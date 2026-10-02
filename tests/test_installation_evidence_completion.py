@@ -65,16 +65,30 @@ def test_elevated_wrapper_captures_real_finite_child_without_elevation(tmp_path,
 $fixture=Join-Path $env:CA_CONTRACT_ROOT 'fixture-helper';[void][IO.Directory]::CreateDirectory((Join-Path $fixture 'tools'))
 $lib=Join-Path (Split-Path -Parent $env:CA_CONTRACT_SOURCE) 'tools\bootstrap_integrity.ps1'
 Copy-Item -LiteralPath $lib -Destination (Join-Path $fixture 'tools\bootstrap_integrity.ps1')
+$fixtureOverrides=@'
+function Get-InstallationEvidenceControlRoot {return (Join-Path $env:CA_CONTRACT_ROOT 'update-control')}
+function Set-InstallationEvidenceAcl {}
+function Assert-BootstrapProtectedRelayPath {param($Path) Assert-BootstrapNoReparsePoint $Path 'owned synthetic protected folder' -PathOnly}
+'@
+[IO.File]::AppendAllText((Join-Path $fixture 'tools\bootstrap_integrity.ps1'),("`n"+$fixtureOverrides))
+function Get-InstallationEvidenceControlRoot {return (Join-Path $env:CA_CONTRACT_ROOT 'update-control')}
+function Assert-BootstrapProtectedRelayPath {param($Path) Assert-BootstrapNoReparsePoint $Path 'owned synthetic protected folder' -PathOnly}
 $target=Join-Path $fixture 'helper.ps1';$auditBase=Join-Path $env:CA_CONTRACT_ROOT 'helper-audit.jsonl'
-[IO.File]::WriteAllText($target,@'
-param([string]$ElevationLogPath)
+$tokens=$null;$errors=$null
+$installer=[Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path -Parent $env:CA_CONTRACT_SOURCE) 'INSTALL_THIS_PC.ps1'),[ref]$tokens,[ref]$errors)
+$initializer=@($installer.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.IfStatementAst] -and $_.Extent.Text.Contains('$helperInstallationEvidenceRoot=Initialize-InstallationEvidence')})
+if($errors.Count -or $initializer.Count -ne 1){throw 'actual helper evidence initializer is unavailable'}
+# Execute only the real parameter/evidence initialization boundary, then a
+# harmless result writer; never the installer entrypoint or placement logic.
+$helperSource=$installer.ParamBlock.Extent.Text+"`n"+$initializer[0].Extent.Text+"`n"+@'
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
-$root=$ElevationLogPath+'.evidence.'+$PID
-[void][IO.Directory]::CreateDirectory($root)
-Write-Output ('installation_stage_evidence_root='+$root)
 Write-Output '{"authorization":"Bearer synthetic-child-value","credential":"synthetic-child-credential"}'
+[void](Write-BootstrapReplacementReceipt $ReplacementReceiptPath @{status='REPLACEMENT_READY'})
+[void](Write-BootstrapReplacementReceipt $RestoreEvidencePath @{status='RESTORE_READY'})
+[void](Complete-InstallationEvidence)
 exit 0
-'@,[Text.UTF8Encoding]::new($true))
+'@
+[IO.File]::WriteAllText($target,$helperSource,[Text.UTF8Encoding]::new($true))
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $parentRoot=Initialize-InstallationEvidence $auditBase $sid
 function ConvertTo-ProcessArgument([string]$Value){if($Value -match '\s'){return '"'+$Value+'"'};return $Value}
@@ -86,10 +100,13 @@ function Start-Process {
  $parts=@([regex]::Matches($ArgumentList,'"([^"\r\n]*)"|([^\s]+)')|ForEach-Object {if($_.Groups[1].Success){$_.Groups[1].Value}else{$_.Groups[2].Value}})
  & $FilePath @parts | Out-Null
  $code=$LASTEXITCODE
- $record=Get-Content -LiteralPath (Join-Path $parentRoot 'elevation-result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+ $paths=@(Get-ChildItem -LiteralPath (Join-Path (Get-InstallationEvidenceControlRoot) 'installation-evidence') -Filter 'elevation-result.json' -Recurse -File)
+ if($paths.Count -ne 1){throw 'missing protected finite result'}
+ $record=Get-Content -LiteralPath $paths[0].FullName -Raw -Encoding UTF8 | ConvertFrom-Json
  return [pscustomobject]@{Id=[int]$record.wrapper_process_id;ExitCode=[int]$code}
 }
-$childArgs=@('-NoLogo','-NoProfile','-NonInteractive','-File',$target,'-ElevationLogPath',$auditBase)
+$replacement=Join-Path $env:CA_CONTRACT_ROOT 'ordinary-replacement.json';$restore=Join-Path $env:CA_CONTRACT_ROOT 'ordinary-restore.json'
+$childArgs=@('-NoLogo','-NoProfile','-NonInteractive','-File',$target,'-ElevationLogPath',$auditBase,'-OperatorSid',$sid,'-ReplaceExistingVerifiedPortable','-ReplacementReceiptPath',$replacement,'-RestoreEvidencePath',$restore)
 $child=Invoke-InstallationElevationCapture $target $childArgs $auditBase $sid
 if($child.ExitCode -ne 0 -or $child.Id -le 0 -or $child.WrapperProcessId -le 0 -or $child.Id -eq $child.WrapperProcessId){throw 'finite wrapper/helper identities were collapsed'}
 $output=@(('installation_stage_evidence_root='+$child.HelperStageEvidenceRoot),('installation_elevation_result_path='+$child.ResultPath))
@@ -98,8 +115,14 @@ if($binding.status -cne 'BOUND_ELEVATED_CHILD' -or $binding.helper_process_id -n
 $stdout=[IO.File]::ReadAllText([string]$binding.streams.stdout.path)
 if($stdout.Contains('synthetic-child-value') -or $stdout.Contains('synthetic-child-credential')){throw 'finite child JSON values survived masking'}
 if(-not $binding.streams.stdout.redacted -or -not $binding.streams.stdout.complete){throw 'capture completeness/masking metadata is false'}
-$wrapperText=[IO.File]::ReadAllText((Join-Path $parentRoot 'elevation-capture.ps1'))
-if($wrapperText.Contains('synthetic-child-value') -or $wrapperText.Contains($auditBase)){throw 'invocation values were persisted inside wrapper source'}
+if(Test-Path -LiteralPath (Join-Path $parentRoot 'elevation-capture.ps1')){throw 'memory wrapper persisted on disk'}
+if(-not $binding.capture_root.StartsWith((Get-InstallationEvidenceControlRoot)+'\') -or -not $binding.stage_evidence_root.StartsWith((Get-InstallationEvidenceControlRoot)+'\')){throw 'privileged evidence was written in operator directory'}
+foreach($pair in @(@($replacement,'replacement-receipt.json'),@($restore,'restore-evidence.json'))){
+ $protected=Join-Path $binding.stage_evidence_root $pair[1]
+ if(-not(Test-Path -LiteralPath $protected) -or (Get-FileSha256 $pair[0]) -cne (Get-FileSha256 $protected)){throw 'ordinary result export differs from protected original'}
+}
+$summary=Complete-InstallationEvidence
+if($summary.status -cne 'COMPLETE' -or $summary.root -cne $parentRoot){throw 'ordinary final summary did not consume protected child evidence'}
 'PASS'
 ''', engine=engine)
     assert result.returncode == 0, result.stdout + result.stderr

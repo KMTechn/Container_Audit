@@ -408,3 +408,18 @@ All three shipped installer/bootstrap PowerShell files keep UTF8 BOM so PS5.1
 decodes bounded Korean path/reason errors consistently. Shared child execution
 is admitted only when every shipped caller terminates in a byte-pinned installer
 admission lifetime; early/late/unknown/ambiguous/direct unfenced calls are rejected.
+# 설치 실행·증거 권한 경계 (2026-10-02 소스 구현)
+
+상승 요청은 operator 소유 wrapper 파일을 실행하지 않는다. 검증한 helper/library
+바이트를 그대로 평가하며, 관리자 증거는 보호된 `update-control\installation-evidence`
+아래 최근 5회로 보관한다. operator 증거와 최종 요약은 일반 프로세스가 쓴다.
+관리자 결과의 PID·helper digest·run/capture/stream 경로·digest와 incomplete 상태를
+일반 부모가 확인한다. replacement/restore 결과의 operator 사본도 일반 부모가
+보호된 원본을 읽어 생성한다. source pin 재생성과 실제 Windows 설치/제거/복원은
+[검증 보고서](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-107/REPORT.md)의
+별도 미검증 범위다.
+
+기존 사용자 TLS 구성 복사와 delegated writer-fence 상태는 사용자 프로필 저장
+계약을 유지한다. TLS는 디렉터리 생성 전 existing ancestor와 복사 전 target,
+writer-fence는 기존 구성 요소 검사로 재분석 지점을 쓰기 전에 거절한다.
+사용자 소유 protocol/config 전체의 동시 변경 방지를 증명한 결과는 아니다.

@@ -1,5 +1,11 @@
 # 남은 요구·검증·문서·추가 제안
 
+설치 증거의 권한 분리는 sub-107 소스 교정 범위다. 최종 컷의 선언/pin·stock과
+5차 실제 설치에서 메모리 wrapper 실행, Administrators owner/operator read-only,
+상위 trust 거절, 보호 결과의 ordinary export, 최근 5회 보존과 제거/복원 시
+updater state 이동과 evidence 자리 보존을 확인한다. 소스 회귀는 실제 상승·예약 작업·relay·설치 성공의
+근거가 아니다. [현재 결과와 경계 표](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-107/REPORT.md)를 따른다.
+
 G10 relay 읽기 실패는 실제 마지막 counts/ACK를 유지하고 미확인 안내로 구별한다. 카드·운영 메뉴의 상세에서 최초 실패/미수신의 미확인, 마지막 확인값·확인 시각·읽기 실패, 정상 읽기 복구와 후속 스캔을 소스 회귀로 검증한다. 실제 장애 화면은 랩에 남는다.
 
 스캐너 경고 뒤 UNDO/다음 현품표, 완료 중 FIFO, 교환 CSV 실패/후속 checkpoint 복구, 6칸 교환 완료와 자동 보류 복원 안내와 동기 감사 outbox·checkpoint 결속·CSV 실패/재시작 멱등 재생은 소스 회귀 범위다. 실제 스캐너·소리·화면·중앙 서버 결합은 랩 검증에 남는다.

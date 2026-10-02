@@ -757,6 +757,24 @@ CA-T01의 이름 14개와 실제 register→ValueError, CA-T02의 malformed JSON
 고정 Web committed source `56c32028ce6b30ccf774e7cc635e3e4b377266ed`의 실제 Flask 서명 HTTP 진입점·SQLite 저장소와 CA 승인 진입점·내구 intent를 함께 사용했다. 성공 2건과 틀린 PIN·중앙 ADMIN 잠금·root 철회·역할 없음·잠금+root 철회 5건의 7 PASS를 확인했다. ADMIN 잠금은 서로 다른 3장치에서 5회씩 실패하여 실제 15회 한계를 충족하며 새 장치에서도 서버 `PIN_LOCKED` 감사와 CA REJECTED를 확인한다. 철회된 이전 grant는 REVOKED로 남고 redeem 거절, 원 recovery 파일 보존·PIN 미저장을 단언한다. 권한 상태 준비는 지원 store API를 이용한 격리 fixture이며 실제 root UI·production·네트워크 배포 수용은 NOT TESTED. 초기 fixture/입력 실패와 잘못된 10회 oracle을 지우지 않고 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)에 연결한다.
 # Installation follow-up evidence — 2026-10-02
 
+설치 상승 wrapper와 일반 토큰 producer wrapper는 파일 없이 메모리 명령으로 실행한다.
+상승 helper·bootstrap library·writer fence helper와 일반 토큰 API는 한 번 읽은
+바이트의 SHA256을 확인하고 그 바이트를 파싱·평가한다. 실행 동안 source handle을
+독점 보유하지 않는다. 높은 권한의 stage journal·stream·summary·placement log·
+replacement/restore 결과는 `C:\KMTech\Apps\Container_Audit\update-control\installation-evidence\run-<guid>`에 둔다.
+폴더 소유자는 Administrators, SYSTEM/Administrators만 쓰며 operator는 읽기만 한다.
+상위 폴더가 사용자 소유·쓰기 가능·재분석 지점이면 한국어 한 줄로 거절한다.
+관리자 단계가 시작할 때 최근 5회만 남긴다. 일반 부모가 보호된 원본을 읽고
+자신의 operator evidence/결과 경로에 요약·필요한 결과 사본을 쓴다.
+
+제거 목록에서 `update-control\installation-evidence`는 최근 5회 증거로 보존한다.
+updater의 나머지 control 항목과 `versions`는 기존 보호된 startup uninstall
+preimage로 이동한다. 되돌리기는 그 state를 원 control에 복귀시키고, 진행 중인
+증거와 보존 증거의 경로·바이트는 바꾸지 않는다. 목적지 항목이 이미 있으면 거절한다.
+실제 제거/되돌리기와 5차 설치에서의 위치 전이는 **NOT TESTED**이며
+[sub-107 보고서](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-107/REPORT.md)의
+버전·시험 범위·예외를 따른다. published pin/선언은 최종 컷에서 별도로 갱신한다.
+
 The2136233 lab fourth installation FAILED_ROLLED_BACK before onboarding/relay.
 The old0d tree/Run and absent CA relay were restored; harmless0x18B child proof
 does not prove an actual CA relay start. Current read-only stage diagnostic V1

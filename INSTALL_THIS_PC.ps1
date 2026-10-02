@@ -40,12 +40,37 @@ $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot "tools\bootstrap_integrit
 if (-not (Test-Path -LiteralPath $BootstrapIntegrityFunctions -PathType Leaf)) {
     throw "Bootstrap integrity producer is unavailable."
 }
-. $BootstrapIntegrityFunctions
+$pinnedLibrary=Get-Variable -Name InstallationPinnedBootstrapLibrary -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+if($pinnedLibrary){
+    if(-not $pinnedLibrary.File.Equals($BootstrapIntegrityFunctions,[StringComparison]::OrdinalIgnoreCase)){throw 'Pinned bootstrap library identity differs.'}
+    . $pinnedLibrary
+}elseif(([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){
+    # A direct administrator invocation also evaluates the bytes it checked.
+    # The canonical elevation path supplies the already verified block above.
+    $libraryManifest=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'portable-manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $libraryStream=[IO.FileStream]::new($BootstrapIntegrityFunctions,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    try{
+        if($libraryStream.Length -le 0 -or $libraryStream.Length -gt 4194304){throw 'Bootstrap integrity producer size is invalid.'}
+        $libraryBytes=[byte[]]::new([int]$libraryStream.Length);$libraryOffset=0
+        while($libraryOffset -lt $libraryBytes.Length){
+            $libraryRead=$libraryStream.Read($libraryBytes,$libraryOffset,$libraryBytes.Length-$libraryOffset)
+            if($libraryRead -eq 0){throw 'Bootstrap integrity producer read is incomplete.'};$libraryOffset+=$libraryRead
+        }
+        if($libraryStream.ReadByte() -ne -1){throw 'Bootstrap integrity producer size changed.'}
+    }finally{$libraryStream.Dispose()}
+    $libraryAlgorithm=[Security.Cryptography.SHA256]::Create()
+    try{$librarySha=([BitConverter]::ToString($libraryAlgorithm.ComputeHash($libraryBytes))).Replace('-','').ToLowerInvariant()}finally{$libraryAlgorithm.Dispose()}
+    if($librarySha -cne [string]$libraryManifest.integrity_helper_sha256){throw 'Bootstrap integrity producer byte pin differs.'}
+    $libraryTokens=$null;$libraryErrors=$null
+    $libraryAst=[Management.Automation.Language.Parser]::ParseInput([Text.UTF8Encoding]::new($false,$true).GetString($libraryBytes).TrimStart([char]0xfeff),$BootstrapIntegrityFunctions,[ref]$libraryTokens,[ref]$libraryErrors)
+    if($libraryErrors.Count){throw 'Bootstrap integrity producer parse failed.'}
+    . ($libraryAst.GetScriptBlock())
+}else{. $BootstrapIntegrityFunctions}
 $IntegrityFileName = $BootstrapIntegrityFileName
 $LegacyRelayTaskName = "direct-sync-relay-container-audit"
 $LegacyQualificationTaskName = "container-audit-isolated-qualification-authority"
 $PlacementWriterSource = "canonical_code_placement"
-$BootstrapScriptPath = $MyInvocation.MyCommand.Path
+$BootstrapScriptPath = $PSCommandPath
 $BootstrapBoundParameters = @{}
 foreach ($boundName in $PSBoundParameters.Keys) {
     $BootstrapBoundParameters[$boundName] = $PSBoundParameters[$boundName]
@@ -76,8 +101,13 @@ function Install-CurrentUserTlsCaBootstrap([string]$SourcePath, [string]$LocalAp
     $sourceLength = (Get-Item -LiteralPath $source -Force).Length
     if ($sourceLength -le 0 -or $sourceLength -gt 131072) { throw "TLS CA bundle source size is invalid." }
     $userRoot = Get-StrictFullPath $LocalAppDataRoot "operator LOCALAPPDATA root"; $target = Join-Path $userRoot "KMTech\Bootstrap\Container_Audit\ca-bundle.pem"
-    $targetParent = Split-Path -Parent $target; New-Item -ItemType Directory -Path $targetParent -Force | Out-Null
+    $targetParent = Split-Path -Parent $target
+    $existingParent=$targetParent
+    while(-not(Test-Path -LiteralPath $existingParent)){$existingParent=Split-Path -Parent $existingParent}
+    Assert-NoReparsePoint $existingParent "TLS CA bootstrap ancestor" -PathOnly
+    New-Item -ItemType Directory -Path $targetParent -Force | Out-Null
     Assert-NoReparsePoint $targetParent "TLS CA bootstrap directory"
+    Assert-NoReparsePoint $target "TLS CA bootstrap target" -PathOnly
     Copy-Item -LiteralPath $source -Destination $target -Force; Assert-NoReparsePoint $target "TLS CA bootstrap target"
     if ((Get-FileSha256 $target) -cne (Get-FileSha256 $source)) { throw "TLS CA bootstrap exact readback failed." }
     return $target
@@ -200,10 +230,7 @@ function Enter-ContainerPlacementWriterFence {
     if (-not (Test-Path -LiteralPath $writerFenceHelperFull -PathType Leaf)) {
         throw 'Production placement writer fence helper is unavailable.'
     }
-    if ((Get-FileSha256 $writerFenceHelperFull) -cne $ExpectedWriterFenceHelperSha256) {
-        throw 'Production placement writer fence helper byte pin differs.'
-    }
-    . $writerFenceHelperFull
+    . (Get-InstallationVerifiedScript $writerFenceHelperFull $ExpectedWriterFenceHelperSha256 'Production placement writer fence helper byte pin differs.')
     $operatorBinding = Assert-ContainerWriterFenceOperatorRoot `
         -PreparedReceiptPath $WriterFencePreparedReceiptPath `
         -PreparedReceiptSha256 $WriterFencePreparedReceiptSha256 `
@@ -390,6 +417,7 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
 function Write-ElevationLog([string]$Status, [string]$Message) {
     if ([string]::IsNullOrWhiteSpace($ElevationLogPath)) { return }
     $path = Get-StrictFullPath $ElevationLogPath "ElevationLogPath"
+    Assert-InstallationEvidenceWriteRoot (Split-Path -Parent $path)
     New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
     $entry = [ordered]@{
         captured_at = (Get-Date).ToUniversalTime().ToString('o')
@@ -589,10 +617,9 @@ function Remove-OwnedLegacyTask([string]$Name, [string]$ExpectedRoot) {
     Write-InstallationCaughtFailure $_
  throw 'Legacy task removal manifest is invalid.' }
     if (
-        [string]$installedManifest.writer_fence_helper_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
-        (Get-FileSha256 $writerFenceHelperPath) -cne [string]$installedManifest.writer_fence_helper_sha256
+        [string]$installedManifest.writer_fence_helper_sha256 -cnotmatch '^[0-9a-f]{64}$'
     ) { throw 'Legacy task removal writer-fence helper pin differs.' }
-    . $writerFenceHelperPath
+    . (Get-InstallationVerifiedScript $writerFenceHelperPath ([string]$installedManifest.writer_fence_helper_sha256) 'Legacy task removal writer-fence helper pin differs.')
     [void](Remove-ContainerScheduledTaskUnderWriterFence `
         -SessionId ([string]$env:CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID) `
         -AttemptId ([string]$env:CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID) `
@@ -825,6 +852,25 @@ function Restore-ContainerStartupUpdatePreimage([string]$Root, [string]$Director
     } | Out-Null
 }
 
+function Move-ContainerStartupUpdateControl([string]$From,[string]$To) {
+    # Keep the active evidence run and the five retained runs at their admitted
+    # path. The updater state still moves to/from the existing recovery preimage.
+    Assert-InstallationEvidenceProtectedPath $From
+    Assert-InstallationEvidenceProtectedPath (Split-Path -Parent $To)
+    if(-not(Test-Path -LiteralPath $To)){
+        [void][IO.Directory]::CreateDirectory($To)
+        Set-InstallationEvidenceAcl $To $OperatorSid -Directory
+    }
+    Assert-InstallationEvidenceProtectedPath $To
+    foreach($item in @(Get-ChildItem -LiteralPath $From -Force | Where-Object {$_.Name -ine 'installation-evidence'})){
+        Assert-InstallationEvidenceProtectedPath $item.FullName
+        Assert-NoReparsePoint $item.FullName 'startup update control move'
+        $destination=Join-Path $To $item.Name
+        if(Test-Path -LiteralPath $destination){throw 'STARTUP_UPDATE_UNINSTALL_RESTORE_TARGET_EXISTS'}
+        Move-Item -LiteralPath $item.FullName -Destination $destination -ErrorAction Stop
+    }
+}
+
 function Initialize-ContainerStartupUpdate([string]$Root) {
     $settingsPath = Join-Path $Root 'app\auto-update-settings.json'
     if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) { return }
@@ -903,8 +949,7 @@ function Initialize-ContainerStartupUpdate([string]$Root) {
     Set-InstallationEvidenceStage 'startup.task_spec' 'startup'
     $spec = Get-ContainerStartupUpdateTaskSpec $Root $OperatorSid
     $writerFenceHelperFull = Get-StrictFullPath $WriterFenceHelperPath 'startup update writer fence helper'
-    if ((Get-FileSha256 $writerFenceHelperFull) -cne $ExpectedWriterFenceHelperSha256) { throw 'STARTUP_UPDATE_WRITER_HELPER_PIN_DIFFERS' }
-    . $writerFenceHelperFull
+    . (Get-InstallationVerifiedScript $writerFenceHelperFull $ExpectedWriterFenceHelperSha256 'STARTUP_UPDATE_WRITER_HELPER_PIN_DIFFERS')
     Set-InstallationEvidenceStage 'startup.register_task_sddl' 'startup'
     Invoke-ContainerWriterFenceMutation -ControlRoot $Script:ContainerWriterFenceAdmissionProductionRoot `
         -SessionId $WriterFenceSessionId -AttemptId $WriterFenceAttemptId `
@@ -987,8 +1032,15 @@ if (
         "before removing hardened code."
     )
 }
-if (-not $DryRun.IsPresent -and $ElevationLogPath) {
+$helperInstallationEvidenceRoot=''
+if (-not $DryRun.IsPresent -and ($ElevationLogPath -or (Test-InstallationEvidencePrivileged))) {
+    if(-not $ElevationLogPath){$ElevationLogPath='helper-audit'}
     $helperInstallationEvidenceRoot=Initialize-InstallationEvidence $ElevationLogPath $OperatorSid @($WriterFenceDelegationToken)
+    if(Test-InstallationEvidencePrivileged){
+        $ElevationLogPath=Join-Path $helperInstallationEvidenceRoot 'placement-result.jsonl'
+        if($ReplaceExistingVerifiedPortable -and $ReplacementReceiptPath){$ReplacementReceiptPath=Join-Path $helperInstallationEvidenceRoot 'replacement-receipt.json'}
+        if($RestoreEvidencePath){$RestoreEvidencePath=Join-Path $helperInstallationEvidenceRoot 'restore-evidence.json'}
+    }
     Write-Output "installation_stage_evidence_root=$helperInstallationEvidenceRoot"
     Set-InstallationEvidenceStage 'placement.writer_fence_preflight'
 }
@@ -997,7 +1049,7 @@ $Script:StartupUpdatePreimage = $null
 if (-not $DryRun.IsPresent -and (-not $testOverride -or $Uninstall.IsPresent -or $RestoreUninstallRecordPath)) {
     try {
         $placementWriterFenceLease = Enter-ContainerPlacementWriterFence
-        . $WriterFenceHelperPath
+        . (Get-InstallationVerifiedScript $WriterFenceHelperPath $ExpectedWriterFenceHelperSha256)
         $Script:ContainerWriterFenceAdmissionProductionRoot = Join-Path $OperatorLocalAppDataRoot 'KMTech\DirectSync\container_audit\control\writer-session'
         if(-not $testOverride -and -not $Uninstall.IsPresent) {
             Set-InstallationEvidenceStage 'placement.protect_shared_ancestors'
@@ -1203,7 +1255,10 @@ if ($Uninstall.IsPresent) {
                 $target = Get-StrictFullPath (Join-Path $uninstallParent $name) 'startup update uninstall code target'
                 if (-not (Test-PathWithin $target $uninstallParent)) { throw 'STARTUP_UPDATE_UNINSTALL_PATH_ESCAPED' }
                 Assert-NoReparsePoint $target 'startup update uninstall code target'
-                if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination (Join-Path $startupUninstallPreimage.path $name) }
+                if (Test-Path -LiteralPath $target) {
+                    if($name -ceq 'update-control'){Move-ContainerStartupUpdateControl $target (Join-Path $startupUninstallPreimage.path $name)}
+                    else{Move-Item -LiteralPath $target -Destination (Join-Path $startupUninstallPreimage.path $name)}
+                }
             }
             Write-Output ('startup_update_uninstall_preimage=' + $startupUninstallPreimage.path)
         }
@@ -1248,8 +1303,11 @@ if ($Uninstall.IsPresent) {
                     $saved = Join-Path $startupUninstallPreimage.path $name
                     $target = Join-Path $uninstallParent $name
                     if (Test-Path -LiteralPath $saved) {
-                        if (Test-Path -LiteralPath $target) { throw 'STARTUP_UPDATE_UNINSTALL_RESTORE_TARGET_EXISTS' }
-                        Move-Item -LiteralPath $saved -Destination $target
+                        if($name -ceq 'update-control'){Move-ContainerStartupUpdateControl $saved $target}
+                        else{
+                            if (Test-Path -LiteralPath $target) { throw 'STARTUP_UPDATE_UNINSTALL_RESTORE_TARGET_EXISTS' }
+                            Move-Item -LiteralPath $saved -Destination $target
+                        }
                     }
                 }
                 Restore-ContainerStartupUpdatePreimage $installRootFull $startupUninstallPreimage.path $startupUninstallPreimage.sha256
@@ -1384,7 +1442,8 @@ try {
             ) { throw 'Verified replacement requires an exact durable receipt binding.' }
             $replacementReceiptFull = Get-StrictFullPath $ReplacementReceiptPath 'ReplacementReceiptPath'
             if (
-                (Test-PathWithin $replacementReceiptFull $applicationParent) -or
+                ((Test-PathWithin $replacementReceiptFull $applicationParent) -and
+                    (-not $helperInstallationEvidenceRoot -or -not(Test-PathWithin $replacementReceiptFull $helperInstallationEvidenceRoot))) -or
                 (Test-Path -LiteralPath $replacementReceiptFull)
             ) { throw 'Replacement receipt must be a new path outside the code parent.' }
             Assert-ContainerReplacementRestoreQuiescent `

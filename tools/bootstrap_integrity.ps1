@@ -47,17 +47,88 @@ function Get-InstallationFailureDetails($Failure) {
 function Set-InstallationEvidenceAcl([string]$Path, [string]$Sid, [switch]$Directory) {
     $acl = if ($Directory) { New-Object Security.AccessControl.DirectorySecurity } else { New-Object Security.AccessControl.FileSecurity }
     $acl.SetAccessRuleProtection($true,$false)
-    $acl.SetOwner([Security.Principal.SecurityIdentifier]::new($Sid))
+    $privileged=Test-InstallationEvidencePrivileged
+    $owner=if($privileged){'S-1-5-32-544'}else{$Sid}
+    $acl.SetOwner([Security.Principal.SecurityIdentifier]::new($owner))
     foreach ($identity in @($Sid,'S-1-5-18','S-1-5-32-544') | Select-Object -Unique) {
         $principal = [Security.Principal.SecurityIdentifier]::new($identity)
-        if ($Directory) { $rule=[Security.AccessControl.FileSystemAccessRule]::new($principal,'FullControl','ContainerInherit,ObjectInherit','None','Allow') }
-        else { $rule=[Security.AccessControl.FileSystemAccessRule]::new($principal,'FullControl','Allow') }
+        $rights=if($privileged -and $identity -cnotin @('S-1-5-18','S-1-5-32-544')){'ReadAndExecute'}else{'FullControl'}
+        if ($Directory) { $rule=[Security.AccessControl.FileSystemAccessRule]::new($principal,$rights,'ContainerInherit,ObjectInherit','None','Allow') }
+        else { $rule=[Security.AccessControl.FileSystemAccessRule]::new($principal,$rights,'Allow') }
         $acl.AddAccessRule($rule)
     }
     Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
 }
 
+function Test-InstallationEvidencePrivileged {
+    $forced=Get-Variable -Name InstallationEvidencePrivileged -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if($forced){return $true}
+    $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
+    return ([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Get-InstallationEvidenceControlRoot {
+    return 'C:\KMTech\Apps\Container_Audit\update-control'
+}
+
+function Assert-InstallationEvidenceProtectedPath([string]$Path) {
+    try { Assert-BootstrapProtectedRelayPath $Path }
+    catch { throw ('설치 증거 폴더를 사용할 수 없습니다: '+$Path+' (상위 폴더 소유자·쓰기 권한·재분석 지점을 확인하세요)') }
+}
+
+function New-InstallationProtectedEvidenceRun([string]$Sid,[string]$RunRoot='') {
+    try{[void][Security.Principal.SecurityIdentifier]::new($Sid)}catch{throw 'Installation evidence operator SID is invalid.'}
+    $control=Get-InstallationEvidenceControlRoot
+    if(-not(Test-Path -LiteralPath $control)) {
+        Assert-InstallationEvidenceProtectedPath (Split-Path -Parent $control)
+        [void][IO.Directory]::CreateDirectory($control)
+        Assert-InstallationEvidenceProtectedPath $control
+        Set-InstallationEvidenceAcl $control $Sid -Directory
+    }
+    Assert-InstallationEvidenceProtectedPath $control
+    $store=Join-Path $control 'installation-evidence'
+    if(-not(Test-Path -LiteralPath $store)) {
+        [void][IO.Directory]::CreateDirectory($store)
+        Assert-InstallationEvidenceProtectedPath $store
+        Set-InstallationEvidenceAcl $store $Sid -Directory
+    }
+    Assert-InstallationEvidenceProtectedPath $store
+    if(-not $RunRoot){$RunRoot=Join-Path $store ('run-'+[Guid]::NewGuid().ToString('N'))}
+    $RunRoot=Get-StrictFullPath $RunRoot 'protected installation run'
+    if(-not(Test-BootstrapSamePath (Split-Path -Parent $RunRoot) $store) -or
+        [IO.Path]::GetFileName($RunRoot) -cnotmatch '^run-[0-9a-f]{32}$'){throw 'Protected installation run binding differs.'}
+    if(Test-Path -LiteralPath $RunRoot){Assert-InstallationEvidenceProtectedPath $RunRoot;return $RunRoot}
+    # Check inherited owner/rights before setting the explicit evidence ACL.
+    # Never repair a user-owned or user-writable preclaimed directory.
+    $prior=@(Get-ChildItem -LiteralPath $store -Directory -Force | Where-Object {$_.Name -cmatch '^run-[0-9a-f]{32}$'} | Sort-Object CreationTimeUtc -Descending)
+    foreach($old in @($prior | Select-Object -Skip 4)) {
+        Assert-InstallationEvidenceProtectedPath $old.FullName
+        Assert-BootstrapNoReparsePoint $old.FullName 'expired installation evidence'
+        Remove-Item -LiteralPath $old.FullName -Recurse -ErrorAction Stop
+    }
+    [void][IO.Directory]::CreateDirectory($RunRoot)
+    Assert-InstallationEvidenceProtectedPath $RunRoot
+    Set-InstallationEvidenceAcl $RunRoot $Sid -Directory
+    Assert-InstallationEvidenceProtectedPath $RunRoot
+    return $RunRoot
+}
+
+function Assert-InstallationEvidenceWriteRoot([string]$Root) {
+    Assert-BootstrapNoReparsePoint $Root 'installation evidence write root' -PathOnly
+    if(Test-InstallationEvidencePrivileged){
+        $run=Get-Variable -Name InstallationProtectedRunRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if(-not $run -or (-not(Test-BootstrapSamePath $Root $run) -and
+            -not $Root.StartsWith($run+'\',[StringComparison]::OrdinalIgnoreCase))){throw 'Privileged evidence write is outside the protected run.'}
+        Assert-InstallationEvidenceProtectedPath $Root
+    }
+}
+
 function Initialize-InstallationEvidence([string]$BasePath,[string]$OperatorSid,[string[]]$SensitiveValues=@()) {
+    if(Test-InstallationEvidencePrivileged){
+        $run=Get-Variable -Name InstallationProtectedRunRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        $Script:InstallationProtectedRunRoot=New-InstallationProtectedEvidenceRun $OperatorSid $run
+        $BasePath=Join-Path $Script:InstallationProtectedRunRoot ([IO.Path]::GetFileName($BasePath))
+    }
     $root = Get-StrictFullPath ($BasePath + '.evidence.' + $PID) 'installation evidence root'
     $parent=Split-Path -Parent $root
     $existing=$parent
@@ -66,6 +137,7 @@ function Initialize-InstallationEvidence([string]$BasePath,[string]$OperatorSid,
     if (Test-Path -LiteralPath $root) { throw 'Installation evidence directory already exists.' }
     [void][IO.Directory]::CreateDirectory($root)
     Set-InstallationEvidenceAcl $root $OperatorSid -Directory
+    Assert-InstallationEvidenceWriteRoot $root
     $Script:InstallationEvidenceRoot = $root
     $Script:InstallationEvidenceSid = $OperatorSid
     $Script:InstallationEvidenceSensitiveValues = @($SensitiveValues)
@@ -81,6 +153,7 @@ function Write-InstallationEvidenceEvent($Payload) {
     $root = Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
     if (-not $root) { return }
     try {
+        Assert-InstallationEvidenceWriteRoot $root
         $path=Join-Path $root 'stages.jsonl'
         $Payload['captured_at']=[DateTime]::UtcNow.ToString('o')
         $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($Payload | ConvertTo-Json -Depth 12 -Compress)+"`n")
@@ -109,6 +182,7 @@ function Complete-InstallationEvidence {
     if(-not $root){return $summary}
     $summary.summary_path=Join-Path $root 'evidence-status.json'
     try {
+        Assert-InstallationEvidenceWriteRoot $root
         $summary.summary_written=$true
         [IO.File]::WriteAllText($summary.summary_path,($summary|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
         Set-InstallationEvidenceAcl $summary.summary_path $Script:InstallationEvidenceSid
@@ -117,7 +191,7 @@ function Complete-InstallationEvidence {
         $summary.status='INCOMPLETE';$summary.recording_failed=$true;$summary.summary_written=$false
         # If writing succeeded before an ACL/readback failure, replace the
         # success-looking body where possible; stdout still carries INCOMPLETE.
-        try{[IO.File]::WriteAllText($summary.summary_path,($summary|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))}catch{}
+        try{Assert-InstallationEvidenceWriteRoot $root;[IO.File]::WriteAllText($summary.summary_path,($summary|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))}catch{}
         $summary.failure_codes+=@('FINAL_SUMMARY_IO_OR_ACL_FAILURE')
     }
     return $summary
@@ -157,7 +231,11 @@ function Read-InstallationHelperEvidenceBinding([string[]]$Output,[string]$Audit
             -not(Test-BootstrapJsonInteger $result.wrapper_process_id) -or [int64]$result.wrapper_process_id -le 0 -or
             -not(Test-BootstrapJsonInteger $result.helper_process_id) -or [int64]$result.helper_process_id -lt 0 -or
             ($ExpectedHelperSha256 -and [string]$result.helper_sha256 -cne $ExpectedHelperSha256)){throw 'Elevation result identity binding differs.'}
-        $expectedCapture=Join-Path $parentRoot ('elevation-capture.evidence.'+[int]$result.wrapper_process_id)
+        $protectedRun=Get-StrictFullPath ([string]$result.protected_run_root) 'protected child evidence run'
+        if(-not(Test-BootstrapSamePath (Split-Path -Parent $protectedRun) (Join-Path (Get-InstallationEvidenceControlRoot) 'installation-evidence')) -or
+            [IO.Path]::GetFileName($protectedRun) -cnotmatch '^run-[0-9a-f]{32}$'){throw 'Protected child evidence run binding differs.'}
+        Assert-InstallationEvidenceProtectedPath $protectedRun
+        $expectedCapture=Join-Path $protectedRun ('elevation-capture.evidence.'+[int]$result.wrapper_process_id)
         if(-not(Test-BootstrapSamePath ([string]$result.capture_root) $expectedCapture)){throw 'Elevation capture root binding differs.'}
         Assert-BootstrapNoReparsePoint $expectedCapture 'elevation capture root' -PathOnly
         if([int64]$result.helper_process_id -eq 0) {
@@ -174,7 +252,7 @@ function Read-InstallationHelperEvidenceBinding([string[]]$Output,[string]$Audit
             if((Get-Item -LiteralPath $expected).Length -gt 1048576 -or (Get-FileSha256 $expected) -cne [string]$stream.sha256){throw 'Elevation stream hash/size binding differs.'}
         }
         $actualRoot=[string]$result.helper_stage_evidence_root
-        if($actualRoot -and -not(Test-BootstrapSamePath $actualRoot ($AuditLogPath+'.evidence.'+[int]$result.helper_process_id))){throw 'Elevated helper journal identity binding differs.'}
+        if($actualRoot -and -not(Test-BootstrapSamePath $actualRoot ((Join-Path $protectedRun 'helper-audit')+'.evidence.'+[int]$result.helper_process_id))){throw 'Elevated helper journal identity binding differs.'}
         if($actualRoot){Assert-BootstrapNoReparsePoint $actualRoot 'elevated helper evidence' -PathOnly}
         $childSummary=if($actualRoot){Read-InstallationEvidenceChildSummary $actualRoot}else{$null}
         Register-InstallationChildEvidenceSummary $result.evidence_summary
@@ -192,10 +270,61 @@ function Read-InstallationHelperEvidenceBinding([string[]]$Output,[string]$Audit
     return [ordered]@{status='BOUND_DIRECT_CHILD';helper_process_id=$DirectProcessId;stage_evidence_root=$root;streams=$null;child_stage_evidence_summary=$childSummary}
 }
 
-function Get-InstallationElevationWrapperSource {
-    # Fixed source only. Invocation arguments, including delegation, remain
-    # in memory/argv and are never embedded in the persisted wrapper.
+function Get-InstallationVerifiedScript {
+    param([string]$Path,[string]$ExpectedSha256,[string]$PinFailure='Pinned installation source bytes differ.')
+    # A bounded shared read, closed before hashing/parsing. Antivirus/indexer
+    # handles and source replacement remain compatible; only captured bytes run.
+    $stream=[IO.FileStream]::new($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    try{
+        if($stream.Length -le 0 -or $stream.Length -gt 4194304){throw 'Pinned installation source size is invalid.'}
+        $bytes=[byte[]]::new([int]$stream.Length);$offset=0
+        while($offset -lt $bytes.Length){$read=$stream.Read($bytes,$offset,$bytes.Length-$offset);if($read -eq 0){throw 'Pinned installation source read is incomplete.'};$offset+=$read}
+        if($stream.ReadByte() -ne -1){throw 'Pinned installation source size changed.'}
+    }finally{$stream.Dispose()}
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try{$actual=([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
+    if($actual -cne $ExpectedSha256){throw $PinFailure}
+    $text=[Text.UTF8Encoding]::new($false,$true).GetString($bytes).TrimStart([char]0xfeff)
+    $tokens=$null;$errors=$null
+    $ast=[Management.Automation.Language.Parser]::ParseInput($text,$Path,[ref]$tokens,[ref]$errors)
+    if($errors.Count){throw 'Pinned installation source parse failed.'}
+    return $ast.GetScriptBlock()
+}
+
+function ConvertTo-InstallationMemoryCommand([string]$Source,[string[]]$Arguments) {
+    $literals=@($Arguments|ForEach-Object {"'"+([string]$_).Replace("'","''")+"'"})
+    $command='& {'+$Source+"`n} "+($literals -join ' ')
+    $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    if($encoded.Length -gt 30000){throw 'Installation memory command exceeds the supported argument budget.'}
+    return $encoded
+}
+
+function Get-InstallationHelperMemorySource {
     return @'
+$ErrorActionPreference='Stop';Set-StrictMode -Version Latest
+$target=$args[0];$targetSha=$args[1];$library=$args[2];$librarySha=$args[3]
+$Script:InstallationEvidencePrivileged=$true;$Script:InstallationProtectedRunRoot=$args[4]
+$libraryBlock=Get-InstallationVerifiedScript $library $librarySha
+$helperBlock=Get-InstallationVerifiedScript $target $targetSha
+. $libraryBlock
+$Script:InstallationPinnedBootstrapLibrary=$libraryBlock
+$bound=@{};$values=@($args|Select-Object -Skip 5)
+for($i=0;$i -lt $values.Count;$i++){
+ $name=([string]$values[$i]).TrimStart('-')
+ $definition=@($helperBlock.Ast.ParamBlock.Parameters|Where-Object {$_.Name.VariablePath.UserPath -ieq $name})
+ if($definition.Count -ne 1 -or -not([string]$values[$i]).StartsWith('-')){throw 'Elevated helper parameter is unsupported.'}
+ if($definition[0].StaticType -eq [Management.Automation.SwitchParameter]){$bound[$name]=$true}
+ else{if(++$i -ge $values.Count){throw 'Elevated helper parameter value is missing.'};$bound[$name]=[string]$values[$i]}
+}
+if($bound.ContainsKey('ElevationLogPath')){$bound['ElevationLogPath']=Join-Path $Script:InstallationProtectedRunRoot 'helper-audit'}
+& $helperBlock @bound
+'@
+}
+
+function Get-InstallationElevationWrapperSource {
+    # No wrapper is persisted. The one read of each source supplies both its
+    # digest and parsed executable bytes, including the script filename metadata.
+    return ('function Get-InstallationVerifiedScript {'+${function:Get-InstallationVerifiedScript}.ToString()+"}`n"+@'
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 if($args.Count -lt 8){exit 1}
@@ -203,22 +332,29 @@ $target=[string]$args[0];$resultPath=[string]$args[1];$auditBase=[string]$args[2
 $parentPid=[int]$args[4];$targetSha=[string]$args[5];$librarySha=[string]$args[6]
 $childArgs=[string[]]@($args | Select-Object -Skip 7)
 $library=Join-Path (Split-Path -Parent $target) 'tools\bootstrap_integrity.ps1'
-if((Get-FileHash -LiteralPath $library -Algorithm SHA256).Hash.ToLowerInvariant() -cne $librarySha){exit 1}
-. $library
+$libraryBlock=Get-InstallationVerifiedScript $library $librarySha
+. $libraryBlock
+$Script:InstallationEvidencePrivileged=$true
+$Script:InstallationProtectedRunRoot=Split-Path -Parent $resultPath
+[void](New-InstallationProtectedEvidenceRun $sid $Script:InstallationProtectedRunRoot)
 $index=[Array]::IndexOf($childArgs,'-WriterFenceDelegationToken')
 $sensitive=@();if($index -ge 0 -and $index+1 -lt $childArgs.Length){$sensitive=@($childArgs[$index+1])}
-$captureRoot=Initialize-InstallationEvidence (Join-Path (Split-Path -Parent $resultPath) 'elevation-capture') $sid $sensitive
+$captureRoot=Initialize-InstallationEvidence (Join-Path $Script:InstallationProtectedRunRoot 'elevation-capture') $sid $sensitive
 $child=$null;$failure=$null;$helperRoot='';$exitCode=1
 try {
- if((Get-FileSha256 $target) -cne $targetSha){throw 'Elevated helper source byte pin differs.'}
  Set-InstallationEvidenceStage 'elevation.helper_capture'
  $winps=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
- $child=Invoke-InstallationEvidenceChild 'elevated-helper' $winps $childArgs
+ $fileIndex=[Array]::IndexOf($childArgs,'-File')
+ if($fileIndex -lt 0 -or $fileIndex+1 -ge $childArgs.Length -or -not(Test-BootstrapSamePath $childArgs[$fileIndex+1] $target)){throw 'Elevated helper invocation differs.'}
+ $parameters=[string[]]@($childArgs|Select-Object -Skip ($fileIndex+2))
+ $helperSource='function Get-InstallationVerifiedScript {'+${function:Get-InstallationVerifiedScript}.ToString()+"}`n"+(Get-InstallationHelperMemorySource)
+ $encoded=ConvertTo-InstallationMemoryCommand $helperSource (@($target,$targetSha,$library,$librarySha,$Script:InstallationProtectedRunRoot)+$parameters)
+ $child=Invoke-InstallationEvidenceChild 'elevated-helper' $winps @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
  $exitCode=[int]$child.ExitCode
  $roots=@($child.Stdout -split "`r?`n" | Where-Object {$_ -cmatch '^installation_stage_evidence_root=.+$'} | ForEach-Object {$_.Substring('installation_stage_evidence_root='.Length)})
  if($roots.Count){
   $helperRoot=Get-StrictFullPath ([string]$roots[-1]) 'elevated helper emitted root'
-  if(-not(Test-BootstrapSamePath $helperRoot ($auditBase+'.evidence.'+$child.ProcessId))){throw 'Elevated helper emitted journal binding differs.'}
+  if(-not(Test-BootstrapSamePath $helperRoot ((Join-Path $Script:InstallationProtectedRunRoot 'helper-audit')+'.evidence.'+$child.ProcessId))){throw 'Elevated helper emitted journal binding differs.'}
   Assert-BootstrapNoReparsePoint $helperRoot 'elevated helper journal' -PathOnly
  }
  Complete-InstallationEvidenceStage 'forward'
@@ -227,39 +363,72 @@ $summary=Complete-InstallationEvidence
 $record=[ordered]@{schema='container-audit-installation-elevation-capture-v1';parent_process_id=$parentPid;wrapper_process_id=$PID;
  helper_process_id=if($null -ne $child){[int]$child.ProcessId}else{0};helper_exit_code=$exitCode;helper_sha256=$targetSha;
  helper_stage_evidence_root=$helperRoot;capture_root=$captureRoot;streams=if($null -ne $child){$child.Streams}else{$null};
+ protected_run_root=$Script:InstallationProtectedRunRoot;
  evidence_summary=$summary;failure=$failure;raw_arguments_recorded=$false;secret_values_recorded=$false}
-Assert-BootstrapNoReparsePoint (Split-Path -Parent $resultPath) 'elevation result parent' -PathOnly
+Assert-InstallationEvidenceWriteRoot (Split-Path -Parent $resultPath)
 if(Test-Path -LiteralPath $resultPath){throw 'Elevation result already exists.'}
 [IO.File]::WriteAllText($resultPath,($record|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
 Set-InstallationEvidenceAcl $resultPath $sid
 exit $exitCode
-'@
+'@)
 }
 
 function Invoke-InstallationElevationCapture([string]$Target,[string[]]$Arguments,[string]$AuditBase,[string]$OperatorSid) {
+    if(Test-InstallationEvidencePrivileged){throw 'Elevation capture requires the ordinary operator caller.'}
     $root=Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
     if(-not $root){throw 'Elevation capture requires initialized private evidence.'}
     Assert-BootstrapNoReparsePoint $root 'elevation capture parent' -PathOnly
-    $wrapper=Join-Path $root 'elevation-capture.ps1';$resultPath=Join-Path $root 'elevation-result.json'
-    if((Test-Path -LiteralPath $wrapper) -or (Test-Path -LiteralPath $resultPath)){throw 'Elevation capture target already exists.'}
-    [IO.File]::WriteAllText($wrapper,(Get-InstallationElevationWrapperSource),[Text.UTF8Encoding]::new($true))
-    Set-InstallationEvidenceAcl $wrapper $OperatorSid
+    $resultPath=Join-Path $root 'elevation-result.json'
+    if(Test-Path -LiteralPath $resultPath){throw 'Elevation capture target already exists.'}
+    $control=Get-InstallationEvidenceControlRoot
+    $ancestor=if(Test-Path -LiteralPath $control){$control}else{Split-Path -Parent $control}
+    # Return the supported Korean refusal to the ordinary caller before UAC;
+    # the elevated creator repeats the same trust check before any write.
+    Assert-InstallationEvidenceProtectedPath $ancestor
+    $protectedRun=Join-Path (Join-Path $control 'installation-evidence') ('run-'+[Guid]::NewGuid().ToString('N'))
+    $protectedResult=Join-Path $protectedRun 'elevation-result.json'
     $library=Join-Path (Split-Path -Parent $Target) 'tools\bootstrap_integrity.ps1'
     $targetSha=Get-FileSha256 $Target
-    $argv=@('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$wrapper,$Target,$resultPath,$AuditBase,$OperatorSid,
-        [string]$PID,$targetSha,(Get-FileSha256 $library))+$Arguments
+    $encoded=ConvertTo-InstallationMemoryCommand (Get-InstallationElevationWrapperSource) (@($Target,$protectedResult,$AuditBase,$OperatorSid,[string]$PID,$targetSha,(Get-FileSha256 $library))+$Arguments)
+    $argv=@('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
     $line=($argv|ForEach-Object {ConvertTo-ProcessArgument ([string]$_)}) -join ' '
     $winps=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
     # Verb RunAs cannot share RedirectStandardOutput/Error parameter sets.
     # The supported elevated wrapper captures its finite helper internally.
     $process=Start-Process -FilePath $winps -Verb RunAs -ArgumentList $line -WindowStyle Hidden -Wait -PassThru
-    Assert-BootstrapNoReparsePoint $resultPath 'elevation result' -PathOnly
-    if((Get-Item -LiteralPath $resultPath).Length -gt 65536){throw 'Elevation result is oversized.'}
-    $result=Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-InstallationEvidenceProtectedPath $protectedResult
+    if((Get-Item -LiteralPath $protectedResult).Length -gt 65536){throw 'Elevation result is oversized.'}
+    $resultText=Get-Content -LiteralPath $protectedResult -Raw -Encoding UTF8
+    $result=$resultText | ConvertFrom-Json
     if([string]$result.schema -cne 'container-audit-installation-elevation-capture-v1' -or
         -not(Test-BootstrapJsonInteger $result.parent_process_id) -or [int64]$result.parent_process_id -ne $PID -or
         -not(Test-BootstrapJsonInteger $result.wrapper_process_id) -or [int64]$result.wrapper_process_id -ne [int64]$process.Id -or
-        [int]$result.helper_exit_code -ne [int]$process.ExitCode -or [string]$result.helper_sha256 -cne $targetSha){throw 'Elevated wrapper process/result binding differs.'}
+        [int]$result.helper_exit_code -ne [int]$process.ExitCode -or [string]$result.helper_sha256 -cne $targetSha -or
+        -not(Test-BootstrapSamePath ([string]$result.protected_run_root) $protectedRun)){throw 'Elevated wrapper process/result binding differs.'}
+    # Only this ordinary caller writes the operator-owned result/summary. The
+    # privileged original and all streams remain in the protected run.
+    Assert-InstallationEvidenceWriteRoot $root
+    [IO.File]::WriteAllText($resultPath,$resultText,[Text.UTF8Encoding]::new($false))
+    Set-InstallationEvidenceAcl $resultPath $OperatorSid
+    if($result.helper_stage_evidence_root){
+        $log=Join-Path ([string]$result.helper_stage_evidence_root) 'placement-result.jsonl'
+        if(Test-Path -LiteralPath $log){Assert-InstallationEvidenceProtectedPath $log;[IO.File]::WriteAllText($AuditBase,[IO.File]::ReadAllText($log),[Text.UTF8Encoding]::new($false))}
+        $exports=@{'RestoreEvidencePath'='restore-evidence.json'}
+        if($Arguments -ccontains '-ReplaceExistingVerifiedPortable'){$exports['ReplacementReceiptPath']='replacement-receipt.json'}
+        foreach($name in $exports.Keys){
+            $index=[Array]::IndexOf($Arguments,'-'+$name)
+            if($index -lt 0 -or $index+1 -ge $Arguments.Count){continue}
+            $source=Join-Path ([string]$result.helper_stage_evidence_root) $exports[$name]
+            if(-not(Test-Path -LiteralPath $source)){continue}
+            Assert-InstallationEvidenceProtectedPath $source
+            if((Get-Item -LiteralPath $source).Length -gt 1048576){throw 'Protected installation export is oversized.'}
+            $destination=Get-StrictFullPath $Arguments[$index+1] 'ordinary installation result'
+            Assert-BootstrapNoReparsePoint (Split-Path -Parent $destination) 'ordinary installation result parent' -PathOnly
+            if(Test-Path -LiteralPath $destination){throw 'Ordinary installation result already exists.'}
+            [IO.File]::WriteAllBytes($destination,[IO.File]::ReadAllBytes($source))
+            Set-InstallationEvidenceAcl $destination $OperatorSid
+        }
+    }
     Write-InstallationEvidenceEvent ([ordered]@{event='ELEVATED_FINITE_CHILD';wrapper_pid=[int]$process.Id;helper_pid=[int]$result.helper_process_id;exit_code=[int]$process.ExitCode;result_path=$resultPath;result_sha256=Get-FileSha256 $resultPath})
     return [pscustomobject]@{ExitCode=[int]$process.ExitCode;Id=[int]$result.helper_process_id;WrapperProcessId=[int]$process.Id;ResultPath=$resultPath;
         HelperStageEvidenceRoot=[string]$result.helper_stage_evidence_root;Streams=$result.streams;EvidenceSummary=$result.evidence_summary}
@@ -269,10 +438,8 @@ function Import-BootstrapCanonicalUserProcessApi([string]$VerifiedProducerRoot) 
     $path=Join-Path $VerifiedProducerRoot 'INSTALL_CANONICAL_PORTABLE.ps1'
     Assert-BootstrapNoReparsePoint $path 'verified normal-user process API' -PathOnly
     $manifest=Read-KmtechPortableManifest $VerifiedProducerRoot
-    if([string]$manifest.installer_sha256 -cnotmatch '^[0-9a-f]{64}$' -or (Get-FileSha256 $path) -cne [string]$manifest.installer_sha256){throw 'Normal-user process API byte pin differs.'}
-    $tokens=$null;$errors=$null
-    $tree=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
-    if($errors.Count){throw 'Normal-user process API source parse failed.'}
+    if([string]$manifest.installer_sha256 -cnotmatch '^[0-9a-f]{64}$'){throw 'Normal-user process API byte pin differs.'}
+    $tree=(Get-InstallationVerifiedScript $path ([string]$manifest.installer_sha256) 'Normal-user process API byte pin differs.').Ast
     $functions=@($tree.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq 'Initialize-CanonicalUserProcessApi'})
     if($functions.Count -ne 1){throw 'Normal-user process API definition is ambiguous.'}
     Invoke-Expression $functions[0].Extent.Text
@@ -281,20 +448,20 @@ function Import-BootstrapCanonicalUserProcessApi([string]$VerifiedProducerRoot) 
 }
 
 function Get-InstallationNormalProducerWrapperSource {
-    return @'
+    return ('function Get-InstallationVerifiedScript {'+${function:Get-InstallationVerifiedScript}.ToString()+"}`n"+@'
 $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 if($args.Count -lt 7){exit 1}
 $library=[string]$args[0];$librarySha=[string]$args[1];$resultPath=[string]$args[2]
 $parentPid=[int]$args[3];$sid=[string]$args[4];$executable=[string]$args[5]
 $childArgs=[string[]]@($args|Select-Object -Skip 6)
-if((Get-FileHash -LiteralPath $library -Algorithm SHA256).Hash.ToLowerInvariant() -cne $librarySha){exit 1}
-. $library
+$libraryBlock=Get-InstallationVerifiedScript $library $librarySha
+. $libraryBlock
+$security=Get-BootstrapRelaySecurity $PID
+if($security.elevated -or $security.integrity_level -ne 8192 -or $security.sid -cne $sid -or $security.session_id -le 0){throw 'Finite lifecycle producer wrapper is not the ordinary operator.'}
 $sensitive=@([Environment]::GetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','Process'))
 $root=Initialize-InstallationEvidence (Join-Path (Split-Path -Parent $resultPath) 'normal-producer-capture') $sid $sensitive
-$child=$null;$failure=$null;$security=$null;$exitCode=1
+$child=$null;$failure=$null;$exitCode=1
 try {
- $security=Get-BootstrapRelaySecurity $PID
- if($security.elevated -or $security.integrity_level -ne 8192 -or $security.sid -cne $sid -or $security.session_id -le 0){throw 'Finite lifecycle producer wrapper is not the ordinary operator.'}
  Set-InstallationEvidenceStage 'lifecycle.normal_producer_capture'
  $child=Invoke-InstallationEvidenceChild 'normal-producer' $executable $childArgs
  $exitCode=[int]$child.ExitCode
@@ -310,7 +477,7 @@ if(Test-Path -LiteralPath $resultPath){throw 'Normal producer result already exi
 [IO.File]::WriteAllText($resultPath,($record|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
 Set-InstallationEvidenceAcl $resultPath $sid
 exit $exitCode
-'@
+'@)
 }
 
 function Start-BootstrapNormalProducerWrapper([string]$Line,$Caller,[string[]]$EnvironmentNames,[string[]]$EnvironmentValues) {
@@ -331,17 +498,14 @@ function Invoke-BootstrapNormalFiniteProducer([string]$VerifiedProducerRoot,[str
             Streams=$child.Streams;EvidenceSummary=$summary;Failure=$null;NormalProducerResultPath=''}
     }
     Import-BootstrapCanonicalUserProcessApi $VerifiedProducerRoot
-    $wrapper=Join-Path $root 'normal-producer.ps1';$resultPath=Join-Path $root 'normal-producer-result.json'
-    Assert-BootstrapNoReparsePoint $root 'normal producer private parent' -PathOnly
-    if((Test-Path -LiteralPath $wrapper) -or (Test-Path -LiteralPath $resultPath)){throw 'Normal producer capture target already exists.'}
-    [IO.File]::WriteAllText($wrapper,(Get-InstallationNormalProducerWrapperSource),[Text.UTF8Encoding]::new($true))
-    Set-InstallationEvidenceAcl $wrapper ([string]$caller.sid)
+    # The low token owns this result. Its directory is created by that token;
+    # the elevated manager only reads it and records its own protected evidence.
+    $resultPath=$EvidenceBase+'.normal-producer-result.'+[Guid]::NewGuid().ToString('N')+'.json'
+    if(Test-Path -LiteralPath $resultPath){throw 'Normal producer capture target already exists.'}
     $library=Join-Path $VerifiedProducerRoot 'tools\bootstrap_integrity.ps1'
     $winps=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
-    $argv=@((ConvertTo-BootstrapRelayArgument $winps),'-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',
-        (ConvertTo-BootstrapRelayArgument $wrapper),(ConvertTo-BootstrapRelayArgument $library),(Get-FileSha256 $library),
-        (ConvertTo-BootstrapRelayArgument $resultPath),[string]$PID,[string]$caller.sid,(ConvertTo-BootstrapRelayArgument $Executable))+
-        @($Arguments|ForEach-Object {ConvertTo-BootstrapRelayArgument ([string]$_)})
+    $encoded=ConvertTo-InstallationMemoryCommand (Get-InstallationNormalProducerWrapperSource) (@($library,(Get-FileSha256 $library),$resultPath,[string]$PID,[string]$caller.sid,$Executable)+$Arguments)
+    $argv=@((ConvertTo-BootstrapRelayArgument $winps),'-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
     $names=@('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID','CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID','CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID','CONTAINER_AUDIT_DATA_ROOT')
     $values=[string[]]@($names|ForEach-Object {[string][Environment]::GetEnvironmentVariable($_,'Process')})
     $wrapperPid=Start-BootstrapNormalProducerWrapper ($argv -join ' ') $caller $names $values
@@ -358,7 +522,7 @@ function Invoke-BootstrapNormalFiniteProducer([string]$VerifiedProducerRoot,[str
         $result.security.elevated -isnot [bool] -or $result.security.elevated -or
         [int]$result.security.integrity_level -ne 8192 -or [string]$result.security.sid -cne [string]$caller.sid -or
         [int]$result.security.session_id -ne [int]$caller.session_id){throw 'Normal producer result/security binding differs.'}
-    $expectedRoot=Join-Path $root ('normal-producer-capture.evidence.'+$wrapperPid)
+    $expectedRoot=Join-Path (Split-Path -Parent $resultPath) ('normal-producer-capture.evidence.'+$wrapperPid)
     if(-not(Test-BootstrapSamePath ([string]$result.capture_root) $expectedRoot)){throw 'Normal producer capture root binding differs.'}
     Assert-BootstrapNoReparsePoint $expectedRoot 'normal producer capture root' -PathOnly
     if([int64]$result.producer_process_id -eq 0 -and ([int]$result.exit_code -eq 0 -or $null -eq $result.failure -or $null -ne $result.streams)){throw 'Unstarted normal producer failure binding differs.'}
@@ -484,6 +648,7 @@ function Invoke-InstallationEvidenceChild([string]$Name,[string]$Executable,[str
         $path=''
         $root=Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
         if($root) {
+            Assert-InstallationEvidenceWriteRoot $root
             $path=Join-Path $root ($Name+'-'+$result.pid+'-'+$streamName+'.bin')
             if(Test-Path -LiteralPath $path){throw 'Installer child evidence target already exists.'}
             [IO.File]::WriteAllBytes($path,$safe.bytes)

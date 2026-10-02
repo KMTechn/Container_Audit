@@ -11,6 +11,7 @@ FUNCTIONS = [
     'Get-StrictFullPath', 'Get-FileSha256', 'Assert-BootstrapNoReparsePoint',
     'Protect-InstallationText', 'Get-InstallationFailureDetails',
     'Set-InstallationEvidenceAcl', 'Initialize-InstallationEvidence',
+    'Test-InstallationEvidencePrivileged', 'Assert-InstallationEvidenceWriteRoot',
     'Write-InstallationEvidenceEvent', 'Set-InstallationEvidenceStage',
     'Complete-InstallationEvidenceStage', 'Write-InstallationCaughtFailure',
     'Fail-InstallationEvidenceStages', 'Initialize-InstallationChildCapture',

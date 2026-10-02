@@ -178,7 +178,7 @@ function Start-BootstrapNormalProducerWrapper {
  if($EnvironmentNames.Count -ne 5 -or $EnvironmentValues.Count -ne 5 -or $Caller.sid -cne $sid){throw 'ordinary launch delegation shape differs'}
  $parts=@([regex]::Matches($Line,'"([^"\r\n]*)"|([^\s]+)')|ForEach-Object {if($_.Groups[1].Success){$_.Groups[1].Value}else{$_.Groups[2].Value}})
  & $parts[0] @($parts|Select-Object -Skip 1) | Out-Null
- $paths=@(Get-ChildItem -LiteralPath $env:CA_CONTRACT_ROOT -Filter 'normal-producer-result.json' -Recurse -File)
+ $paths=@(Get-ChildItem -LiteralPath $env:CA_CONTRACT_ROOT -Filter '*.normal-producer-result.*.json' -Recurse -File)
  if($paths.Count -ne 1){throw 'missing isolated finite result'}
  $record=Get-Content -LiteralPath $paths[0].FullName -Raw -Encoding UTF8|ConvertFrom-Json
  return [int]$record.wrapper_process_id
@@ -189,6 +189,24 @@ if($child.ExitCode -ne 0 -or $child.ProcessId -le 0 -or $child.Stdout -notmatch 
  $child.EvidenceSummary.status -cne 'COMPLETE' -or -not $child.Streams.stdout.complete){throw 'finite normal producer proof missing'}
 $record=Get-Content -LiteralPath $child.NormalProducerResultPath -Raw -Encoding UTF8|ConvertFrom-Json
 if($record.wrapper_process_id -eq $record.producer_process_id -or $record.security.elevated -or $record.security.integrity_level -ne 8192){throw 'native-boundary proof or child identity collapsed'}
+'PASS'
+''', engine=engine)
+    assert result.returncode == 0, result.stdout + result.stderr
+@pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
+def test_normal_wrapper_refuses_high_token_before_any_operator_evidence_write(tmp_path, engine):
+    result = run_functions(tmp_path, SOURCE, ["Get-CanonicalFailureDetails"], r'''
+$fixture=Join-Path $env:CA_CONTRACT_ROOT 'bad-token';[void][IO.Directory]::CreateDirectory((Join-Path $fixture 'tools'))
+$library=Join-Path $fixture 'tools\bootstrap_integrity.ps1'
+Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $env:CA_CONTRACT_SOURCE) 'tools\bootstrap_integrity.ps1') -Destination $library
+$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$override="`nfunction Get-BootstrapRelaySecurity {return [pscustomobject]@{sid='$sid';session_id=1;elevated=`$true;integrity_level=12288}}`n"
+[IO.File]::AppendAllText($library,$override,[Text.UTF8Encoding]::new($false))
+$resultPath=Join-Path $fixture 'ordinary-result.json'
+$winps=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+$encoded=ConvertTo-InstallationMemoryCommand (Get-InstallationNormalProducerWrapperSource) @($library,(Get-FileSha256 $library),$resultPath,[string]$PID,$sid,$winps,'-NoProfile','-Command','exit 0')
+$child=Invoke-InstallationEvidenceChild 'bad-token' $winps @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',$encoded)
+if($child.ExitCode -eq 0 -or $child.Stderr -notlike '*not the ordinary operator*'){throw 'wrong token reached finite producer'}
+if((Test-Path -LiteralPath $resultPath) -or @(Get-ChildItem -LiteralPath $fixture -Directory -Filter 'normal-producer-capture*').Count){throw 'wrong token wrote operator evidence'}
 'PASS'
 ''', engine=engine)
     assert result.returncode == 0, result.stdout + result.stderr
