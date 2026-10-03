@@ -34,6 +34,12 @@ param(
     [switch]$InjectRestoreFailureAfterDisplaceForTest,
     [switch]$RepairAbandonedInstallationParent,
     [switch]$RepairOwnedInstallationParent,
+    [switch]$RecordRollbackContinuation,
+    [switch]$CompleteRollbackContinuation,
+    [string]$RollbackAuditPath = '',
+    [string]$RollbackAuditSha256 = '',
+    [string]$RollbackContinuationPath = '',
+    [string]$RollbackContinuationSha256 = '',
     [string]$AbandonedRecoverySourceManifestSha256 = '',
     [int]$AbandonedRecoveryParentProcessId = 0
 )
@@ -216,6 +222,160 @@ function Invoke-SelfElevated {
     Write-Output ('installation_evidence_status='+[string]$summary.status)
     Write-Output ('installation_evidence_summary_path='+[string]$summary.summary_path)
     exit $process.ExitCode
+}
+
+function Write-ContainerRollbackContinuation([string]$AuditPath,[string]$AuditSha256) {
+    Assert-InstallationEvidenceWriteRoot $Script:InstallationEvidenceRoot
+    Assert-InstallationEvidenceProtectedPath $Script:InstallationEvidenceRoot
+    Assert-BootstrapNoReparsePoint $AuditPath 'rollback origin audit' -PathOnly
+    if ($AuditSha256 -cnotmatch '^[0-9a-f]{64}$' -or (Get-Item -LiteralPath $AuditPath).Length -gt 1048576 -or
+        (Get-FileSha256 $AuditPath) -cne $AuditSha256) {throw 'Rollback origin audit hash/size differs.'}
+    $origin=Get-Content -LiteralPath $AuditPath -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+    $active=Read-ContainerWriterFence
+    if ([IO.Path]::GetFileName([string]$origin.stage_evidence_root) -cnotmatch '\.evidence\.([1-9][0-9]{0,9})$') {
+        throw 'Rollback origin controller PID binding differs.'
+    }
+    $ownerPid=[int]$Matches[1]
+    $ownerStarted=(Get-Process -Id $ownerPid -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')
+    $manifestSha=Get-FileSha256 (Join-Path $PSScriptRoot 'portable-manifest.json')
+    if ([string]$origin.schema -cne 'container-audit-canonical-portable-install-v2' -or
+        [string]$origin.operation -cne 'INSTALL' -or -not $origin.failure -or
+        -not (Test-SamePath ([string]$origin.install_root) $installRootFull) -or
+        [string]$origin.source_manifest_sha256 -cne $manifestSha -or
+        [string]$origin.code_replacement.transaction_id -cne [string]$active.replacement_transaction_id -or
+        [string]$active.orchestrator_sha256 -cne (Get-FileSha256 (Join-Path $PSScriptRoot 'INSTALL_CANONICAL_PORTABLE.ps1')) -or
+        [string]$origin.runtime_preimage_binding.status -cne 'PASS' -or
+        $origin.runtime_preimage_binding.relay_count -notin @(0,1) -or
+        [bool]$origin.scheduled_writer.preimage.present) {throw 'Rollback origin audit binding differs.'}
+    $path=[string]$origin.code_replacement.receipt_path
+    Assert-InstallationEvidenceProtectedPath $path
+    $receipt=Read-BootstrapReplacementReceipt $path ([string]$origin.code_replacement.receipt_sha256)
+    if ([string]$receipt.new.manifest_sha256 -cne $manifestSha -or
+        [string]$receipt.transaction_id -cne [string]$active.replacement_transaction_id) {throw 'Rollback continuation successor or transaction differs.'}
+    $state=Get-BootstrapVerifiedReplacementRestoreState $receipt $path $installRootFull 'container_audit' ([string]$receipt.transaction_id) (Get-FileSha256 $BootstrapScriptPath)
+    if ([string]$state.status -cne 'PENDING') {throw 'Rollback continuation requires verified pending replacement.'}
+    $store=Join-Path (Get-InstallationEvidenceControlRoot) 'rollback-continuations'
+    New-InstallationProtectedDirectory $store $OperatorSid
+    $directory=Join-Path $store ([string]$receipt.transaction_id)
+    if (Test-Path -LiteralPath $directory) {throw 'Rollback continuation path already exists.'}
+    New-InstallationProtectedDirectory $directory $OperatorSid
+    $copy=Join-Path $directory 'replacement-receipt.json'
+    $bytes=[IO.File]::ReadAllBytes($path)
+    $stream=[IO.FileStream]::new($copy,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    try {$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)} finally {$stream.Dispose()}
+    Set-InstallationEvidenceAcl $copy $OperatorSid
+    if ((Get-FileSha256 $copy) -cne [string]$origin.code_replacement.receipt_sha256) {throw 'Rollback continuation receipt copy differs.'}
+    # The immutable original's self-path is preserved. This explicit recovery
+    # journal authenticates the durable byte copy outside rotating evidence runs.
+    $record=[ordered]@{schema='container-audit-rollback-continuation-v1';event='ROLLBACK_CONTINUATION';install_root=$installRootFull;
+        operator_sid=$OperatorSid;operator_local_appdata_root=$OperatorLocalAppDataRoot;
+        owner_process_id=$ownerPid;owner_started_at_utc=$ownerStarted;
+        session_id=[string]$active.session_id;attempt_id=[string]$active.attempt_id;
+        orchestrator_sha256=[string]$active.orchestrator_sha256;writer_contract_sha256=[string]$active.writer_contract_sha256;
+        source_manifest_sha256=$manifestSha;receipt_path=$copy;receipt_binding_path=$path;receipt_sha256=[string]$origin.code_replacement.receipt_sha256;
+        old_manifest_sha256=[string]$receipt.old.manifest_sha256;new_manifest_sha256=[string]$receipt.new.manifest_sha256;
+        transaction_id=[string]$receipt.transaction_id;preimage=$origin.preimage;relay_count=[int]$origin.runtime_preimage_binding.relay_count;
+        original_relays=@($origin.rollback.original_relays);
+        runtime_preimage_binding=$origin.runtime_preimage_binding;
+        original_audit_sha256=$AuditSha256;secret_values_recorded=$false}
+    $saved=Write-BootstrapReplacementReceipt (Join-Path $directory 'continuation-journal.json') $record
+    Write-InstallationEvidenceEvent ([ordered]@{event='ROLLBACK_CONTINUATION';path=$saved.path;sha256=$saved.sha256;
+        receipt_path=$path;receipt_sha256=$record.receipt_sha256;old_manifest_sha256=$record.old_manifest_sha256;new_manifest_sha256=$record.new_manifest_sha256})
+    if($Script:InstallationEvidenceFailed){throw 'Rollback continuation journal was not durably recorded.'}
+    return $saved
+}
+
+function Read-ContainerRollbackContinuation([string]$Path,[string]$ExpectedSha256) {
+    Assert-InstallationEvidenceProtectedPath $Path
+    $record=Read-BootstrapReplacementReceipt $Path $ExpectedSha256
+    $directory=Join-Path (Join-Path (Get-InstallationEvidenceControlRoot) 'rollback-continuations') ([string]$record.transaction_id)
+    if ([string]$record.schema -cne 'container-audit-rollback-continuation-v1' -or
+        [string]$record.event -cne 'ROLLBACK_CONTINUATION' -or [string]$record.transaction_id -cnotmatch '^[0-9a-f]{32}$' -or
+        -not (Test-SamePath $Path (Join-Path $directory 'continuation-journal.json')) -or
+        -not (Test-SamePath ([string]$record.receipt_path) (Join-Path $directory 'replacement-receipt.json')) -or
+        -not (Test-SamePath ([string]$record.install_root) $installRootFull) -or
+        [string]$record.operator_sid -cne $OperatorSid -or
+        -not (Test-SamePath ([string]$record.operator_local_appdata_root) $OperatorLocalAppDataRoot) -or
+        [string]$record.source_manifest_sha256 -cne (Get-FileSha256 (Join-Path $PSScriptRoot 'portable-manifest.json')) -or
+        [string]$record.orchestrator_sha256 -cne (Get-FileSha256 (Join-Path $PSScriptRoot 'INSTALL_CANONICAL_PORTABLE.ps1'))) {
+        throw 'Rollback continuation protected journal binding differs.'
+    }
+    Assert-InstallationEvidenceProtectedPath $directory
+    Assert-InstallationEvidenceProtectedPath ([string]$record.receipt_path)
+    $receipt=Read-BootstrapReplacementReceipt ([string]$record.receipt_path) ([string]$record.receipt_sha256)
+    if (-not (Test-SamePath ([string]$receipt.receipt_path) ([string]$record.receipt_binding_path)) -or
+        [string]$record.old_manifest_sha256 -cne [string]$receipt.old.manifest_sha256 -or
+        [string]$record.new_manifest_sha256 -cne [string]$receipt.new.manifest_sha256 -or
+        [string]$record.new_manifest_sha256 -cne [string]$record.source_manifest_sha256 -or
+        [string]$record.transaction_id -cne [string]$receipt.transaction_id) {throw 'Rollback continuation receipt/manifests differ.'}
+    [void](Get-BootstrapVerifiedReplacementRestoreState $receipt ([string]$record.receipt_binding_path) $installRootFull 'container_audit' ([string]$record.transaction_id) (Get-FileSha256 $BootstrapScriptPath))
+    return $record
+}
+
+function Read-ContainerRollbackRunPreimage {
+    $key=[Microsoft.Win32.Registry]::Users.OpenSubKey(($OperatorSid+'\Software\Microsoft\Windows\CurrentVersion\Run'))
+    try {
+        $exists=$null -ne $key -and @($key.GetValueNames()) -ccontains 'KMTech.ContainerAudit.Relay'
+        if (-not $exists) {return [pscustomobject]@{exists=$false;kind='';data=''}}
+        return [pscustomobject]@{exists=$true;kind=[string]$key.GetValueKind('KMTech.ContainerAudit.Relay');
+            data=[string]$key.GetValue('KMTech.ContainerAudit.Relay',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)}
+    } finally {if($null -ne $key){$key.Dispose()}}
+}
+
+function Complete-ContainerRollbackContinuation {
+    # Close evidence under the same live delegated placement authority. Code,
+    # startup state, and the user's runtime are read back without mutation.
+    if (-not (Test-InstallationEvidencePrivileged)) {throw 'Rollback completion requires protected evidence authority.'}
+    $record=Read-ContainerRollbackContinuation $RollbackContinuationPath $RollbackContinuationSha256
+    $receipt=Read-BootstrapReplacementReceipt ([string]$record.receipt_path) ([string]$record.receipt_sha256)
+    $state=Get-BootstrapVerifiedReplacementRestoreState $receipt ([string]$record.receipt_binding_path) $installRootFull 'container_audit' ([string]$record.transaction_id) (Get-FileSha256 $BootstrapScriptPath)
+    if ([string]$state.status -cne 'RESTORED') {throw 'Rollback completion requires exact restored code.'}
+    Assert-BootstrapNoReparsePoint $RollbackAuditPath 'rollback completion audit' -PathOnly
+    if ((Get-Item -LiteralPath $RollbackAuditPath).Length -gt 1048576 -or (Get-FileSha256 $RollbackAuditPath) -cne $RollbackAuditSha256) {throw 'Rollback completion audit differs.'}
+    $audit=Get-Content -LiteralPath $RollbackAuditPath -Raw -Encoding UTF8|ConvertFrom-Json
+    if ([string]$audit.status -cnotin @('PASS_RESTORED_VERIFIED_DATA_PRESERVED','FAILED_ROLLED_BACK') -or
+        $audit.rollback.code_exact -isnot [bool] -or -not $audit.rollback.code_exact -or
+        $audit.rollback.runtime_restored -isnot [bool] -or -not $audit.rollback.runtime_restored -or
+        [string]$audit.code_replacement.receipt_sha256 -cne [string]$record.receipt_sha256 -or
+        -not (Test-SamePath ([string]$audit.install_root) $installRootFull)) {throw 'Rollback completion state is unproven.'}
+    $run=Read-ContainerRollbackRunPreimage
+    if ([bool]$record.preimage.exists -ne [bool]$run.exists -or [string]$record.preimage.kind -cne [string]$run.kind -or
+        [string]$record.preimage.data -cne [string]$run.data) {throw 'Rollback completion Run differs.'}
+    $control=Join-Path $OperatorLocalAppDataRoot 'KMTech\DirectSync\container_audit\control\writer-session'
+    $relayRoot=Join-Path $OperatorLocalAppDataRoot 'KMTech\DirectSync\container_audit'
+    if ($env:CONTAINER_AUDIT_DATA_ROOT) {$relayRoot=Join-Path (Get-StrictFullPath $env:CONTAINER_AUDIT_DATA_ROOT 'completion data root') 'direct_sync'}
+    $stop=Join-Path $relayRoot 'control\container_audit_user_relay.stop.json'
+    $active=Read-ContainerWriterFence -ControlRoot $control
+    if ([string]$active.session_id -cne $WriterFenceSessionId -or [string]$active.attempt_id -cne $WriterFenceAttemptId -or
+        [string]$active.replacement_transaction_id -cne $WriterFenceReplacementTransactionId -or
+        (Test-Path -LiteralPath $stop)) {throw 'Rollback completion authority or stop marker differs.'}
+    $processes=@(Get-CimInstance Win32_Process|Where-Object {[string]$_.ExecutablePath -ieq (Join-Path $installRootFull 'runtime\pythonw.exe') -and [string]$_.CommandLine -match '--container-audit-user-relay'})
+    if ($processes.Count -ne [int]$record.relay_count) {throw 'Rollback completion relay count differs.'}
+    if ([int]$record.relay_count -eq 1) {
+        $proof=$audit.exact_launch
+        $identity=Get-BootstrapRelayExpectedIdentity $installRootFull ([string]$record.preimage.data)
+        $statusPath=Join-Path $relayRoot 'status\container_audit_user_relay.json'
+        $status=Get-Content -LiteralPath $statusPath -Raw -Encoding UTF8|ConvertFrom-Json
+        $security=Get-BootstrapRelaySecurity ([int]$processes[0].ProcessId)
+        $caller=[pscustomobject]@{sid=$OperatorSid;session_id=[int]$proof.session_id}
+        if ([string]$proof.status -cne 'PROVEN' -or [int]$proof.process_id -ne [int]$processes[0].ProcessId -or
+            -not (Test-BootstrapRelayReadback $identity $processes[0] $security $caller $status ([DateTime]$processes[0].CreationDate) '' (Get-FileSha256 $statusPath))) {throw 'Rollback completion resident READY is unproven.'}
+    }
+    if ($receipt.PSObject.Properties['startup_update_preimage']) {
+        $saved=Get-Content -LiteralPath (Join-Path ([string]$receipt.startup_update_preimage) 'preimage.json') -Raw -Encoding UTF8|ConvertFrom-Json
+        $startupControl=Join-Path (Split-Path -Parent $installRootFull) 'update-control'
+        foreach($item in @($saved.files)) {
+            $target=Join-Path $startupControl ([string]$item.name)
+            if ([bool]$item.exists -ne (Test-Path -LiteralPath $target -PathType Leaf) -or
+                ($item.exists -and (Get-FileSha256 $target) -cne [string]$item.sha256)) {throw 'Rollback completion startup pointer differs.'}
+        }
+        if ($saved.task.exists -or $null -ne (Get-ScheduledTask -TaskName ([string]$saved.task.name) -ErrorAction SilentlyContinue)) {throw 'Rollback completion startup task remains.'}
+    }
+    $completed=[ordered]@{schema='container-audit-rollback-completed-v1';status='COMPLETE';
+        journal_sha256=$RollbackContinuationSha256;receipt_sha256=[string]$record.receipt_sha256;
+        old_manifest_sha256=[string]$record.old_manifest_sha256;new_manifest_sha256=[string]$record.new_manifest_sha256;
+        audit_sha256=$RollbackAuditSha256;completed_at_utc=[DateTime]::UtcNow.ToString('o');secret_values_recorded=$false}
+    [void](Write-BootstrapReplacementReceipt (Join-Path (Split-Path -Parent $RollbackContinuationPath) 'continuation-completed.json') $completed)
 }
 
 function Enter-ContainerPlacementWriterFence {
@@ -847,10 +1007,13 @@ function Restore-ContainerStartupUpdatePreimage([string]$Root, [string]$Director
     foreach ($item in @($saved.files)) {
         $target = Join-Path $control ([string]$item.name)
         Assert-NoReparsePoint $target 'startup update restore target'
+        if ($item.exists -isnot [bool]) { throw 'STARTUP_UPDATE_RESTORE_EXISTENCE_INVALID' }
+        if (($item.exists -and (Test-Path -LiteralPath $target -PathType Leaf) -and
+            (Get-FileSha256 $target) -ceq [string]$item.sha256) -or
+            (-not $item.exists -and -not (Test-Path -LiteralPath $target))) {continue}
         if (Test-Path -LiteralPath $target) {
             Move-Item -LiteralPath $target -Destination (Join-Path $full ('failed-' + [guid]::NewGuid().ToString('N') + '-' + $item.name))
         }
-        if ($item.exists -isnot [bool]) { throw 'STARTUP_UPDATE_RESTORE_EXISTENCE_INVALID' }
         if ($item.exists) {
             $original = Join-Path $full ([string]$item.name)
             if ((Get-FileSha256 $original) -cne [string]$item.sha256) { throw 'STARTUP_UPDATE_RESTORE_BYTES_DIFFER' }
@@ -1112,6 +1275,21 @@ if (-not $DryRun.IsPresent -and (-not $testOverride -or $Uninstall.IsPresent -or
     }
 }
 try {
+if ($CompleteRollbackContinuation) {
+    if ($DryRun -or $Uninstall -or $RecordRollbackContinuation -or $ReplaceExistingVerifiedPortable -or $RestoreVerifiedReplacement -or $testOverride) {throw 'Rollback completion accepts only protected evidence inputs.'}
+    Complete-ContainerRollbackContinuation
+    'rollback_continuation_status=COMPLETE'
+    exit 0
+}
+if ($RecordRollbackContinuation) {
+    if ($DryRun -or $Uninstall -or $ReplaceExistingVerifiedPortable -or $RestoreVerifiedReplacement -or
+        -not $WriterFencePreparedReceiptPath -or -not $WriterFenceDelegationToken -or $testOverride) {
+        throw 'Rollback continuation recording requires the live canonical placement authority.'
+    }
+    [void](Write-ContainerRollbackContinuation $RollbackAuditPath $RollbackAuditSha256)
+    'rollback_continuation_status=RECORDED'
+    exit 0
+}
 if ($RestoreVerifiedReplacement.IsPresent) {
     if ($DryRun.IsPresent -or $Uninstall.IsPresent -or $ReplaceExistingVerifiedPortable.IsPresent) {
         throw 'RestoreVerifiedReplacement cannot be combined with placement, uninstall, or DryRun.'
@@ -1136,9 +1314,16 @@ if ($RestoreVerifiedReplacement.IsPresent) {
         $receipt = Read-BootstrapReplacementReceipt `
             -Path $ReplacementReceiptPath `
             -ExpectedSha256 $ReplacementReceiptSha256
+        $receiptBindingPath=$ReplacementReceiptPath
+        if ($RollbackContinuationPath) {
+            $continuation=Read-ContainerRollbackContinuation $RollbackContinuationPath $RollbackContinuationSha256
+            if (-not (Test-SamePath $ReplacementReceiptPath ([string]$continuation.receipt_path)) -or
+                $ReplacementReceiptSha256 -cne [string]$continuation.receipt_sha256) {throw 'Rollback continuation restore input differs.'}
+            $receiptBindingPath=[string]$continuation.receipt_binding_path
+        }
         $result = Invoke-BootstrapVerifiedReplacementRestore `
             -Receipt $receipt `
-            -ReceiptPath $ReplacementReceiptPath `
+            -ReceiptPath $receiptBindingPath `
             -InstallRoot $installRootFull `
             -ExpectedAppId 'container_audit' `
             -ExpectedTransactionId $ReplacementTransactionId `

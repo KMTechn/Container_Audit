@@ -1,4 +1,4 @@
-# 운영·환경·장애 복구
+﻿# 운영·환경·장애 복구
 
 canonical 부모는 상승 direct/wrapper helper의 보호 원본 receipt와 restore evidence를 그 실행의
 bound evidence root·journal SHA로 읽는다. 일반 caller 사본의 존재를 요구하지 않는다.
@@ -962,3 +962,24 @@ receipt regressions cover AI/order admission, legacy conservative rejection,
 raw-hash binding and all permission negatives. Formal declaration regeneration
 remains zero; the canonical receipt reader changes but its bootstrap pin remains
 frozen until the separately committed rehearsal declaration refresh.
+
+### 끝나지 않은 되돌리기 이어 하기 — sub-172 소스 계약
+
+고친 설치기의 보호 control/rollback-continuations/transaction 자리에는 최초 receipt의
+바이트 그대로인 사본과 SHA, 최초 자기 경로, 옛·새 manifest, 원 Run/relay 증명,
+owner PID/시작 시각과 session/attempt를 묶은 불변 journal을 한 번만 쓴다. 최근 실행
+증거 회전과 별도로 남기며 완료 표식도 한 번만 작성한다. canonical 준비/release와
+복구 journal의 시각은 기존 fence JSON 문자열 파서를 써 PS5.1/7의 wire 값이 같다.
+
+같은 successor packet으로 설치기를 다시 실행하면 원 owner가 종료했고 원 receipt,
+양쪽 전체 코드/record/ACL, startup preimage, source와 operator가 모두 같은지 먼저
+검사한다. PlanOnly는 VERIFIED_PENDING만 보고한다. 실제 재진입은 기존 authority와
+placement admission 안에서 원 receipt가 가리키는 옛 트리, 정확한 Run, task/pointer,
+옛 일반 사용자 relay를 복원한다. 코드가 이미 복원된 경우도 남은 단계를 확인하며
+완료 표식 뒤 다음 PlanOnly는 NOT_FOUND다. 불일치는 기록·트리 변경 전에 한국어로
+거절한다. 기록 자체를 다시 쓰거나 guard를 우회하지 않는다.
+
+G처럼 고치기 전 installer의 기록만 있는 상태는 이 계약의 입력이 아니다. 공개
+legacy receipt self-path 규칙은 그대로이고, 새 journal로 검증된 사본만 최초 binding
+경로와 구별한다. 128개를 넘는 retained continuation은 보수적으로 거절하며 자동
+정리하지 않는다. 독립 native 랩 수용과 장기간 보관 정책은 별도 확인이 필요하다.

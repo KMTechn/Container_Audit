@@ -45,9 +45,9 @@ def _distinct_replacement(source):
     # this owned canonical session, preserving the real validator and arguments.
     # Elevation and ACL changes remain disabled by the original layout switch.
     text = text.replace(bypass, 'if (-not $DryRun.IsPresent) {')
-    entered = '    . $WriterFenceHelperPath'
+    entered = '    . (Get-InstallationVerifiedScript $WriterFenceHelperPath $ExpectedWriterFenceHelperSha256)'
     assert text.count(entered) == 1
-    helper_loaded = '    . $writerFenceHelperFull'
+    helper_loaded = "    . (Get-InstallationVerifiedScript $writerFenceHelperFull $ExpectedWriterFenceHelperSha256 'Production placement writer fence helper byte pin differs.')"
     assert text.count(helper_loaded) == 1
     text = text.replace(helper_loaded, helper_loaded + r'''
     if ($testOverride) {
