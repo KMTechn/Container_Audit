@@ -8,10 +8,11 @@ TrustedInstaller 거절 회귀는 PS5.1/7에서 RED→GREEN이며 helper 로딩 
 hardened BA/원본 owner 결속은 유지한다. IW/LM 같은 부류는 해당 소유 레인에 남는다.
 
 예행 F(205f877): CA-T1의 native task 되읽기는 통과했으나 설치는 FAILED_ROLLED_BACK이다.
-후속 CA-R1: INSTALL_THIS_PC.ps1:1564에서 쓴 replacement receipt를 :1588에서 다시 쓰며
-bootstrap_integrity.ps1:1799의 `Replacement receipt path already exists.`가 첫 실패(native 73)다.
-receipt 원본/경로·startup preimage 결속을 보존하는 별도 교정과 독립 검토가 필요하다. 이번 범위에서
-AllowReplace guard 교정·우회와 재시도0이다. 실제 9/10구간 및 old2302파일·Run·ACL·비상승 relay
+CA-R1 소스 교정: startup preimage를 먼저 내구 보관하고 실제 보호 run 경로에 완성된 replacement
+receipt를 한 번만 쓴다. startup 초기화는 그 preimage를 재사용하며 기록 덮어쓰기·guard 완화는 없다.
+PS5.1/7 회귀는 초기화 실패→지원 preimage 복원→새 run 재설치, 기존 receipt 보존과 위조 거절을
+검사한다. 랩 예행 G와 독립 수용은 [sub-162](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-162/REPORT.md)에서 별도로 판정한다.
+F의 최초 중복 쓰기 실패(native 73), 실제 9/10구간 및 old2302파일·Run·ACL·비상승 relay
 복원 PROVEN, 시작 화면/업데이트 NOT TESTED는 [예행 F](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-156/CA-5TH-REHEARSAL-F.md)를 따른다.
 
 SYSTEM task XML의 unsupported ServiceAccount 요소를 제거했다(trigger/action/주체/조건 불변).

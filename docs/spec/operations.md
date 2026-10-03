@@ -197,6 +197,11 @@ canonical relay 작업의 주체 판정도 같은 SID 해석을 쓴다. PS5.1/7�
 INSTALL_THIS_PC.ps1:1564의 최초 receipt 작성 뒤 :1588이 같은 경로를 교체 허용 없이 다시 작성한다.
 지원 rollback과 독립 old2302파일·Run·ACL·비상승 relay 복원은 PROVEN이다. 시작 화면/업데이트 확인은
 NOT TESTED이며 재시도0이다. 원 예외·보호 원본·실제 9/10구간은 위 예행 F 문서에 보존한다.
+CA-R1 교정 후 replacement receipt는 startup 설정이 있는 경우 원 startup preimage의 경로·hash를
+처음부터 포함해 실제 보호 run 경로에 한 번만 작성한다. startup 변경은 그 뒤에 실행하며 같은
+preimage를 사용한다. 새 실행은 새 run/attempt 경로를 사용하고 기존 receipt를 덮어쓰지 않는다.
+실패 복원·원 receipt hash/old-new identity 검사는 유지한다. PS5.1/7 소스 회귀와 실제 예행 G의
+범위·결과는 [sub-162](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-162/REPORT.md)를 따른다.
 켜진 작업자가 이미 있으면 로그온 작업은 DEFERRED로 남기며 업무를 멈추지 않는다.
 수명주기 교체/복구는 진행 중 자동 전이나 실행 중 작업이 있으면 거절한다.
 기존 policy·pointer·journal·task XML/ACL은 보호된 `.startup-update-install.<attempt>`에

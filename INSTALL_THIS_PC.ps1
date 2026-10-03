@@ -903,7 +903,9 @@ function Initialize-ContainerStartupUpdate([string]$Root) {
     Set-InstallationEvidenceStage 'startup.trust' 'startup'
     Assert-ContainerStartupUpdateTrust $Root
     Set-InstallationEvidenceStage 'startup.save_preimage' 'startup'
-    $Script:StartupUpdatePreimage = Save-ContainerStartupUpdatePreimage $Root 'install'
+    if ($null -eq $Script:StartupUpdatePreimage) {
+        $Script:StartupUpdatePreimage = Save-ContainerStartupUpdatePreimage $Root 'install'
+    }
     $managed = Get-StrictFullPath (Split-Path -Parent $Root) 'startup update managed root'
     Assert-NoReparsePoint $managed 'startup update managed root'
     Set-InstallationEvidenceStage 'startup.prepare_directories' 'startup'
@@ -1551,7 +1553,7 @@ try {
             created_at = (Get-Date).ToUniversalTime().ToString('o')
             helper_sha256 = Get-FileSha256 $BootstrapScriptPath
             integrity_helper_sha256 = Get-FileSha256 $BootstrapIntegrityFunctions
-            receipt_path = Get-StrictFullPath $BootstrapBoundParameters['ReplacementReceiptPath'] 'replacement receipt binding path'
+            receipt_path = $replacementReceiptFull
             install_root = $installRootFull
             install_parent = $applicationParent
             rollback_root = $replacementRollbackRoot
@@ -1560,6 +1562,15 @@ try {
             old = $oldIdentity
             new = $newIdentity
             identity_or_credential_copied = $false
+        }
+        # Bind the original startup state before any startup mutation. The
+        # immutable receipt is created once, at its actual protected run path.
+        if (-not $testOverride -and
+            (Test-Path -LiteralPath (Join-Path $installRootFull 'app\auto-update-settings.json') -PathType Leaf)) {
+            Set-InstallationEvidenceStage 'placement.startup_preimage'
+            $Script:StartupUpdatePreimage = Save-ContainerStartupUpdatePreimage $installRootFull 'install'
+            $receiptPayload['startup_update_preimage'] = [string]$Script:StartupUpdatePreimage.path
+            $receiptPayload['startup_update_preimage_sha256'] = [string]$Script:StartupUpdatePreimage.sha256
         }
         $replacementReceipt = Write-BootstrapReplacementReceipt `
             -Path $replacementReceiptFull `
@@ -1581,12 +1592,6 @@ try {
     Write-Output "integrity_record=$(Join-Path $installRootFull $IntegrityFileName)"
     Set-InstallationEvidenceStage 'placement.startup_update'
     Initialize-ContainerStartupUpdate $installRootFull
-    Set-InstallationEvidenceStage 'placement.startup_receipt_binding'
-    if ($replacementApplied -and $null -ne $Script:StartupUpdatePreimage) {
-        $receiptPayload['startup_update_preimage'] = [string]$Script:StartupUpdatePreimage.path
-        $receiptPayload['startup_update_preimage_sha256'] = [string]$Script:StartupUpdatePreimage.sha256
-        $replacementReceipt = Write-BootstrapReplacementReceipt -Path $replacementReceiptFull -Payload $receiptPayload
-    }
     Set-InstallationEvidenceStage 'placement.tls_bootstrap'
     $tlsCaBootstrap = Install-CurrentUserTlsCaBootstrap $TlsCaBundlePath $OperatorLocalAppDataRoot
     if ($null -eq $tlsCaBootstrap) { Write-Output "tls_ca_bootstrap_status=ABSENT" }
