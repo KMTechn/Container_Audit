@@ -508,9 +508,22 @@ PS5.1/PS7 mutex RED/GREEN includes absent/wrong lease rejection before UAC.
 race readback and startup-task restore. Baseline41ab6b4 has four AI/order
 failures; edited source passes the 22-case PS5.1/PS7 regression, including two
 owned native ACL checks. Historical hash-only receipts cannot recover ACE order;
-Packet, supported lab repair, rehearsal D and independent
-acceptance remain open. The coordinator approved raw-bound new receipts and
+The coordinator approved raw-bound new receipts and
 AI-only SHA proof for legacy receipts; the existing hash field meaning remains
 unchanged and legacy ACE-order differences stay rejected. Receipt readers and
 restore guards now share the central comparison. See the sub-149 report and
 SDDL-COMPARE-SITES.md for committed evidence and remaining lab limits.
+Final rehearsal source c40c267/d49f4c2 has 505 PASS/2 SKIP across 16 isolated
+file packs (product/test bytes unchanged by the final docs-only commit).
+Stock packet d49f4c2 was built once; 2303-file host ZIP and guest Stage parity
+are PROVEN. All five supported repair steps restored the old ordinary relay;
+an inherited 65-character receipt-SHA typo was corrected against the preserved
+original, with the initial failure retained. Limited PlanOnly passed. The single
+installation FAILED at startup task XML registration (LogonType:ServiceAccount),
+after placement/aggregate/new raw-bound receipt passed; a separate helper
+evidence-root binding failure obscured the native child exit in the outer result.
+Rollback restored old 2302-file code, original Run, protected ACLs and Medium
+ordinary relay READY. No reinstall or unrelated-class correction was attempted.
+Fresh host parent-induced AI and native owner-change regression remain UNPROVEN;
+preserved real lab P-to-PAI descriptors and native ACE/protection negatives are
+separate evidence. Independent acceptance remains coordinator owned.
