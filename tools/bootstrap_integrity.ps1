@@ -1,4 +1,4 @@
-$BootstrapIntegrityFileName = "bootstrap-integrity.json"
+﻿$BootstrapIntegrityFileName = "bootstrap-integrity.json"
 $BootstrapIntegritySchema = "container-audit-bootstrap-integrity-v1"
 
 function ConvertTo-BootstrapPrincipalSid([string]$Identity) {
