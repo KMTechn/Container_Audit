@@ -3,7 +3,6 @@
 """Register this PC's local Container_Audit producer identity without storing raw secrets."""
 
 from __future__ import annotations
-from storage_utils import RemoteAttempt
 
 import argparse
 import ctypes
@@ -22,6 +21,11 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+SITE_PACKAGES = ROOT / "site-packages"
+if SITE_PACKAGES.is_dir() and str(SITE_PACKAGES) not in sys.path:
+    sys.path.insert(1, str(SITE_PACKAGES))
+
+from storage_utils import RemoteAttempt  # noqa: E402
 
 from writer_session_fence import writer_admission, writer_sink  # noqa: E402
 

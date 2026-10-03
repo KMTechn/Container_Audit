@@ -46,6 +46,31 @@ TEST_POSSESSION_PUBLIC_JWK = {
 }
 
 
+def test_installed_registration_tool_loads_bundled_dependencies_directly(tmp_path):
+    import subprocess
+    import sys
+    from tools.build_portable_release_candidate import _copy_application
+
+    app = tmp_path / "installed" / "app"
+    _copy_application(REPO_ROOT, app)
+    requests_package = app / "site-packages" / "requests"
+    requests_package.mkdir(parents=True)
+    requests_package.joinpath("__init__.py").write_text(
+        "print('task-bundled-requests-loaded')\n", encoding="utf-8"
+    )
+    # -S also removes the developer interpreter's installed packages. The
+    # documented direct tool command must prepare both portable import roots.
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-B",
+         str(app / "tools" / "register_container_audit_worker_pc.py"), "--help"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert result.returncode == 0, result.stderr
+    assert "task-bundled-requests-loaded" in result.stdout
+    assert "--admin-recovery-two-phase" in result.stdout
+
+
 class _FakePossessionKey:
     def __enter__(self):
         return self

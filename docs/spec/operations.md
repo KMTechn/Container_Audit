@@ -149,6 +149,7 @@ writer inventory는 sink의 소스 행 번호도 포함한다. UI 등 앞선 코
 일치 검사는 유지하며, 행 번호 차이를 무시하거나 설치 시 pin을 다시 계산하지 않는다.
 
 canonical installer는 초기에 로드하는 bootstrap 자체의 고정 SHA256부터 검증한다.
+portable 등록·관리자 복구의 직접 명령 `runtime/python.exe -I -B app/tools/register_container_audit_worker_pc.py`는 도구 자기 위치의 `app`와 `app/site-packages`를 먼저 싣는다. 격리 subprocess `--help`는 경로 준비만 증명하며 실제 등록·서버 복구 수용은 별도다.
 기존 `derive_container_writer_sinks.py --write/--check`가 이 pin과 inventory를 함께 갱신/검사하며
 bootstrap은 checkout EOL 변환에서 제외해 bytes를 보존한다. bootstrap의 strict path·ancestor/reparse 검사 후 고정 consumer
 manifest SHA256과 leaf SHA256을 검증하고 shared PowerShell을 dot-source한다.
