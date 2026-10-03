@@ -534,6 +534,16 @@ function Assert-ProtectedCodeAncestors([string]$Path) {
             )) {
                 throw 'Update path component owner is not privileged.'
             }
+            if($full -in @('C:\KMTech','C:\KMTech\Apps')){
+                try{Protect-KmtechCodeAncestors 'C:\KMTech\Apps\Container_Audit' -AdmissionOnly -ProtectedAncestor $full}
+                catch{
+                    $code=[int]$_.Exception.Data['installation_preparation_exit_code']
+                    if($code -notin @(61,62,63)){throw}
+                    $message=switch($code){62{'Unsafe update path component.'}63{'Update path component owner is not privileged.'}61{'Update path component is user mutable.'}}
+                    throw [InvalidOperationException]::new($message,$_.Exception)
+                }
+                $full=[IO.Path]::GetDirectoryName($full);$leaf=$false;continue
+            }
             $mask = if ($leaf) { 0x500D0156 } else { 0x500D0150 }
             foreach ($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
                 if ($rule.AccessControlType -eq 'Allow' -and

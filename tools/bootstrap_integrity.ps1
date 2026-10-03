@@ -994,11 +994,14 @@ function Get-StrictFullPath([string]$Path, [string]$Purpose) {
     return $full
 }
 
-function Protect-KmtechCodeAncestors([string]$CodeParent,[switch]$AdmissionOnly,[switch]$BeforeAppCreation) {
+function Protect-KmtechCodeAncestors([string]$CodeParent,[switch]$AdmissionOnly,[switch]$BeforeAppCreation,[string]$ProtectedAncestor) {
     # Deliberately persistent, non-recursive protection of these two shared paths.
     # Never restore their old permissions as part of an app rollback/uninstall.
     if (-not ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($CodeParent))).Equals('C:\KMTech\Apps',[StringComparison]::OrdinalIgnoreCase)) {
         throw 'Code parent must be a direct application directory under C:\KMTech\Apps.'
+    }
+    if($ProtectedAncestor -and (-not $AdmissionOnly -or $ProtectedAncestor -notin @('C:\KMTech','C:\KMTech\Apps'))){
+        throw 'Protected ancestor admission requires one literal shared ancestor and read-only admission.'
     }
     $records=@(); $plans=@()
     function Get-KmtechAncestorAclShapeKey($Acl) {
@@ -1006,10 +1009,11 @@ function Protect-KmtechCodeAncestors([string]$CodeParent,[switch]$AdmissionOnly,
             [string]$_.IdentityReference.Value+'|'+[int64]$_.FileSystemRights+'|'+[string]$_.AccessControlType+'|'+[int]$_.InheritanceFlags+'|'+[int]$_.PropagationFlags+'|'+[int]$_.IsInherited
         } | Sort-Object) -join ';')
     }
-    foreach ($path in @('C:\KMTech','C:\KMTech\Apps')) {
+    $ancestorPaths=if($ProtectedAncestor){@($ProtectedAncestor)}else{@('C:\KMTech','C:\KMTech\Apps')}
+    foreach ($path in $ancestorPaths) {
         $reason=''
         if (-not (Test-Path -LiteralPath $path)) {
-            if($AdmissionOnly){continue}
+            if($AdmissionOnly -and -not $ProtectedAncestor){continue}
             $ancestor=Split-Path -Parent $path
             $entry=Get-Item -LiteralPath $ancestor -ErrorAction Stop
             if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { $reason='상위 폴더가 재분석 지점입니다' }
@@ -1035,6 +1039,7 @@ function Protect-KmtechCodeAncestors([string]$CodeParent,[switch]$AdmissionOnly,
         $targetShape=($rules.Count -eq 5 -and $acl.AreAccessRulesProtected -and $actualKey -ceq $targetKey)
         if($owner -cne 'S-1-5-32-544'){$reason='폴더 소유자가 예상과 다릅니다'}
         if(-not $reason -and -not $defaultShape -and -not $targetShape){$reason='권한 모양이 지원하는 기본값 또는 보호된 값과 다릅니다'}
+        if(-not $reason -and $ProtectedAncestor -and -not $targetShape){$reason='권한 모양이 지원하는 보호된 값과 다릅니다'}
         if($reason) {
             Write-InstallationEvidenceEvent ([ordered]@{event='ANCESTOR_ACL_REJECTED';path=$path;reason=$reason;before_sddl=$before;changed=$false})
             $failure=[InvalidOperationException]::new("설치 폴더 권한을 확인하세요: $path ($reason). 지원 담당자에게 문의하세요.")
@@ -1314,6 +1319,17 @@ function Assert-BootstrapProtectedRelayPath([string]$Path,[switch]$AllowSupporte
         )){
             $failure=[InvalidOperationException]::new('Relay path owner is not privileged.')
             $failure.Data['installation_preparation_exit_code']=63;throw $failure
+        }
+        if($shared -and -not $AllowSupportedPreparation){
+            try{Protect-KmtechCodeAncestors 'C:\KMTech\Apps\Container_Audit' -AdmissionOnly -ProtectedAncestor $full}
+            catch{
+                $code=[int]$_.Exception.Data['installation_preparation_exit_code']
+                if($code -notin @(61,62,63)){throw}
+                $message=switch($code){62{'Relay path contains a reparse point.'}63{'Relay path owner is not privileged.'}61{'Relay path is user mutable.'}}
+                $failure=[InvalidOperationException]::new($message,$_.Exception)
+                $failure.Data['installation_preparation_exit_code']=$code;throw $failure
+            }
+            $full=[IO.Path]::GetDirectoryName($full);$leaf=$false;continue
         }
         $mask=if($leaf){0x500D0156}else{0x500D0150}
         foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {

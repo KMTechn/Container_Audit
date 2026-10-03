@@ -492,5 +492,14 @@ decision; execute the separate LAB-REPAIR-PLAN before the next rehearsal. Actual
 UAC/privileged ownership, ordinary resident readiness and lab acceptance are
 NOT TESTED here. General lifecycle convergence remains a later task; coordinator
 owns independent review, fifth rehearsal and shared hub acceptance.
+
+2026-10-03 sub-142: literal shared ancestor recovery admission now uses the same
+exact target-shape predicate as preparation; other leaf masks remain unchanged.
+Native PS5.1/PS7 admission has 70 PASS with an explicit owner-admission seam.
+Formal declarations/pins remain frozen by the task instruction. Rehearsal
+declaration regeneration, stock packet, supported lab repair and one installation
+are reported separately in sub-142; independent acceptance remains coordinator
+owned. This source verification does not prove privileged repair/ordinary relay
+readiness or release acceptance.
 Ordinary repair admission now validates the actual owning-thread lease; its
 PS5.1/PS7 mutex RED/GREEN includes absent/wrong lease rejection before UAC.

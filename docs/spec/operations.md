@@ -872,3 +872,21 @@ are retained. Actual privileged ownership, UAC, lab installation/GUI and release
 acceptance remain NOT TESTED. The legacy sub-125 lab build has no qualifying
 reentry record and is deliberately refused; its separate lab repair plan is not
 a product hash exception. [Evidence and limits](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-127/REPORT.md).
+
+### Shared ancestor recovery admission — 2026-10-03
+
+Strict relay/evidence, installation and startup-update admission use the existing
+ancestor ACE-set/Administrators-owner/protection/reparse check for the literal
+`C:\KMTech` and `C:\KMTech\Apps`. Read-only `ProtectedAncestor` admission requires
+the protected target; it cannot prepare missing/default folders or write ACLs.
+Other paths retain their existing strict leaf masks and rejection diagnostics.
+The updater retains its initial code trust check before loading bootstrap, then
+rechecks with the validated library's exact ancestor admission before proceeding.
+
+PS5.1/PS7 native D: fixtures cover both literal leaves, supported recovery
+admission, default/extra-write/user-owner/reparse rejection, unchanged ACLs and
+strict rejection of a matching shape at another path (70 PASS; unchanged owner
+admission is translated for the non-elevated host). Old committed helpers reject
+the supported shape. Rehearsal-only declarations/packet and lab repair/install
+evidence are separate from the formal source change; see
+[the task report](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-142/REPORT.md).

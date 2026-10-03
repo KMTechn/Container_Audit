@@ -5,6 +5,7 @@ param(
     [string]$CodeRoot = ''
 )
 $ErrorActionPreference = 'Stop'
+$script:StartupUpdateBootstrapLoaded=$false
 function Assert-Protected([string]$Path, [switch]$Recursive, [hashtable]$Verified = $null) {
     if ($null -eq $Verified) { $Verified = @{} }
     $full = [IO.Path]::GetFullPath($Path)
@@ -16,6 +17,17 @@ function Assert-Protected([string]$Path, [switch]$Recursive, [hashtable]$Verifie
         $acl = Get-Acl -LiteralPath $full -ErrorAction Stop
         $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
         if ($owner -notin @('S-1-5-18','S-1-5-32-544')) { throw 'Update storage owner is not privileged.' }
+        if($script:StartupUpdateBootstrapLoaded -and $full -in @('C:\KMTech','C:\KMTech\Apps')){
+            try{Protect-KmtechCodeAncestors 'C:\KMTech\Apps\Container_Audit' -AdmissionOnly -ProtectedAncestor $full}
+            catch{
+                $code=[int]$_.Exception.Data['installation_preparation_exit_code']
+                if($code -notin @(61,62,63)){throw}
+                $message=switch($code){62{'Reparse point in update storage.'}63{'Update storage owner is not privileged.'}61{'Update storage is user mutable.'}}
+                throw [InvalidOperationException]::new($message,$_.Exception)
+            }
+            $Verified[$full]=$leaf
+            $full=[IO.Path]::GetDirectoryName($full);$leaf=$false;continue
+        }
         $mask = if ($leaf) { 0x500D0156 } else { 0x500D0150 }
         foreach ($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
             if ($rule.AccessControlType -eq 'Allow' -and
@@ -48,6 +60,10 @@ foreach ($directory in @('update-control','versions')) {
 }
 $IntegrityHelper = Join-Path $PSScriptRoot 'bootstrap_integrity.ps1'
 . $IntegrityHelper
+$script:StartupUpdateBootstrapLoaded=$true
+# The first pass must validate code before any helper load. Once the validated
+# shared library is available, require its exact shared-ancestor target shape.
+Assert-Protected $trustedApplication
 $SharedLeaf = Get-BootstrapSharedPortableLeaf $InstallRoot
 . $SharedLeaf
 

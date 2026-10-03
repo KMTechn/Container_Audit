@@ -218,7 +218,8 @@ def test_native_unprotected_parent_repair_preserves_protected_children(tmp_path,
                            ['New-InstallationProtectedDirectory', 'Set-InstallationEvidenceAcl',
                             'Assert-BootstrapNoReparsePoint', 'Get-StrictFullPath'], r'''
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$fixture=Join-Path 'D:\KMTech\program-improvement-20260912\work\program\w9setupprep\sub-127\ntfs' ([Guid]::NewGuid().ToString('N').Substring(0,8))
+$nativeRoot=if($env:CA_NTFS_TEST_ROOT){$env:CA_NTFS_TEST_ROOT}else{$env:CA_CONTRACT_ROOT}
+$fixture=Join-Path $nativeRoot ([Guid]::NewGuid().ToString('N').Substring(0,8))
 [void][IO.Directory]::CreateDirectory($fixture)
 $original=(Get-Acl -LiteralPath $fixture).Sddl
 Add-Type -TypeDefinition @'
