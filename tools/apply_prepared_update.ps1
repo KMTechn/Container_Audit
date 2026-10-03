@@ -6,6 +6,14 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $script:StartupUpdateBootstrapLoaded=$false
+# Pure bootstrap copy: the path must be admitted before that library is loaded.
+function Test-BootstrapPrivilegedOwnerSid([string]$Sid) {
+    return $Sid -cin @(
+        'S-1-5-18', 'S-1-5-32-544',
+        'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+    )
+}
+
 function Assert-Protected([string]$Path, [switch]$Recursive, [hashtable]$Verified = $null) {
     if ($null -eq $Verified) { $Verified = @{} }
     $full = [IO.Path]::GetFullPath($Path)
@@ -16,7 +24,7 @@ function Assert-Protected([string]$Path, [switch]$Recursive, [hashtable]$Verifie
         if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse point in update storage.' }
         $acl = Get-Acl -LiteralPath $full -ErrorAction Stop
         $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
-        if ($owner -notin @('S-1-5-18','S-1-5-32-544')) { throw 'Update storage owner is not privileged.' }
+        if (-not (Test-BootstrapPrivilegedOwnerSid $owner)) { throw 'Update storage owner is not privileged.' }
         if($script:StartupUpdateBootstrapLoaded -and $full -in @('C:\KMTech','C:\KMTech\Apps')){
             try{Protect-KmtechCodeAncestors 'C:\KMTech\Apps\Container_Audit' -AdmissionOnly -ProtectedAncestor $full}
             catch{

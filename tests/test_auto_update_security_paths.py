@@ -22,6 +22,11 @@ $ErrorActionPreference='Stop'
 $tokens=$null; $errors=$null
 $tree=[Management.Automation.Language.Parser]::ParseFile($Source,[ref]$tokens,[ref]$errors)
 if ($errors.Count) { throw 'Source parse error' }
+$ownerSource=if((Split-Path -Leaf $Source) -ceq 'INSTALL_THIS_PC.ps1'){Join-Path (Split-Path -Parent $Source) 'tools\bootstrap_integrity.ps1'}else{$Source}
+$ownerTree=[Management.Automation.Language.Parser]::ParseFile($ownerSource,[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'Owner source parse error'}
+$ownerDefinition=$ownerTree.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Test-BootstrapPrivilegedOwnerSid'},$true)
+if($null -ne $ownerDefinition){Invoke-Expression $ownerDefinition.Extent.Text}
 $definition=$tree.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $Function},$true)
 if ($null -eq $definition) { throw 'Required boundary function absent' }
 Invoke-Expression $definition.Extent.Text

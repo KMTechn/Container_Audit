@@ -528,10 +528,7 @@ function Assert-ProtectedCodeAncestors([string]$Path) {
             $entry = Get-Item -LiteralPath $full -ErrorAction Stop
             if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Unsafe update path component.' }
             $acl = Get-Acl -LiteralPath $full -ErrorAction Stop
-            if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin @(
-                'S-1-5-18','S-1-5-32-544',
-                'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
-            )) {
+            if (-not (Test-BootstrapPrivilegedOwnerSid $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value)) {
                 throw 'Update path component owner is not privileged.'
             }
             if($full -in @('C:\KMTech','C:\KMTech\Apps')){

@@ -3,6 +3,9 @@
 CA-T1: task 주체·trigger를 SID로 해석하는 같은 함수가 세 소비자와 canonical 주체 판정에 적용된다.
 PS5.1/7 실제 소비자 회귀에서 이름 표현은 수용하고 다른 SID·해석 실패·action 변조는 거절한다.
 정식 선언/pin은 동결 상태이며 예행 F·독립 수용은 [sub-156](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-156/REPORT.md)에서 별도로 확인한다.
+특권 경로 소유자의 SID 셋은 설치·relay·업데이트 적용에 동일하게 적용한다. 업데이트의
+TrustedInstaller 거절 회귀는 PS5.1/7에서 RED→GREEN이며 helper 로딩 전 신뢰 검사와
+hardened BA/원본 owner 결속은 유지한다. IW/LM 같은 부류는 해당 소유 레인에 남는다.
 
 SYSTEM task XML의 unsupported ServiceAccount 요소를 제거했다(trigger/action/주체/조건 불변).
 호스트 회귀 PROVEN과 랩 등록·단일 설치 수용은 별도이며

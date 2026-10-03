@@ -11,6 +11,13 @@ function ConvertTo-BootstrapPrincipalSid([string]$Identity) {
     } catch { throw [InvalidOperationException]::new('Task user SID cannot be resolved.', $_.Exception) }
 }
 
+function Test-BootstrapPrivilegedOwnerSid([string]$Sid) {
+    return $Sid -cin @(
+        'S-1-5-18', 'S-1-5-32-544',
+        'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+    )
+}
+
 function Protect-InstallationText([string]$Text, [int]$Limit = 4096) {
     # Same known-value replacement and message markers as the runtime redactors.
     $values = [Collections.Generic.List[string]]::new()
@@ -1345,9 +1352,7 @@ function Assert-BootstrapProtectedRelayPath([string]$Path,[switch]$AllowSupporte
             $failure.Data['installation_preparation_exit_code']=62;throw $failure
         }
         $acl=Get-Acl -LiteralPath $full -ErrorAction Stop
-        if($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -cnotin @(
-            'S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
-        )){
+        if(-not(Test-BootstrapPrivilegedOwnerSid $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value)){
             $failure=[InvalidOperationException]::new('Relay path owner is not privileged.')
             $failure.Data['installation_preparation_exit_code']=63;throw $failure
         }
