@@ -3601,6 +3601,8 @@ class ContainerAudit:
                 return False
 
     def _checkpoint_audit_event(self, event_type: str, **kwargs) -> Dict[str, Any]:
+        if 'worker_record' not in kwargs:
+            kwargs['worker_record'] = self._worker_record_context()
         payload = self._prepare_event_log_entry(event_type, synchronous=True, **kwargs)
         if not payload:
             raise ValueError('checkpoint audit payload is invalid')
@@ -3609,6 +3611,19 @@ class ContainerAudit:
                     else self.log_file_path)).name,
                 'local_only': payload['local_only'], 'log_entry': payload['log_entry'],
                 'worker_record': payload['worker_record']}
+
+    def _checkpoint_stored_audit_event(self, event_type: str, *, stored_worker_record, **kwargs):
+        return self._checkpoint_audit_event(
+            event_type, worker_record=dict(stored_worker_record or {}), **kwargs)
+
+    def _project_stored_audit_event(self, event: Mapping[str, Any], *, stored_worker_record) -> bool:
+        path = self._completion_projection_log_path(event['log_file_name'])
+        if event['local_only']:
+            path = local_only_event_log_path(path, local_events_dir=getattr(self, 'local_events_folder', ''))
+        return self._write_event_log_entry({
+            'log_file_path': str(path), 'log_entry': dict(event['log_entry']),
+            'local_only': event['local_only'], 'worker_record': dict(stored_worker_record or {}),
+        }, synchronous=True)
 
     def _stage_checkpoint_audit_events(self, state: Mapping[str, Any]) -> bool:
         try:
@@ -3743,7 +3758,7 @@ class ContainerAudit:
             projection_path = self._completion_projection_log_path(
                 str(contract["projection_log_name"])
             )
-            return self._log_event(
+            return self._log_stored_event(
                 str(contract["event_type"]),
                 detail=dict(contract["event_detail"]),
                 synchronous=True,
@@ -3752,7 +3767,7 @@ class ContainerAudit:
                 log_file_path_override=str(projection_path),
                 deduplicate=True,
                 worker_name_override=str(contract["projection_worker_name"]),
-                worker_record=contract.get("worker_record", {}),
+                stored_worker_record=contract.get("worker_record", {}),
             )
         except (KeyError, TypeError, ValueError) as exc:
             self._record_log_write_error(
@@ -3867,7 +3882,7 @@ class ContainerAudit:
             canonical_event_name = str(
                 contract.get("canonical_event_name") or ""
             )
-            return self._log_event(
+            return self._log_stored_event(
                 str(contract["event_type"]),
                 detail=dict(contract["event_detail"]),
                 synchronous=True,
@@ -3877,7 +3892,7 @@ class ContainerAudit:
                 log_file_path_override=str(projection_path),
                 deduplicate=True,
                 worker_name_override=str(contract["projection_worker_name"]),
-                worker_record=contract.get("worker_record", {}),
+                stored_worker_record=contract.get("worker_record", {}),
             )
         except (KeyError, TypeError, ValueError) as exc:
             self._record_log_write_error(f"감사 outbox 투영 오류: {exc}")
@@ -12909,7 +12924,11 @@ class ContainerAudit:
             and receipts.get(head.raw_barcode) == head.scan_id
         )
         audit_durable = False
-        if not already_durable:
+        if head.audit_event is not None and head.audit_event['log_entry']['event'] != 'SCAN_OK':
+            already_durable = yield from self._durably_reject_preflight_hold_head(
+                head, self._preflight_held_scan_decision(head.raw_barcode))
+            audit_durable = already_durable
+        elif not already_durable:
             decision = self._preflight_held_scan_decision(head.raw_barcode)
             if decision.status != SCAN_ACCEPTED:
                 already_durable = yield from self._durably_reject_preflight_hold_head(
@@ -13056,13 +13075,19 @@ class ContainerAudit:
         )
         if not decision.event_name:
             return False
-        durable = yield lambda: self._log_event(
-            decision.event_name,
-            detail=dict(decision.event_detail),
-            synchronous=True,
-            idempotency_key=f"preflight-held-reject:{head.scan_id}",
-            deduplicate=True,
-        )
+        event = head.audit_event
+        if event is None:
+            event = self._checkpoint_audit_event(
+                decision.event_name, detail=dict(decision.event_detail),
+                idempotency_key=f"preflight-held-reject:{head.scan_id}", deduplicate=True)
+            try:
+                snapshot = yield lambda: self._preflight_hold_store().bind_head_audit(head.scan_id, event)
+            except Exception:
+                return False
+            self._preflight_hold_snapshot = snapshot
+            event = snapshot.items[0].audit_event
+        durable = yield lambda: self._project_stored_audit_event(
+            event, stored_worker_record=event.get('worker_record', {}))
         return bool(durable)
 
     def _persist_existing_held_scan_audit(
@@ -13072,6 +13097,39 @@ class ContainerAudit:
         scan_id: str,
         scan_position: int,
     ) -> bool:
+        snapshot = getattr(self, '_preflight_hold_snapshot', None)
+        event = next((item.audit_event for item in getattr(snapshot, 'items', ())
+                      if item.scan_id == scan_id), None)
+        if event is not None:
+            return self._project_stored_audit_event(
+                event, stored_worker_record=event.get('worker_record', {}))
+        # Pre-binding versions already kept the first row in the outbox or CSV.
+        # Read that projection rather than rebuilding it from today's signal.
+        path = str(self._completion_projection_log_path())
+        local_only = bool(getattr(self.current_tray, 'is_test_tray', False))
+        if local_only:
+            path = str(local_only_event_log_path(path, local_events_dir=getattr(self, 'local_events_folder', '')))
+        def original_rows():
+            for source in self._event_log_outbox(path).directory.glob('*.json'):
+                payload = json.loads(source.read_text(encoding='utf-8'))
+                if payload.get('log_file_path') == path:
+                    yield payload['log_entry'], dict(payload.get('worker_record') or {})
+            if Path(path).exists():
+                with open(path, encoding='utf-8-sig', newline='') as stream:
+                    for row in csv.DictReader(stream):
+                        yield row, None
+        for row, record in original_rows():
+            if row.get('event') != 'SCAN_OK':
+                continue
+            detail = json.loads(row.get('details') or '{}')
+            if detail.get('idempotency_key') == f'preflight-held-scan:{scan_id}':
+                if record is None:
+                    identity = record_identity(detail)
+                    record = {**identity, 'enabled': True} if identity else {}
+                return self._write_event_log_entry({
+                    'log_file_path': path, 'log_entry': row, 'local_only': local_only,
+                    'worker_record': record,
+                }, synchronous=True)
         scan_times = list(getattr(self.current_tray, "scan_times", []) or [])
         index = max(0, int(scan_position) - 1)
         interval = 0.0
@@ -13083,8 +13141,9 @@ class ContainerAudit:
             ):
                 interval = max(0.0, (current_time - previous_time).total_seconds())
         return bool(
-            self._log_event(
+            self._log_stored_event(
                 "SCAN_OK",
+                stored_worker_record={},
                 detail=build_scan_ok_detail(
                     raw_barcode,
                     interval_sec=interval,
@@ -14480,8 +14539,25 @@ class ContainerAudit:
         state = self._current_tray_state_snapshot()
         state["scanned_barcodes"].append(raw_barcode)
         state["scan_times"].append(now.isoformat())
+        held_audit = None
         if _durable_scan_id:
             state.setdefault("preflight_scan_receipts", {})[raw_barcode] = _durable_scan_id
+            hold = getattr(self, '_preflight_hold_snapshot', None)
+            if getattr(hold, 'items', ()) and hold.items[0].scan_id == _durable_scan_id:
+                held_audit = hold.items[0].audit_event
+                if held_audit is None:
+                    held_audit = self._checkpoint_audit_event(
+                        'SCAN_OK', detail=build_scan_ok_detail(raw_barcode, interval_sec=interval,
+                            scan_position=len(state['scanned_barcodes']),
+                            scan_contract_version=self.SCAN_CONTRACT_VERSION),
+                        event_timestamp=now.isoformat(),
+                        idempotency_key=f'preflight-held-scan:{_durable_scan_id}', deduplicate=True)
+                    try:
+                        hold = yield lambda: self._preflight_hold_store().bind_head_audit(_durable_scan_id, held_audit)
+                    except Exception:
+                        return False
+                    self._preflight_hold_snapshot = hold
+                    held_audit = hold.items[0].audit_event
         try:
             saved = yield lambda: self._save_tray_state_snapshot(state)
         except Exception:
@@ -14512,7 +14588,11 @@ class ContainerAudit:
             scan_position=len(tray.scanned_barcodes),
             scan_contract_version=self.SCAN_CONTRACT_VERSION,
         )
-        audit_durable = yield lambda: self._log_event('SCAN_OK', detail=detail, **scan_log_kwargs)
+        if held_audit is not None:
+            audit_durable = yield lambda: self._project_stored_audit_event(
+                held_audit, stored_worker_record=held_audit.get('worker_record', {}))
+        else:
+            audit_durable = yield lambda: self._log_event('SCAN_OK', detail=detail, **scan_log_kwargs)
         if len(tray.scanned_barcodes) >= tray.tray_size:
             if _durable_scan_log:
                 self._preflight_completion_due = True
@@ -14709,8 +14789,8 @@ class ContainerAudit:
             "was_restored_session": bool(was_restored_session),
             "log_may_have_been_attempted": bool(log_may_have_been_attempted),
             "transfer_detail": dict(transfer_detail),
-            "worker_record": (dict(existing["worker_record"]) if (existing := self._active_completion_event_contract())
-                              and existing.get("transfer_intent_id") == intent_id and "worker_record" in existing
+            "worker_record": (dict(existing.get("worker_record", {})) if (existing := self._active_completion_event_contract())
+                              and existing.get("transfer_intent_id") == intent_id
                               else self._worker_record_context()),
         }
 
@@ -14881,11 +14961,11 @@ class ContainerAudit:
         undo_attempt = self._cancel_event_attempt(
             undo_key, self.current_tray.cancel_event_attempts, {'undone_barcode': last_barcode},
         )
-        undo_event = self._checkpoint_audit_event('SCAN_UNDO',
+        undo_event = self._checkpoint_stored_audit_event('SCAN_UNDO',
             detail=dict(undo_attempt['detail']), idempotency_key=undo_key,
             event_timestamp=undo_attempt['timestamp'],
             worker_name_override=undo_attempt.get('worker_name', self.worker_name),
-            worker_record=undo_attempt.get('worker_record', {}),
+            stored_worker_record=undo_attempt.get('worker_record', {}),
             log_file_path_override=str(self._completion_projection_log_path(undo_attempt['log_file_name'])))
         self.current_tray.pending_audit_events.append(undo_event)
         self.scanned_listbox.delete(0)
@@ -14942,10 +15022,10 @@ class ContainerAudit:
             reset_attempt = self._cancel_event_attempt(reset_key, self.current_tray.cancel_event_attempts, reset_detail)
             state_snapshot = self._current_tray_state_snapshot()
             state_snapshot.setdefault('pending_audit_events', []).append(
-                self._checkpoint_audit_event('TRAY_RESET', detail=reset_detail,
+                self._checkpoint_stored_audit_event('TRAY_RESET', detail=reset_detail,
                     idempotency_key=reset_key, event_timestamp=reset_attempt['timestamp'],
                     worker_name_override=reset_attempt.get('worker_name', self.worker_name),
-                    worker_record=reset_attempt.get('worker_record', {}),
+                    stored_worker_record=reset_attempt.get('worker_record', {}),
                     log_file_path_override=str(self._completion_projection_log_path(reset_attempt['log_file_name']))))
             state_snapshot['audit_reset_committed'] = True
             try:
@@ -16362,7 +16442,8 @@ class ContainerAudit:
         log_file_path_override: str = "",
         deduplicate: bool = False,
         worker_name_override: str = "",
-        worker_record: Optional[Mapping[str, Any]] = None,
+        *,
+        worker_record: Mapping[str, Any],
     ) -> bool:
         projection_worker_name = persistent_operator_name(
             worker_name_override or self._record_worker_name()
@@ -16376,7 +16457,7 @@ class ContainerAudit:
         if not target_log_file_path: return False
         normalized_idempotency_key = str(idempotency_key or "").strip()
         raw_detail = dict(detail or {})
-        record = self._worker_record_context() if worker_record is None else dict(worker_record)
+        record = dict(worker_record or {})
         if record.get("enabled") is True:
             raw_detail.update(record_identity(record))
         if not normalized_idempotency_key:
@@ -16443,8 +16524,15 @@ class ContainerAudit:
         payload = self._prepare_event_log_entry(
             event_type, detail, synchronous, canonical_event_name,
             idempotency_key, event_timestamp, log_file_path_override,
-            deduplicate, worker_name_override, worker_record,
+            deduplicate, worker_name_override,
+            worker_record=self._worker_record_context() if worker_record is None else worker_record,
         )
+        return self._write_event_log_entry(payload, synchronous=synchronous)
+
+    def _log_stored_event(self, event_type: str, *, stored_worker_record, **kwargs) -> bool:
+        return self._log_event(event_type, worker_record=dict(stored_worker_record or {}), **kwargs)
+
+    def _write_event_log_entry(self, payload, *, synchronous: bool) -> bool:
         if not payload:
             return False
         target_log_file_path, log_entry = payload['log_file_path'], payload['log_entry']
@@ -16463,6 +16551,7 @@ class ContainerAudit:
                     self.log_queue.join()
                 store.drain(append=append_event_log_entry_idempotent)
                 self._last_log_event_was_replay = not store.take_projection_result(target_log_file_path, log_entry)
+                event_type = log_entry['event']
                 if not payload['local_only'] and event_type in {
                     "TRAY_COMPLETE",
                     "PRODUCT_EXCHANGE_COMPLETED",
@@ -17262,11 +17351,11 @@ class ContainerAudit:
         record["status"] = "SETTLING"
         atomic_write_json(path, record, ensure_ascii=False)
         contract = record["contract"]
-        if not self._log_event("TRAY_COMPLETE", detail=record["detail"], synchronous=True,
+        if not self._log_stored_event("TRAY_COMPLETE", detail=record["detail"], synchronous=True,
                 idempotency_key=contract["idempotency_key"], event_timestamp=contract["observed_at"],
                 log_file_path_override=str(self._completion_projection_log_path(contract["projection_log_name"])),
                 worker_name_override=contract["projection_worker_name"], deduplicate=True,
-                worker_record=contract.get("worker_record", {})):
+                stored_worker_record=contract.get("worker_record", {})):
             return False
         if record["intent_id"]:
             runtime = coordinator or self._transfer_seal_runtime()
@@ -17395,10 +17484,10 @@ class ContainerAudit:
                     for event in source.get('pending_audit_events', []):
                         if event not in events:
                             events.append(event)
-                events.extend([self._checkpoint_audit_event('TRAY_COMPLETE', detail=record['detail'],
+                events.extend([self._checkpoint_stored_audit_event('TRAY_COMPLETE', detail=record['detail'],
                     idempotency_key=contract['idempotency_key'], event_timestamp=contract['observed_at'],
                     worker_name_override=contract['projection_worker_name'],
-                    worker_record=contract.get('worker_record', {}),
+                    stored_worker_record=contract.get('worker_record', {}),
                     log_file_path_override=str(self._completion_projection_log_path(contract['projection_log_name']))),
                     self._checkpoint_audit_event('TRAY_SHORT_CONFIRMATION_UNDONE',
                         detail={'completion_id': undo['completion_id']},
@@ -17566,7 +17655,7 @@ class ContainerAudit:
                     day = datetime.datetime.fromisoformat(context["exchanged_at"]).strftime('%Y%m%d')
                     projection_log_name = f"이적작업이벤트로그_{worker}_{day}.csv"
                 projection_log_path = str(self._completion_projection_log_path(projection_log_name))
-                if not self._log_event("PRODUCT_EXCHANGE_COMPLETED", detail={
+                if not self._log_stored_event("PRODUCT_EXCHANGE_COMPLETED", detail={
                     "defective_barcodes": json.loads(row["old_barcodes_json"]),
                     "good_barcodes": json.loads(row["new_barcodes_json"]),
                     "item_code": row["item_id"], "exchange_intent_id": row["intent_id"],
@@ -17574,7 +17663,7 @@ class ContainerAudit:
                     "device_id": context["device_id"]}, synchronous=True,
                     idempotency_key="scan-exchange:" + row["intent_id"], deduplicate=True,
                     event_timestamp=context["exchanged_at"], worker_name_override=row["operator"],
-                    log_file_path_override=projection_log_path, worker_record=context.get("worker_record", {})):
+                    log_file_path_override=projection_log_path, stored_worker_record=context.get("worker_record", {})):
                     continue
                 exchanges.store.mark_scan_exchange_projected(row["intent_id"])
             result["releases"] = self._work_operation_lease_releases((), active_lease_id=active_lease_id)
@@ -18992,7 +19081,7 @@ class ContainerAudit:
         if attempts is None:  # a cancellation not bound to the saved tray
             attempts = vars(self).setdefault("_cancel_event_attempts", {})
         attempt = self._cancel_event_attempt(key, attempts, detail)
-        logged = self._log_event(
+        logged = self._log_stored_event(
             event_type,
             detail=dict(attempt["detail"]),
             synchronous=True,
@@ -19000,7 +19089,7 @@ class ContainerAudit:
             deduplicate=True,
             event_timestamp=attempt["timestamp"],
             worker_name_override=attempt.get('worker_name', getattr(self, 'worker_name', '')),
-            worker_record=attempt.get('worker_record', {}),
+            stored_worker_record=attempt.get('worker_record', {}),
             log_file_path_override=(
                 str(self._completion_projection_log_path(attempt["log_file_name"]))
                 if attempt["log_file_name"]
@@ -20212,13 +20301,14 @@ class ContainerAudit:
             self._inline_exchange_target = ""
             self._update_current_item_label()
             self._update_center_display()
-            if not (yield lambda: self._log_event("PRODUCT_EXCHANGE_COMPLETED", detail={
+            if not (yield lambda: self._log_stored_event("PRODUCT_EXCHANGE_COMPLETED", detail={
                 "defective_barcodes": [old], "good_barcodes": [barcode], "item_code": tray.item_code,
                 "exchange_intent_id": row["intent_id"], "exchange_idempotency_key": key,
                 "exchanged_at": timestamp, "device_id": str(getattr(self, "computer_id", ""))},
                 synchronous=True, idempotency_key="scan-exchange:" + row["intent_id"], deduplicate=True,
                 event_timestamp=timestamp, worker_name_override=row["operator"],
-                log_file_path_override=str(projection_log_path), worker_record=exchange_worker_record)):
+                log_file_path_override=str(projection_log_path),
+                stored_worker_record=(coordinator.store.scan_exchange_context(row['intent_id']) or {}).get('worker_record', {}))):
                 self.show_status_message("교환은 저장되었습니다. 기록 전송을 다시 확인합니다.", self.COLOR_PRIMARY)
                 return False
             yield lambda: coordinator.store.mark_scan_exchange_projected(row["intent_id"])

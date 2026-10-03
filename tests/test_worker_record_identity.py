@@ -157,6 +157,7 @@ def test_park_after_rename_keeps_snapshot_filename(flow, windows, tmp_path):
 def test_csv_wire_golden_and_enabled_details(flow, windows, tmp_path, enabled):
     app = _app(flow, tmp_path, enabled=enabled)
     entry = app._prepare_event_log_entry("PRODUCT_SCAN", detail={"product_barcode": "part"},
+        worker_record=app._worker_record_context(),
         idempotency_key="identity-golden", event_timestamp="2026-10-04T00:00:00")["log_entry"]
     golden = json.loads((Path(__file__).parent / "fixtures/worker_record_identity_disabled.json").read_text(encoding="utf-8"))
     if enabled:

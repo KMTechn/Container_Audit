@@ -1,5 +1,6 @@
 import csv
 import hashlib
+import json
 import queue
 import sqlite3
 import threading
@@ -354,6 +355,7 @@ def _app(tmp_path, client):
     app.item_catalog = ItemCatalog(app.items_data)
     app.parked_trays_dir = str(tmp_path / "parked")
     app.log_file_path = str(tmp_path / "events.csv")
+    app.save_folder = str(tmp_path)
     app.root = ScheduledRoot()
     app.show_tray_image_var = Toggle()
     lease_manager = OperationLeaseManager(
@@ -389,6 +391,23 @@ def _app(tmp_path, client):
     app._log_event = lambda event, detail=None, **kwargs: app.events.append(
         (event, detail, kwargs)
     ) or True
+    # The fixture observes the logging boundary rather than writing CSV. Held
+    # audits now reach that boundary as their original, durably bound row.
+    captured_details = {}
+    native_checkpoint = app._checkpoint_audit_event
+    def checkpoint(event, **kwargs):
+        row = native_checkpoint(event, **kwargs)
+        captured_details[json.loads(row['log_entry']['details'])['idempotency_key']] = dict(kwargs.get('detail', {}))
+        return row
+    app._checkpoint_audit_event = checkpoint
+    def project_saved_row(event, *, stored_worker_record):
+        if getattr(app._log_event, '__func__', None) is ContainerAudit._log_event:
+            return ContainerAudit._project_stored_audit_event(app, event, stored_worker_record=stored_worker_record)
+        event_key = json.loads(event['log_entry']['details'])['idempotency_key']
+        return app._log_event(event['log_entry']['event'], detail=captured_details[event_key],
+            synchronous=True, idempotency_key=event_key, deduplicate=True,
+            worker_record=stored_worker_record)
+    app._project_stored_audit_event = project_saved_row
     app._clear_settled_operator_context = lambda: None
     app._update_tray_image_display = lambda: None
     app._update_center_display = lambda: None
@@ -1096,7 +1115,8 @@ def test_held_catalog_rejection_preserves_event_warning_and_fifo_on_audit_retry(
     assert app.current_tray.has_error_or_reset is False
     expected = (event_name, {"expected": ITEM, "scanned": raw, **extra}, {
         "synchronous": True, "idempotency_key": f"preflight-held-reject:{scan_id}",
-        "deduplicate": True,
+        "deduplicate": True, "worker_record": {
+            "worker_id": None, "worker_name_snapshot": "tester", "enabled": False},
     })
     assert rejects == [expected]
     assert app.warnings == [title]

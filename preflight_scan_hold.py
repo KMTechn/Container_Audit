@@ -60,6 +60,7 @@ class HeldScan:
     sequence: int
     raw_barcode: str
     admitted_at: str
+    audit_event: Mapping[str, Any] | None = None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "HeldScan":
@@ -69,7 +70,19 @@ class HeldScan:
         sequence = payload.get("sequence")
         if not scan_id or not raw or not admitted_at or not isinstance(sequence, int) or sequence < 1:
             raise PreflightHoldError("preflight hold item is invalid")
-        return cls(scan_id, sequence, raw, admitted_at)
+        audit = payload.get("audit_event")
+        if audit is not None:
+            from tray_state import validate_checkpoint_audit_events
+            try:
+                validate_checkpoint_audit_events([audit])
+            except ValueError as exc:
+                raise PreflightHoldError("preflight hold audit is invalid") from exc
+            detail = json.loads(audit["log_entry"]["details"])
+            if detail["idempotency_key"] not in {
+                f"preflight-held-scan:{scan_id}", f"preflight-held-reject:{scan_id}"
+            }:
+                raise PreflightHoldError("preflight hold audit identity mismatch")
+        return cls(scan_id, sequence, raw, admitted_at, audit)
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -77,6 +90,7 @@ class HeldScan:
             "sequence": self.sequence,
             "raw_barcode": self.raw_barcode,
             "admitted_at": self.admitted_at,
+            **({"audit_event": dict(self.audit_event)} if self.audit_event is not None else {}),
         }
 
 
@@ -369,6 +383,21 @@ class PreflightScanHoldStore:
                     }
                 )
             )
+
+    @writer_sink("preflight_scan_hold")
+    def bind_head_audit(self, scan_id: str, audit_event: Mapping[str, Any]) -> PreflightHoldSnapshot:
+        """Retain the first projection until the FIFO head is acknowledged."""
+        with self._lock:
+            snapshot = self.load()
+            if snapshot.state != HOLD_DRAINING or not snapshot.items or snapshot.items[0].scan_id != scan_id:
+                raise PreflightHoldConflict("preflight hold head identity mismatch")
+            head = snapshot.items[0]
+            if head.audit_event is not None:
+                return snapshot
+            bound = HeldScan.from_payload({**head.to_payload(), "audit_event": dict(audit_event)})
+            return self._write(PreflightHoldSnapshot(**{
+                **snapshot.__dict__, "items": (bound, *snapshot.items[1:]), "updated_at": _utc_now(),
+            }))
 
     @writer_sink("preflight_scan_hold")
     def ack_head(self, scan_id: str) -> PreflightHoldSnapshot | None:
