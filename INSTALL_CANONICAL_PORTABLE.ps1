@@ -2801,6 +2801,7 @@ $enteredPlacementTry = $true
         if ($testMode) { $bootstrap += '-AllowNoncanonicalLayoutForTest' }
     Set-InstallationEvidenceStage 'canonical.placement_child'
         $previousErrorActionPreference = $ErrorActionPreference
+        $bootstrapChild=$null
         try {
             # Keep the elevated helper's raw stderr out of operator-facing
             # output; only a bounded classification line may cross this edge.
@@ -2810,14 +2811,25 @@ $enteredPlacementTry = $true
             $bootstrapOutput = @($bootstrapChild.Stdout -split "`r?`n")
             $bootstrapExitCode = $bootstrapChild.ExitCode
             $audit.code_replacement['child_streams']=$bootstrapChild.Streams
+            $audit.code_replacement['child_failure_summary']=$bootstrapChild.FailureDiagnostic
             $binding=Read-InstallationHelperEvidenceBinding $bootstrapOutput $elevationLogPath $bootstrapChild.ProcessId ([string]$sourceManifest.helper_sha256)
             $audit.code_replacement['child_evidence_binding']=$binding
             $audit.code_replacement['child_stage_evidence_root']=[string]$binding.stage_evidence_root
         } catch {
     Write-InstallationCaughtFailure $_
 
-            $bootstrapOutput = @('code_placement_preflight_failure=CONTAINER_PLACEMENT_CHILD_FAILED')
-            $bootstrapExitCode = 1
+            if($null -eq $bootstrapChild){
+                $bootstrapOutput = @('code_placement_preflight_failure=CONTAINER_PLACEMENT_CHILD_FAILED')
+                $bootstrapExitCode = 1
+            }else{
+                $bindingFailure=Get-InstallationFailureDetails $_
+                $audit.code_replacement['child_evidence_binding_failure']=$bindingFailure
+                Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_EVIDENCE_BINDING_FAILED';child_exit_code=[int]$bootstrapChild.ExitCode;failure=$bindingFailure})
+                Register-InstallationChildEvidenceSummary @{status='INCOMPLETE';recording_failed=$true}
+                # Keep a failed child's native code and first one-line summary.
+                # A successful child still fails closed when evidence is unbound.
+                if($bootstrapExitCode -eq 0){$bootstrapExitCode=1}
+            }
         } finally {
             $ErrorActionPreference = $previousErrorActionPreference
         }

@@ -480,7 +480,17 @@ function Read-InstallationHelperEvidenceBinding([string[]]$Output,[string]$Audit
     }
     if(-not $roots.Count){return [ordered]@{status='NOT_RECORDED';helper_process_id=$DirectProcessId;stage_evidence_root='';streams=$null}}
     $root=Get-StrictFullPath ([string]$roots[-1]) 'helper emitted evidence root'
-    if(-not(Test-BootstrapSamePath $root $parentRoot)){throw 'Direct helper evidence root binding differs.'}
+    if(-not(Test-BootstrapSamePath $root $parentRoot)){
+        # A directly privileged helper also relocates evidence to its protected
+        # run. Preserve the same basename/PID and protected-control boundaries
+        # used for the elevated-wrapper path; never accept an arbitrary root.
+        $protectedRun=Split-Path -Parent $root
+        if(-not(Test-BootstrapSamePath (Split-Path -Parent $protectedRun) (Join-Path (Get-InstallationEvidenceControlRoot) 'installation-evidence')) -or
+            [IO.Path]::GetFileName($protectedRun) -cnotmatch '^run-[0-9a-f]{32}$' -or
+            [IO.Path]::GetFileName($root) -cne [IO.Path]::GetFileName($parentRoot)){throw 'Direct helper evidence root binding differs.'}
+        Assert-InstallationEvidenceProtectedPath $protectedRun
+        Assert-InstallationEvidenceProtectedPath $root
+    }
     Assert-BootstrapNoReparsePoint $root 'helper emitted evidence root' -PathOnly
     $childSummary=Read-InstallationEvidenceChildSummary $root
     Register-InstallationChildEvidenceSummary $childSummary
@@ -941,17 +951,19 @@ function Invoke-InstallationEvidenceChild([string]$Name,[string]$Executable,[str
     Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_EXIT';stage=$Name;pid=$result.pid;exit_code=$result.exit_code;elapsed_ms=$watch.ElapsedMilliseconds;streams=$streams;evidence_failure=$evidenceFailure})
     # A pinned helper's bounded one-line fallback belongs in its parent's own
     # journal. Retain it even when the helper could not persist a summary file.
+    $failureDiagnostic=$null
     foreach($line in @($texts.stdout -split '\r?\n')){
         if($line.Length -le 4096 -and $line.StartsWith('installation_failure_summary=',[StringComparison]::Ordinal)){
             try{
                 $diagnostic=$line.Substring('installation_failure_summary='.Length) | ConvertFrom-Json
                 if([string]$diagnostic.schema -ceq 'container-audit-installation-fallback-v1' -and [int]$diagnostic.exit_code -in @(71,72,73)){
                     Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_FAILURE_FALLBACK';stage=$Name;pid=$result.pid;child_exit_code=$result.exit_code;diagnostic=$diagnostic})
+                    if($null -eq $failureDiagnostic -and [int]$diagnostic.exit_code -eq [int]$result.exit_code){$failureDiagnostic=$diagnostic}
                 }
             }catch{Write-InstallationCaughtFailure $_}
         }
     }
-    return [pscustomobject]@{ExitCode=$result.exit_code;ProcessId=$result.pid;Stdout=$texts.stdout;Stderr=$texts.stderr;Streams=$streams;EvidenceFailure=$evidenceFailure}
+    return [pscustomobject]@{ExitCode=$result.exit_code;ProcessId=$result.pid;Stdout=$texts.stdout;Stderr=$texts.stderr;Streams=$streams;EvidenceFailure=$evidenceFailure;FailureDiagnostic=$failureDiagnostic}
 }
 
 function Get-InstallationFallbackDiagnostic($Failure) {

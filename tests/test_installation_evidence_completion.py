@@ -8,6 +8,78 @@ SOURCE = ROOT / "INSTALL_CANONICAL_PORTABLE.ps1"
 
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
+def test_native_child_fallback_is_returned_and_recorded_before_binding(tmp_path, engine):
+    result = run_functions(tmp_path, SOURCE, ["Get-CanonicalFailureDetails"], r'''
+function Set-InstallationEvidenceAcl {}
+$root=Initialize-InstallationEvidence (Join-Path $env:CA_CONTRACT_ROOT 'parent') 'S-1-5-21-111-222-333-1001'
+$child=Join-Path $env:CA_CONTRACT_ROOT 'finite-native-failure.ps1'
+$diagnostic=@{schema='container-audit-installation-fallback-v1';exit_code=73;failure=@{message='native task XML rejected'}}|ConvertTo-Json -Depth 8 -Compress
+$payload="[Console]::Out.WriteLine('installation_failure_summary="+$diagnostic.Replace("'","''")+"'); exit 73"
+[IO.File]::WriteAllText($child,$payload,[Text.UTF8Encoding]::new($true))
+$result=Invoke-InstallationEvidenceChild 'placement-helper' (Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe') @('-NoLogo','-NoProfile','-NonInteractive','-File',$child)
+if($result.ExitCode -ne 73 -or $result.FailureDiagnostic.failure.message -cne 'native task XML rejected'){throw 'Native fallback was not returned.'}
+$events=@(Get-Content -LiteralPath (Join-Path $root 'stages.jsonl')|ForEach-Object {$_|ConvertFrom-Json}|Where-Object {$_.event -ceq 'CHILD_FAILURE_FALLBACK'})
+if($events.Count -ne 1 -or $events[0].child_exit_code -ne 73 -or $events[0].diagnostic.failure.message -cne $result.FailureDiagnostic.failure.message){throw 'Native fallback was not retained in parent journal.'}
+'PASS'
+''', engine=engine)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
+@pytest.mark.parametrize("native_code", (73, 0))
+def test_placement_binding_failure_preserves_first_native_failure(tmp_path, engine, native_code):
+    result = run_functions(tmp_path, SOURCE, ["Get-CanonicalFailureDetails"], r'''
+function Set-InstallationEvidenceAcl {}
+$journalRoot=Initialize-InstallationEvidence (Join-Path $env:CA_CONTRACT_ROOT 'parent') 'S-1-5-21-111-222-333-1001'
+$original=@{schema='container-audit-installation-fallback-v1';exit_code=73;failure=@{message='native task XML rejected';exception_chain=@(@{type='CimException';message='LogonType:ServiceAccount'})}}
+function Invoke-InstallationEvidenceChild {
+ [pscustomobject]@{ExitCode=[int]$env:CA_NATIVE_CODE;ProcessId=4111;Stdout=('installation_failure_summary='+($original|ConvertTo-Json -Depth 8 -Compress));Streams=@{};FailureDiagnostic=$original}
+}
+function Read-InstallationHelperEvidenceBinding {throw 'Direct helper evidence root binding differs.'}
+$tokens=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile($env:CA_CONTRACT_SOURCE,[ref]$tokens,[ref]$errors)
+$blocks=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.TryStatementAst] -and $n.Body.Extent.Text.Contains('$bootstrapChild = Invoke-InstallationEvidenceChild')},$true)|Sort-Object {$_.Extent.Text.Length})
+if($errors.Count -or -not $blocks.Count){throw 'Actual canonical placement block unavailable.'}
+$audit=@{code_replacement=@{}};$bootstrapChild=$null;$bootstrapOutput=@();$bootstrapExitCode=1
+$elevationLogPath=Join-Path $env:CA_CONTRACT_ROOT 'helper';$sourceManifest=@{helper_sha256='a'*64}
+Invoke-Expression $blocks[0].Extent.Text
+if([int]$env:CA_NATIVE_CODE -ne 0){
+ if($bootstrapExitCode -ne 73 -or $bootstrapOutput.Count -ne 1 -or $audit.code_replacement.child_failure_summary.failure.message -cne 'native task XML rejected'){throw 'Secondary binding failure replaced native code or first summary.'}
+}elseif($bootstrapExitCode -eq 0){throw 'Unbound successful child was accepted.'}
+if(-not $audit.code_replacement.child_evidence_binding_failure){throw 'Secondary evidence failure was not retained.'}
+$events=@(Get-Content -LiteralPath (Join-Path $journalRoot 'stages.jsonl')|ForEach-Object {$_|ConvertFrom-Json}|Where-Object {$_.event -ceq 'CHILD_EVIDENCE_BINDING_FAILED'})
+if($events.Count -ne 1 -or $events[0].child_exit_code -ne [int]$env:CA_NATIVE_CODE){throw 'Parent journal lost the actual native exit.'}
+'PASS'
+''', engine=engine, values={"CA_NATIVE_CODE": str(native_code)})
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
+@pytest.mark.parametrize("shape", ("valid", "wrong_pid", "wrong_run", "foreign_root"))
+def test_direct_protected_helper_binding_retains_path_and_pid_guards(tmp_path, engine, shape):
+    result = run_functions(tmp_path, SOURCE, ["Get-CanonicalFailureDetails"], r'''
+$control=Join-Path $env:CA_CONTRACT_ROOT 'update-control'
+function Get-InstallationEvidenceControlRoot {return $control}
+function Assert-InstallationEvidenceProtectedPath {param($Path) Assert-BootstrapNoReparsePoint $Path 'owned protected fixture' -PathOnly}
+$log=Join-Path $env:CA_CONTRACT_ROOT 'helper.jsonl'
+$run=Join-Path $control ('installation-evidence\run-'+('a'*32))
+if($env:CA_BINDING_SHAPE -ceq 'wrong_run'){$run=Join-Path $control 'installation-evidence\other'}
+if($env:CA_BINDING_SHAPE -ceq 'foreign_root'){$run=Join-Path $env:CA_CONTRACT_ROOT ('foreign\run-'+('a'*32))}
+$actual=Join-Path $run ('helper.jsonl.evidence.'+$(if($env:CA_BINDING_SHAPE -ceq 'wrong_pid'){4112}else{4111}))
+[void][IO.Directory]::CreateDirectory($actual)
+[IO.File]::WriteAllText((Join-Path $actual 'evidence-status.json'),(@{status='COMPLETE';root=$actual;recording_failed=$false}|ConvertTo-Json))
+$failed=$false
+try{$binding=Read-InstallationHelperEvidenceBinding @('installation_stage_evidence_root='+$actual) $log 4111}catch{$failed=$true;$bindingError=$_}
+if($env:CA_BINDING_SHAPE -ceq 'valid'){
+ if($failed){throw $bindingError}
+ if($binding.helper_process_id -ne 4111 -or $binding.stage_evidence_root -cne $actual){throw 'Actual protected direct helper root was rejected.'}
+}elseif(-not $failed){throw 'Foreign protected helper root or PID was accepted.'}
+'PASS'
+''', engine=engine, values={"CA_BINDING_SHAPE": shape})
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 @pytest.mark.parametrize("failure", ("journal_directory", "journal_limit"))
 def test_journal_failure_survives_final_evidence_summary(tmp_path, engine, failure):
     result = run_functions(tmp_path, SOURCE, ["Get-CanonicalFailureDetails"], r'''

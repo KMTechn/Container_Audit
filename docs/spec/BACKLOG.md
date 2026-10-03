@@ -3,6 +3,8 @@
 SYSTEM task XML의 unsupported ServiceAccount 요소를 제거했다(trigger/action/주체/조건 불변).
 호스트 회귀 PROVEN과 랩 등록·단일 설치 수용은 별도이며
 [sub-151 결과](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-151/REPORT.md)에서 실제 실행 범위를 확인한다. IW/LM의 같은 XML 문제는 각 소유 레인에 남는다.
+같은 교정은 첫 native 종료/fallback의 요약·부모 journal 전달과 직접 privileged helper의
+보호 evidence run 결속을 유지한다. 실제 단일 설치 결과·독립 수용과 소스 회귀를 구별한다.
 
 설치 증거의 권한 분리는 sub-107 소스 교정 범위다. 최종 컷의 선언/pin·stock과
 5차 실제 설치에서 메모리 wrapper 실행, Administrators owner/operator read-only,
