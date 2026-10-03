@@ -1169,6 +1169,7 @@ if ($RestoreVerifiedReplacement.IsPresent) {
             completed_at = (Get-Date).ToUniversalTime().ToString('o')
         }
         Write-BootstrapReplacementReceipt -Path $restoreEvidenceFull -Payload $evidence | Out-Null
+        Write-InstallationEvidenceEvent ([ordered]@{event='RESTORE_EVIDENCE_READY';path=$restoreEvidenceFull;sha256=Get-FileSha256 $restoreEvidenceFull})
         if (-not $testOverride) { Write-ElevationLog 'PASS' 'Elevated Container verified replacement restore completed.' }
         Write-Output "replacement_restore_status=$($result.status)"
         Write-Output "replacement_restore_evidence=$restoreEvidenceFull"
@@ -1545,6 +1546,11 @@ try {
             [string]$newIdentity.aggregate_sha256 -cne $sourceAggregate
         ) { throw 'Verified replacement tree identity readback failed.' }
         $parentAcl = Get-BootstrapAclIdentity $applicationParent
+        if ($helperInstallationEvidenceRoot -and $WriterFencePreparedReceiptPath) {
+            # Canonical callers consume the authenticated protected original.
+            # Standalone callers retain their existing caller/export contract.
+            $BootstrapBoundParameters['ReplacementReceiptPath']=$replacementReceiptFull
+        }
         $receiptPayload = [ordered]@{
             schema_version = 'container-audit-verified-replacement-v1'
             status = 'OLD_PRESERVED_NEW_VERIFIED'
@@ -1576,6 +1582,9 @@ try {
             -Path $replacementReceiptFull `
             -Payload $receiptPayload
         $replacementReceiptWritten = $true
+        Write-InstallationEvidenceEvent ([ordered]@{event='REPLACEMENT_RECEIPT_READY';path=$replacementReceipt.path;
+            sha256=$replacementReceipt.sha256;old_manifest_sha256=$oldIdentity.manifest_sha256;
+            new_manifest_sha256=$newIdentity.manifest_sha256;transaction_id=$ReplacementTransactionId})
     }
     if ($RestoreUninstallRecordPath -and
         (Get-FileSha256 (Join-Path $installRootFull $IntegrityFileName)) -cne $ExpectedUninstallRecordSha256) {

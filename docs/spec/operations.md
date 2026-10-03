@@ -1,5 +1,10 @@
 # 운영·환경·장애 복구
 
+canonical 부모는 상승 direct/wrapper helper의 보호 원본 receipt와 restore evidence를 그 실행의
+bound evidence root·journal SHA로 읽는다. 일반 caller 사본의 존재를 요구하지 않는다.
+startup preimage 두 필드는 한 쌍으로 검증하며 원 preimage.json의 SHA가 같아야 한다.
+PS5.1/7 실제 소비자·기존 export/startup 34 PASS, 랩 G 기록은 보존하고 native 복구는 별도 판정이다.
+
 `대기 건수 확인 불가(읽기 실패)`는 이 PC의 relay 상태 읽기 문제다. 마지막 확인 대기 수와 성공 ACK 시각을 유지하며 서버 연결 표시와 구별한다. 카드·운영 메뉴의 상세에서도 이전 읽기 값이 없으면 미확인, 있으면 마지막 확인값·확인 시각과 읽기 실패를 보인다. 정상 읽기가 복구되면 새 실제 값으로 바뀐다.
 
 `진행 현황`은 보기 전용 별도 화면이며 `작업 화면` 단추 또는 스캔으로 돌아간다. 조회가 느려도 작업 스캔은 계속한다. `연결 끊김`이면 마지막 수신 값과 시각을 보여 주며 다음 60초 갱신에서 재조회한다.

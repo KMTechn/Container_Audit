@@ -1394,6 +1394,36 @@ function StartRaw([string]$Line) {
     }
     return [int]$newPid
 }
+function Read-CanonicalHelperArtifact($Binding,[string]$Leaf,[string]$Event) {
+    if ([string]$Binding.status -cnotin @('BOUND_DIRECT_CHILD','BOUND_ELEVATED_CHILD') -or
+        [string]$Leaf -cnotin @('replacement-receipt.json','restore-evidence.json')) {
+        throw 'Canonical helper artifact binding is absent.'
+    }
+    $root=Full ([string]$Binding.stage_evidence_root) 'bound helper evidence root'
+    $run=Split-Path -Parent $root
+    if (-not (Same (Split-Path -Parent $run) (Join-Path (Get-InstallationEvidenceControlRoot) 'installation-evidence')) -or
+        [IO.Path]::GetFileName($run) -cnotmatch '^run-[0-9a-f]{32}$') {
+        throw 'Canonical helper artifact protected run differs.'
+    }
+    Assert-InstallationEvidenceProtectedPath $run
+    Assert-InstallationEvidenceProtectedPath $root
+    $path=Join-Path $root $Leaf
+    $journal=Join-Path $root 'stages.jsonl'
+    foreach($file in @($path,$journal)) {
+        Assert-BootstrapNoReparsePoint $file 'bound helper artifact' -PathOnly
+        Assert-InstallationEvidenceProtectedPath $file
+        if ((Get-Item -LiteralPath $file).Length -gt 1048576) {throw 'Canonical helper artifact is oversized.'}
+    }
+    $records=@(Get-Content -LiteralPath $journal -Encoding UTF8 | ForEach-Object {$_|ConvertFrom-Json} |
+        Where-Object {[string]$_.event -ceq $Event})
+    if ($records.Count -ne 1 -or -not (Same ([string]$records[0].path) $path) -or
+        [string]$records[0].sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        (Sha $path) -cne [string]$records[0].sha256) {
+        throw 'Canonical helper artifact journal/hash differs.'
+    }
+    return $path
+}
+
 function ReadReplacementReceipt(
     [string]$Path,
     [string]$ExpectedTransactionId,
@@ -1424,6 +1454,15 @@ function ReadReplacementReceipt(
         'integrity_helper_sha256','receipt_path','install_root','install_parent',
         'rollback_root','failed_root'
     )
+    if ($receipt.PSObject.Properties['startup_update_preimage'] -or
+        $receipt.PSObject.Properties['startup_update_preimage_sha256']) {
+        $top += @('startup_update_preimage','startup_update_preimage_sha256')
+        $topStrings += @('startup_update_preimage','startup_update_preimage_sha256')
+        if ([string]$receipt.startup_update_preimage_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+            (Sha (Join-Path ([string]$receipt.startup_update_preimage) 'preimage.json')) -cne [string]$receipt.startup_update_preimage_sha256) {
+            throw 'Verified replacement startup preimage differs.'
+        }
+    }
     $acl = @('owner_sid','access_rules_protected','sddl_sha256')
     $tree = @(
         'file_count','aggregate_sha256','integrity_sha256','manifest_sha256',
@@ -2578,6 +2617,10 @@ $enteredPlacementTry = $true
             $global:LASTEXITCODE=$capturedChild.ExitCode
             Write-Output $capturedChild.Stdout
         if ($LASTEXITCODE -ne 0) { throw "Canonical code restore failed: $LASTEXITCODE" }
+        if (-not $testMode) {
+            $restoreBinding=Read-InstallationHelperEvidenceBinding @($capturedChild.Stdout -split "`r?`n") $elevationLogPath $capturedChild.ProcessId $sourceHelperSha256
+            $replacementRestoreEvidencePath=Read-CanonicalHelperArtifact $restoreBinding 'restore-evidence.json' 'RESTORE_EVIDENCE_READY'
+        }
         $currentTreeInventorySha256 = [string]$publicRestore.old_inventory_sha256
         $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = $currentTreeInventorySha256
         $restoreEvidence = ReadReplacementRestoreEvidence `
@@ -2884,6 +2927,9 @@ $enteredPlacementTry = $true
         $audit.code_placement='PLACED_PENDING_VERIFICATION'
         $currentTreeInventorySha256 = $Script:ContainerWriterFenceInventorySha256
         if ($replaceExisting) {
+            if (-not $testMode) {
+                $replacementReceiptPath=Read-CanonicalHelperArtifact $binding 'replacement-receipt.json' 'REPLACEMENT_RECEIPT_READY'
+            }
             $replacementReceiptSha256 = Sha $replacementReceiptPath
             $replacementReceipt = ReadReplacementReceipt `
                 -Path $replacementReceiptPath `
@@ -3263,6 +3309,10 @@ catch {
             $restoreOutput=@($capturedChild.Stdout)
             $restoreExitCode=$capturedChild.ExitCode
             if ($restoreExitCode -ne 0) { throw "Code restore failed: $restoreExitCode" }
+            if (-not $testMode) {
+                $restoreBinding=Read-InstallationHelperEvidenceBinding @($capturedChild.Stdout -split "`r?`n") $elevationLogPath $capturedChild.ProcessId $sourceHelperSha256
+                $replacementRestoreEvidencePath=Read-CanonicalHelperArtifact $restoreBinding 'restore-evidence.json' 'RESTORE_EVIDENCE_READY'
+            }
             $currentTreeInventorySha256 = $installedInventorySha256
             $restoreEvidence = ReadReplacementRestoreEvidence `
                 -Path $replacementRestoreEvidencePath `
@@ -3274,6 +3324,7 @@ catch {
             $audit.code_replacement.restore_evidence_path=$replacementRestoreEvidencePath
             $audit.code_replacement.restore_evidence_sha256=Sha $replacementRestoreEvidencePath
             $audit.code_replacement.later_restore_surface='CONSUMED'
+            $audit.rollback.code_exact=$true
             $codeRestoreNeeded=$false
             Save $auditPath $audit
             if ($evidenceFull) { Save $evidenceFull $audit }
