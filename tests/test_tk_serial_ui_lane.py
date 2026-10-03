@@ -49,10 +49,15 @@ class FakeTkRoot:
 
     def run_until(self, predicate, *, timeout=2.0) -> None:
         deadline = time.monotonic() + timeout
+        batch = 0
         while not predicate():
             ran = self.run_one()
-            if not ran:
+            batch += 1
+            # Bound continuously rescheduled polling without adding a delay to
+            # every UI callback in the short remote-response timing fixtures.
+            if not ran or batch >= 8:
                 threading.Event().wait(0.002)
+                batch = 0
             if time.monotonic() >= deadline:
                 raise AssertionError("fake Tk pump did not reach the expected state")
 
