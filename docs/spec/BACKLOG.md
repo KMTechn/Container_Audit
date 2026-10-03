@@ -12,6 +12,7 @@ CA-R1 소스 교정: startup preimage를 먼저 내구 보관하고 실제 보�
 receipt를 한 번만 쓴다. startup 초기화는 그 preimage를 재사용하며 기록 덮어쓰기·guard 완화는 없다.
 최초 018e013의 추가 self-path 변경은 기존 evidence completion 회귀 2개를 깨뜨렸다.
 caller/export 경로 계약을 원복해 순서 교정만 유지하며 실패 증거는 sub-162에 보존한다.
+최종 diff에서 self-path 표현을 기준과 완전히 동일하게 복원해 추가 fallback도 제거한다.
 PS5.1/7 회귀는 초기화 실패→지원 preimage 복원→새 run 재설치, 기존 receipt 보존과 위조 거절을
 검사한다. 랩 예행 G와 독립 수용은 [sub-162](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-162/REPORT.md)에서 별도로 판정한다.
 F의 최초 중복 쓰기 실패(native 73), 실제 9/10구간 및 old2302파일·Run·ACL·비상승 relay
