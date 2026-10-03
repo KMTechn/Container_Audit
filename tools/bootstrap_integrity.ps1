@@ -1829,6 +1829,59 @@ function Read-BootstrapReplacementReceipt(
     catch { throw 'Replacement receipt JSON is invalid.' }
 }
 
+
+function Get-BootstrapSupportedVersionRestoreState($Receipt,[string]$ReceiptPath,[string]$InstallRoot,[string]$ExpectedAppId,[string]$ExpectedTransactionId,[string]$ExpectedHelperSha256) {
+    $fixed=Get-StrictFullPath $InstallRoot 'supported fixed owner'
+    $parent=Split-Path -Parent $fixed
+    $selection=$Receipt.active_version
+    if ([string]$Receipt.schema_version -cne 'container-audit-verified-replacement-v1' -or
+        [string]$Receipt.status -cne 'OLD_PRESERVED_NEW_VERIFIED' -or [string]$Receipt.app_id -cne $ExpectedAppId -or
+        $ExpectedTransactionId -cnotmatch '^[0-9a-f]{32}$' -or [string]$Receipt.transaction_id -cne $ExpectedTransactionId -or
+        [string]$Receipt.helper_sha256 -cne $ExpectedHelperSha256 -or
+        -not(Test-BootstrapSamePath ([string]$Receipt.receipt_path) $ReceiptPath) -or
+        -not(Test-BootstrapSamePath ([string]$Receipt.install_root) $fixed) -or
+        -not(Test-BootstrapSamePath ([string]$Receipt.install_parent) $parent) -or
+        [string]$selection.kind -cne 'SUPPORTED_ACTIVE_VERSION' -or
+        [string]$selection.from_sha -cnotmatch '^[0-9a-f]{40}$' -or
+        [string]$selection.to_sha -cnotmatch '^[0-9a-f]{40}$' -or
+        [string]$selection.from_sha -ceq [string]$selection.to_sha -or
+        [string]$Receipt.old.source_commit -ceq [string]$selection.from_sha -or
+        [string]$Receipt.new.source_commit -cne [string]$selection.to_sha -or
+        -not(Test-BootstrapSamePath ([string]$selection.from_root) (Join-Path $parent ('versions\'+[string]$selection.from_sha))) -or
+        -not(Test-BootstrapSamePath ([string]$selection.to_root) (Join-Path $parent ('versions\'+[string]$selection.to_sha))) -or
+        -not(Test-BootstrapSamePath ([string]$Receipt.rollback_root) ([string]$selection.from_root)) -or
+        -not(Test-BootstrapSamePath ([string]$Receipt.failed_root) (Join-Path $parent ('.version.failed.'+$ExpectedTransactionId))) -or
+        -not $Receipt.PSObject.Properties['startup_update_preimage']) {throw 'Supported placement receipt binding differs.'}
+    Assert-BootstrapNoReparsePoint $parent 'supported restore parent' -PathOnly
+    if (-not(Test-BootstrapAclIdentity $Receipt.parent_acl (Get-BootstrapAclIdentity $parent))) {throw 'Supported restore parent protection differs.'}
+    if (-not(Test-BootstrapReplacementTreeIdentity $Receipt.old (Get-BootstrapReplacementTreeIdentity $fixed $fixed)) -or
+        -not(Test-BootstrapReplacementTreeIdentity $selection.from (Get-BootstrapReplacementTreeIdentity ([string]$selection.from_root) ([string]$selection.from_root)))) {throw 'Supported restore original owner or active code differs.'}
+    $directory=[string]$Receipt.startup_update_preimage
+    Assert-BootstrapNoReparsePoint $directory 'supported startup preimage'
+    Assert-InstallationEvidenceProtectedPath $directory
+    if((Get-FileSha256 (Join-Path $directory 'preimage.json')) -cne [string]$Receipt.startup_update_preimage_sha256){throw 'Supported restore preimage differs.'}
+    $saved=Get-Content -LiteralPath (Join-Path $directory 'preimage.json') -Raw -Encoding UTF8|ConvertFrom-Json
+    if([string]$saved.schema -cne 'container-audit-startup-update-install-preimage-v1' -or
+        -not(Test-BootstrapSamePath ([string]$saved.root) $fixed) -or
+        (@($saved.files|ForEach-Object {[string]$_.name}) -join ',') -cne 'policy.json,active.json,transition.json' -or
+        (@($selection.control_after|ForEach-Object {[string]$_.name}) -join ',') -cne 'policy.json,active.json,transition.json'){throw 'Supported restore control binding differs.'}
+    foreach($item in @($saved.files)) {
+        $planned=@($selection.control_after|Where-Object {$_.name -ceq $item.name})[0]
+        if($item.exists -isnot [bool] -or -not $item.exists -or [string]$item.sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+            (Get-FileSha256 (Join-Path $directory ([string]$item.name))) -cne [string]$item.sha256 -or
+            [string]$planned.sha256 -cnotmatch '^[0-9a-f]{64}$'){throw 'Supported restore control bytes differ.'}
+        $target=Join-Path $parent ('update-control\'+[string]$item.name)
+        Assert-BootstrapNoReparsePoint $target 'supported control cut' -PathOnly
+        if((Get-FileSha256 $target) -cnotin @([string]$item.sha256,[string]$planned.sha256)){throw 'Supported control state is not an authenticated transaction cut.'}
+    }
+    $new=[string]$selection.to_root; $failed=[string]$Receipt.failed_root
+    $newExists=Test-Path -LiteralPath $new; $failedExists=Test-Path -LiteralPath $failed
+    if($newExists -eq $failedExists){throw 'Supported candidate preservation state is ambiguous.'}
+    $selected=if($newExists){$new}else{$failed}
+    if(-not(Test-BootstrapReplacementTreeIdentity $Receipt.new (Get-BootstrapReplacementTreeIdentity $selected $new))){throw 'Supported candidate tree or protection differs.'}
+    return [pscustomobject]@{status=$(if($newExists){'PENDING'}else{'RESTORED'});install_root=$fixed;rollback_root=[string]$selection.from_root;failed_new_root=$failed}
+}
+
 function Get-BootstrapVerifiedReplacementRestoreState(
     $Receipt,
     [string]$ReceiptPath,
@@ -1837,6 +1890,7 @@ function Get-BootstrapVerifiedReplacementRestoreState(
     [string]$ExpectedTransactionId,
     [string]$ExpectedHelperSha256
 ) {
+    if($Receipt.PSObject.Properties['active_version']) {return Get-BootstrapSupportedVersionRestoreState $Receipt $ReceiptPath $InstallRoot $ExpectedAppId $ExpectedTransactionId $ExpectedHelperSha256}
     $current = Get-StrictFullPath $InstallRoot 'restore current root'
     $parent = Get-StrictFullPath (Split-Path -Parent $current) 'restore parent'
     $rollback = Get-StrictFullPath ([string]$Receipt.rollback_root) 'restore rollback root'
@@ -1910,6 +1964,15 @@ function Invoke-BootstrapVerifiedReplacementRestore(
         -Receipt $Receipt -ReceiptPath $ReceiptPath -InstallRoot $InstallRoot `
         -ExpectedAppId $ExpectedAppId -ExpectedTransactionId $ExpectedTransactionId `
         -ExpectedHelperSha256 $ExpectedHelperSha256
+    if($Receipt.PSObject.Properties['active_version']) {
+        if([string]$state.status -ceq 'PENDING') {
+            Move-Item -LiteralPath ([string]$Receipt.active_version.to_root) -Destination ([string]$Receipt.failed_root) -ErrorAction Stop
+            if($InjectFailureAfterDisplace){throw 'Injected supported restore interruption after candidate preservation.'}
+        }
+        $verified=Get-BootstrapSupportedVersionRestoreState $Receipt $ReceiptPath $InstallRoot $ExpectedAppId $ExpectedTransactionId $ExpectedHelperSha256
+        if([string]$verified.status -cne 'RESTORED'){throw 'Supported restore exact readback failed.'}
+        return [pscustomobject]@{status='RESTORED';install_root=$InstallRoot;failed_new_root=[string]$Receipt.failed_root;prior_code_exact=$true;failed_new_preserved=$true}
+    }
     $current = [string]$state.install_root
     $rollback = [string]$state.rollback_root
     $failed = [string]$state.failed_new_root

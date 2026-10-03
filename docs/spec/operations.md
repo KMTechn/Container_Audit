@@ -1008,3 +1008,9 @@ G는 새 계약 journal이 없어 NOT_FOUND였고 제품 밖 기존 지원 함�
 H 성공으로 native 미완 rollback 이어 하기를 실행하지 않았으며 그 장애 경로와 독립 검토는 여전히 별도다.
 현재 새 복구 수용 범위는 원 startup task 부재/retired writer 부재/원 relay0~1이다.
 반복 복구가 fresh controller 생성 뒤 중단된 경우의 native 검증은 없으며 fail-closed 한계를 독립 검토에 남긴다.
+
+## sub-189 지원 설치 운영 경계 (2026-10-04)
+
+A≠B일 때 INSTALL_CANONICAL_PORTABLE.ps1이 실제 B를 from으로 선택하며, direct helper의 current 통째 교체는 거절한다. 새 C와 기존 A/B를 검증하고 보호 receipt를 제어 게시보다 먼저 만든다. 부분 게시/후속 실패는 같은 receipt 복원으로 C를 보존하고 원 policy/active/transition/task와 사용자 Run·relay를 복원한다. 보호 기록에 없는 bytes나 권한 변화는 수용하지 않는다. 미완 복구는 정확한 successor packet과 protected 원 기록이 있어야 이어 간다.
+
+NTFS 함수 회귀의 코드 이동·hash·반복 복원은 실제다. Task Scheduler/CIM/ACL/승격/사용자 token 관측은 시험 seam이며 실제 PC의 A≠B→C 성공·실패·전원 단절 수용은 아직 NOT TESTED다. 첫 설치/A=B 경로의 기존 집중 회귀를 재검증하고, 배포 전 랩에서 옛 판 위 설치 1회 및 내용 소유 제거 수렴 1회를 진행한다. 정식 선언·pin·서명 쌍 재생성은 coordinator 수용 단계로 남긴다.

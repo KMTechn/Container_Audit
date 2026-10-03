@@ -1292,7 +1292,21 @@ def onboard_current_user(
     autostart_installer: Callable[..., Mapping[str, Any]] = install_user_relay_autostart,
     relay_launcher: Callable[..., Mapping[str, Any]] = start_user_relay_process,
 ) -> dict[str, Any]:
+    from auto_update import installation_root, resolve_lifecycle_context
+    managed = installation_root(Path(app_root))
+    if managed is not None and any((managed / 'update-control' / name).exists() for name in ('policy.json', 'active.json', 'transition.json')):
+        owner = _read_json(managed / 'current/portable-manifest.json', 'fixed owner manifest')
+        pointer = _read_json(managed / 'update-control/active.json', 'active pointer')
+        if pointer.get('sha') != owner.get('source_commit'):
+            app_root = resolve_lifecycle_context(managed, operation='register')['active_app_root']
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
+    if managed is not None:
+        namespaces = tuple(managed / name for name in ('current', 'versions', 'update-control', 'removal-evidence', 'removed.json'))
+        if any(path_is_within(candidate, namespace) or path_is_within(namespace, candidate)
+               for candidate in (paths.data_root, paths.direct_sync_root, paths.logistics_profile_path, paths.bootstrap_tls_ca_bundle_path)
+               for namespace in namespaces):
+            raise CurrentUserOnboardingError('자료 경로가 코드·제어·제거 증거 경로와 겹칩니다. 자료를 보존하고 별도 경로를 선택하세요.',
+                                             report_path=paths.registration_report_path, status='FAILED')
     tls_ca_source = _configured_tls_ca_bundle_source(paths, environ)
     for directory in (
         paths.data_root,

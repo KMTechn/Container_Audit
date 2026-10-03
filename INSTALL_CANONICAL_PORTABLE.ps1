@@ -1505,7 +1505,7 @@ function Read-CanonicalRollbackContinuation([string]$InstallRoot,[string]$LocalA
             if ([string]$saved.schema -cne 'container-audit-startup-update-install-preimage-v1' -or
                 -not (Same ([string]$saved.root) $InstallRoot) -or [string]$saved.operator_sid -cne $Sid -or
                 (@($saved.files|ForEach-Object {[string]$_.name}) -join ',') -cne 'policy.json,active.json,transition.json' -or
-                $saved.task.exists -isnot [bool] -or $saved.task.exists) {throw 'Rollback continuation startup preimage differs.'}
+                $saved.task.exists -isnot [bool] -or ($saved.task.exists -and -not $receipt.PSObject.Properties['active_version'])) {throw 'Rollback continuation startup preimage differs.'}
             foreach($item in @($saved.files)) {
                 if ($item.exists -isnot [bool] -or ($item.exists -and
                     ([string]$item.sha256 -cnotmatch '^[0-9a-f]{64}$' -or (Sha (Join-Path $preimageDirectory ([string]$item.name))) -cne [string]$item.sha256))) {throw 'Rollback continuation startup bytes differ.'}
@@ -1616,6 +1616,11 @@ function ReadReplacementReceipt(
             (Sha (Join-Path ([string]$receipt.startup_update_preimage) 'preimage.json')) -cne [string]$receipt.startup_update_preimage_sha256) {
             throw 'Verified replacement startup preimage differs.'
         }
+    }
+    if($receipt.PSObject.Properties['active_version']) {
+        $top+='active_version'
+        if(-not(Test-ExactPropertySet $receipt.active_version @('kind','from_sha','to_sha','from_root','to_root','from','control_after'))){throw 'Supported receipt selection fields differ.'}
+        [void](Get-BootstrapSupportedVersionRestoreState $receipt $(if($ExpectedReceiptBindingPath){$ExpectedReceiptBindingPath}else{$Path}) $ExpectedInstallRoot 'container_audit' $ExpectedTransactionId $ExpectedHelperSha256)
     }
     $acl = @('owner_sid','access_rules_protected','sddl_sha256')
     $tree = @(
@@ -1741,7 +1746,8 @@ function Read-CanonicalReplacementRestore {
     if ([string]$state.status -cnotin @('PENDING','RESTORED')) {
         throw 'Canonical restore requires a verified current tree for normal runtime quiescence.'
     }
-    $oldRoot = if ([string]$state.status -ceq 'PENDING') { [string]$state.rollback_root } else { $install }
+    if($receipt.PSObject.Properties['active_version']){$Script:supportedPlacement=$true;$Script:installedCodeRoot=[string]$receipt.active_version.to_root;$Script:supportedRestoreFromRoot=[string]$receipt.active_version.from_root}
+    $oldRoot = if($receipt.PSObject.Properties['active_version']){[string]$receipt.active_version.from_root}elseif ([string]$state.status -ceq 'PENDING') { [string]$state.rollback_root } else { $install }
     $oldManifest = InstalledManifest $oldRoot $SkipSignatureValidationForTest
     $oldInventory = Assert-WriterSinkInventory `
         (Join-Path $oldRoot 'tools\container_writer_sink_inventory.json') `
@@ -2289,6 +2295,19 @@ if ($rollbackContinuation) {
         $continuationPriorFenceSha=Get-ContainerWriterFenceFileSha256 (Get-ContainerWriterFenceActivePath)
     }
 }
+$supportedContext=$null
+$supportedPlacement=$false
+$installedCodeRoot=$install
+if(-not $testMode -and -not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $rollbackContinuation) {
+    $contextText=& (Join-Path $source 'runtime\python.exe') (Join-Path $source 'app\auto_update.py') '--lifecycle-context' '--operation' 'install' '--install-root' $install
+    if($LASTEXITCODE -ne 0){throw '자료와 등록 및 전송 대기를 보존하고 지원 제거를 먼저 실행한 뒤 다시 설치하세요.'}
+    $supportedContext=$contextText|ConvertFrom-Json
+    if([string]$supportedContext.lifecycle_state -ceq 'HEALTHY' -and [bool]$supportedContext.managed -and
+        [string]$supportedContext.bootstrap_commit -cne [string]$supportedContext.from_commit) {
+        $supportedPlacement=$true
+        $installedCodeRoot=Join-Path (Split-Path -Parent $install) ('versions\'+[string]$sourceManifest.source_commit)
+    }
+}
 if ($PlanOnly) {
     'rollback_resume_status='+$(if($rollbackContinuation){'VERIFIED_PENDING'}else{'NOT_FOUND'})
     "install_status=PLAN_ONLY"
@@ -2756,14 +2775,15 @@ $enteredPlacementTry = $true
     $existingVerified = $false
     if ((-not $Uninstall -or $CompleteRetiredRemoval) -and (Test-Path $install -PathType Container)) {
         try {
-            $candidate = InstalledManifest $install $SkipSignatureValidationForTest
+            $candidateRoot=if($supportedContext -and $supportedPlacement){[string]$supportedContext.active_code_root}elseif($supportedPlacement){if(Test-Path -LiteralPath $installedCodeRoot){$installedCodeRoot}else{$supportedRestoreFromRoot}}else{$install}
+            $candidate = InstalledManifest $candidateRoot $SkipSignatureValidationForTest
             $helper = (Join-Path $source 'tools\bootstrap_integrity.ps1').Replace("'","''")
-            $escapedRoot = $install.Replace("'","''")
+            $escapedRoot = $candidateRoot.Replace("'","''")
             $capturedChild=Invoke-InstallationEvidenceChild 'verify-existing-code' $winps @('-NoLogo','-NoProfile','-NonInteractive','-Command',". '$helper'; [void](Assert-BootstrapIntegrityRecord '$escapedRoot')")
             $global:LASTEXITCODE=$capturedChild.ExitCode
             if ($LASTEXITCODE -ne 0) { throw 'integrity differs' }
             $installedInventory = Assert-WriterSinkInventory `
-                (Join-Path $install 'tools\container_writer_sink_inventory.json') `
+                (Join-Path $candidateRoot 'tools\container_writer_sink_inventory.json') `
                 ([string]$candidate.writer_sink_inventory_sha256) `
                 ([string]$candidate.writer_sink_inventory_contract_sha256)
             if ((Get-WriterInventorySemantics $installedInventory) -cne (Get-WriterInventorySemantics $lifecycleWriterInventory) -and
@@ -2781,7 +2801,7 @@ $enteredPlacementTry = $true
                 [string]$candidate.source_commit -ceq [string]$lifecycleManifest.source_commit -and
                 [string]$candidate.source_tree -ceq [string]$lifecycleManifest.source_tree -and
                 (Sha (Join-Path $install 'runtime\pythonw.exe')) -ceq (Sha (Join-Path $lifecycleSource 'runtime\pythonw.exe'))
-            ) { $placement = 'REUSED_VERIFIED' }
+            ) { if(-not $supportedPlacement){$placement = 'REUSED_VERIFIED'} }
         }
         catch {
     Write-InstallationCaughtFailure $_
@@ -3082,7 +3102,7 @@ $enteredPlacementTry = $true
         if ($replaceExisting) {
             Sync-CanonicalWriterFenceInventory $installedInventorySha256
             $mutated = $true
-            Product $install '--remove-current-user-setup'
+            if($supportedPlacement){Product $source '--remove-current-user-setup' (Join-Path $install 'app')}else{Product $install '--remove-current-user-setup'}
             $removal = Get-Content $removalPath -Raw -Encoding UTF8 | ConvertFrom-Json
             # Rollback invokes removal again; preserve this first result before
             # that supported recovery overwrites the product's status file.
@@ -3123,6 +3143,7 @@ $enteredPlacementTry = $true
                 '-ReplacementReceiptPath',$replacementReceiptPath
             )
         }
+        if($supportedPlacement){$bootstrap+=@('-SupportedActiveVersionPlacement','-SupportedFromCommit',([string]$supportedContext.from_commit))}
         if ($testMode) { $bootstrap += '-AllowNoncanonicalLayoutForTest' }
     Set-InstallationEvidenceStage 'canonical.placement_child'
         $previousErrorActionPreference = $ErrorActionPreference
@@ -3157,6 +3178,20 @@ $enteredPlacementTry = $true
             }
         } finally {
             $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if($supportedPlacement -and $null -ne $binding) {
+            # A failed child may have published only part of the authenticated
+            # control cut. Bind its protected receipt before entering rollback.
+            $protectedReceiptPath=Join-Path ([string]$binding.stage_evidence_root) 'replacement-receipt.json'
+            if(Test-Path -LiteralPath $protectedReceiptPath -PathType Leaf) {
+                $replacementReceiptPath=Read-CanonicalHelperArtifact $binding 'replacement-receipt.json' 'REPLACEMENT_RECEIPT_READY'
+                $replacementReceiptSha256=Sha $replacementReceiptPath
+                $replacementReceipt=ReadReplacementReceipt $replacementReceiptPath $replacementTransactionId $install $sourceManifest $sourceManifestSha256 $sourceHelperSha256 $sourceIntegrityHelperSha256
+                $codeRestoreNeeded=$true
+                $audit.code_replacement.receipt_path=$replacementReceiptPath
+                $audit.code_replacement.receipt_sha256=$replacementReceiptSha256
+                $audit.code_replacement.rollback_root=[string]$replacementReceipt.rollback_root
+            }
         }
         if ($bootstrapExitCode -ne 0) {
             $audit.code_placement='FAILED_CHILD'
@@ -3237,14 +3272,14 @@ $enteredPlacementTry = $true
         else { $placement = 'PASS_NEW_VERIFIED' }
     }
     Set-InstallationEvidenceStage 'canonical.installed_verification'
-    $installedManifest = InstalledManifest $install $SkipSignatureValidationForTest
+    $installedManifest = InstalledManifest $installedCodeRoot $SkipSignatureValidationForTest
     if (
         [string]$installedManifest.source_commit -cne [string]$sourceManifest.source_commit -or
         [string]$installedManifest.source_tree -cne [string]$sourceManifest.source_tree -or
-        (Sha (Join-Path $install 'portable-manifest.json')) -cne $sourceManifestSha256
+        (Sha (Join-Path $installedCodeRoot 'portable-manifest.json')) -cne $sourceManifestSha256
     ) { throw 'Installed identity differs.' }
     $installedHelper = (Join-Path $source 'tools\bootstrap_integrity.ps1').Replace("'","''")
-    $escapedInstalledRoot = $install.Replace("'","''")
+    $escapedInstalledRoot = $installedCodeRoot.Replace("'","''")
     $capturedChild=Invoke-InstallationEvidenceChild 'verify-installed-code' $winps @('-NoLogo','-NoProfile','-NonInteractive','-Command',". '$installedHelper'; [void](Assert-BootstrapIntegrityRecord '$escapedInstalledRoot')")
     $global:LASTEXITCODE=$capturedChild.ExitCode
     if ($LASTEXITCODE -ne 0) { throw 'Installed aggregate integrity differs.' }
@@ -3256,13 +3291,13 @@ $enteredPlacementTry = $true
     if ($evidenceFull) { Save $evidenceFull $audit }
 
     $mutated = $true
-    Product $install '--remove-current-user-setup'
+    if($supportedPlacement){Product $source '--remove-current-user-setup' (Join-Path $install 'app')}else{Product $install '--remove-current-user-setup'}
     $removal = Get-Content $removalPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ((Snapshot).exists -or [string]$removal.status -cne 'PASS_DATA_PRESERVED' -or
         [string]$removal.relay_process.status -cne 'ABSENT' -or @(Relays).Count -ne 0) { throw 'Removal readback failed.' }
     $started = (Get-Date).ToUniversalTime()
     Set-InstallationEvidenceStage 'canonical.onboarding'
-    Product $install '--onboard-current-user'
+    if($supportedPlacement){Product $source '--onboard-current-user' (Join-Path $installedCodeRoot 'app')}else{Product $install '--onboard-current-user'}
     $onboarding = Get-Content $onboardingPath -Raw -Encoding UTF8 | ConvertFrom-Json
     Set-InstallationEvidenceStage 'canonical.onboarding_run_readback'
     $after = Snapshot
@@ -3591,13 +3626,13 @@ catch {
         try {
             Set-InstallationEvidenceStage 'rollback.code_replacement' 'rollback'
             Sync-CanonicalWriterFenceInventory $Script:ContainerWriterFenceInventorySha256
-            Product $install '--remove-current-user-setup'
+            if($supportedPlacement){Product $source '--remove-current-user-setup' (Join-Path $install 'app')}else{Product $install '--remove-current-user-setup'}
             if ((Snapshot).exists -or @(Relays).Count -ne 0) {
                 throw 'Replacement rollback runtime quiescence failed.'
             }
             $restoreBootstrap = @(
                 '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
-                '-File',(Join-Path $install 'INSTALL_THIS_PC.ps1'),
+                '-File',(Join-Path $(if($supportedPlacement){$source}else{$install}) 'INSTALL_THIS_PC.ps1'),
                 '-InstallRoot',$install,
                 '-OperatorLocalAppDataRoot',$lad,
                 '-OperatorSid',$operatorSid,
@@ -3609,7 +3644,7 @@ catch {
                 '-ReplacementReceiptPath',$replacementReceiptPath,
                 '-ReplacementReceiptSha256',$replacementReceiptSha256,
                 '-RestoreEvidencePath',$replacementRestoreEvidencePath,
-                '-WriterFenceHelperPath',(Join-Path $install 'tools\container_writer_fence.ps1'),
+                '-WriterFenceHelperPath',(Join-Path $(if($supportedPlacement){$source}else{$install}) 'tools\container_writer_fence.ps1'),
                 '-ExpectedWriterFenceHelperSha256',([string]$sourceManifest.writer_fence_helper_sha256),
                 '-WriterFenceSessionId',$Script:CanonicalWriterFenceSessionId,
                 '-WriterFenceAttemptId',$Script:CanonicalWriterFenceAttemptId,

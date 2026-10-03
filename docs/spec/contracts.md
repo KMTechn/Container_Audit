@@ -494,3 +494,9 @@ G처럼 고치기 전 installer의 기록만 있는 상태는 이 계약의 입�
 legacy receipt self-path 규칙은 그대로이고, 새 journal로 검증된 사본만 최초 binding
 경로와 구별한다. 128개를 넘는 retained continuation은 보수적으로 거절하며 자동
 정리하지 않는다. 독립 native 랩 수용과 장기간 보관 정책은 별도 확인이 필요하다.
+
+## sub-189 지원 설치와 상태 판정 (2026-10-04)
+
+정상 자동 적용 뒤 fixed owner A와 actual active B가 다를 때만 지원 설치가 versions/C를 준비하고 B→C를 선택한다. A와 B는 이동하지 않는다. 기존 immutable replacement receipt에 active_version 선택, A/B/C 전체 파일·record·ACL identity, 원 제어 preimage와 허용된 게시 cut의 SHA를 결속한다. 같은 protected rollback journal, 원 receipt 사본, 복구 권한, Run 복원, ordinary relay READY와 끝 상태를 소비한다. 첫 설치와 A=B의 current 교체는 기존 경로다.
+
+설치/이종 active 등록은 실제 stock 기록·bytes·보호·신뢰 키와 derived SYSTEM task를 확인한다. 불안정/잔재/namespace 충돌은 한국어 지원 제거 안내로 멈춘다. 제거와 사용자 정리는 손상된 machine control 해석을 전제로 삼지 않는다. 오류는 제한된 cause chain/native errno·winerror/exit code를 보존하고 credential text를 마스킹한다. data/API 동일성으로 unsigned 쌍을 승인하던 미사용 fallback은 제거했다.

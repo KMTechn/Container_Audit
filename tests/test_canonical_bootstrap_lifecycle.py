@@ -47,6 +47,8 @@ def test_real_onboarding_defers_relay_under_valid_installation_delegation(monkey
     control = app.parent.parent / "update-control"
     control.mkdir()
     (control / "policy.json").write_text(json.dumps({"operator_sid": "S-1-5-21-111-222-333-1001"}), encoding="utf-8")
+    (control / "active.json").write_text(json.dumps({"sha": SHA}), encoding="utf-8")
+    (app.parent / "portable-manifest.json").write_text(json.dumps({"source_commit": SHA}), encoding="utf-8")
     environment = {"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "state")}
     paths = onboarding.resolve_current_user_onboarding_paths(app, environ=environment)
     _ready_state(paths)

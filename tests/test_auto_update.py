@@ -127,14 +127,15 @@ def test_approval_rejects_wildcards_and_malformed_entries(change):
         updates.directional_pin([{**forward, **change}], **forward)
 
 
-def test_both_directions_and_unchanged_data_api_are_required_for_automatic_apply():
-    current = dict(source_commit=OLD, writer_sink_inventory_contract_sha256="a" * 64, data_api_contract_sha256="c" * 64)
-    candidate = dict(source_commit=NEW, writer_sink_inventory_contract_sha256="b" * 64, data_api_contract_sha256="c" * 64)
-    assert len(updates.bidirectional_pins(pins(), current=current, candidate=candidate)) == 2
-    with pytest.raises(ValueError, match="no exact approval"):
-        updates.bidirectional_pins(pins()[:1], current=current, candidate=candidate)
-    with pytest.raises(ValueError, match="unchanged data"):
-        updates.bidirectional_pins(pins(), current=current, candidate={**candidate, "data_api_contract_sha256": "d" * 64})
+def test_signed_pair_allows_changed_data_api_evidence():
+    from tests.test_signed_pairrule import identities, signed
+    current, candidate = identities()
+    manifest = signed(current, candidate)
+    result = updates.authorize_feed_transition(manifest,current=current,candidate=candidate)
+    assert result['evidence']['candidate_data_api_sha256'] == candidate['data_api_contract_sha256']
+    manifest['approved_transitions'].pop()
+    with pytest.raises(ValueError,match='signed_exact_pair_required'):
+        updates.authorize_feed_transition(manifest,current=current,candidate=candidate)
 
 
 def test_feed_defaults_and_work_time_switch_are_closed():

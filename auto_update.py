@@ -236,37 +236,6 @@ def directional_pin(
     return hashlib.sha256(json.dumps(wanted, sort_keys=True, separators=(",", ":")).encode("ascii")).hexdigest()
 
 
-def bidirectional_pins(
-    approvals: list[Mapping[str, Any]], *, current: Mapping[str, Any],
-    candidate: Mapping[str, Any],
-) -> tuple[str, str]:
-    if (
-        not isinstance(current.get("data_api_contract_sha256"), str)
-        or _sha(current["data_api_contract_sha256"], length=64)
-        != _sha(candidate.get("data_api_contract_sha256"), length=64)
-    ):
-        raise ValueError("automatic rollback requires unchanged data and API contracts")
-    if not approvals and current["writer_sink_inventory_contract_sha256"] == candidate["writer_sink_inventory_contract_sha256"]:
-        fields = dict(zip(PIN_FIELDS, (current["source_commit"], candidate["source_commit"], current["writer_sink_inventory_contract_sha256"], candidate["writer_sink_inventory_contract_sha256"])))
-        for name, value in fields.items():
-            _sha(value, length=40 if name.endswith("commit") else 64)
-        reverse = dict(zip(PIN_FIELDS, (fields["to_commit"], fields["from_commit"], fields["to_contract_sha256"], fields["from_contract_sha256"])))
-        def identical_pin(pair):
-            return hashlib.sha256(json.dumps({"rule": "IDENTICAL_WRITER_DATA_API", "pair": pair, "data_api_sha256": current["data_api_contract_sha256"]}, sort_keys=True, separators=(",", ":")).encode("ascii")).hexdigest()
-        return identical_pin(fields), identical_pin(reverse)
-    forward = directional_pin(
-        approvals, from_commit=current["source_commit"], to_commit=candidate["source_commit"],
-        from_contract_sha256=current["writer_sink_inventory_contract_sha256"],
-        to_contract_sha256=candidate["writer_sink_inventory_contract_sha256"],
-    )
-    backward = directional_pin(
-        approvals, from_commit=candidate["source_commit"], to_commit=current["source_commit"],
-        from_contract_sha256=candidate["writer_sink_inventory_contract_sha256"],
-        to_contract_sha256=current["writer_sink_inventory_contract_sha256"],
-    )
-    return forward, backward
-
-
 def manifest_transition_pins(manifest: Mapping[str, Any], *, current: Mapping[str, Any], candidate: Mapping[str, Any]) -> tuple[str, str, dict[str, str], str]:
     """Only call after authentication of this complete manifest and packet."""
     result = authorize_feed_transition(manifest, current=current, candidate=candidate)
@@ -483,6 +452,197 @@ def control_root(app_root: Path) -> Path | None:
         return None
     _assert_no_reparse_components(policy)
     return policy.parent
+
+
+def _failure_text(value, *, limit: int = 16384) -> str:
+    text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else str(value or "")
+    # Decode quoted field names/values instead of stopping at escaped quotes
+    # or a comma inside a credential object. No store/environment lookup.
+    sensitive = r"authorization|credential|password|secret|token|signature|apikey|accesskey|privatekey"
+    decoder, spans, covered = json.JSONDecoder(), [], 0
+    for match in re.finditer(r'"(?P<key>(?:\\.|[^"\\])*)"\s*[:=]\s*', text):
+        if match.start() < covered:
+            continue
+        try:
+            key = json.loads('"' + match.group("key") + '"')
+        except ValueError:
+            continue
+        if re.search(sensitive, key.replace("-", "").replace("_", ""), re.IGNORECASE) is None:
+            continue
+        try:
+            _, end = decoder.raw_decode(text, match.end())
+        except ValueError:
+            end = len(text)  # Malformed sensitive JSON is never partly retained.
+        spans.append((match.end(), end))
+        covered = end
+    for start, end in reversed(spans):
+        text = text[:start] + "[redacted]" + text[end:]
+    text = re.sub(r"(?i)(\b[a-z][a-z0-9+.-]*://)[^/\s?#]*@",
+                  lambda match: match.group(1) + "[redacted]@", text)
+    # Quoted JSON keys were handled above. Keep assignments, query/header
+    # fields and Python-style quoted keys, including hyphenated API keys.
+    text = re.sub(r'''(?ix)(?<![\w"])(\b[A-Za-z0-9_-]*(?:authorization|credential|password|secret|token|signature|api[_-]?key|access[_-]?key|private[_-]?key)[A-Za-z0-9_-]*'?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|[^\r\n;&}]+)''',
+                  lambda match: match.group(1) + "[redacted]", text)
+    text = re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+=*", "Bearer [redacted]", text)
+    return text[:limit]
+
+
+def _failure_details(error: BaseException) -> list[dict]:
+    details, seen = [], set()
+    while error is not None and id(error) not in seen and len(details) < 16:
+        seen.add(id(error))
+        item = {"type": type(error).__module__ + "." + type(error).__name__,
+                "message": _failure_text(error, limit=4096)}
+        for name in ("errno", "winerror", "exit_code"):
+            value = getattr(error, name, None)
+            if type(value) is int:
+                item[name] = value
+        for name in ("stdout", "stderr"):
+            value = getattr(error, name, None)
+            if isinstance(value, (str, bytes)):
+                item[name] = _failure_text(value)
+                item[name + "_truncated"] = len(value) > 16384
+        details.append(item)
+        error = error.__cause__ or error.__context__
+    return details
+
+
+
+def installation_root(app_root: Path) -> Path | None:
+    code = app_root.absolute()
+    if code.name != 'app':
+        return None
+    bundle = code.parent
+    if bundle.name == 'current':
+        return bundle.parent
+    if bundle.parent.name == 'versions' and re.fullmatch(r'[0-9a-f]{40}', bundle.name):
+        return bundle.parent.parent
+    return None
+
+
+LIFECYCLE_RECOVERY = '자료와 등록 및 전송 대기를 보존하고 지원 제거를 먼저 실행한 뒤 다시 설치하세요.'
+
+
+def verify_lifecycle_stock(bundle: Path) -> dict[str, Any]:
+    from current_user_onboarding import _read_replacement_tree_identity, _windows_acl_identity
+    identity = _read_replacement_tree_identity(bundle, bundle, acl_identity_reader=_windows_acl_identity)
+    if identity['owner_sid'] != 'S-1-5-32-544' or identity['access_rules_protected'] is not True:
+        raise ValueError('lifecycle_stock_protection_invalid')
+    return identity
+
+
+def supported_tasks_absent(fixed: Path) -> bool:
+    """Removal markers do not substitute for actual task absence."""
+    import subprocess
+    escaped = str(fixed).replace("'", "''")
+    script = ("$ErrorActionPreference='Stop';$root='" + escaped + "';"
+              "$s=New-Object -ComObject 'Schedule.Service';$s.Connect();"
+              "foreach($t in @($s.GetFolder('\\').GetTasks(1))){"
+              "if($t.Name -cin @('direct-sync-relay-container-audit','container-audit-isolated-qualification-authority')){exit 5};"
+              "if($t.Name -cmatch '^KMTech\\.ContainerAudit\\.StartupUpdate\\.[0-9a-f]{24}$'){"
+              "[xml]$x=$t.Xml;foreach($a in @($x.Task.Actions.Exec)){if(([string]$a.Arguments).IndexOf($root,[StringComparison]::OrdinalIgnoreCase) -ge 0){exit 5}}}};exit 0")
+    result = subprocess.run([system_executable('WindowsPowerShell/v1.0/powershell.exe'), '-NoLogo', '-NoProfile',
+                             '-NonInteractive', '-Command', script], capture_output=True,
+                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    return result.returncode == 0
+
+
+def supported_task_present(fixed: Path, sid: str) -> bool:
+    """Read the actual derived task without executing installed support code."""
+    import subprocess
+    import xml.etree.ElementTree as xml
+
+    name = task_name(fixed, sid)
+    script = "$ErrorActionPreference='Stop';$s=New-Object -ComObject 'Schedule.Service';$s.Connect();$t=$s.GetFolder('\\').GetTask('" + name + "');[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);[Console]::Write($t.Xml)"
+    result = subprocess.run([system_executable('WindowsPowerShell/v1.0/powershell.exe'), '-NoLogo', '-NoProfile',
+                             '-NonInteractive', '-Command', script], capture_output=True, encoding='utf-8',
+                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    if result.returncode or len(result.stdout) > 1024 * 1024:
+        return False
+    try:
+        actual = xml.fromstring(result.stdout); expected = xml.fromstring(logon_task_xml(app_root=fixed, operator_sid=sid))
+        ns = {'t': 'http://schemas.microsoft.com/windows/2004/02/mit/task'}
+        paths = ('t:Triggers/t:LogonTrigger/t:UserId', 't:Principals/t:Principal/t:UserId',
+                 't:Principals/t:Principal/t:RunLevel', 't:Actions/t:Exec/t:Command',
+                 't:Actions/t:Exec/t:Arguments', 't:Settings/t:AllowHardTerminate', 't:Settings/t:Hidden')
+        return (len(actual.findall('t:Actions/t:Exec', ns)) == 1
+                and len(actual.findall('t:Triggers/t:LogonTrigger', ns)) == 1
+                and len(actual.findall('t:Principals/t:Principal', ns)) == 1
+                and all(actual.findtext(path, namespaces=ns) == expected.findtext(path, namespaces=ns) for path in paths))
+    except (ValueError, xml.ParseError):
+        return False
+
+
+def resolve_lifecycle_context(root: Path, *, operation: str = 'inspect', expected_from_commit: str | None = None) -> dict[str, Any]:
+    """Removal needs scope; install/register require actual healthy stock bytes."""
+    if operation not in {'inspect', 'install', 'register', 'uninstall', 'user_remove'}:
+        raise ValueError('lifecycle_operation_invalid')
+    root = root.absolute(); fixed = root / 'current'; control = root / 'update-control'
+    if operation in {'uninstall', 'user_remove'}:
+        return dict(status='PASS', lifecycle_state='REMOVAL_READY', fixed_root=str(fixed),
+                    owner_app_root=str(fixed / 'app'), active_code_root=None, active_app_root=None, from_commit=None)
+    try:
+        _assert_no_reparse_components(root)
+        for path in (fixed, control, root / 'versions'):
+            _assert_no_reparse_components(path)
+            if path.exists() and not path.is_dir():
+                raise ValueError('lifecycle_owned_namespace_collision')
+        data_root = os.environ.get('CONTAINER_AUDIT_DATA_ROOT')
+        if data_root:
+            data = Path(data_root).absolute()
+            for reserved in (fixed, control, root / 'versions', root / 'removal-evidence'):
+                if data == reserved or data in reserved.parents or reserved in data.parents:
+                    raise ValueError('lifecycle_data_namespace_collision')
+        records = [control / name for name in ('policy.json', 'active.json', 'transition.json')]
+        present = [path.exists() for path in records]
+        if not fixed.exists():
+            if any(present):
+                raise ValueError('lifecycle_removed_control_remains')
+            if operation == 'register':
+                raise ValueError('lifecycle_register_requires_installed_code')
+            if not supported_tasks_absent(fixed):
+                raise ValueError('lifecycle_removed_tasks_remain_or_unknown')
+            return dict(status='PASS', lifecycle_state='REMOVED', fixed_root=str(fixed),
+                        owner_app_root=str(fixed / 'app'), active_code_root=None, active_app_root=None, from_commit=None)
+        verify_lifecycle_stock(fixed)
+        owner = read_json(fixed / 'portable-manifest.json')
+        if owner.get('schema') != 'container-audit-portable-tree-v1':
+            raise ValueError('lifecycle_stock_manifest_invalid')
+        owner_sha = _sha(owner.get('source_commit'))
+        active_root = fixed; active_sha = owner_sha
+        if any(present):
+            if not all(present):
+                raise ValueError('lifecycle_control_incomplete')
+            policy, pointer, state = [read_json(path) for path in records]
+            if (policy.get('schema') != 'container-audit-startup-update-policy-v1' or pointer.get('schema') != SCHEMA
+                    or state.get('schema') != SCHEMA or state.get('phase') not in {'CONFIRMED', 'DEFERRED', 'ROLLED_BACK'}):
+                raise ValueError('lifecycle_transition_requires_recovery')
+            active_sha = _sha(pointer.get('sha'))
+            if state.get('phase') == 'CONFIRMED' and state.get('candidate_sha') != active_sha:
+                raise ValueError('lifecycle_confirmed_pointer_mismatch')
+            if state.get('phase') == 'ROLLED_BACK' and state.get('previous_sha') != active_sha:
+                raise ValueError('lifecycle_rollback_pointer_mismatch')
+            active_root = version_bundle(control, active_sha)
+            verify_lifecycle_stock(active_root)
+            actual = read_json(active_root / 'portable-manifest.json')
+            if actual.get('schema') != owner.get('schema') or actual.get('source_commit') != active_sha:
+                raise ValueError('lifecycle_active_manifest_mismatch')
+            for bundle in (fixed, active_root):
+                _assert_no_reparse_components(bundle / 'app/update-manifest-key-config.json')
+            if ((fixed / 'app/update-manifest-key-config.json').read_bytes()
+                    != (active_root / 'app/update-manifest-key-config.json').read_bytes()):
+                raise ValueError('lifecycle_active_trust_key_mismatch')
+            if supported_task_present(fixed, policy.get('operator_sid')) is not True:
+                raise ValueError('lifecycle_task_absence_or_unknown')
+            if [read_json(path) for path in records] != [policy, pointer, state]:
+                raise ValueError('lifecycle_state_changed_during_verification')
+        if expected_from_commit is not None and _sha(expected_from_commit) != active_sha:
+            raise ValueError('lifecycle_from_commit_mismatch')
+        return dict(status='PASS', lifecycle_state='HEALTHY', fixed_root=str(fixed), owner_app_root=str(fixed / 'app'),
+                    active_code_root=str(active_root), active_app_root=str(active_root / 'app'),
+                    from_commit=active_sha, bootstrap_commit=owner_sha, managed=any(present))
+    except (OSError, ValueError, RuntimeError) as error:
+        raise ValueError(LIFECYCLE_RECOVERY + ' [' + type(error).__name__ + ']') from error
 
 
 def version_bundle(control: Path, sha: str) -> Path:
@@ -722,7 +882,7 @@ def apply_prepared(control: Path) -> int:
             not_applied = pointer == before and (not state or state.get("phase") in {"CONFIRMED", "ROLLED_BACK", "DEFERRED", "PREPARED"})
             failure = {**(state or {}), "schema": SCHEMA,
                        "phase": "DEFERRED" if not_applied else "UNKNOWN",
-                       "deferred_at": now_utc(), "reason": type(error).__name__}
+                       "deferred_at": now_utc(), "reason": type(error).__name__, "failure_details": _failure_details(error)}
             write_json_durable(control / ("failure-" + uuid.uuid4().hex + ".json"), failure)
             write_json_durable(control / "transition.json", failure)
         return 0 if not_applied else 20
@@ -1109,7 +1269,7 @@ def prepare_feed_packet(app_root: Path) -> dict[str, Any]:
     from update_service import (verify_update_manifest_signature, update_candidate_from_private_manifest,
                                 file_sha256, assert_https_update_url, is_github_hosted_update_url,
                                 validate_update_archive_layout, _is_zip_symlink, _validate_windows_archive_path)
-    from current_user_onboarding import resolve_current_user_onboarding_paths, _default_profile_loader, verify_bootstrap_integrity
+    from current_user_onboarding import resolve_current_user_onboarding_paths, _default_profile_loader
 
     control = control_root(app_root)
     if control is None:
@@ -1120,8 +1280,7 @@ def prepare_feed_packet(app_root: Path) -> dict[str, Any]:
     key = read_json(control.parent / "current/app/update-manifest-key-config.json")["manifest_public_key"]
     active = read_json(control / "active.json")
     active_bundle = version_bundle(control, active["sha"])
-    if verify_bootstrap_integrity(resolve_current_user_onboarding_paths(active_bundle / "app")).get("status") != "PASS":
-        raise ValueError("daily update requires verified installed stock bytes")
+    verify_lifecycle_stock(active_bundle)
     current = version_manifest(active_bundle, require_version=True)
     profile = _default_profile_loader(resolve_current_user_onboarding_paths(app_root).logistics_profile_path) if policy.get("profile_auth") else None
     feed_url = assert_https_update_url(policy["feed_url"])
@@ -1442,8 +1601,20 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--print-logon-task", action="store_true")
     parser.add_argument("--install-root", type=Path)
     parser.add_argument("--operator-sid")
+    parser.add_argument('--lifecycle-context', action='store_true')
+    parser.add_argument('--operation', choices=('inspect', 'install', 'register', 'uninstall', 'user_remove'), default='inspect')
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     options = parser.parse_args(arguments)
+    if options.lifecycle_context:
+        if options.bootstrap or options.apply_prepared or options.print_logon_task or options.arguments or options.install_root is None:
+            raise ValueError('lifecycle context arguments differ')
+        try:
+            context = resolve_lifecycle_context(options.install_root.absolute().parent, operation=options.operation)
+            print(json.dumps(context, ensure_ascii=True))
+            return 0
+        except (OSError, ValueError, RuntimeError) as error:
+            print(json.dumps(dict(status='FAILED', message=LIFECYCLE_RECOVERY, error_type=type(error).__name__, failure_details=_failure_details(error)), ensure_ascii=True))
+            return 20
     if options.print_logon_task:
         if options.apply_prepared or options.bootstrap or options.arguments or options.install_root is None:
             raise ValueError("logon task generation arguments differ")

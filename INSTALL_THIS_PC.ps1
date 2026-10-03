@@ -9,6 +9,8 @@ param(
     [string]$OperatorSid = "",
     [string]$ElevationLogPath = "",
     [switch]$ReplaceExistingVerifiedPortable,
+    [switch]$SupportedActiveVersionPlacement,
+    [string]$SupportedFromCommit = "",
     [string]$ReplacementTransactionId = "",
     [string]$ReplacementReceiptPath = "",
     [switch]$ProbeVerifiedReplacementRestore,
@@ -349,7 +351,8 @@ function Complete-ContainerRollbackContinuation {
     if ([string]$active.session_id -cne $WriterFenceSessionId -or [string]$active.attempt_id -cne $WriterFenceAttemptId -or
         [string]$active.replacement_transaction_id -cne $WriterFenceReplacementTransactionId -or
         (Test-Path -LiteralPath $stop)) {throw 'Rollback completion authority or stop marker differs.'}
-    $processes=@(Get-CimInstance Win32_Process|Where-Object {[string]$_.ExecutablePath -ieq (Join-Path $installRootFull 'runtime\pythonw.exe') -and [string]$_.CommandLine -match '--container-audit-user-relay'})
+    $completionIdentity=Get-BootstrapRelayExpectedIdentity $installRootFull ([string]$record.preimage.data)
+    $processes=@(Get-CimInstance Win32_Process|Where-Object {[string]$_.ExecutablePath -ieq [string]$completionIdentity.executable -and [string]$_.CommandLine -match '--container-audit-user-relay'})
     if ($processes.Count -ne [int]$record.relay_count) {throw 'Rollback completion relay count differs.'}
     if ([int]$record.relay_count -eq 1) {
         $proof=$audit.exact_launch
@@ -369,7 +372,11 @@ function Complete-ContainerRollbackContinuation {
             if ([bool]$item.exists -ne (Test-Path -LiteralPath $target -PathType Leaf) -or
                 ($item.exists -and (Get-FileSha256 $target) -cne [string]$item.sha256)) {throw 'Rollback completion startup pointer differs.'}
         }
-        if ($saved.task.exists -or $null -ne (Get-ScheduledTask -TaskName ([string]$saved.task.name) -ErrorAction SilentlyContinue)) {throw 'Rollback completion startup task remains.'}
+        if($receipt.PSObject.Properties['active_version']) {
+            $actual=Get-ContainerStartupUpdateTaskPreimage $installRootFull
+            if([bool]$actual.exists -ne [bool]$saved.task.exists -or [string]$actual.xml -cne [string]$saved.task.xml -or
+                (Get-BootstrapAclComparisonKey ([string]$actual.sddl)) -cne (Get-BootstrapAclComparisonKey ([string]$saved.task.sddl))){throw 'Rollback completion startup task differs.'}
+        } elseif ($saved.task.exists -or $null -ne (Get-ScheduledTask -TaskName ([string]$saved.task.name) -ErrorAction SilentlyContinue)) {throw 'Rollback completion startup task remains.'}
     }
     $completed=[ordered]@{schema='container-audit-rollback-completed-v1';status='COMPLETE';
         journal_sha256=$RollbackContinuationSha256;receipt_sha256=[string]$record.receipt_sha256;
@@ -1777,6 +1784,12 @@ if ($releaseLayout -ceq 'PORTABLE_CPYTHON') {
         throw 'Integrity helper must load from the admitted SourceRoot.'
     }
 }
+if(-not $testOverride -and -not $RestoreUninstallRecordPath -and -not $SupportedActiveVersionPlacement) {
+    $contextText=& (Join-Path $sourceRootFull 'runtime\python.exe') (Join-Path $sourceRootFull 'app\auto_update.py') '--lifecycle-context' '--operation' 'install' '--install-root' $installRootFull
+    if($LASTEXITCODE -ne 0){throw '자료와 등록 및 전송 대기를 보존하고 지원 제거를 먼저 실행한 뒤 다시 설치하세요.'}
+    $context=$contextText|ConvertFrom-Json
+    if([string]$context.lifecycle_state -ceq 'HEALTHY' -and [bool]$context.managed -and [string]$context.bootstrap_commit -cne [string]$context.from_commit){throw '자동 적용 뒤 지원 설치는 INSTALL_CANONICAL_PORTABLE.ps1 로 실행하세요.'}
+}
 $sourceInventory = @(Get-CodeInventory $sourceRootFull)
 if ($sourceInventory.Count -eq 0) {
     throw "Frozen release code inventory is empty."
@@ -1807,6 +1820,81 @@ if ($DryRun.IsPresent) {
     Write-Output "elevation_points=1:code_placement"
     exit 0
 }
+
+function Get-ContainerSupportedInstallContext([string]$Source,[string]$Fixed) {
+    $contextText=& (Join-Path $Source 'runtime\python.exe') (Join-Path $Source 'app\auto_update.py') '--lifecycle-context' '--operation' 'install' '--install-root' $Fixed
+    if($LASTEXITCODE -ne 0){throw 'Supported lifecycle context is unhealthy.'}
+    return $contextText|ConvertFrom-Json
+}
+function Invoke-ContainerSupportedActiveVersionPlacement {
+    if($testOverride -or -not $ReplaceExistingVerifiedPortable -or $SupportedFromCommit -cnotmatch '^[0-9a-f]{40}$' -or
+        $ReplacementTransactionId -cnotmatch '^[0-9a-f]{32}$' -or -not $WriterFencePreparedReceiptPath){throw 'Supported placement requires the live canonical receipt authority.'}
+    $applicationParent=Split-Path -Parent $installRootFull
+    Assert-InstallationEvidenceProtectedPath $applicationParent
+    $control=Join-Path $applicationParent 'update-control'
+    $gate=New-Object Threading.Mutex($false,('Global\KMTech.ContainerAudit.Update.'+(Get-ContainerWriterFenceStringSha256 $control.ToLowerInvariant()).Substring(0,24)))
+    $held=$false
+    try {
+        try{$held=$gate.WaitOne(5000)}catch [Threading.AbandonedMutexException]{$held=$true;throw 'Supported update gate was abandoned.'}
+        if(-not $held){throw 'Supported update gate is busy.'}
+        # Verify the old stock through the admitted source, never by running B.
+        $context=Get-ContainerSupportedInstallContext $sourceRootFull $installRootFull
+        if([string]$context.lifecycle_state -cne 'HEALTHY' -or [string]$context.from_commit -cne $SupportedFromCommit -or
+            [string]$context.bootstrap_commit -ceq $SupportedFromCommit){throw 'Supported active from binding differs.'}
+        Assert-ContainerReplacementRestoreQuiescent -CurrentRoot $installRootFull
+        if((Get-FileSha256 (Join-Path $sourceRootFull 'app\update-manifest-key-config.json')) -cne (Get-FileSha256 (Join-Path $installRootFull 'app\update-manifest-key-config.json'))){throw 'Supported stock trust key differs.'}
+        $from=Join-Path $applicationParent ('versions\'+$SupportedFromCommit)
+        $manifest=Get-Content -LiteralPath (Join-Path $sourceRootFull 'portable-manifest.json') -Raw -Encoding UTF8|ConvertFrom-Json
+        $to=Join-Path $applicationParent ('versions\'+[string]$manifest.source_commit)
+        if([string]$manifest.source_commit -cnotmatch '^[0-9a-f]{40}$' -or (Test-Path -LiteralPath $to)){throw 'Supported candidate destination already exists or differs.'}
+        Assert-NoReparsePoint (Split-Path -Parent $to) 'supported version parent'
+        $owner=Get-BootstrapReplacementTreeIdentity $installRootFull $installRootFull
+        $active=Get-BootstrapReplacementTreeIdentity $from $from
+        $preimage=Save-ContainerStartupUpdatePreimage $installRootFull 'install'
+        # Before publishing any pointer, preserve the complete protected C tree
+        # and the same immutable receipt consumed by ordinary rollback/resume.
+        Copy-Item -LiteralPath $sourceRootFull -Destination $to -Recurse -ErrorAction Stop
+        if((Get-InventoryAggregate @(Get-CodeInventory $to)) -cne $sourceAggregate){throw 'Supported candidate copy differs.'}
+        [void](Write-BootstrapIntegrityRecord -Root $to -CodeRootIdentity $to)
+        Set-HardenedCodeAcl $to -Recursive
+        $new=Get-BootstrapReplacementTreeIdentity $to $to
+        $planned=Join-Path $preimage.path 'planned'
+        New-InstallationProtectedDirectory $planned $OperatorSid
+        $oldState=Get-Content -LiteralPath (Join-Path $control 'transition.json') -Raw -Encoding UTF8|ConvertFrom-Json
+        $policy=Get-Content -LiteralPath (Join-Path $control 'policy.json') -Raw -Encoding UTF8|ConvertFrom-Json
+        $settings=Get-Content -LiteralPath (Join-Path $sourceRootFull 'app\auto-update-settings.json') -Raw -Encoding UTF8|ConvertFrom-Json
+        if($settings.apply_during_work -isnot [bool] -or $settings.apply_during_work){throw 'Supported policy permits work-time application.'}
+        $policy.feed_url=[string]$settings.feed_url;$policy.channel=[string]$settings.channel
+        $policy.profile_auth=[bool]$settings.profile_auth;$policy.approved_transitions=@($settings.approved_transitions)
+        Write-ContainerStartupUpdateRecord (Join-Path $planned 'policy.json') $policy
+        Write-ContainerStartupUpdateRecord (Join-Path $planned 'active.json') ([ordered]@{schema='container-audit-startup-update-v1';sha=[string]$manifest.source_commit;transition_id=$ReplacementTransactionId})
+        Write-ContainerStartupUpdateRecord (Join-Path $planned 'transition.json') ([ordered]@{schema='container-audit-startup-update-v1';phase='DEFERRED';deferred_at=[DateTime]::UtcNow.ToString('o');reason='supported canonical active-version placement';failed_shas=@($oldState.failed_shas)})
+        $after=@('policy.json','active.json','transition.json'|ForEach-Object {[ordered]@{name=$_;sha256=Get-FileSha256 (Join-Path $planned $_)}})
+        $receiptFull=Join-Path $Script:InstallationEvidenceRoot 'replacement-receipt.json'
+        $payload=[ordered]@{schema_version='container-audit-verified-replacement-v1';status='OLD_PRESERVED_NEW_VERIFIED';app_id='container_audit';transaction_id=$ReplacementTransactionId;
+            created_at=[DateTime]::UtcNow.ToString('o');helper_sha256=Get-FileSha256 $BootstrapScriptPath;integrity_helper_sha256=Get-FileSha256 $BootstrapIntegrityFunctions;
+            receipt_path=$receiptFull;install_root=$installRootFull;install_parent=$applicationParent;rollback_root=$from;failed_root=Join-Path $applicationParent ('.version.failed.'+$ReplacementTransactionId);
+            parent_acl=Get-BootstrapAclIdentity $applicationParent;old=$owner;new=$new;identity_or_credential_copied=$false;
+            startup_update_preimage=$preimage.path;startup_update_preimage_sha256=$preimage.sha256;
+            active_version=[ordered]@{kind='SUPPORTED_ACTIVE_VERSION';from_sha=$SupportedFromCommit;to_sha=[string]$manifest.source_commit;from_root=$from;to_root=$to;from=$active;control_after=$after}}
+        $saved=Write-BootstrapReplacementReceipt $receiptFull $payload
+        Write-InstallationEvidenceEvent ([ordered]@{event='REPLACEMENT_RECEIPT_READY';path=$saved.path;sha256=$saved.sha256;old_manifest_sha256=$owner.manifest_sha256;new_manifest_sha256=$new.manifest_sha256;transaction_id=$ReplacementTransactionId})
+        if($Script:InstallationEvidenceFailed){throw 'Supported receipt was not durably recorded.'}
+        foreach($name in @('transition.json','policy.json','active.json')) {
+            $bytes=Get-Content -LiteralPath (Join-Path $planned $name) -Raw -Encoding UTF8|ConvertFrom-Json
+            Write-ContainerStartupUpdateRecord (Join-Path $control $name) $bytes
+            if((Get-FileSha256 (Join-Path $control $name)) -cne (Get-FileSha256 (Join-Path $planned $name))){throw 'Supported control publication differs.'}
+        }
+        $verifiedReceipt=Read-BootstrapReplacementReceipt $saved.path $saved.sha256
+        [void](Get-BootstrapSupportedVersionRestoreState $verifiedReceipt $receiptFull $installRootFull 'container_audit' $ReplacementTransactionId (Get-FileSha256 $BootstrapScriptPath))
+        'replacement_receipt_path='+$saved.path
+        'replacement_receipt_sha256='+$saved.sha256
+        'supported_placement_status=OLD_OWNER_AND_ACTIVE_PRESERVED_NEW_VERIFIED'
+        return
+    } finally {if($held){$gate.ReleaseMutex()};$gate.Dispose()}
+}
+
+if($SupportedActiveVersionPlacement){Invoke-ContainerSupportedActiveVersionPlacement;exit 0}
 
 $applicationParent = Split-Path -Parent $installRootFull
 $stagingRoot = Join-Path $applicationParent ('.current.bootstrap.' + [Guid]::NewGuid().ToString('N'))
