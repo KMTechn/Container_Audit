@@ -13,6 +13,12 @@ receipt를 한 번만 쓴다. startup 초기화는 그 preimage를 재사용하�
 최초 018e013의 추가 self-path 변경은 기존 evidence completion 회귀 2개를 깨뜨렸다.
 caller/export 경로 계약을 원복해 순서 교정만 유지하며 실패 증거는 sub-162에 보존한다.
 최종 diff에서 self-path 표현을 기준과 완전히 동일하게 복원해 추가 fallback도 제거한다.
+예행 G(dac6157): helper native0/REPLACED_VERIFIED로 단일 receipt·startup task·TLS ABSENT는 통과했다.
+부모2887의 caller receipt Sha는 FileNotFound, 뒤 rollback917 relay READY timeout으로
+AUTOSTART_ROLLBACK_FAILED/native1이다. current dac/2304파일·startup task1·active pointerdac가
+남아 old-normal 복원은 FAILED다. public3/business82/Machine2/Run/ACL5/형제 판은 동일하며
+늦은 비상승 relay RUNNING은 native 복원 실패를 뒤집지 않는다. direct-child receipt 전달과
+지원 복구/독립 검토가 다음 작업이다. 추가 수선·재설치·GUI/update는 실행하지 않았다.
 PS5.1/7 회귀는 초기화 실패→지원 preimage 복원→새 run 재설치, 기존 receipt 보존과 위조 거절을
 검사한다. 랩 예행 G와 독립 수용은 [sub-162](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-162/REPORT.md)에서 별도로 판정한다.
 F의 최초 중복 쓰기 실패(native 73), 실제 9/10구간 및 old2302파일·Run·ACL·비상승 relay

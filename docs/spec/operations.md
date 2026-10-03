@@ -204,6 +204,13 @@ receipt_path는 원 caller/export 경로를 유지한다. protected destination�
 ordinary export/restore 소비자 검증이 실패하므로 그 변경은 적용하지 않는다.
 실패 복원·원 receipt hash/old-new identity 검사는 유지한다. PS5.1/7 소스 회귀와 실제 예행 G의
 범위·결과는 [sub-162](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-162/REPORT.md)를 따른다.
+예행 G의 설치1회는 helper0/REPLACED_VERIFIED 뒤 부모 caller receipt 부재(OpenRead,
+portable.ps1:6/호출2887, inner HRESULT -2147024894)로 실패했다. 뒤 rollback917의
+CANONICAL_RELAY_READY_TIMEOUT/native1/AUTOSTART_ROLLBACK_FAILED를 첫 실패와 분리한다.
+current dac6157/2304파일·active pointerdac·startup task1이 남았으며 old code 복원은 FAILED다.
+public3/business82/Machine2/원 Run144·5 ACL·형제 판 동일과 늦은 Medium ordinary relay RUNNING은
+별도 관측이다. 원 rollback tree·startup preimage·보험과 protected 원본을 보존했고 수동
+receipt export/추가repair/재설치/GUI/update0이다. 현재 상태의 지원 복구는 다음 작업이다.
 켜진 작업자가 이미 있으면 로그온 작업은 DEFERRED로 남기며 업무를 멈추지 않는다.
 수명주기 교체/복구는 진행 중 자동 전이나 실행 중 작업이 있으면 거절한다.
 기존 policy·pointer·journal·task XML/ACL은 보호된 `.startup-update-install.<attempt>`에
