@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import time
 
 import pytest
 
@@ -113,6 +114,9 @@ def _fixture(tmp_path):
         baseline_text=baseline_text.replace('$wanted = Command $install',OS_BOUNDARIES+'\n$wanted = Command $install')
         canonical.write_text(baseline_text,encoding='utf-8-sig')
     text = canonical.read_text(encoding='utf-8-sig')
+    # Expose the real scheduling window after a completion fence is published
+    # and before its helper takes admission; no production deadline changes.
+    text = text.replace("$canonicalWriterFenceActive=$true\n    $authorization=New-CanonicalWriterFenceReleaseAuthorization -Path ($productCompleteAuthorizationPath+'.continuation-complete')", "$canonicalWriterFenceActive=$true\n    Start-Sleep -Seconds 2\n    $authorization=New-CanonicalWriterFenceReleaseAuthorization -Path ($productCompleteAuthorizationPath+'.continuation-complete')", 1)
     text=text.replace(' -WindowStyle Hidden -PassThru'," -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:CA_UNINSTALL_ROOT 'resumed-relay.stdout') -RedirectStandardError (Join-Path $env:CA_UNINSTALL_ROOT 'resumed-relay.stderr') -PassThru")
     text = text.replace("Join-Path $env:LOCALAPPDATA 'KMTech\\DirectSync\\container_audit\\control\\writer-session'", "Join-Path $env:LOCALAPPDATA 'c'")
     text = text.replace('. $BootstrapIntegrityFunctions\n', '. $BootstrapIntegrityFunctions\n' + PROTECTED_OS + '\n')
@@ -137,6 +141,8 @@ def _fixture(tmp_path):
                         'if ($codeRestoreNeeded -and -not $RestoreVerifiedReplacement)')
     anchor="[void](Write-ContainerWriterFenceAtomic '' $resumedFence)"
     text=text.replace(anchor,anchor+"\n        $cut=Join-Path $env:CA_UNINSTALL_ROOT 'interrupt-resume';if(Test-Path -LiteralPath $cut){$remaining=[int]([IO.File]::ReadAllText($cut));if($remaining -gt 0){[IO.File]::WriteAllText($cut,[string]($remaining-1));[Environment]::Exit(86)}}",1)
+    text = text.replace('$canonicalWriterFenceActive = $true\n', '$canonicalWriterFenceActive = $true\n' +
+        "if(Test-Path (Join-Path $env:CA_UNINSTALL_ROOT 'probe-active-fence')){Start-Sleep -Seconds 3;$relayPid=[int](Get-Content (Join-Path $env:CA_UNINSTALL_ROOT 'relay.pid'));@{fence_present=(Test-Path (Join-Path $env:CA_UNINSTALL_CONTROL 'active.json'));stop_absent=(-not(Test-Path (Join-Path $env:LOCALAPPDATA 'KMTech\\DirectSync\\container_audit\\control\\container_audit_user_relay.stop.json')));original_alive=(@(Get-Process -Id $relayPid -ErrorAction SilentlyContinue).Count -gt 0)}|ConvertTo-Json|Set-Content (Join-Path $env:CA_UNINSTALL_ROOT 'active-fence-observation.json');[Environment]::Exit(86)}\n", 1)
     text = text.replace("    $child=Invoke-InstallationEvidenceChild 'record-rollback-continuation'",
                         "    if($testMode){$args+='-AllowNoncanonicalLayoutForTest'}\n    $child=Invoke-InstallationEvidenceChild 'record-rollback-continuation'")
     # An external product failure occurs after real replacement. The first
@@ -145,6 +151,7 @@ def _fixture(tmp_path):
     canonical.write_text(text, encoding='utf-8-sig')
     helper = source / 'INSTALL_THIS_PC.ps1'
     text = helper.read_text(encoding='utf-8-sig')
+    text = text.replace('function Complete-ContainerRollbackContinuation {', 'function Complete-ContainerRollbackContinuation {\n    Start-Sleep -Seconds 2', 1)
     text = text.replace(r'KMTech\DirectSync\container_audit\control\writer-session', 'c')
     text = text.replace('$testOverride = (', PROTECTED_OS + r'''
 function Test-InstallationEvidencePrivileged {return @((Get-PSCallStack)|Where-Object {$_.FunctionName -cin @('Complete-ContainerRollbackContinuation','Write-ContainerRollbackContinuationAuthority')}).Count -gt 0}
@@ -266,7 +273,10 @@ def test_corrected_installer_resumes_its_pending_ntfs_rollback_on_rerun(tmp_path
         for name in ('policy.json','active.json','transition.json'):
             assert json.loads((install.parent/'update-control'/name).read_text()) == {'sha':'a'*40}
         assert all(p.read_bytes() == b'protected-fixture-must-be-preserved' for p in protected)
-        _assert_one_live_relay(tmp_path, env)
+        _,resident=_assert_one_live_relay(tmp_path, env)
+        time.sleep(2.2)
+        _,later=_assert_one_live_relay(tmp_path,env)
+        assert resident['ProcessId']==later['ProcessId']
         settled = _invoke(tmp_path, env, source, install, engine, 'settled-plan', '-PlanOnly')
         assert settled.returncode == 0 and 'rollback_resume_status=NOT_FOUND' in settled.stdout, settled.stderr
 
@@ -286,8 +296,14 @@ def test_same_receipt_can_resume_after_two_more_controller_interruptions(tmp_pat
         assert planned.returncode==0 and 'rollback_resume_status=VERIFIED_PENDING' in planned.stdout,planned.stdout+planned.stderr
         assert len(list(journal.parent.glob('authority-*.json')))==2
         assert journal.read_bytes()==original_journal and Path(record['receipt_path']).read_bytes()==original_receipt
-        # Completion uses the separate P2-2 change; this regression ends at
-        # authenticated reentry while the original NTFS receipt stays pending.
+        completed=_invoke(tmp_path,env,source,install,engine,'after-two-complete')
+        assert completed.returncode==0 and 'rollback_resume_status=COMPLETE' in completed.stdout,completed.stdout+completed.stderr
+        assert _tree(install)==old_tree and (journal.parent/'continuation-completed.json').exists()
+        _,resident=_assert_one_live_relay(tmp_path,env)
+        time.sleep(2.2)
+        _,later=_assert_one_live_relay(tmp_path,env)
+        assert later['ProcessId']==resident['ProcessId']
+        assert journal.read_bytes()==original_journal and Path(record['receipt_path']).read_bytes()==original_receipt
 
 
 @pytest.mark.parametrize('engine', ['powershell.exe', 'pwsh.exe'])
@@ -338,3 +354,16 @@ def test_resume_mismatch_refuses_before_any_mutation(tmp_path, engine, tamper):
         assert after == state
         assert not (tmp_path / 'refused.json').exists()
         assert all(p.read_bytes() == b'protected-fixture-must-be-preserved' for p in protected)
+
+
+@pytest.mark.parametrize('engine', ['powershell.exe', 'pwsh.exe'])
+def test_actual_active_fence_stops_ordinary_relay_before_product_quiesce(tmp_path,engine):
+    env,source,install,_,_=_fixture(tmp_path)
+    with _launch_relay(tmp_path,env) as child:
+        _live_preimage(tmp_path,env,source,install,child)
+        (tmp_path/'probe-active-fence').touch()
+        result=_invoke(tmp_path,env,source,install,engine,'active-fence-probe')
+        assert result.returncode==86,result.stdout+result.stderr
+        observation=json.loads((tmp_path/'active-fence-observation.json').read_text(encoding='utf-8-sig'))
+        assert observation=={'fence_present':True,'stop_absent':True,'original_alive':False}
+        assert child.poll() is not None

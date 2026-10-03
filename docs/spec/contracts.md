@@ -504,3 +504,7 @@ legacy receipt self-path 규칙은 그대로이고, 새 journal로 검증된 사
 ### sub-189 P2-1: 반복 중단 복구 권한 결속
 
 최초 보호 journal/receipt는 불변이다. 새 복구 controller는 원 journal SHA·receipt SHA·직전 authority tuple/link SHA·새 caller preparation SHA·살아 있는 owner PID/시작 시각을 보호된 immutable authority link로 결속한 뒤 그 링크 path/SHA를 fence에 게시한다. 다음 재진입은 보호 링크 사슬과 직전 owner 종료를 검증하며 같은 기록의 반복 중단을 이어 간다. 임의 tuple, 같은 tuple의 바뀐 링크, 살아 있거나 재사용된 owner는 거절한다. DISPLACED/current 부재는 기존 지원 범위 밖이다.
+
+### sub-189 P2-2: 보호 완료와 ordinary writer 해제
+
+relay READY 뒤 복구 완료 기록은 새 INSTALLING fence를 열지 않는다. privileged helper는 원 보호 journal/receipt·exact restored tree/Run/task·runtime audit·실제 protected RELEASED receipt와 authorization SHA·같은 살아 있는 controller PID/시작 시각 및 이미 잡힌 authority mutex를 확인하고 CreateNew 보호 완료를 기록한다. 실제 fence/stop 부재를 요구하며 relay를 재기동하지 않는다. controller는 helper 뒤 같은 resident PID와 READY를 다시 관측한다.

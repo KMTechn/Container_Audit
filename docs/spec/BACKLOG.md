@@ -605,3 +605,5 @@ separate evidence. Independent acceptance remains coordinator owned.
 서명 쌍/stock version/ASCII feed, 내용 소유 제거, 실제 B를 선택하는 지원 설치와 이종 active 등록, 제한된 원 오류 기록을 이적 구조에 맞췄다. 기존 receipt·protected journal·ordinary relay READY·한국어 복구 끝 상태를 유지한다. A≠B의 native 지원 설치 및 실제 제거 수렴, frozen 선언/pin의 최종 재생성·stock packet gate와 랩 실증은 열린 수용 항목이다. 자체 회귀·범위·실패 보존 및 독립 확인 입력은 sub-189 REPORT.md와 FOR-REVIEW.md에 기록한다.
 
 - sub-189 P2-1: immutable 원 journal/receipt에 보호 authority-link 사슬을 결속하여 반복 중단 재진입을 지원; PS5.1/PS7 두 추가 중단과 동일 tuple 링크 위조 거절 회귀. 정식 선언/pin 재생성 및 native 랩 수용은 별도 담당 레인에 남음.
+
+- sub-189 P2-2: READY 뒤 completion refence 제거; 보호 release/controller/journal 권한은 유지하고 helper 전후 resident PID/READY 재관측. 실제 admission root의 active-fence 부정 사례·완료 뒤 동일 PID 생존·두 추가 중단 뒤 완료 회귀. native 랩 재실증 및 frozen 선언 갱신은 출시 레인에 남음.

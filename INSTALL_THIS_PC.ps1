@@ -41,6 +41,8 @@ param(
     [int]$ContinuationOwnerProcessId=0,
     [string]$ContinuationOwnerStartedAtUtc="",
     [switch]$CompleteRollbackContinuation,
+    [string]$ContinuationReleaseAuthorizationPath="",
+    [string]$ContinuationReleaseAuthorizationSha256="",
     [string]$RollbackAuditPath = '',
     [string]$RollbackAuditSha256 = '',
     [string]$RollbackContinuationPath = '',
@@ -366,7 +368,7 @@ function Read-ContainerRollbackRunPreimage {
 }
 
 function Complete-ContainerRollbackContinuation {
-    # Close evidence under the same live delegated placement authority. Code,
+    # Close evidence under the same live controller and protected evidence authority. Code,
     # startup state, and the user's runtime are read back without mutation.
     if (-not (Test-InstallationEvidencePrivileged)) {throw 'Rollback completion requires protected evidence authority.'}
     $record=Read-ContainerRollbackContinuation $RollbackContinuationPath $RollbackContinuationSha256
@@ -388,10 +390,32 @@ function Complete-ContainerRollbackContinuation {
     $relayRoot=Join-Path $OperatorLocalAppDataRoot 'KMTech\DirectSync\container_audit'
     if ($env:CONTAINER_AUDIT_DATA_ROOT) {$relayRoot=Join-Path (Get-StrictFullPath $env:CONTAINER_AUDIT_DATA_ROOT 'completion data root') 'direct_sync'}
     $stop=Join-Path $relayRoot 'control\container_audit_user_relay.stop.json'
-    $active=Read-ContainerWriterFence -ControlRoot $control
-    if ([string]$active.session_id -cne $WriterFenceSessionId -or [string]$active.attempt_id -cne $WriterFenceAttemptId -or
-        [string]$active.replacement_transaction_id -cne $WriterFenceReplacementTransactionId -or
-        (Test-Path -LiteralPath $stop)) {throw 'Rollback completion authority or stop marker differs.'}
+    # Protected completion is read-only with respect to ordinary writers.
+    # Require the actual completed release, the same live controller authority,
+    # and exact code/runtime evidence; never open another installation fence.
+    $active=Read-ContainerWriterFence -ControlRoot $control -AllowAbsent
+    if($active -or (Test-Path -LiteralPath $stop)){throw 'Rollback completion requires released ordinary writers.'}
+    $releasePath=Join-Path $control ('release-'+$WriterFenceReplacementTransactionId+'-'+$ContinuationReleaseAuthorizationSha256+'.json')
+    $release=Read-ContainerWriterFenceReleaseReceipt $releasePath
+    if([string]$release.session_id -cne $WriterFenceSessionId -or [string]$release.attempt_id -cne $WriterFenceAttemptId -or
+        [string]$release.replacement_transaction_id -cne $WriterFenceReplacementTransactionId -or
+        -not(Test-SamePath ([string]$release.release_authorization_path) $ContinuationReleaseAuthorizationPath) -or
+        [string]$release.release_authorization_sha256 -cne $ContinuationReleaseAuthorizationSha256){throw 'Rollback completion release binding differs.'}
+    $authorization=Read-BootstrapReplacementReceipt $ContinuationReleaseAuthorizationPath $ContinuationReleaseAuthorizationSha256
+    if([string]$authorization.schema -cne 'container-audit-writer-release-authorization-v1' -or
+        [string]$authorization.phase -cnotin @('PRODUCT_COMPLETE','ROLLBACK_COMPLETE') -or
+        [string]$authorization.session_id -cne $WriterFenceSessionId -or [string]$authorization.attempt_id -cne $WriterFenceAttemptId -or
+        [string]$authorization.replacement_transaction_id -cne $WriterFenceReplacementTransactionId -or
+        -not(Test-SamePath ([string]$authorization.install_audit_path) $RollbackAuditPath)){throw 'Rollback completion authorization differs.'}
+    $owner=Get-Process -Id $ContinuationOwnerProcessId -ErrorAction Stop
+    if($owner.StartTime.ToUniversalTime().ToString('o') -cne $ContinuationOwnerStartedAtUtc){throw 'Rollback completion controller differs.'}
+    $mutex=$null;$acquired=$false
+    try{
+        $name=Get-ContainerWriterSessionAuthorityMutexName $WriterFenceSessionId $WriterFenceAttemptId ([string]$record.orchestrator_sha256) $WriterFenceReplacementTransactionId ([string]$record.writer_contract_sha256)
+        $mutex=[Threading.Mutex]::OpenExisting($name)
+        try{$acquired=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$acquired=$true}
+        if($acquired){throw 'Rollback completion controller authority is no longer held.'}
+    }finally{if($acquired){$mutex.ReleaseMutex()};if($null -ne $mutex){$mutex.Dispose()}}
     $completionIdentity=Get-BootstrapRelayExpectedIdentity $installRootFull ([string]$record.preimage.data)
     $processes=@(Get-CimInstance Win32_Process|Where-Object {[string]$_.ExecutablePath -ieq [string]$completionIdentity.executable -and [string]$_.CommandLine -match '--container-audit-user-relay'})
     if ($processes.Count -ne [int]$record.relay_count) {throw 'Rollback completion relay count differs.'}
@@ -1291,7 +1315,7 @@ if (-not $DryRun.IsPresent -and ($ElevationLogPath -or (Test-InstallationEvidenc
 }
 $placementWriterFenceLease = $null
 $Script:StartupUpdatePreimage = $null
-if (-not $RecordRollbackContinuationAuthority -and -not $DryRun.IsPresent -and (-not $testOverride -or $Uninstall.IsPresent -or $RestoreUninstallRecordPath)) {
+if (-not $CompleteRollbackContinuation -and -not $RecordRollbackContinuationAuthority -and -not $DryRun.IsPresent -and (-not $testOverride -or $Uninstall.IsPresent -or $RestoreUninstallRecordPath)) {
     try {
         $placementWriterFenceLease = Enter-ContainerPlacementWriterFence
         . (Get-InstallationVerifiedScript $WriterFenceHelperPath $ExpectedWriterFenceHelperSha256)
@@ -1339,6 +1363,7 @@ if($RecordRollbackContinuationAuthority) {
 }
 if ($CompleteRollbackContinuation) {
     if ($DryRun -or $Uninstall -or $RecordRollbackContinuation -or $ReplaceExistingVerifiedPortable -or $RestoreVerifiedReplacement -or $testOverride) {throw 'Rollback completion accepts only protected evidence inputs.'}
+    . ( Get-InstallationVerifiedScript $WriterFenceHelperPath $ExpectedWriterFenceHelperSha256)
     Complete-ContainerRollbackContinuation
     'rollback_continuation_status=COMPLETE'
     exit 0

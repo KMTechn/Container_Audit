@@ -1541,18 +1541,12 @@ function Write-CanonicalRollbackContinuation {
 }
 
 function Complete-CanonicalRollbackContinuation($Record) {
-    [void](Start-ContainerWriterFence -Status 'INSTALLING' -OwnerKind 'canonical_installer' `
-        -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
-        -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId -SessionStartedAtUtc $canonicalWriterFenceStartedAtUtc `
-        -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 -WriterContractSha256 $canonicalWriterFenceContractSha256 `
-        -PreparedReceiptPath ([string]$canonicalWriterFencePreparedReceipt.path) -PreparedReceiptSha256 ([string]$canonicalWriterFencePreparedReceipt.sha256) `
-        -DelegationToken $Script:CanonicalWriterFenceDelegationToken -DelegatedSources $canonicalWriterFenceDelegatedSources `
-        -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(20).ToString('o')) -AuthorityLease $canonicalWriterFenceAuthority)
-    $canonicalWriterFenceActive=$true
-    $authorization=New-CanonicalWriterFenceReleaseAuthorization -Path ($productCompleteAuthorizationPath+'.continuation-complete') -Phase 'PRODUCT_COMPLETE' -AuditPath $auditPath
+    $residentsBefore=@(Relays)
     $args=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
         '-InstallRoot',$install,'-OperatorLocalAppDataRoot',$lad,'-OperatorSid',$operatorSid,
         '-ElevationLogPath',($elevationLogPath+'.continuation-complete'),'-CompleteRollbackContinuation',
+        '-ContinuationReleaseAuthorizationPath',$canonicalWriterFenceLastReleaseAuthorizationPath,'-ContinuationReleaseAuthorizationSha256',$canonicalWriterFenceLastReleaseAuthorizationSha256,
+        '-ContinuationOwnerProcessId',$PID,'-ContinuationOwnerStartedAtUtc',((Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')),
         '-RollbackAuditPath',$auditPath,'-RollbackAuditSha256',(Sha $auditPath),
         '-RollbackContinuationPath',([string]$Record.record_path),'-RollbackContinuationSha256',([string]$Record.record_sha256),
         '-WriterFencePreparedReceiptPath',([string]$canonicalWriterFencePreparedReceipt.path),'-WriterFencePreparedReceiptSha256',([string]$canonicalWriterFencePreparedReceipt.sha256),
@@ -1560,14 +1554,11 @@ function Complete-CanonicalRollbackContinuation($Record) {
         '-WriterFenceSessionId',$Script:CanonicalWriterFenceSessionId,'-WriterFenceAttemptId',$Script:CanonicalWriterFenceAttemptId,
         '-WriterFenceReplacementTransactionId',$Script:CanonicalWriterFenceTransactionId,'-WriterFenceDelegationToken',$Script:CanonicalWriterFenceDelegationToken)
     if($testMode){$args+='-AllowNoncanonicalLayoutForTest'}
-    try {$child=Invoke-InstallationEvidenceChild 'complete-rollback-continuation' $winps $args}
-    finally {
-        Set-CanonicalWriterFenceReleaseAuthorization $authorization
-        Clear-CanonicalWriterFenceReleaseDelegation
-        Stop-CanonicalWriterFenceRelease $authorization
-        $canonicalWriterFenceActive=$false
-    }
+    $child=Invoke-InstallationEvidenceChild 'complete-rollback-continuation' $winps $args
     if ($child.ExitCode -ne 0) {throw 'Protected rollback completion was not recorded.'}
+    $residentsAfter=@(Assert-RollbackRelayPreimage -ExpectedRelays $old)
+    if($residentsBefore.Count -ne $residentsAfter.Count){throw 'Rollback completion changed the resident count.'}
+    if($residentsBefore.Count -eq 1 -and [int]$residentsBefore[0].ProcessId -ne [int]$residentsAfter[0].ProcessId){throw 'Rollback completion changed the resident process.'}
 }
 
 function Enter-CanonicalRollbackContinuationClaim($Record) {

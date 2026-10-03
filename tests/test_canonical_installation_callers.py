@@ -41,12 +41,15 @@ def _distinct_replacement(source):
     bypass = 'if (-not $DryRun.IsPresent -and (-not $testOverride -or $Uninstall.IsPresent -or $RestoreUninstallRecordPath)) {'
     if '-not $RecordRollbackContinuationAuthority -and -not $DryRun.IsPresent' in text:
         bypass = bypass.replace('if (-not $DryRun.IsPresent','if (-not $RecordRollbackContinuationAuthority -and -not $DryRun.IsPresent')
+    completion_prefix = '-not $CompleteRollbackContinuation -and ' if '-not $CompleteRollbackContinuation -and -not $RecordRollbackContinuationAuthority' in text else ''
+    if completion_prefix:
+        bypass = bypass.replace('if (-not ', 'if (' + completion_prefix + '-not ', 1)
     assert text.count(bypass) == 1
     # The layout override also bypasses placement/restore admission in the
     # generic bootstrap fixture. Re-enable that production admission path for
     # this owned canonical session, preserving the real validator and arguments.
     # Elevation and ACL changes remain disabled by the original layout switch.
-    text = text.replace(bypass, 'if (-not $RecordRollbackContinuationAuthority -and -not $DryRun.IsPresent) {')
+    text = text.replace(bypass, 'if (' + completion_prefix + '-not $RecordRollbackContinuationAuthority -and -not $DryRun.IsPresent) {')
     entered = '    . (Get-InstallationVerifiedScript $WriterFenceHelperPath $ExpectedWriterFenceHelperSha256)'
     assert text.count(entered) == 1
     helper_loaded = "    . (Get-InstallationVerifiedScript $writerFenceHelperFull $ExpectedWriterFenceHelperSha256 'Production placement writer fence helper byte pin differs.')"

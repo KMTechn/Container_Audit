@@ -1018,3 +1018,7 @@ NTFS 함수 회귀의 코드 이동·hash·반복 복원은 실제다. Task Sche
 ### sub-189 P2-1 검증 범위
 
 PS5.1/PS7 owned NTFS fixture에서 최초 미완 복구 뒤 controller를 두 번 더 중단하고 같은 원 receipt/journal로 VERIFIED_PENDING에 재진입한다. 실제 Python admission root는 PS의 canonical control root와 일치시킨다. 보호 ACL/registry/task/token 관측은 seam이며 native 상승·전원 단절은 NOT TESTED다. D 경합 timeout은 C의 같은 90초 조건으로 대조하며 실패 로그를 보존한다.
+
+### sub-189 P2-2 검증 범위
+
+fixture Python canonical_control_root는 PS의 L/c와 같다. ordinary persistent relay의 실제 status admission은 active fence에서 종료됨을 부정 사례로 확인한다. completion helper 지연과 구판 completion fence 게시 직후의 2초 scheduling cut로 기존 결함을 노출하고, 수정 판은 같은 ordinary relay PID가 완료 뒤 두 주기 이상 생존함을 확인한다. 최초 중단 뒤 추가 중단 2회→완료도 확인한다. PS5.1/PS7 owned NTFS·process는 실제, 보호 ACL/registry/COM/token 관측은 seam; native UAC/전원 단절은 NOT TESTED.
