@@ -609,3 +609,5 @@ separate evidence. Independent acceptance remains coordinator owned.
 - sub-189 P2-2: READY 뒤 completion refence 제거; 보호 release/controller/journal 권한은 유지하고 helper 전후 resident PID/READY 재관측. 실제 admission root의 active-fence 부정 사례·완료 뒤 동일 PID 생존·두 추가 중단 뒤 완료 회귀. native 랩 재실증 및 frozen 선언 갱신은 출시 레인에 남음.
 
 - sub-189 형식 교정: 기존 17파일의 shipped UTF-8 BOM 회귀가 bootstrap helper의 누락을 발견; BOM 3바이트 복구(함수 본문 불변), PS5.1 한국어 오류 호환을 유지하며 실패/수정 회귀를 별도 보존.
+
+- sub-189 A==B 회귀: 실제 canonical AST 분기문을 PS5.1/PS7에서 실행해 healthy equal-owner는 기존 current placement, 실제 B가 다르면 C versions placement를 선택함을 확인. lifecycle 27·지원 receipt/NTFS 22·기존 canonical/bootstrap 14와 함께 해석하며 실제 정상 설치기/UAC/managed task의 통합 수용은 랩에 남음.
