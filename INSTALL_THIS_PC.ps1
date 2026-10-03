@@ -1553,7 +1553,7 @@ try {
             created_at = (Get-Date).ToUniversalTime().ToString('o')
             helper_sha256 = Get-FileSha256 $BootstrapScriptPath
             integrity_helper_sha256 = Get-FileSha256 $BootstrapIntegrityFunctions
-            receipt_path = $replacementReceiptFull
+            receipt_path = if($BootstrapBoundParameters['ReplacementReceiptPath']){Get-StrictFullPath ([string]$BootstrapBoundParameters['ReplacementReceiptPath']) 'caller replacement receipt'}else{$replacementReceiptFull}
             install_root = $installRootFull
             install_parent = $applicationParent
             rollback_root = $replacementRollbackRoot
@@ -1564,7 +1564,7 @@ try {
             identity_or_credential_copied = $false
         }
         # Bind the original startup state before any startup mutation. The
-        # immutable receipt is created once, at its actual protected run path.
+        # immutable receipt is created once. Keep its caller/export path binding.
         if (-not $testOverride -and
             (Test-Path -LiteralPath (Join-Path $installRootFull 'app\auto-update-settings.json') -PathType Leaf)) {
             Set-InstallationEvidenceStage 'placement.startup_preimage'

@@ -380,7 +380,8 @@ claim으로 한 개만 받는다. writer admission 안에서 journal·두 marker
 
 **공개 사후 코드 복원 계약:** 현재 canonical의 `RestoreVerifiedReplacement`는 정확한 successor source/원 replacement receipt SHA·old/new 코드/record/ACL과 현재 사용자 runtime preimage에 결속한다. 과거 install owner/session/prepared 증명을 재사용하지 않고 새 controller session/attempt/transaction으로 현재 quiescence와 fence를 만든다. `code_replacement.transaction_id`는 원 교체, `controller_transaction_id`는 새 소유권이며 기존 replacement/code-restore receipt schema는 바뀌지 않는다. 정상 removal이 보존한 현 owner·업무 자료를 유지한 채 old code를 복원하고, 기존 Run 값을 fence 안에서 복원·검사한 뒤 fence 해제를 확인하고 원 relay 명령으로 process를 시작한다. 재등록·key/credential 복제·중앙 물류 rollback·오래된 DB snapshot 복원은 이 동작에 없다. 다른 historical sibling은 이 transaction의 입력이 아니지만 선택 root 이름은 동일 receipt transaction이어야 하고, 선택 tree나 integrity record drift는 그대로 거부한다. 자세한 지원/실패 상태와 실제 적용 범위는 [CA-O05/O09](operations.md#ca-o05)에 기록한다.
 
-replacement receipt는 실제 기록 경로에 자기 경로를 결속하고 한 번만 작성한다. startup 설정이
+replacement receipt는 caller/export 경로에 자기 경로를 결속하고 protected run에 한 번만 작성한다.
+보호 원본을 일반 사용자 결과 경로로 내보내는 기존 바이트/hash 계약을 유지한다. startup 설정이
 있으면 원 startup preimage를 먼저 보관해 그 경로·SHA를 receipt에 포함하고, 그 뒤에 startup을
 변경한다. 같은 실행에서 receipt를 재작성하거나 다른 실행의 receipt를 덮어쓰지 않는다.
 

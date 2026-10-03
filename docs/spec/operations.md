@@ -200,6 +200,8 @@ NOT TESTED이며 재시도0이다. 원 예외·보호 원본·실제 9/10구간�
 CA-R1 교정 후 replacement receipt는 startup 설정이 있는 경우 원 startup preimage의 경로·hash를
 처음부터 포함해 실제 보호 run 경로에 한 번만 작성한다. startup 변경은 그 뒤에 실행하며 같은
 preimage를 사용한다. 새 실행은 새 run/attempt 경로를 사용하고 기존 receipt를 덮어쓰지 않는다.
+receipt_path는 원 caller/export 경로를 유지한다. protected destination으로 이 필드를 바꾸면
+ordinary export/restore 소비자 검증이 실패하므로 그 변경은 적용하지 않는다.
 실패 복원·원 receipt hash/old-new identity 검사는 유지한다. PS5.1/7 소스 회귀와 실제 예행 G의
 범위·결과는 [sub-162](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-162/REPORT.md)를 따른다.
 켜진 작업자가 이미 있으면 로그온 작업은 DEFERRED로 남기며 업무를 멈추지 않는다.

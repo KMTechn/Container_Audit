@@ -76,7 +76,7 @@ for($run=0;$run -lt $attempts;$run++) {
     $replacementRollbackRoot=Join-Path $applicationParent ('.current.rollback.'+$ReplacementTransactionId)
     $replacementReceiptFull=Join-Path $env:CA_CONTRACT_ROOT ('run-'+$WriterFenceAttemptId+'/replacement-receipt.json')
     # Privileged placement relocates the caller path into its protected run.
-    $BootstrapBoundParameters=@{ReplacementReceiptPath=(Join-Path $env:CA_CONTRACT_ROOT 'caller-receipt.json')}
+    $BootstrapBoundParameters=@{ReplacementReceiptPath=(Join-Path $env:CA_CONTRACT_ROOT ('caller-run-'+$WriterFenceAttemptId+'/receipt.json'))}
     $Script:StartupUpdatePreimage=$null
     try { . $sequence | Out-Null }
     catch {
@@ -87,7 +87,7 @@ for($run=0;$run -lt $attempts;$run++) {
         }
     }
     $saved=Read-BootstrapReplacementReceipt $replacementReceipt.path $replacementReceipt.sha256
-    if(-not(Test-BootstrapSamePath $saved.receipt_path $replacementReceipt.path)){throw 'receipt self path differs'}
+    if(-not(Test-BootstrapSamePath $saved.receipt_path $BootstrapBoundParameters['ReplacementReceiptPath'])){throw 'caller/export receipt path differs'}
     if([string]$saved.startup_update_preimage -cne [string]$Script:StartupUpdatePreimage.path){throw 'preimage binding differs'}
     if($saves -ne ($run+1)){throw 'preimage must be captured once per run'}
     if(-not $completeBeforeMutation){throw 'receipt was incomplete before startup mutation'}
