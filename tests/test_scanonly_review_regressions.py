@@ -290,7 +290,8 @@ def test_next_label_during_final_product_save_is_retained(flow, windows, monkeyp
 
 def test_automatic_other_worker_restore_uses_inline_notice(flow, windows, monkeypatch):
     app = flow(transition=False)
-    snapshot = SimpleNamespace(worker='another-operator', state='WAITING_LABEL', master_raw=COMPACT_QR)
+    snapshot = SimpleNamespace(worker='another-operator', state='WAITING_LABEL', master_raw=COMPACT_QR,
+                               to_payload=lambda: {'worker': 'another-operator'})
     monkeypatch.setattr(app, '_preflight_hold_store', lambda: SimpleNamespace(
         exists=lambda: True, load=lambda: snapshot))
     monkeypatch.setattr(app, '_paired_preflight_store', lambda: SimpleNamespace(

@@ -14885,6 +14885,7 @@ class ContainerAudit:
             detail=dict(undo_attempt['detail']), idempotency_key=undo_key,
             event_timestamp=undo_attempt['timestamp'],
             worker_name_override=undo_attempt.get('worker_name', self.worker_name),
+            worker_record=undo_attempt.get('worker_record', {}),
             log_file_path_override=str(self._completion_projection_log_path(undo_attempt['log_file_name'])))
         self.current_tray.pending_audit_events.append(undo_event)
         self.scanned_listbox.delete(0)
@@ -14944,6 +14945,7 @@ class ContainerAudit:
                 self._checkpoint_audit_event('TRAY_RESET', detail=reset_detail,
                     idempotency_key=reset_key, event_timestamp=reset_attempt['timestamp'],
                     worker_name_override=reset_attempt.get('worker_name', self.worker_name),
+                    worker_record=reset_attempt.get('worker_record', {}),
                     log_file_path_override=str(self._completion_projection_log_path(reset_attempt['log_file_name']))))
             state_snapshot['audit_reset_committed'] = True
             try:
@@ -17396,6 +17398,7 @@ class ContainerAudit:
                 events.extend([self._checkpoint_audit_event('TRAY_COMPLETE', detail=record['detail'],
                     idempotency_key=contract['idempotency_key'], event_timestamp=contract['observed_at'],
                     worker_name_override=contract['projection_worker_name'],
+                    worker_record=contract.get('worker_record', {}),
                     log_file_path_override=str(self._completion_projection_log_path(contract['projection_log_name']))),
                     self._checkpoint_audit_event('TRAY_SHORT_CONFIRMATION_UNDONE',
                         detail={'completion_id': undo['completion_id']},

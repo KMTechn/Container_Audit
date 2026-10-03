@@ -16,6 +16,7 @@ from parked_tray_store import ParkedTrayStore
 from preflight_scan_hold import PreflightScanHoldStore
 from tests.test_worker_roster import response, row, store
 from tests.test_w9scanonly_workflow import flow, windows, fixed_operation_lease_clock, COMPACT_QR, ITEM
+from tests.test_scanonly_review_regressions import public_scan
 from transfer_member_exchange import TransferMemberExchangeStore
 from transfer_seal import TransferSealCoordinator, TransferSealStore
 from tests.test_transfer_seal import FakeResponse, _client, _receipt, _resolved_bundle
@@ -194,6 +195,66 @@ def test_audit_retry_freezes_capability_and_name(flow, windows, tmp_path, monkey
     app._worker_record_identity_enabled = enabled
     assert app._project_audit_event_contract(contract)
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("case", ["off_to_on", "on_to_off", "rename", "legacy"])
+def test_short_undo_keeps_original_completion_identity(flow, windows, tmp_path, case):
+    enabled = case in {"on_to_off", "rename"}
+    app = _app(flow, tmp_path, enabled=enabled)
+    public_scan(app, ITEM + "-SERIAL-001")
+    public_scan(app, COMPACT_QR + "|QT=3")
+    undo = app._short_confirmation_undo
+    assert undo
+    path = app._short_projection_path(undo["completion_id"])
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if case == "legacy":
+        record["contract"].pop("worker_record")
+        path.write_text(json.dumps(record), encoding="utf-8")
+    expected = record["contract"].get("worker_record", {})
+    app._worker_record_identity_enabled = case != "on_to_off"
+    app.worker_roster.apply(response(row("corrected", worker_id=WORKER_ID), version=2), requested_version=1)
+    public_scan(app, "KMCMD:UNDO")
+    app._flush_pending_event_logs()
+    app.log_queue.join()
+    cancelled = json.loads(path.read_text(encoding="utf-8"))
+    assert cancelled["contract"].get("worker_record", {}) == expected
+    with Path(app.log_file_path).open(encoding="utf-8-sig", newline="") as stream:
+        projected = [entry for entry in csv.DictReader(stream) if entry["event"] == "TRAY_COMPLETE"]
+    assert len(projected) == 1
+    assert projected[0]["worker_name"] == record["contract"]["projection_worker_name"]
+    assert projected[0]["timestamp"] == record["contract"]["observed_at"]
+    assert record_identity(json.loads(projected[0]["details"])) == (IDENTITY if enabled else {})
+    assert windows == []
+
+
+@pytest.mark.parametrize("action", ["undo", "reset"])
+@pytest.mark.parametrize("enabled", [False, True, None])
+def test_cancel_checkpoint_retry_keeps_first_identity(flow, windows, tmp_path, monkeypatch, action, enabled):
+    app = _app(flow, tmp_path, enabled=enabled is True)
+    public_scan(app, ITEM + "-SERIAL-001")
+    save = "_save_current_tray_state" if action == "undo" else "_save_tray_state_snapshot"
+    cancel = app.undo_last_scan if action == "undo" else app.reset_current_work
+    with monkeypatch.context() as patch:
+        patch.setattr(app, save, lambda *args, **kwargs: False)
+        cancel()
+    assert app.current_tray.scanned_barcodes == [ITEM + "-SERIAL-001"]
+    attempts = app.current_tray.cancel_event_attempts
+    assert len(attempts) == 1
+    attempt = next(iter(attempts.values()))
+    if enabled is None:
+        attempt.pop("worker_record")
+    expected = attempt.get("worker_record", {})
+    app._worker_record_identity_enabled = enabled is not True
+    cancel()
+    app._flush_pending_event_logs()
+    app.log_queue.join()
+    with Path(app.log_file_path).open(encoding="utf-8-sig", newline="") as stream:
+        rows = [entry for entry in csv.DictReader(stream)
+                if entry["event"] == ("SCAN_UNDO" if action == "undo" else "TRAY_RESET")]
+    assert len(rows) == 1
+    assert record_identity(json.loads(rows[0]["details"])) == (
+        record_identity(expected) if expected.get("enabled") is True else {})
+    assert windows == []
 
 
 @pytest.mark.parametrize("enabled", [False, True])
