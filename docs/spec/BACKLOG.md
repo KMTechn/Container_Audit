@@ -4,6 +4,9 @@ sub-172 receipt 전달: canonical의 보호 self-path·journal-bound 부모 소�
 교정했다. PS5.1/7 post-child RED2→GREEN4, 기존 startup/export 합계34 PASS; 위조·덮어쓰기 거절 유지.
 relay 대기·새 미완 rollback 재진입·G 랩 수선과 예행 H의 실제 수용은 진행 중이며 정식 선언/pin은 재생성하지 않는다.
 
+sub-172 relay 대기: 설치·되돌리기 공통 360초와 timeout 뒤 끝 상태 기록을 교정했고
+PS5.1/7 RED4→GREEN4다. 새 지원 복구·랩 G 수선·H 수용 및 독립 검토는 아직 미증명이다.
+
 CA-T1: task 주체·trigger를 SID로 해석하는 같은 함수가 세 소비자와 canonical 주체 판정에 적용된다.
 PS5.1/7 실제 소비자 회귀에서 이름 표현은 수용하고 다른 SID·해석 실패·action 변조는 거절한다.
 정식 선언/pin은 동결 상태이며 예행 F·독립 수용은 [sub-156](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-156/REPORT.md)에서 별도로 확인한다.

@@ -874,8 +874,10 @@ function Confirm-CanonicalRuntimeQuiescence($Removal, [object[]]$ExpectedRelays,
     } while ((Get-Date) -lt $deadline)
     throw 'Verified replacement runtime quiescence failed: process exit timed out.'
 }
-function Wait-CanonicalRelayReady($Identity,[DateTime]$StartedAt,[string]$PreviousStatusSha256,[int[]]$PreviousProcessIds,[int]$TimeoutSeconds=75) {
-    if($TimeoutSeconds -lt 1 -or $TimeoutSeconds -gt 120){throw 'Canonical relay readiness timeout is invalid.'}
+# G's first recorded READY was 275.561 seconds after the request. The shared
+# install/rollback budget adds 84.439 seconds; it remains a failure if unproven.
+function Wait-CanonicalRelayReady($Identity,[DateTime]$StartedAt,[string]$PreviousStatusSha256,[int[]]$PreviousProcessIds,[int]$TimeoutSeconds=360) {
+    if($TimeoutSeconds -lt 1 -or $TimeoutSeconds -gt 600){throw 'Canonical relay readiness timeout is invalid.'}
     $caller=Get-CanonicalRelaySecurity $PID
     $watch=[Diagnostics.Stopwatch]::StartNew();$lastStatusSha='';$lastStatus=$null
     do {
@@ -3456,6 +3458,7 @@ catch {
     }
     # Win32_Process.Create does not inherit this process's delegation. Restore
     # the old relay only after releasing the fence, as on the success path.
+    $relayRollbackIncomplete=$false
     try {
         if ($mutated) {
             Set-InstallationEvidenceStage 'rollback.normal_relay_exact_preimage' 'rollback'
@@ -3468,6 +3471,7 @@ catch {
     Write-InstallationCaughtFailure $_
 
         $audit.status='AUTOSTART_ROLLBACK_FAILED'
+        $relayRollbackIncomplete=$true
         $audit.rollback.runtime_restored=$false
         $audit.rollback.failure=Get-CanonicalFailureDetails $_ 'ROLLBACK_RELAY'
         $audit.rollback.relay_recovery_status='RELAY_RESTORE_FAILED'
@@ -3492,11 +3496,17 @@ catch {
         if ($audit.rollback.relay_recovery_status -ceq 'RUN_RESTORED_RELAY_NEXT_LOGON') {
             Write-Warning '이전 자동 시작 설정은 복원됐지만 현재 전송 릴레이를 시작하지 못했습니다. 다음 Windows 로그온에서 다시 시작합니다. 기존 기록은 보존됐으며 이번 설치는 실패 상태입니다.'
         }
-        throw "AUTOSTART_ROLLBACK_FAILED: $($audit.rollback.relay_recovery_status)"
+        $codeState=if([bool]$audit.rollback.code_exact){'옛 판 확인'}else{'복원 확인 못 함'}
+        $runState=if($check -and [bool]$check.exists -eq [bool]$before.exists -and
+            [string]$check.kind -ceq [string]$before.kind -and [string]$check.data -ceq [string]$before.data){'원 값 확인'}else{'복원 확인 못 함'}
+        $taskState=if([bool]$audit.rollback.code_exact -and [bool]$audit.rollback.scheduled_writer_restored){'원 상태 확인'}else{'복원 확인 못 함'}
+        Write-Output "되돌리기: 코드 $codeState; Run $runState; 시작 작업 $taskState; relay READY 확인 못 함. 이번 설치는 실패입니다."
     }
     # A fresh placement has no old code tree to restore. Its verified files
     # remain available even after the current-user runtime preimage is restored.
-    $audit.status = if ($RestoreVerifiedReplacement) {
+    $audit.status = if ($relayRollbackIncomplete) {
+        'AUTOSTART_ROLLBACK_FAILED'
+    } elseif ($RestoreVerifiedReplacement) {
         'FAILED_RESTORE_RUNTIME_RECOVERED'
     } elseif ($placement -ceq 'PASS_NEW_VERIFIED') {
         'FAILED_RUNTIME_RESTORED_CODE_RETAINED'
