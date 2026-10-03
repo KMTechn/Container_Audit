@@ -13920,11 +13920,11 @@ class ContainerAudit:
             self._warning_state_presenter().acknowledge()
             self._stop_warning_beep()
         if raw_barcode.startswith("KMCMD:"):
+            if raw_barcode == "KMCMD:UNDO":
+                return self.undo_last_scan()
             self._inline_exchange_target = ""
             self._inline_exchange_mode = ""
-            if raw_barcode == "KMCMD:UNDO":
-                self.undo_last_scan()
-            elif raw_barcode == "KMCMD:EXCHANGE":
+            if raw_barcode == "KMCMD:EXCHANGE":
                 self.show_exchange_dialog()
             else:
                 self.show_status_message("알 수 없는 명령 카드입니다.", self.COLOR_DANGER)
@@ -14724,6 +14724,12 @@ class ContainerAudit:
         self._update_tray_image_display()
 
     def undo_last_scan(self):
+        if getattr(self, "_inline_exchange_mode", ""):
+            self._inline_exchange_mode = ""
+            self._inline_exchange_target = ""
+            self.show_status_message("교환 입력을 취소했습니다. 제품을 계속 스캔하세요.", self.COLOR_PRIMARY)
+            self._schedule_focus_return()
+            return True
         if not self.current_tray.master_label_code and getattr(self, "_short_confirmation_undo", None):
             return self._undo_short_confirmation()
         parked_undo = getattr(self, "_parked_tray_undo", None)
@@ -14738,7 +14744,10 @@ class ContainerAudit:
         if self._transfer_member_exchange_blocks_local_action("마지막 스캔 취소"):
             return
         self._update_last_activity_time()
-        if not self.current_tray.scanned_barcodes: return
+        if not self.current_tray.scanned_barcodes:
+            self.show_status_message("되돌릴 스캔이 없습니다. 완료된 작업은 되돌릴 수 없습니다.", self.COLOR_DANGER)
+            self._start_warning_beep()
+            return False
         self.current_tray.scan_completion_context = {}
         last_barcode = self.current_tray.scanned_barcodes.pop()
         last_scan_time = self.current_tray.scan_times.pop()
@@ -17293,7 +17302,7 @@ class ContainerAudit:
             self._warning_state_presenter().acknowledge()
             self._update_current_item_label()
             self._update_center_display()
-            self._start_stopwatch()
+            self._start_stopwatch(resume=True)
             self.show_status_message("미달 확정을 취소했습니다. 제품을 계속 스캔하세요.", self.COLOR_PRIMARY)
             return True
         if hasattr(getattr(self, "root", None), "tk"):

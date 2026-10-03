@@ -392,7 +392,7 @@ def _app(tmp_path, client):
     app._clear_settled_operator_context = lambda: None
     app._update_tray_image_display = lambda: None
     app._update_center_display = lambda: None
-    app._start_stopwatch = lambda: None
+    app._start_stopwatch = lambda resume=False: None
     app._schedule_focus_return = lambda *args, **kwargs: None
     return app
 
