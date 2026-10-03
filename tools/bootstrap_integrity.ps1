@@ -1026,6 +1026,15 @@ function Protect-KmtechCodeAncestors([string]$CodeParent,[switch]$AdmissionOnly,
         $reason=''
         if (-not (Test-Path -LiteralPath $path)) {
             if($AdmissionOnly -and -not $ProtectedAncestor){continue}
+            if($AdmissionOnly){
+                $reason='폴더가 없습니다'
+                Write-InstallationEvidenceEvent ([ordered]@{event='ANCESTOR_ACL_REJECTED';path=$path;reason=$reason;before_sddl=$null;changed=$false})
+                $failure=[InvalidOperationException]::new("설치 폴더 권한을 확인하세요: $path ($reason). 지원 담당자에게 문의하세요.")
+                $failure.Data['canonical_code']='CONTAINER_PLACEMENT_ANCESTOR_TRUST_FAILED'
+                $failure.Data['ancestor_trust_failure']=$failure.Message
+                $failure.Data['installation_preparation_exit_code']=61
+                throw $failure
+            }
             $ancestor=Split-Path -Parent $path
             $entry=Get-Item -LiteralPath $ancestor -ErrorAction Stop
             if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { $reason='상위 폴더가 재분석 지점입니다' }

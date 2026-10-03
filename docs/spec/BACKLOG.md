@@ -5,6 +5,8 @@ SYSTEM task XML의 unsupported ServiceAccount 요소를 제거했다(trigger/act
 [sub-151 결과](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-151/REPORT.md)에서 실제 실행 범위를 확인한다. IW/LM의 같은 XML 문제는 각 소유 레인에 남는다.
 같은 교정은 첫 native 종료/fallback의 요약·부모 journal 전달과 직접 privileged helper의
 보호 evidence run 결속을 유지한다. 실제 단일 설치 결과·독립 수용과 소스 회귀를 구별한다.
+CA-A2는 누락된 선택 조상을 생성 전에 거절하며 부모/대상 미생성을 PS5.1/7에서 검증했다.
+CA-D1의 역사 전수표79행은 AST로 소속22행을 고쳤으며 제품 경로나 guard 변경이 아니다.
 
 설치 증거의 권한 분리는 sub-107 소스 교정 범위다. 최종 컷의 선언/pin·stock과
 5차 실제 설치에서 메모리 wrapper 실행, Administrators owner/operator read-only,

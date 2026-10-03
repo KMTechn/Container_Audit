@@ -142,6 +142,8 @@ placement child의 첫 native 종료 코드와 bounded fallback 한 줄은 canon
 부모 journal에 보존한다. 뒤 evidence 결속 실패는 추가 진단이며 첫 실패를 바꾸지 않는다.
 직접 높은 권한 helper의 증거 자리도 exact protected control/run, 원 basename/PID와
 보호/no-reparse 검사로 결속한다. 성공한 child의 증거가 결속되지 않으면 계속 거절한다.
+exact shared ancestor admission에서 선택한 폴더가 없으면 부모/대상 생성 전에
+기존 ancestor trust 오류로 거절한다. 읽기 admission은 조상을 만들거나 강화하지 않는다.
 journal I/O/ACL/limit 실패는 INCOMPLETE이며 business 결과와 구별한다. 원 오류를 덮거나
 부분 진단을 완전한 증거로 수용하지 않는다. 실제 UAC·일반 token lifecycle hop·5차 제품 설치는
 [지정 보고](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-84/REPORT.md)의 환경·결과를 확인한다.

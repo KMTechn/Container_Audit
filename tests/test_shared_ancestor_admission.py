@@ -12,6 +12,28 @@ SOURCE_ROOT = Path(os.environ.get('CA_SHARED_ADMISSION_SOURCE_ROOT', str(ROOT)))
 
 
 @pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
+@pytest.mark.parametrize('ancestor', ('KMTech', 'Apps'))
+def test_missing_selected_ancestor_is_rejected_without_creating_parent_or_target(tmp_path, engine, ancestor):
+    result = run_functions(tmp_path, SOURCE_ROOT / 'tools/bootstrap_integrity.ps1',
+                           ['Protect-KmtechCodeAncestors'], r'''
+# Substitute literal paths only, keeping the actual admission body and native
+# CreateDirectory call; the RED version must never create a host C: ancestor.
+$owned=Join-Path $env:CA_CONTRACT_ROOT 'missing-parent\KMTech'
+$definition=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Protect-KmtechCodeAncestors'},$true))[0].Extent.Text.Replace('C:\KMTech',$owned)
+Invoke-Expression $definition
+function Write-InstallationEvidenceEvent {param($Payload)}
+$selected=if($env:CA_MISSING_ANCESTOR -ceq 'Apps'){Join-Path $owned 'Apps'}else{$owned}
+$failure=$null
+try{Protect-KmtechCodeAncestors (Join-Path $owned 'Apps\Container_Audit') -AdmissionOnly -ProtectedAncestor $selected}catch{$failure=$_}
+if(Test-Path -LiteralPath $owned){throw 'Admission created the selected ancestor or its missing parent.'}
+if(Test-Path -LiteralPath (Split-Path -Parent $owned)){throw 'Admission created a missing parent.'}
+if($null -eq $failure -or $failure.Exception.Data['canonical_code'] -cne 'CONTAINER_PLACEMENT_ANCESTOR_TRUST_FAILED' -or $failure.Exception.Data['installation_preparation_exit_code'] -ne 61){throw 'Missing ancestor did not retain the trust rejection contract.'}
+'PASS'
+''', engine=engine, values={'CA_MISSING_ANCESTOR': ancestor})
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
 @pytest.mark.parametrize('guard', ('relay', 'evidence', 'installer', 'updater', 'recovery'))
 @pytest.mark.parametrize('scenario', ('target', 'target_kmtech', 'default', 'extra_write', 'user_owner', 'reparse', 'nonliteral'))
 def test_native_shared_ancestor_admission(tmp_path, engine, guard, scenario):
