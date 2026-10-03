@@ -533,7 +533,7 @@ def _windows_acl_identity(path: Path) -> dict[str, Any]:
         "[ordered]@{owner_sid=[string]$acl.GetOwner("
         "[Security.Principal.SecurityIdentifier]).Value;"
         "access_rules_protected=[bool]$acl.AreAccessRulesProtected;"
-        "acl_sddl_sha256=$hash}|ConvertTo-Json -Compress"
+        "acl_sddl_sha256=$hash;acl_sddl=$sddl}|ConvertTo-Json -Compress"
     )
     completed = subprocess.run(
         [
@@ -555,7 +555,7 @@ def _windows_acl_identity(path: Path) -> dict[str, Any]:
     )
     if (
         completed.returncode != 0
-        or len(completed.stdout.encode("utf-8")) > 4096
+        or len(completed.stdout.encode("utf-8")) > 131072
         or len(completed.stderr.encode("utf-8")) > 4096
     ):
         raise OSError("replacement lifecycle ACL readback failed")
@@ -568,11 +568,70 @@ def _windows_acl_identity(path: Path) -> dict[str, Any]:
     return result
 
 
+def _validate_acl_raw_binding(value: Mapping[str, Any], raw_field: str, hash_field: str) -> None:
+    if raw_field in value:
+        raw = value[raw_field]
+        if (not isinstance(raw, str) or not raw.strip() or len(raw) > 65536
+                or hashlib.sha256(raw.encode("utf-8")).hexdigest() != value[hash_field]):
+            raise ValueError("replacement ACL raw descriptor binding is invalid")
+
+
+@writer_sink("current_user_lifecycle_restore")
+def _replacement_identities_match(expected: Mapping[str, Any], actual: Mapping[str, Any]) -> bool:
+    fields = _REPLACEMENT_IDENTITY_FIELDS - {"acl_sddl_sha256"}
+    if any(expected[field] != actual[field] for field in fields):
+        return False
+    if "acl_sddl" not in expected and "acl_sddl" not in actual:
+        return expected["acl_sddl_sha256"] == actual["acl_sddl_sha256"]
+    # Use the same library shipped with this executing module, never a helper
+    # from either receipt-selected tree. Parsing only extracts trusted functions.
+    module_root = Path(__file__).resolve().parent
+    helper = module_root / "tools" / "bootstrap_integrity.ps1"
+    if not helper.exists():
+        helper = module_root.parent / "tools" / "bootstrap_integrity.ps1"
+    info = _require_regular_unredirected_file(helper, "executing ACL comparison library")
+    if info.st_size > 1048576:
+        raise ValueError("executing ACL comparison library is oversized")
+    import ctypes
+
+    directory = ctypes.create_unicode_buffer(32768)
+    length = ctypes.windll.kernel32.GetSystemDirectoryW(directory, len(directory))
+    if length <= 0 or length >= len(directory):
+        raise OSError("Windows system directory readback failed")
+    powershell = Path(directory.value) / "WindowsPowerShell/v1.0/powershell.exe"
+    _require_regular_unredirected_file(powershell, "Windows PowerShell ACL reader")
+    escaped = str(helper).replace("'", "''")
+    command = (
+        "$ErrorActionPreference='Stop';$tokens=$null;$errors=$null;"
+        f"$ast=[Management.Automation.Language.Parser]::ParseFile('{escaped}',[ref]$tokens,[ref]$errors);"
+        "if($errors.Count){throw 'Invalid ACL library'};"
+        "$names=@('Get-BootstrapStringSha256','Get-BootstrapAclComparisonKey',"
+        "'Test-BootstrapAclRawBinding','Test-BootstrapAclIdentity');"
+        "foreach($name in $names){$nodes=@($ast.FindAll({param($n) "
+        "$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name},$false));"
+        "if($nodes.Count -ne 1){throw 'Invalid ACL function'};"
+        "Invoke-Expression $nodes[0].Extent.Text};"
+        "$pair=[Console]::In.ReadToEnd()|ConvertFrom-Json;"
+        "Test-BootstrapAclIdentity $pair.expected $pair.actual 'acl_sddl_sha256' 'acl_sddl'"
+    )
+    completed = subprocess.run(
+        [str(powershell), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        input=json.dumps({"expected": dict(expected), "actual": dict(actual)}),
+        capture_output=True, text=True, encoding="utf-8", errors="strict",
+        timeout=15, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if completed.returncode != 0 or completed.stdout.strip() not in ("True", "False"):
+        raise OSError("replacement ACL comparison failed")
+    return completed.stdout.strip() == "True"
+
+
 def _normalized_replacement_identity(
     value: Any,
     purpose: str,
 ) -> dict[str, Any]:
-    if not isinstance(value, Mapping) or set(value) != _REPLACEMENT_IDENTITY_FIELDS:
+    if not isinstance(value, Mapping) or set(value) not in (
+        _REPLACEMENT_IDENTITY_FIELDS, _REPLACEMENT_IDENTITY_FIELDS | {"acl_sddl"}
+    ):
         raise ValueError(f"{purpose} shape is invalid")
     file_count = value.get("file_count")
     reparse_count = value.get("reparse_count")
@@ -597,7 +656,8 @@ def _normalized_replacement_identity(
     owner_sid = str(value.get("owner_sid") or "")
     if not owner_sid or len(owner_sid) > 184:
         raise ValueError(f"{purpose} owner identity is invalid")
-    return {field: value[field] for field in _REPLACEMENT_IDENTITY_FIELDS}
+    _validate_acl_raw_binding(value, "acl_sddl", "acl_sddl_sha256")
+    return dict(value)
 
 
 def _read_replacement_tree_identity(
@@ -717,11 +777,11 @@ def _read_replacement_tree_identity(
     ):
         raise ValueError("replacement portable manifest identity is invalid")
     acl = dict(acl_identity_reader(selected_root))
-    if set(acl) != {
+    if set(acl) not in ({
         "owner_sid",
         "access_rules_protected",
         "acl_sddl_sha256",
-    }:
+    }, {"owner_sid", "access_rules_protected", "acl_sddl_sha256", "acl_sddl"}):
         raise ValueError("replacement code ACL identity is invalid")
     return _normalized_replacement_identity(
         {
@@ -734,6 +794,7 @@ def _read_replacement_tree_identity(
             "owner_sid": acl["owner_sid"],
             "access_rules_protected": acl["access_rules_protected"],
             "acl_sddl_sha256": acl["acl_sddl_sha256"],
+            **({"acl_sddl": acl["acl_sddl"]} if "acl_sddl" in acl else {}),
             "reparse_count": 0,
         },
         "replacement code identity",
@@ -1647,7 +1708,10 @@ def restore_current_user_lifecycle_after_replacement(
         parent_acl = receipt.get("parent_acl")
         if (
             not isinstance(parent_acl, Mapping)
-            or set(parent_acl) != {"owner_sid", "access_rules_protected", "sddl_sha256"}
+            or set(parent_acl) not in (
+                {"owner_sid", "access_rules_protected", "sddl_sha256"},
+                {"owner_sid", "access_rules_protected", "sddl_sha256", "sddl"},
+            )
             or not str(parent_acl.get("owner_sid") or "")
             or type(parent_acl.get("access_rules_protected")) is not bool
             or not re.fullmatch(
@@ -1656,6 +1720,7 @@ def restore_current_user_lifecycle_after_replacement(
             )
         ):
             raise ValueError("replacement lifecycle parent ACL receipt is invalid")
+        _validate_acl_raw_binding(parent_acl, "sddl", "sddl_sha256")
         for field in ("helper_sha256", "integrity_helper_sha256"):
             if not re.fullmatch(r"[0-9a-f]{64}", str(receipt.get(field) or "")):
                 raise ValueError(
@@ -1717,7 +1782,8 @@ def restore_current_user_lifecycle_after_replacement(
             identity_reader(failed_root, selected_code_root),
             "failed-new replacement code identity",
         )
-        if restored_identity != old_identity or failed_new_identity != new_identity:
+        if (not _replacement_identities_match(old_identity, restored_identity)
+                or not _replacement_identities_match(new_identity, failed_new_identity)):
             raise ValueError(
                 "replacement lifecycle trees differ from the exact receipt"
             )

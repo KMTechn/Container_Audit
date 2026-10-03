@@ -1368,7 +1368,7 @@ function Test-ReplacementReceiptShape($Receipt) {
         $top = @('schema_version','status','app_id','transaction_id','created_at','helper_sha256','integrity_helper_sha256','receipt_path','install_root','install_parent','rollback_root','failed_root','parent_acl','old','new','identity_or_credential_copied')
         $tree = @('file_count','aggregate_sha256','integrity_sha256','manifest_sha256','source_commit','source_tree','owner_sid','access_rules_protected','acl_sddl_sha256','reparse_count')
         $acl = @('owner_sid','access_rules_protected','sddl_sha256')
-        if (-not (Test-ExactPropertySet $Receipt $top) -or -not (Test-ExactPropertySet $Receipt.old $tree) -or -not (Test-ExactPropertySet $Receipt.new $tree) -or -not (Test-ExactPropertySet $Receipt.parent_acl $acl)) { return $false }
+        if (-not (Test-ExactPropertySet $Receipt $top) -or -not (Test-BootstrapAclPropertySet $Receipt.old $tree 'acl_sddl' 'acl_sddl_sha256') -or -not (Test-BootstrapAclPropertySet $Receipt.new $tree 'acl_sddl' 'acl_sddl_sha256') -or -not (Test-BootstrapAclPropertySet $Receipt.parent_acl $acl)) { return $false }
         [void](ConvertTo-RoundTripUtc ([string]$Receipt.created_at) 'replacement receipt creation')
         return (
             [string]$Receipt.schema_version -ceq $Script:ReplacementSchema -and
@@ -1632,11 +1632,7 @@ function Get-ContainerReplacementReceiptValidation {
             throw 'Replacement receipt tree identity readback differs.'
         }
         $parentAcl = Get-BootstrapAclIdentity $parent
-        if (
-            [string]$receipt.parent_acl.owner_sid -cne [string]$parentAcl.owner_sid -or
-            [string]$receipt.parent_acl.access_rules_protected -cne [string]$parentAcl.access_rules_protected -or
-            [string]$receipt.parent_acl.sddl_sha256 -cne [string]$parentAcl.sddl_sha256
-        ) { throw 'Replacement receipt parent ACL readback differs.' }
+        if (-not (Test-BootstrapAclIdentity $Receipt.parent_acl $parentAcl)) { throw 'Replacement receipt parent ACL readback differs.' }
         $siblings = @(Get-ChildItem -LiteralPath $parent -Directory -Force | Where-Object { $_.Name -match '^\.current\.(rollback|failed)\.' })
         if ($siblings.Count -ne 1 -or -not (Test-BootstrapSamePath $siblings[0].FullName $rollback)) {
             throw 'Replacement receipt sibling set is ambiguous.'
@@ -1711,8 +1707,8 @@ function Test-ContainerLifecycleRestoreReceipt {
         }
         $exact = (
             (Test-LifecycleReceiptStructuralGuard $receipt) -and
-            (Test-ExactPropertySet $receipt.restored_code_identity $tree) -and
-            (Test-ExactPropertySet $receipt.failed_new_code_identity $tree) -and
+            (Test-BootstrapAclPropertySet $receipt.restored_code_identity $tree 'acl_sddl' 'acl_sddl_sha256') -and
+            (Test-BootstrapAclPropertySet $receipt.failed_new_code_identity $tree 'acl_sddl' 'acl_sddl_sha256') -and
             (Test-ExactPropertySet $receipt.owner_artifact_paths $ownerArtifacts) -and
             (Test-ExactPropertySet $receipt.owner_artifact_fingerprints_before $ownerArtifacts) -and
             (Test-ExactPropertySet $receipt.owner_artifact_fingerprints_after $ownerArtifacts) -and
@@ -2556,12 +2552,7 @@ function Test-ContainerRestoredTreesAgainstReceipt([string]$CanonicalInstallRoot
         ) { return $false }
         Assert-BootstrapNoReparsePoint $parent 'Container install parent'
         $parentAcl = Get-BootstrapAclIdentity $parent
-        if (
-            $Receipt.parent_acl.access_rules_protected -isnot [bool] -or
-            [string]$Receipt.parent_acl.owner_sid -cne [string]$parentAcl.owner_sid -or
-            [bool]$Receipt.parent_acl.access_rules_protected -ne [bool]$parentAcl.access_rules_protected -or
-            [string]$Receipt.parent_acl.sddl_sha256 -cne [string]$parentAcl.sddl_sha256
-        ) { return $false }
+        if (-not (Test-BootstrapAclIdentity $Receipt.parent_acl $parentAcl)) { return $false }
         $currentIdentity = Get-BootstrapReplacementTreeIdentity $root $root
         $failedIdentity = Get-BootstrapReplacementTreeIdentity $failed $root
         if (

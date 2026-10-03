@@ -509,4 +509,8 @@ race readback and startup-task restore. Baseline41ab6b4 has four AI/order
 failures; edited source passes the 22-case PS5.1/PS7 regression, including two
 owned native ACL checks. Historical hash-only receipts cannot recover ACE order;
 compatibility decision, packet, supported lab repair, rehearsal D and independent
-acceptance remain open. See the sub-149 report and SDDL-COMPARE-SITES.md.
+acceptance remain open. The coordinator approved raw-bound new receipts and
+AI-only SHA proof for legacy receipts; the existing hash field meaning remains
+unchanged and legacy ACE-order differences stay rejected. Receipt readers and
+restore guards now share the central comparison. See the sub-149 report and
+SDDL-COMPARE-SITES.md for committed evidence and remaining lab limits.

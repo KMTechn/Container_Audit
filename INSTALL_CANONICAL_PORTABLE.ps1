@@ -1437,11 +1437,11 @@ function ReadReplacementReceipt(
     if (
         -not (Test-ExactPropertySet $receipt $top) -or
         -not (Test-ExactStringProperties $receipt $topStrings) -or
-        -not (Test-ExactPropertySet $receipt.parent_acl $acl) -or
+        -not (Test-BootstrapAclPropertySet $receipt.parent_acl $acl) -or
         -not (Test-ExactStringProperties $receipt.parent_acl @('owner_sid','sddl_sha256')) -or
         -not ($receipt.parent_acl.access_rules_protected -is [bool]) -or
-        -not (Test-ExactPropertySet $receipt.old $tree) -or
-        -not (Test-ExactPropertySet $receipt.new $tree) -or
+        -not (Test-BootstrapAclPropertySet $receipt.old $tree 'acl_sddl' 'acl_sddl_sha256') -or
+        -not (Test-BootstrapAclPropertySet $receipt.new $tree 'acl_sddl' 'acl_sddl_sha256') -or
         -not (Test-ExactStringProperties $receipt.old $treeStrings) -or
         -not (Test-ExactStringProperties $receipt.new $treeStrings) -or
         -not ($receipt.old.access_rules_protected -is [bool]) -or

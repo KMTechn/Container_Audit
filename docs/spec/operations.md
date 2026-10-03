@@ -902,4 +902,9 @@ protection, ACE/inherited flag, other control and invalid-descriptor drift.
 Owned native D: ACE addition and protection removal remain rejected. This
 evidence does not prove reproduction of the lab's parent-induced AI transition,
 privileged ownership, lab repair or installation. Raw hash-only receipt recovery
-is unchanged while its compatibility scope is awaiting the coordinator.
+uses exact raw SHA or AI-only raw SHA proof; it cannot recover legacy ACE order.
+New receipts retain raw SDDL alongside the unchanged hash. PS5.1/PS7 and Python
+receipt regressions cover AI/order admission, legacy conservative rejection,
+raw-hash binding and all permission negatives. Formal declaration regeneration
+remains zero; the canonical receipt reader changes but its bootstrap pin remains
+frozen until the separately committed rehearsal declaration refresh.

@@ -1547,6 +1547,61 @@ function Get-BootstrapAclComparisonKey([string]$Sddl) {
     return ($parts -join '|')
 }
 
+function Test-BootstrapAclRawBinding($Identity, [string]$HashField = 'sddl_sha256', [string]$RawField = 'sddl') {
+    try {
+        if ([string]$Identity.$HashField -cnotmatch '^[0-9a-f]{64}$') { return $false }
+        if ($null -eq $Identity.PSObject.Properties[$RawField]) { return $true }
+        $sddl = $Identity.$RawField
+        if ($sddl -isnot [string] -or [string]::IsNullOrWhiteSpace($sddl) -or $sddl.Length -gt 65536 -or
+            (Get-BootstrapStringSha256 $sddl) -cne [string]$Identity.$HashField) { return $false }
+        $raw = [Security.AccessControl.RawSecurityDescriptor]::new($sddl)
+        return ([string]$raw.Owner.Value -ceq [string]$Identity.owner_sid -and
+            $Identity.access_rules_protected -is [bool] -and
+            [bool]($raw.ControlFlags -band [Security.AccessControl.ControlFlags]::DiscretionaryAclProtected) -eq $Identity.access_rules_protected)
+    } catch { return $false }
+}
+
+function Test-BootstrapAclPropertySet($Identity, [string[]]$Fields, [string]$RawField = 'sddl', [string]$HashField = 'sddl_sha256') {
+    if ($null -eq $Identity) { return $false }
+    $names = @($Identity.PSObject.Properties.Name)
+    $expected = @($Fields)
+    if ($names -ccontains $RawField) { $expected += $RawField }
+    if ($names.Count -ne $expected.Count) { return $false }
+    foreach ($name in $names) { if ($expected -cnotcontains $name) { return $false } }
+    return (Test-BootstrapAclRawBinding $Identity $HashField $RawField)
+}
+
+function Test-BootstrapAclIdentity($Expected, $Actual, [string]$HashField = 'sddl_sha256', [string]$RawField = 'sddl') {
+    try {
+        if ($null -eq $Expected -or $null -eq $Actual -or
+            $Expected.access_rules_protected -isnot [bool] -or $Actual.access_rules_protected -isnot [bool] -or
+            $Expected.access_rules_protected -ne $Actual.access_rules_protected -or
+            [string]$Expected.owner_sid -cne [string]$Actual.owner_sid -or
+            -not (Test-BootstrapAclRawBinding $Expected $HashField $RawField) -or
+            -not (Test-BootstrapAclRawBinding $Actual $HashField $RawField)) { return $false }
+        $expectedRaw = $Expected.PSObject.Properties[$RawField]
+        $actualRaw = $Actual.PSObject.Properties[$RawField]
+        if ($null -ne $expectedRaw -and $null -ne $actualRaw) {
+            return ((Get-BootstrapAclComparisonKey $expectedRaw.Value) -ceq (Get-BootstrapAclComparisonKey $actualRaw.Value))
+        }
+        if ([string]$Expected.$HashField -ceq [string]$Actual.$HashField) { return $true }
+        # A legacy digest proves only exact bytes or the same bytes with DACL AI toggled.
+        $rawProperty = if ($null -ne $actualRaw) { $actualRaw } else { $expectedRaw }
+        if ($null -eq $rawProperty) { return $false }
+        $legacyHash = if ($null -eq $expectedRaw) { [string]$Expected.$HashField } else { [string]$Actual.$HashField }
+        $text = [string]$rawProperty.Value
+        $match = [regex]::Match($text, '(?<=D:)(?:P|AI|AR)*')
+        if (-not $match.Success) { return $false }
+        $control = $match.Value.Replace('AI','')
+        $withAI = if ($control.Contains('AR')) { $control.Replace('AR','AIAR') } else { $control + 'AI' }
+        foreach ($value in @($control,$withAI)) {
+            $candidate = $text.Substring(0,$match.Index) + $value + $text.Substring($match.Index+$match.Length)
+            if ((Get-BootstrapStringSha256 $candidate) -ceq $legacyHash) { return $true }
+        }
+        return $false
+    } catch { return $false }
+}
+
 function Get-BootstrapAclIdentity([string]$Path) {
     $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
     $sections = (
@@ -1569,6 +1624,7 @@ function Get-BootstrapAclIdentity([string]$Path) {
         owner_sid = [string]$owner
         access_rules_protected = $acl.AreAccessRulesProtected
         sddl_sha256 = Get-BootstrapStringSha256 $sddl
+        sddl = $sddl
     }
 }
 
@@ -1666,6 +1722,7 @@ function Get-BootstrapReplacementTreeIdentity(
         owner_sid = [string]$acl.owner_sid
         access_rules_protected = $acl.access_rules_protected
         acl_sddl_sha256 = [string]$acl.sddl_sha256
+        acl_sddl = [string]$acl.sddl
         reparse_count = 0
     }
 }
@@ -1686,11 +1743,11 @@ function Test-BootstrapReplacementTreeIdentity($Expected, $Actual) {
     ) { return $false }
     foreach ($name in @(
         'aggregate_sha256', 'integrity_sha256', 'manifest_sha256', 'source_commit',
-        'source_tree', 'owner_sid', 'acl_sddl_sha256'
+        'source_tree', 'owner_sid'
     )) {
         if ([string]$Expected.$name -cne [string]$Actual.$name) { return $false }
     }
-    return $true
+    return (Test-BootstrapAclIdentity $Expected $Actual 'acl_sddl_sha256' 'acl_sddl')
 }
 
 function Write-BootstrapReplacementReceipt(
@@ -1768,13 +1825,7 @@ function Get-BootstrapVerifiedReplacementRestoreState(
     }
     Assert-BootstrapNoReparsePoint $parent 'replacement restore parent' -PathOnly
     $parentAcl = Get-BootstrapAclIdentity $parent
-    if (
-        [string]$Receipt.parent_acl.owner_sid -cne [string]$parentAcl.owner_sid -or
-        $Receipt.parent_acl.access_rules_protected -isnot [bool] -or
-        $parentAcl.access_rules_protected -isnot [bool] -or
-        $Receipt.parent_acl.access_rules_protected -ne $parentAcl.access_rules_protected -or
-        [string]$Receipt.parent_acl.sddl_sha256 -cne [string]$parentAcl.sddl_sha256
-    ) { throw 'Replacement restore parent ACL identity differs.' }
+    if (-not (Test-BootstrapAclIdentity $Receipt.parent_acl $parentAcl)) { throw 'Replacement restore parent ACL identity differs.' }
     # Only the receipt-selected trees participate in this transaction. Retained
     # history is neither read nor moved; each selected tree is checked recursively.
     foreach ($selected in @($current, $rollback, $failed)) {

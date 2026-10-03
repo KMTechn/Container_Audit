@@ -439,4 +439,9 @@ Protection removal, another control bit, changed owner/group or changed ACEs
 remain different. Original SDDL is retained in evidence. Shared-ancestor race
 readback and startup-task restoration use this rule; XML and other bindings
 remain exact. Hash-only historical replacement receipts retain their existing
-raw SHA contract pending the documented compatibility decision.
+raw SHA contract. New replacement and lifecycle identities carry raw SDDL bound
+to that unchanged SHA and use the central comparison. Legacy hash-only identities
+accept exact bytes, or actual SDDL with only its DACL AI marker toggled; any other
+unrecoverable difference, including ACE order, remains rejected. Raw-field hash,
+owner or protection inconsistency fails closed. Python recovery calls the trusted
+library beside its executing module, without executing receipt-selected trees.
