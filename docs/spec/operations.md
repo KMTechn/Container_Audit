@@ -168,6 +168,10 @@ packet의 역방향 승인과 원 replacement receipt를 함께 사용한다. �
 옛 releases/latest 경로를 켜지 않는다.
 
 설치 때 HiberbootEnabled를 읽고 policy에 값/읽기 결과만 기록한다.
+SYSTEM 로그온 작업의 XML은 SYSTEM SID와 HighestAvailable을 유지하고 선택
+LogonType 요소를 생략한다. ServiceAccount는 cmdlet/COM enum이며 XML schema 값이
+아니다. trigger/action/조건·Task 1.4는 그대로다. 호스트 schema 회귀와 랩 등록 수용을
+구별하며 [전수와 원 실패](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-151/TASK-XML-SITES.md)를 따른다.
 켜진 작업자가 이미 있으면 로그온 작업은 DEFERRED로 남기며 업무를 멈추지 않는다.
 수명주기 교체/복구는 진행 중 자동 전이나 실행 중 작업이 있으면 거절한다.
 기존 policy·pointer·journal·task XML/ACL은 보호된 `.startup-update-install.<attempt>`에

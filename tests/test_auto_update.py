@@ -154,6 +154,14 @@ def test_logon_task_has_fixed_system_action_and_operator_trigger(monkeypatch, tm
     ns = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
     assert document.find("t:Triggers/t:LogonTrigger/t:UserId", ns).text == sid
     assert document.find("t:Principals/t:Principal/t:UserId", ns).text == "S-1-5-18"
+    # ServiceAccount is a COM/cmdlet enum, not an XML schema LogonType.
+    # SYSTEM is represented by its SID with the optional LogonType omitted.
+    assert document.tag == "{" + ns["t"] + "}Task"
+    assert document.attrib["version"] == "1.4"
+    principal = document.find("t:Principals/t:Principal", ns)
+    assert [element.tag.rsplit("}", 1)[-1] for element in principal] == ["UserId", "RunLevel"]
+    assert principal.find("t:RunLevel", ns).text == "HighestAvailable"
+    assert document.find("t:Actions", ns).attrib["Context"] == principal.attrib["id"]
     assert document.find("t:Settings/t:Hidden", ns).text == "true"
     assert document.find("t:Settings/t:AllowHardTerminate", ns).text == "false"
     action = document.find("t:Actions/t:Exec", ns)
