@@ -46,9 +46,12 @@ class EventLogOutbox:
         with self._lock:
             return bool(self._unstaged)
 
-    def stage(self, log_file_path: str, log_entry: Dict[str, Any]) -> None:
+    def stage(self, log_file_path: str, log_entry: Dict[str, Any], *, worker_record=None) -> None:
         with self._lock:
-            self._unstaged.append({"log_file_path": log_file_path, "log_entry": dict(log_entry)})
+            payload = {"log_file_path": log_file_path, "log_entry": dict(log_entry)}
+            if worker_record:
+                payload["worker_record"] = dict(worker_record)
+            self._unstaged.append(payload)
         # Retain before admission can fail; release the lock before waiting for
         # admission, matching drain's admission -> outbox lock order.
         self._persist_unstaged()

@@ -1761,6 +1761,7 @@ class TransferSealCoordinator:
         item_id: str,
         scanned_barcodes: Iterable[str],
         operation_lease_id: str = "",
+        worker_record: Mapping[str, Any] | None = None,
     ) -> SealAttempt:
         """Compute the exact transfer identity without creating local ledger rows."""
 
@@ -1784,6 +1785,7 @@ class TransferSealCoordinator:
             item_id=item_id,
             scanned_barcodes=scans,
             operation_lease_id=normalized_lease_id,
+            worker_record=worker_record,
         )
         return SealAttempt(
             intent_id=str(preview["intent_id"]),
@@ -1807,6 +1809,7 @@ class TransferSealCoordinator:
         operation_lease_id: str = "",
         require_completion_checkpoint: bool = False,
         scan_context: Mapping[str, Any] | None = None,
+        worker_record: Mapping[str, Any] | None = None,
     ) -> SealAttempt:
         self._assert_owner()
         scans = list(scanned_barcodes)
@@ -1832,6 +1835,7 @@ class TransferSealCoordinator:
             operation_lease_id=normalized_lease_id,
             require_completion_checkpoint=require_completion_checkpoint,
             scan_context=scan_context,
+            worker_record=worker_record,
         )
         if normalized_lease_id:
             assert self.operation_lease_manager is not None

@@ -1,0 +1,6 @@
+{
+  "timestamp": "2026-10-04T00:00:00",
+  "worker_name": "tester",
+  "event": "PRODUCT_SCAN",
+  "details": "{\"product_barcode\": \"part\", \"idempotency_key\": \"identity-golden\", \"source_system\": \"container_audit\", \"source_transport_or_dataset\": \"legacy_transfer_csv\", \"raw_event_name\": \"PRODUCT_SCAN\", \"canonical_event_name\": \"PRODUCT_SCAN\", \"dispatch_key\": \"container_audit|legacy_transfer_csv|PRODUCT_SCAN\", \"identity_class\": \"LEGACY_FALLBACK\", \"integrity_requirement\": \"UNSIGNED_LEGACY_ALLOWED\", \"integrity_status\": \"UNSIGNED_LEGACY\", \"parser_mapping_version\": \"container-audit-plan-b-v1\"}"
+}

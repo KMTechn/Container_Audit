@@ -91,13 +91,22 @@ class PreflightHoldSnapshot:
     state: str
     items: tuple[HeldScan, ...]
     error_code: str = ""
+    worker_id: str | None = None
+    worker_name_snapshot: str = ""
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "PreflightHoldSnapshot":
+        from worker_roster import record_identity
+        try:
+            identity = record_identity(payload)
+        except ValueError as exc:
+            raise PreflightHoldError("preflight hold worker identity is invalid") from exc
         if str(payload.get("schema_version") or "") != HOLD_SCHEMA_VERSION:
             raise PreflightHoldError("preflight hold schema is invalid")
         preflight_id = str(payload.get("preflight_id") or "").strip()
         worker = str(payload.get("worker") or "").strip()
+        if identity and identity["worker_name_snapshot"] != worker:
+            raise PreflightHoldError("preflight hold worker snapshot differs from worker name")
         master_raw = str(payload.get("master_raw") or "")
         created_at = str(payload.get("created_at") or "").strip()
         updated_at = str(payload.get("updated_at") or "").strip()
@@ -132,6 +141,7 @@ class PreflightHoldSnapshot:
             state,
             items,
             str(payload.get("error_code") or "").strip(),
+            **identity,
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -146,6 +156,8 @@ class PreflightHoldSnapshot:
             "state": self.state,
             "items": [item.to_payload() for item in self.items],
             "error_code": self.error_code,
+            **({"worker_id": self.worker_id, "worker_name_snapshot": self.worker_name_snapshot}
+               if self.worker_name_snapshot else {}),
         }
 
 
@@ -224,6 +236,8 @@ class PreflightScanHoldStore:
         worker: str,
         master_raw: str,
         scan_epoch: int,
+        worker_id: str | None = None,
+        worker_name_snapshot: str = "",
     ) -> PreflightHoldSnapshot:
         normalized_worker = str(worker or "").strip()
         master = str(master_raw or "")
@@ -242,6 +256,9 @@ class PreflightScanHoldStore:
                 "scan_epoch": int(scan_epoch),
                 "created_at": created_at,
             }
+            worker_identity = ({"worker_id": worker_id, "worker_name_snapshot": worker_name_snapshot}
+                               if worker_name_snapshot else {})
+            identity.update(worker_identity)
             snapshot = PreflightHoldSnapshot(
                 preflight_id="preflight-" + _hash(identity)[:32],
                 scan_epoch=max(0, int(scan_epoch)),
@@ -251,6 +268,7 @@ class PreflightScanHoldStore:
                 updated_at=created_at,
                 state=HOLD_LOOKUP,
                 items=(),
+                **worker_identity,
             )
             return self._write(snapshot)
 

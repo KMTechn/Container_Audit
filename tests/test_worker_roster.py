@@ -232,7 +232,9 @@ def test_selected_name_is_preserved_in_session_scan_and_history(flow, windows, t
     public_scan(app, ITEM + "-SERIAL-001")
     state = json.loads((Path(app.save_folder) / app.CURRENT_TRAY_STATE_FILE).read_text(encoding="utf-8"))
     assert state["worker_name"] == name
-    assert "worker_id" not in state
+    # Roster stage 2 §1: local identity is additive; CSV remains capability-gated.
+    assert state["worker_id"] == chosen["worker_id"]
+    assert state["worker_name_snapshot"] == name
     assert app._load_work_session_state()["worker_name"] == name
     history = load_session_history(save_folder=app.save_folder, worker_name=name,
                                    today=datetime.date.today(), tray_size=app.TRAY_SIZE)

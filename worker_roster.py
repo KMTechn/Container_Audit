@@ -1,4 +1,4 @@
-"""Stage-one shared worker roster; business records continue to contain names."""
+"""Shared worker roster and optional identity on new business records."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import json
 import unicodedata
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from storage_utils import atomic_write_json
 from writer_session_fence import writer_sink
@@ -17,6 +17,37 @@ CONTRACT_VERSION = "worker-roster.v1"
 MAX_RESPONSE_BYTES = 262144
 # Local indentation adds bytes to a valid wire response; bound disk reads separately.
 MAX_CACHE_BYTES = 2 * MAX_RESPONSE_BYTES + 1024
+
+
+def record_identity(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep old records absent; never invent a number for a local name."""
+    if "worker_name_snapshot" not in value and "worker_id" not in value:
+        return {}
+    name = value.get("worker_name_snapshot")
+    worker_id = value.get("worker_id")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("invalid worker name snapshot")
+    if worker_id is not None and (
+        not isinstance(worker_id, str) or str(uuid.UUID(worker_id)) != worker_id
+    ):
+        raise ValueError("invalid record worker id")
+    return {"worker_id": worker_id, "worker_name_snapshot": name}
+
+
+def record_owner_matches(value: Mapping[str, Any], *, worker_name: str,
+                         worker_id: str = "") -> bool:
+    identity = record_identity(value)
+    if identity.get("worker_id"):
+        return identity["worker_id"] == worker_id
+    return str(value.get("worker_name") or value.get("worker") or "").strip() == worker_name
+
+
+def record_identity_enabled(answer: Any) -> bool:
+    if not isinstance(answer, Mapping):
+        return False
+    capabilities = answer.get("capabilities")
+    capability = capabilities.get("worker_record_identity_v1") if isinstance(capabilities, Mapping) else None
+    return isinstance(capability, Mapping) and capability.get("enabled") is True
 
 
 def _digest(value: dict[str, Any]) -> str:

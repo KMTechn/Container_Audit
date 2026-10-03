@@ -290,7 +290,7 @@ from update_service import (
     verify_update_manifest_signature,
 )
 from worker_registry import WorkerRegistry
-from worker_roster import WorkerRoster
+from worker_roster import WorkerRoster, record_identity, record_identity_enabled, record_owner_matches
 from warning_presenter import (
     CompletionOutcome,
     CompletionOutcomeSnapshot,
@@ -1000,6 +1000,8 @@ class TraySession:
     # have landed: its retry, even after a restart on a later day, is the same row.
     cancel_event_attempts: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     pending_audit_events: List[Dict[str, Any]] = field(default_factory=list)
+    worker_id: Optional[str] = None
+    worker_name_snapshot: str = ""
 
 
 class _LocalValueVar:
@@ -1739,6 +1741,15 @@ class ContainerAudit:
         selected = getattr(self, "_preflight_hold_snapshot", None)
         if not preflight_id and owner_worker is None and not new_work:
             preflight_id = getattr(selected, "preflight_id", "")
+            if not preflight_id and getattr(self, "_selected_roster_id", ""):
+                for candidate in (path, *path.parent.glob(f"{path.stem}_*.json")):
+                    try:
+                        held = PreflightScanHoldStore.load_path(candidate)
+                    except PreflightHoldError:
+                        continue
+                    if held.worker_id and self._owns_worker_record(held.to_payload()):
+                        preflight_id = held.preflight_id
+                        break
         worker_name = owner_worker
         if worker_name is None:
             worker_name = getattr(self, "worker_name", "") if new_work else ""
@@ -1802,7 +1813,7 @@ class ContainerAudit:
                 snapshot = PreflightScanHoldStore.load_path(path)
             except PreflightHoldError:
                 continue
-            if snapshot.worker != worker:
+            if not self._owns_worker_record(snapshot.to_payload()):
                 holds.append(snapshot)
         return holds
 
@@ -1887,7 +1898,7 @@ class ContainerAudit:
             for held in PreflightScanHoldStore.list_quarantined(
                 self._preflight_hold_quarantine_directory()
             )
-            if supervisor or held.snapshot.worker == current_worker
+            if supervisor or self._owns_worker_record(held.snapshot.to_payload())
         )
 
     @staticmethod
@@ -2148,7 +2159,7 @@ class ContainerAudit:
         current_worker = persistent_operator_name(
             str(getattr(self, "worker_name", "") or "")
         )
-        if snapshot.worker != current_worker and not self._is_preflight_hold_supervisor():
+        if not self._owns_worker_record(snapshot.to_payload()) and not self._is_preflight_hold_supervisor():
             messagebox.showwarning(
                 "보류 묶음 작업자 확인",
                 "원래 작업자 또는 관리자로 로그인해야 복원할 수 있습니다.",
@@ -3130,6 +3141,21 @@ class ContainerAudit:
                     session = getattr(client, "session", None)
                     if session is not None:
                         session.close()
+            capability_client = None
+            enabled = False
+            try:
+                capability_client = logistics_transfer_client_from_env(probe_required=False)
+                if capability_client is not None:
+                    enabled = record_identity_enabled(capability_client.get_capabilities())
+            except Exception:
+                pass
+            finally:
+                if capability_client is not None:
+                    session = getattr(capability_client, "session", None)
+                    if session is not None:
+                        session.close()
+            if attempt == getattr(self, "_roster_attempt", None) and epoch == getattr(self, "_admin_pin_login_epoch", ""):
+                self._worker_record_identity_enabled = enabled
             results.put(answer)
         self._roster_thread = threading.Thread(target=read, name="container-audit-roster", daemon=True)
         self._roster_thread.start()
@@ -3164,8 +3190,40 @@ class ContainerAudit:
         worker_id = getattr(self, "_selected_roster_id", "") if getattr(self, "worker_name", "") else self.worker_registry.recent_worker_id()
         return roster.active_worker(worker_id=worker_id, name=name) is not None
 
+    def _selected_worker_identity(self):
+        worker_id = (getattr(self, "_selected_roster_id", "") or None) if getattr(self, "worker_role", "") != "ADMIN" else None
+        roster = getattr(self, "worker_roster", None)
+        row = roster.active_worker(worker_id=worker_id) if roster is not None and worker_id else None
+        name = row["display_name"] if row else persistent_operator_name(getattr(self, "worker_name", ""))
+        return record_identity({"worker_id": row["worker_id"] if row else None, "worker_name_snapshot": name}) if name else {}
+
+    def _record_worker_name(self):
+        return (getattr(getattr(self, "current_tray", None), "worker_name_snapshot", "")
+                or persistent_operator_name(getattr(self, "worker_name", "")))
+
+    def _worker_record_context(self):
+        tray = getattr(self, "current_tray", None)
+        if getattr(tray, "master_label_code", ""):
+            identity = record_identity(vars(tray)) if getattr(tray, "worker_name_snapshot", "") else {}
+        else:
+            identity = self._selected_worker_identity()
+        return {**identity, "enabled": getattr(self, "_worker_record_identity_enabled", False) is True} if identity else {}
+
+    def _owns_worker_record(self, value):
+        return record_owner_matches(value,
+            worker_name=persistent_operator_name(getattr(self, "worker_name", "")),
+            worker_id=getattr(self, "_selected_roster_id", ""))
+
     def _roster_allows_new_tray(self):
         if self._current_roster_worker_active():
+            selected = self._selected_worker_identity()
+            if selected and self.worker_name != selected["worker_name_snapshot"] and not self.current_tray.master_label_code:
+                if not self._end_work_session(reason="roster_name_corrected"):
+                    return False
+                self.worker_name = selected["worker_name_snapshot"]
+                self._load_session_state()
+                if not self._begin_or_resume_work_session():
+                    return False
             return True
         if not self._disable_remembered_worker_start():
             return False
@@ -3546,8 +3604,11 @@ class ContainerAudit:
         payload = self._prepare_event_log_entry(event_type, synchronous=True, **kwargs)
         if not payload:
             raise ValueError('checkpoint audit payload is invalid')
-        return {'log_file_name': Path(kwargs.get('log_file_path_override') or self.log_file_path).name,
-                'local_only': payload['local_only'], 'log_entry': payload['log_entry']}
+        return {'log_file_name': Path(kwargs.get('log_file_path_override') or (
+                    self._completion_projection_log_path() if getattr(getattr(self, 'current_tray', None), 'worker_name_snapshot', '')
+                    else self.log_file_path)).name,
+                'local_only': payload['local_only'], 'log_entry': payload['log_entry'],
+                'worker_record': payload['worker_record']}
 
     def _stage_checkpoint_audit_events(self, state: Mapping[str, Any]) -> bool:
         try:
@@ -3556,7 +3617,8 @@ class ContainerAudit:
                 if event['local_only']:
                     path = local_only_event_log_path(
                         path, local_events_dir=getattr(self, 'local_events_folder', ''))
-                self._event_log_outbox(str(path)).stage(str(path), event['log_entry'])
+                self._event_log_outbox(str(path)).stage(str(path), event['log_entry'],
+                    worker_record=event.get('worker_record'))
             return True
         except Exception as exc:
             self._record_log_write_error(f'checkpoint 감사 재시도: {exc.__class__.__name__}')
@@ -3642,6 +3704,7 @@ class ContainerAudit:
             "projection_worker_name": str(payload["projection_worker_name"]),
             "master_label_code": str(payload["master_label_code"]),
             "event_detail": dict(payload["event_detail"]),
+            **({"worker_record": dict(payload["worker_record"])} if "worker_record" in payload else {}),
         }
 
     def _active_activation_event_contract(self) -> Optional[Dict[str, Any]]:
@@ -3656,7 +3719,7 @@ class ContainerAudit:
         master_label_code: str,
         observed_at: datetime.datetime,
     ) -> Dict[str, Any]:
-        projection_worker = persistent_operator_name(self.worker_name)
+        projection_worker = self._record_worker_name()
         if not projection_worker:
             raise ValueError("activation projection worker is missing")
         projection_path = self._completion_projection_log_path()
@@ -3669,6 +3732,7 @@ class ContainerAudit:
             "projection_worker_name": projection_worker,
             "master_label_code": str(master_label_code),
             "event_detail": dict(sanitize_persistent_value(dict(event_detail))),
+            "worker_record": self._worker_record_context(),
         }
 
     def _project_activation_event_contract(
@@ -3688,6 +3752,7 @@ class ContainerAudit:
                 log_file_path_override=str(projection_path),
                 deduplicate=True,
                 worker_name_override=str(contract["projection_worker_name"]),
+                worker_record=contract.get("worker_record", {}),
             )
         except (KeyError, TypeError, ValueError) as exc:
             self._record_log_write_error(
@@ -3777,7 +3842,7 @@ class ContainerAudit:
         canonical_event_name: str = "",
     ) -> Dict[str, Any]:
         projection_worker = persistent_operator_name(
-            projection_worker_name or self.worker_name
+            projection_worker_name or self._record_worker_name()
         )
         if not projection_worker:
             raise ValueError("audit projection worker is missing")
@@ -3791,6 +3856,7 @@ class ContainerAudit:
             "projection_log_name": projection_path.name,
             "projection_worker_name": projection_worker,
             "event_detail": dict(sanitize_persistent_value(dict(event_detail))),
+            "worker_record": self._worker_record_context(),
         }
 
     def _project_audit_event_contract(self, contract: Mapping[str, Any]) -> bool:
@@ -3811,6 +3877,7 @@ class ContainerAudit:
                 log_file_path_override=str(projection_path),
                 deduplicate=True,
                 worker_name_override=str(contract["projection_worker_name"]),
+                worker_record=contract.get("worker_record", {}),
             )
         except (KeyError, TypeError, ValueError) as exc:
             self._record_log_write_error(f"감사 outbox 투영 오류: {exc}")
@@ -3845,6 +3912,7 @@ class ContainerAudit:
                         event["projection_worker_name"]
                     ),
                     "event_detail": dict(event["event_detail"]),
+                    **({"worker_record": dict(event["worker_record"])} if "worker_record" in event else {}),
                 }
                 for event in payload["projection_events"]
             ],
@@ -3890,6 +3958,15 @@ class ContainerAudit:
                 observed_at=observed_at,
             )
         )
+        restored_identity = record_identity(restored_state)
+        projection_events[-1]["worker_record"] = (
+            {**restored_identity, "enabled": getattr(self, "_worker_record_identity_enabled", False) is True}
+            if restored_identity else {})
+        if restored_identity:
+            restored_name = restored_identity["worker_name_snapshot"]
+            projection_events[-1]["projection_worker_name"] = restored_name
+            projection_events[-1]["projection_log_name"] = self._completion_projection_log_path(
+                worker_name_snapshot=restored_name).name
         return {
             "schema_version": PARKED_RESTORE_STATE_SCHEMA_VERSION,
             "operation_id": operation_id,
@@ -4092,7 +4169,7 @@ class ContainerAudit:
         if (
             previous is not None
             and previous["phase"] == WORK_SESSION_PHASE_ACTIVE
-            and previous["worker_name"] == actor
+            and self._owns_worker_record(previous)
         ):
             self._work_session_id = previous["session_id"]
             self._work_session_recovery_blocked = False
@@ -4122,6 +4199,7 @@ class ContainerAudit:
             "started_at": observed_at.isoformat(),
             "ended_at": "",
             "pending_event": pending_event,
+            **self._selected_worker_identity(),
         }
         if not self._save_work_session_state(state):
             return False
@@ -4152,7 +4230,7 @@ class ContainerAudit:
         if (
             state is None
             or state["phase"] != WORK_SESSION_PHASE_ACTIVE
-            or state["worker_name"] != actor
+            or not self._owns_worker_record(state)
         ):
             return True
         session_suffix = state["session_id"].removeprefix("work-session:")
@@ -4168,8 +4246,10 @@ class ContainerAudit:
             },
             idempotency_key=f"work-session-end:{session_suffix}",
             observed_at=observed_at,
-            projection_worker_name=actor,
+            projection_worker_name=state["worker_name"],
         )
+        state["pending_event"]["worker_record"] = {
+            **record_identity(state), "enabled": getattr(self, "_worker_record_identity_enabled", False) is True}
         if not self._save_work_session_state(state):
             return False
         if not self._reconcile_work_session_state():
@@ -4226,6 +4306,7 @@ class ContainerAudit:
         if payload is None:
             return None
         return {
+            **({"worker_record": dict(payload["worker_record"])} if "worker_record" in payload else {}),
             "schema_version": int(payload["schema_version"]),
             "event_type": str(payload["event_type"]),
             "idempotency_key": str(payload["idempotency_key"]),
@@ -4314,7 +4395,7 @@ class ContainerAudit:
         return True
 
     def _current_tray_state_snapshot(self) -> Dict[str, Any]:
-        state = tray_session_to_state(self.current_tray, worker_name=self.worker_name)
+        state = tray_session_to_state(self.current_tray, worker_name=self._record_worker_name())
         activation_event = self._active_activation_event_contract()
         if activation_event is not None:
             state[ACTIVATION_EVENT_STATE_KEY] = activation_event
@@ -4459,7 +4540,7 @@ class ContainerAudit:
                         self._show_field_notice("작업 기록 실패", "완료된 이전 작업 상태 정리 기록을 남기지 못했고 상태 파일 복원에도 실패했습니다. 상태 폴더를 확인하세요.")
                     return
                 return
-            if saved_worker == current_worker_persistent:
+            if self._owns_worker_record(saved_state):
                 msg = (
                     "이전에 마치지 못한 트레이 작업을 이어서 시작하시겠습니까?\n\n"
                     f"· 품목: {saved_state.get('item_name', '알 수 없음')}\n"
@@ -11841,7 +11922,11 @@ class ContainerAudit:
             and self._reject_mutation_during_preflight_hold(barcode)
         ):
             return False
+        held = getattr(self, "_preflight_hold_snapshot", None)
+        identity = (record_identity(held.to_payload()) if held is not None and held.master_raw == barcode
+                    else self._selected_worker_identity())
         self.current_tray = TraySession(
+            **identity,
             master_label_code=barcode,
             canonical_input_tag_qr=canonical_input_tag_qr or barcode,
             active_label_qr_payload=active_label_qr_payload or barcode,
@@ -11969,6 +12054,7 @@ class ContainerAudit:
 
         hold_store = self._preflight_hold_store(new_work=not (offline_retry or transition_requery))
         hold_worker = persistent_operator_name(self.worker_name)
+        hold_identity = self._selected_worker_identity()
         marker_log_path = str(getattr(self, "log_file_path", "") or "")
         finish_identity = self._capture_mutation_finish_identity()
 
@@ -11976,7 +12062,7 @@ class ContainerAudit:
             if hold_store.exists():
                 existing = hold_store.load()
                 if (
-                    existing.worker != hold_worker
+                    not self._owns_worker_record(existing.to_payload())
                     or existing.master_raw != barcode
                 ):
                     raise PreflightHoldConflict(
@@ -11985,7 +12071,7 @@ class ContainerAudit:
                 if existing.state == HOLD_LOOKUP_FAILED:
                     snapshot = hold_store.resume(
                         master_raw=barcode,
-                        worker=hold_worker,
+                        worker=existing.worker,
                     )
                 elif existing.state == HOLD_LOOKUP:
                     snapshot = existing
@@ -11995,6 +12081,7 @@ class ContainerAudit:
                     )
             else:
                 snapshot = hold_store.start(
+                    **hold_identity,
                     worker=hold_worker,
                     master_raw=barcode,
                     scan_epoch=token,
@@ -13063,7 +13150,7 @@ class ContainerAudit:
         ):
             snapshot = getattr(self, "_preflight_hold_snapshot", None)
             if (self._is_offline_preflight_hold(snapshot)
-                    and snapshot.worker == persistent_operator_name(self.worker_name)
+                    and self._owns_worker_record(snapshot.to_payload())
                     and not getattr(self.current_tray, "master_label_code", "")
                     and not self._ui_task_lane().is_busy()
                     and not getattr(self, "_master_preflight_poll_job", None)
@@ -13251,7 +13338,7 @@ class ContainerAudit:
             )
             return True
         current_worker = persistent_operator_name(self.worker_name)
-        if snapshot.worker != current_worker and not (
+        if not self._owns_worker_record(snapshot.to_payload()) and not (
             snapshot.state == HOLD_DRAINING
             and not self._preflight_hold_matches_current_tray(snapshot)
         ):
@@ -14167,7 +14254,7 @@ class ContainerAudit:
                     )
                     if (
                         parked_worker
-                        and parked_worker != persistent_operator_name(self.worker_name)
+                        and not self._owns_worker_record(parked_state)
                     ):
                         self.show_fullscreen_warning(
                             "보류 작업 중복",
@@ -14206,7 +14293,7 @@ class ContainerAudit:
                     if not matched_item:
                         self.show_fullscreen_warning("품목 없음", f"코드 '{item_code}'에 해당하는 품목 정보를 찾을 수 없습니다.", self.COLOR_DANGER)
                         return
-                    if waiting_hold and waiting_hold.snapshot.worker != persistent_operator_name(self.worker_name):
+                    if waiting_hold and not self._owns_worker_record(waiting_hold.snapshot.to_payload()):
                         self.show_fullscreen_warning(
                             "보류 묶음 작업자 확인", "원래 작업자로 로그인한 뒤 대기 현품표를 다시 스캔하세요.", self.COLOR_DANGER,
                         )
@@ -14550,6 +14637,7 @@ class ContainerAudit:
     def _completion_projection_log_path(
         self,
         projection_log_name: str = "",
+        *, worker_name_snapshot: str = "",
     ) -> Path:
         save_root = Path(
             str(
@@ -14569,6 +14657,10 @@ class ContainerAudit:
             target = save_root / log_name
         else:
             target = Path(str(getattr(self, "log_file_path", "") or ""))
+            snapshot = worker_name_snapshot or getattr(getattr(self, "current_tray", None), "worker_name_snapshot", "")
+            if snapshot and snapshot != persistent_operator_name(getattr(self, "worker_name", "")):
+                worker = re.sub(r'[\\/*?:"<>|]', "", snapshot)
+                target = save_root / f"이적작업이벤트로그_{worker}_{datetime.date.today():%Y%m%d}.csv"
         if not str(target) or target.resolve(strict=False).parent != save_root:
             raise ValueError("completion projection log must be inside the event folder")
         return target.resolve(strict=False)
@@ -14617,6 +14709,9 @@ class ContainerAudit:
             "was_restored_session": bool(was_restored_session),
             "log_may_have_been_attempted": bool(log_may_have_been_attempted),
             "transfer_detail": dict(transfer_detail),
+            "worker_record": (dict(existing["worker_record"]) if (existing := self._active_completion_event_contract())
+                              and existing.get("transfer_intent_id") == intent_id and "worker_record" in existing
+                              else self._worker_record_context()),
         }
 
     def _completion_lane_identity(self) -> tuple[Any, ...]:
@@ -15679,7 +15774,7 @@ class ContainerAudit:
             )
             return False, True
         if (not getattr(self, "_preflight_hold_snapshot", None)
-                and snapshot.worker != persistent_operator_name(getattr(self, "worker_name", ""))
+                and not self._owns_worker_record(snapshot.to_payload())
                 and snapshot.state != HOLD_DRAINING):
             return True, False
         self._preflight_hold_snapshot = snapshot
@@ -16265,17 +16360,23 @@ class ContainerAudit:
         log_file_path_override: str = "",
         deduplicate: bool = False,
         worker_name_override: str = "",
+        worker_record: Optional[Mapping[str, Any]] = None,
     ) -> bool:
         projection_worker_name = persistent_operator_name(
-            worker_name_override or self.worker_name
+            worker_name_override or self._record_worker_name()
         )
         if not projection_worker_name: return False
         target_log_file_path = str(
             log_file_path_override or self.log_file_path or ""
         ).strip()
+        if not log_file_path_override and getattr(getattr(self, "current_tray", None), "worker_name_snapshot", ""):
+            target_log_file_path = str(self._completion_projection_log_path())
         if not target_log_file_path: return False
         normalized_idempotency_key = str(idempotency_key or "").strip()
         raw_detail = dict(detail or {})
+        record = self._worker_record_context() if worker_record is None else dict(worker_record)
+        if record.get("enabled") is True:
+            raw_detail.update(record_identity(record))
         if not normalized_idempotency_key:
             normalized_idempotency_key = str(raw_detail.get("idempotency_key") or uuid.uuid4().hex)
         local_only = (
@@ -16327,7 +16428,7 @@ class ContainerAudit:
             'details': details_json,
         }
         return {'log_file_path': target_log_file_path, 'log_entry': log_entry,
-                'local_only': local_only}
+                'local_only': local_only, 'worker_record': record}
 
     def _log_event(
         self, event_type: str, detail: Optional[Dict] = None,
@@ -16335,11 +16436,12 @@ class ContainerAudit:
         idempotency_key: str = '', event_timestamp: str = '',
         log_file_path_override: str = '', deduplicate: bool = False,
         worker_name_override: str = '',
+        worker_record: Optional[Mapping[str, Any]] = None,
     ) -> bool:
         payload = self._prepare_event_log_entry(
             event_type, detail, synchronous, canonical_event_name,
             idempotency_key, event_timestamp, log_file_path_override,
-            deduplicate, worker_name_override,
+            deduplicate, worker_name_override, worker_record,
         )
         if not payload:
             return False
@@ -16348,7 +16450,7 @@ class ContainerAudit:
         # its failure must never roll back an already saved operator action.
         try:
             store = self._event_log_outbox(target_log_file_path)
-            store.stage(target_log_file_path, log_entry)
+            store.stage(target_log_file_path, log_entry, worker_record=payload['worker_record'])
         except Exception as exc:
             self._record_log_write_error(f"로그 재시도 사본 저장 오류: {exc.__class__.__name__}")
             self._event_log_notice = "로그 저장 실패 · 재시도 중입니다. 저장 공간을 확인하고 이 PC를 종료하지 마세요."
@@ -17161,7 +17263,8 @@ class ContainerAudit:
         if not self._log_event("TRAY_COMPLETE", detail=record["detail"], synchronous=True,
                 idempotency_key=contract["idempotency_key"], event_timestamp=contract["observed_at"],
                 log_file_path_override=str(self._completion_projection_log_path(contract["projection_log_name"])),
-                worker_name_override=contract["projection_worker_name"], deduplicate=True):
+                worker_name_override=contract["projection_worker_name"], deduplicate=True,
+                worker_record=contract.get("worker_record", {})):
             return False
         if record["intent_id"]:
             runtime = coordinator or self._transfer_seal_runtime()
@@ -17347,7 +17450,8 @@ class ContainerAudit:
                 "exchange_idempotency_keys": list(getattr(self.current_tray, "exchange_idempotency_keys", [])),
                 "tray_state": state,
                 "device_id": str(getattr(self, "computer_id", "")),
-                "operator": persistent_operator_name(self.worker_name)}
+                "operator": self._record_worker_name(),
+                **record_identity(state), "worker_record": self._worker_record_context()}
         self.current_tray.scan_completion_context = context
         return dict(context)
 
@@ -17410,6 +17514,10 @@ class ContainerAudit:
         queued_guard = self._transfer_transport_guard("")
         def transport_work():
             coordinator = self._scanonly_transport_runtime()
+            try:
+                self._worker_record_identity_enabled = record_identity_enabled(coordinator.client.get_capabilities())
+            except Exception:
+                self._worker_record_identity_enabled = False
             if getattr(self, "_scanonly_recover_requested", False):
                 self._scanonly_recover_requested = False
             result = {"lookup": lookup, "preflight": None, "pending": 0, "local_exchange_reviews": 0}
@@ -17463,7 +17571,7 @@ class ContainerAudit:
                     "device_id": context["device_id"]}, synchronous=True,
                     idempotency_key="scan-exchange:" + row["intent_id"], deduplicate=True,
                     event_timestamp=context["exchanged_at"], worker_name_override=row["operator"],
-                    log_file_path_override=projection_log_path):
+                    log_file_path_override=projection_log_path, worker_record=context.get("worker_record", {})):
                     continue
                 exchanges.store.mark_scan_exchange_projected(row["intent_id"])
             result["releases"] = self._work_operation_lease_releases((), active_lease_id=active_lease_id)
@@ -18863,9 +18971,11 @@ class ContainerAudit:
         if key not in attempts:
             attempts[key] = {
                 "timestamp": datetime.datetime.now().isoformat(),
-                "log_file_name": Path(str(getattr(self, "log_file_path", "") or "")).name,
+                "log_file_name": (self._completion_projection_log_path().name
+                                  if getattr(self, "log_file_path", "") else ""),
                 "detail": dict(detail),
-                "worker_name": persistent_operator_name(getattr(self, 'worker_name', '')),
+                "worker_name": self._record_worker_name(),
+                "worker_record": self._worker_record_context(),
             }
         return attempts[key]
 
@@ -18887,6 +18997,7 @@ class ContainerAudit:
             deduplicate=True,
             event_timestamp=attempt["timestamp"],
             worker_name_override=attempt.get('worker_name', getattr(self, 'worker_name', '')),
+            worker_record=attempt.get('worker_record', {}),
             log_file_path_override=(
                 str(self._completion_projection_log_path(attempt["log_file_name"]))
                 if attempt["log_file_name"]
@@ -19040,7 +19151,7 @@ class ContainerAudit:
                     'tray_capacity': self.current_tray.tray_size}))
             parked_path = self._parked_store().save_state(
                 state_snapshot,
-                worker_name=persistent_operator_name(self.worker_name),
+                worker_name=self._record_worker_name(),
                 master_label=master_label,
             )
             if not self._delete_current_tray_state():
@@ -19090,6 +19201,7 @@ class ContainerAudit:
         try:
             summaries = self._parked_store().scan_for_worker(
                 self.worker_name, tray_size=getattr(self, "TRAY_SIZE", 60), strict=True,
+                worker_id=getattr(self, "_selected_roster_id", ""),
             )
             self._invalid_parked_rows = {
                 str(summary.path): summary.problem for summary in summaries if summary.problem
@@ -19332,7 +19444,7 @@ class ContainerAudit:
             self._update_parked_trays_list()
             return
         parked_worker = persistent_operator_name(saved_state.get("worker_name"))
-        if parked_worker and parked_worker != persistent_operator_name(self.worker_name):
+        if parked_worker and not self._owns_worker_record(saved_state):
             self._show_field_notice("복원 실패", "다른 작업자의 보류 작업은 복원할 수 없습니다. 목록을 갱신합니다.")
             self._update_parked_trays_list()
             return
@@ -20064,6 +20176,7 @@ class ContainerAudit:
                                              for value in tray.known_member_barcodes]
         timestamp = datetime.datetime.now().isoformat()
         projection_log_path = self._completion_projection_log_path()
+        exchange_worker_record = self._worker_record_context()
         coordinator = self._transfer_member_exchange_runtime()
         def settled():
             self._schedule_scanonly_transport()
@@ -20074,11 +20187,12 @@ class ContainerAudit:
             row = yield lambda: coordinator.store.prepare(master_label=tray.master_label_code,
                 source_identity={**source_identity_from_label(self._parse_new_format_qr(tray.master_label_code) or {}),
                     "replacement_mode": "SCAN_REGISTER_GOOD", "local_exchange_round": timestamp},
-                item_id=tray.item_code, operator=persistent_operator_name(self.worker_name),
+                item_id=tray.item_code, operator=self._record_worker_name(),
                 old_barcodes=[old], new_barcodes=[barcode], scan_context={"exchanged_at": timestamp,
                     "projection_log_name": projection_log_path.name,
                     "device_id": str(getattr(self, "computer_id", "")), "before_state": state,
-                    "after_state": after, "predecessor_keys": list(tray.exchange_idempotency_keys)})
+                    "after_state": after, "predecessor_keys": list(tray.exchange_idempotency_keys),
+                    **record_identity(state), "worker_record": exchange_worker_record})
             key = "container-member-exchange:" + str(row["intent_hash"])
             after["exchange_idempotency_keys"] = [*tray.exchange_idempotency_keys, key]
             lease_id = str(tray.operation_lease_id or "")
@@ -20101,7 +20215,7 @@ class ContainerAudit:
                 "exchanged_at": timestamp, "device_id": str(getattr(self, "computer_id", ""))},
                 synchronous=True, idempotency_key="scan-exchange:" + row["intent_id"], deduplicate=True,
                 event_timestamp=timestamp, worker_name_override=row["operator"],
-                log_file_path_override=str(projection_log_path))):
+                log_file_path_override=str(projection_log_path), worker_record=exchange_worker_record)):
                 self.show_status_message("교환은 저장되었습니다. 기록 전송을 다시 확인합니다.", self.COLOR_PRIMARY)
                 return False
             yield lambda: coordinator.store.mark_scan_exchange_projected(row["intent_id"])

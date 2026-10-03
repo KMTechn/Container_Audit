@@ -133,6 +133,9 @@ class TransferSealStore:
         ).strip()
         if operation_lease_id:
             payload["intent"]["operation_lease_id"] = operation_lease_id
+        if "worker_record_json" in row.keys() and row["worker_record_json"]:
+            from worker_roster import record_identity
+            payload["intent"].update(record_identity(json.loads(row["worker_record_json"])))
         return payload
 
     @classmethod
@@ -291,6 +294,12 @@ class TransferSealStore:
                     "ADD COLUMN completion_checkpoint_confirmed "
                     "INTEGER NOT NULL DEFAULT 1"
                 )
+            if "worker_record_json" not in columns:
+                conn.execute("ALTER TABLE transfer_seal_intents ADD COLUMN worker_record_json TEXT NOT NULL DEFAULT ''")
+            conn.execute("""CREATE TRIGGER IF NOT EXISTS trg_transfer_worker_record_immutable
+                BEFORE UPDATE OF worker_record_json ON transfer_seal_intents
+                WHEN NEW.worker_record_json IS NOT OLD.worker_record_json
+                BEGIN SELECT RAISE(ABORT, 'transfer worker record is immutable'); END""")
             conn.execute(
                 """UPDATE transfer_seal_intents
                       SET idempotency_key='container-seal:' || intent_hash
@@ -495,6 +504,7 @@ class TransferSealStore:
         item_id: str,
         scanned_barcodes: Iterable[str],
         operation_lease_id: str = "",
+        worker_record: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         self._assert_not_ui_thread_read()
         raw_barcodes = [_normalize_identifier(value, "scanned_barcode") for value in scanned_barcodes]
@@ -513,6 +523,9 @@ class TransferSealStore:
                 normalized_operation_lease_id,
                 "operation_lease_id",
             )
+        if worker_record and worker_record.get("enabled") is True:
+            from worker_roster import record_identity
+            intent_material["worker_identity"] = record_identity(worker_record)
         digest = _sha256(intent_material)
         intent_id = f"transfer-intent-{digest[:32]}"
         idempotency_key = f"container-seal:{digest}"
@@ -538,14 +551,18 @@ class TransferSealStore:
         operation_lease_id: str = "",
         require_completion_checkpoint: bool = False,
         scan_context: Mapping[str, Any] | None = None,
+        worker_record: Mapping[str, Any] | None = None,
     ) -> sqlite3.Row:
         self._assert_coordinator_owner()
+        if worker_record is None:
+            worker_record = (scan_context or {}).get("worker_record")
         preview = self.preview_intent(
             master_label=master_label,
             source_identity=source_identity,
             item_id=item_id,
             scanned_barcodes=scanned_barcodes,
             operation_lease_id=operation_lease_id,
+            worker_record=worker_record,
         )
         intent_material = preview["intent_material"]
         raw_barcodes = preview["raw_barcodes"]
@@ -569,8 +586,8 @@ class TransferSealStore:
                        intent_id,schema_version,status,master_label,source_identity_json,
                        item_id,operator,scanned_barcodes_json,scan_count,intent_hash,
                        idempotency_key,operation_lease_id,relay_log_file_path,
-                       completion_checkpoint_confirmed,created_at,updated_at
-                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       completion_checkpoint_confirmed,created_at,updated_at,worker_record_json
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     intent_id,
                     SCHEMA_VERSION,
@@ -588,6 +605,7 @@ class TransferSealStore:
                     completion_checkpoint_confirmed,
                     now,
                     now,
+                    _canonical_json(dict(worker_record)) if worker_record else "",
                 ),
             )
             row = conn.execute(
@@ -675,8 +693,6 @@ class TransferSealStore:
     def bind_command(self, intent_id: str, context: Mapping[str, Any]) -> sqlite3.Row:
         self._assert_coordinator_owner()
         command_id = _normalize_identifier(context.get("idempotency_key"), "idempotency_key")
-        command_json = _canonical_json(dict(context))
-        command_hash = hashlib.sha256(command_json.encode("utf-8")).hexdigest()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -684,6 +700,12 @@ class TransferSealStore:
             ).fetchone()
             if row is None:
                 raise KeyError(intent_id)
+            record = json.loads(row["worker_record_json"] or "{}")
+            if record.get("enabled") is True:
+                from worker_roster import record_identity
+                context = {**context, "payload": {**context["payload"], "worker_identity": record_identity(record)}}
+            command_json = _canonical_json(dict(context))
+            command_hash = hashlib.sha256(command_json.encode("utf-8")).hexdigest()
             if not bool(row["completion_checkpoint_confirmed"]):
                 raise ValueError(
                     "completion checkpoint must be confirmed before command binding"

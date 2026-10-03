@@ -4,6 +4,8 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
+from worker_roster import record_identity
+
 
 WORK_SESSION_STATE_SCHEMA_VERSION = 1
 WORK_SESSION_PHASE_START_PENDING = "START_PENDING"
@@ -115,6 +117,7 @@ def _validate_event(
         "projection_log_name": log_name,
         "projection_worker_name": worker_name,
         "event_detail": dict(detail),
+        **({"worker_record": dict(payload["worker_record"])} if "worker_record" in payload else {}),
     }
 
 
@@ -140,6 +143,12 @@ def validate_work_session_state(
     ):
         raise WorkSessionStateError("worker_name is invalid")
     worker_role = str(state.get("worker_role") or "").strip()
+    try:
+        identity = record_identity(state)
+    except ValueError as exc:
+        raise WorkSessionStateError("invalid work session identity") from exc
+    if identity and identity["worker_name_snapshot"] != worker_name:
+        raise WorkSessionStateError("work session worker snapshot differs from worker name")
     if worker_role not in {"WORKER", "ADMIN"}:
         raise WorkSessionStateError("worker_role is invalid")
     phase = str(state.get("phase") or "").strip()
@@ -206,4 +215,5 @@ def validate_work_session_state(
         "started_at": str(state["started_at"]),
         "ended_at": str(ended_at_raw or ""),
         "pending_event": normalized_event,
+        **identity,
     }

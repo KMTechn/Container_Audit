@@ -183,7 +183,7 @@ def request_complete_tray(
             completion_observed_at = clock.datetime.now()
             completion_was_restored = bool(self.current_tray.is_restored_session)
             completion_projection_worker = persistent_operator_name(
-                self.worker_name
+                self._record_worker_name()
             )
             projection_log_path = self._completion_projection_log_path()
         log_detail = build_tray_complete_detail(
@@ -234,7 +234,7 @@ def request_complete_tray(
     coordinator = None if local_only else self._transfer_seal_runtime()
     item_code = str(self.current_tray.item_code or "")
     scanned_barcodes = tuple(log_detail.get("product_barcodes") or ())
-    operator = persistent_operator_name(self.worker_name)
+    operator = self._record_worker_name()
     relay_log_path = str(getattr(self, "log_file_path", "") or "")
     scan_context = self._scanonly_completion_context(completion_observed_at) if not local_only else None
     existing_contract_snapshot = (
@@ -446,7 +446,7 @@ def complete_tray_steps(
             completion_observed_at = clock.datetime.now()
             completion_was_restored = bool(is_restored)
             completion_projection_worker = persistent_operator_name(
-                self.worker_name
+                self._record_worker_name()
             )
             projection_log_path = self._completion_projection_log_path()
     except (KeyError, TypeError, ValueError) as e:
@@ -767,6 +767,7 @@ def complete_tray_steps(
         event_timestamp=completion_event_contract["observed_at"],
         log_file_path_override=str(projection_log_path),
         deduplicate=prior_log_attempt,
+        worker_record=completion_event_contract.get("worker_record", {}),
         **completion_log_overrides,
         )
     if not (yield projection_operation):

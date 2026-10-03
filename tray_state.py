@@ -98,6 +98,10 @@ def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
         "is_partial_submission": tray.is_partial_submission,
     }
     transition_reasons = list(getattr(tray, "transition_reasons", []) or [])
+    if getattr(tray, "worker_name_snapshot", ""):
+        state.update(worker_id=getattr(tray, "worker_id", None),
+                     worker_name_snapshot=tray.worker_name_snapshot)
+        state["worker_name"] = tray.worker_name_snapshot
     for key in ("known_member_barcodes", "exchange_idempotency_keys"):
         if getattr(tray, key, None):
             state[key] = list(getattr(tray, key))
@@ -747,6 +751,13 @@ def validate_tray_state(
     state = _require_mapping(state)
     validation_now = now or datetime.datetime.now()
     _require_string(state, "worker_name", allow_empty=False)
+    from worker_roster import record_identity
+    try:
+        identity = record_identity(state)
+    except ValueError as exc:
+        raise TrayStateValidationError("invalid tray worker identity") from exc
+    if identity and identity["worker_name_snapshot"] != state["worker_name"]:
+        raise TrayStateValidationError("tray worker snapshot differs from worker name")
     _require_string(state, "master_label_code", allow_empty=False)
     _require_string(state, "item_code", allow_empty=False)
     _require_string(state, "item_name")
@@ -804,7 +815,7 @@ def validate_tray_state(
         isinstance(key, str) and key.strip()
         and isinstance(attempt, dict)
         and {"timestamp", "log_file_name", "detail"} <= set(attempt)
-        and set(attempt) <= {"timestamp", "log_file_name", "detail", "worker_name"}
+        and set(attempt) <= {"timestamp", "log_file_name", "detail", "worker_name", "worker_record"}
         and isinstance(attempt.get('worker_name', ''), str)
         and isinstance(attempt["detail"], dict)
         and isinstance(attempt["timestamp"], str) and attempt["timestamp"].strip()
@@ -932,6 +943,9 @@ def tray_session_from_state(
         if state.get("transition_reasons")
         else {}
     )
+    if "worker_name_snapshot" in state or "worker_id" in state:
+        from worker_roster import record_identity
+        transition.update(record_identity(state))
     if state.get("transition_class"):
         transition["transition_class"] = str(state["transition_class"])
     if state.get("cancel_event_attempts"):

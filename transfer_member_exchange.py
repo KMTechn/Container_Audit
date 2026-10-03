@@ -513,6 +513,10 @@ class TransferMemberExchangeStore:
                 _sha256(predecessor) if predecessor is not None else ""
             ),
         }
+        worker_record = (scan_context or {}).get("worker_record") or {}
+        if worker_record.get("enabled") is True:
+            from worker_roster import record_identity
+            material["worker_identity"] = record_identity(worker_record)
         digest = _sha256(material)
         intent_id = f"transfer-exchange-intent-{digest[:32]}"
         now = _utc_now()
@@ -685,8 +689,6 @@ class TransferMemberExchangeStore:
     def bind_command(self, intent_id: str, command: Mapping[str, Any]) -> sqlite3.Row:
         self._assert_coordinator_owner()
         command_id = _identifier(command.get("idempotency_key"), "idempotency_key")
-        command_json = _canonical_json(dict(command))
-        command_hash = hashlib.sha256(command_json.encode("utf-8")).hexdigest()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -695,6 +697,13 @@ class TransferMemberExchangeStore:
             ).fetchone()
             if row is None:
                 raise KeyError(intent_id)
+            saved = conn.execute("SELECT context_json FROM transfer_scan_exchanges WHERE intent_id=?", (intent_id,)).fetchone()
+            record = (json.loads(saved["context_json"]).get("worker_record") or {}) if saved else {}
+            if record.get("enabled") is True:
+                from worker_roster import record_identity
+                command = {**command, "payload": {**command["payload"], "worker_identity": record_identity(record)}}
+            command_json = _canonical_json(dict(command))
+            command_hash = hashlib.sha256(command_json.encode("utf-8")).hexdigest()
             dismissed = conn.execute(
                 """SELECT 1 FROM transfer_member_exchange_dismissals
                     WHERE intent_id=?""",
