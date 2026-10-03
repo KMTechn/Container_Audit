@@ -59,7 +59,7 @@ $shared=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefi
 $copyAst=[Management.Automation.Language.Parser]::ParseFile($env:CA_OWNER_PRETRUST,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'Pretrust parser error'}
 $copy=$copyAst.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Test-BootstrapPrivilegedOwnerSid'},$true)
-if($null -eq $copy -or $shared.Extent.Text -cne $copy.Extent.Text){throw 'Pretrust owner rule differs from the shared rule'}
+if($null -eq $copy -or $shared.Extent.Text.Replace("`r`n","`n") -cne $copy.Extent.Text.Replace("`r`n","`n")){throw 'Pretrust owner rule differs from the shared rule'}
 'PASS'
 ''', engine=engine, values={'CA_OWNER_PRETRUST': str(ROOT/'tools/apply_prepared_update.ps1')})
     assert result.returncode == 0, result.stdout + result.stderr
