@@ -95,7 +95,12 @@ def build_tray_complete_detail(
         label_quantity = parse_positive_quantity(label_fields)
         if label_quantity is None:
             raise ValueError("master_label_fields QT must be a positive integer")
-        if label_quantity != tray_capacity:
+        # PHS2's printed QT can exceed the current member target after exchange.
+        if label_quantity != tray_capacity and not (
+            str(label_fields.get("PHS") or "") == "2"
+            and str(label_fields.get("SRC") or "") == "KMTECH_INPUT_TAG"
+            and label_quantity > tray_capacity
+        ):
             raise ValueError("master_label_fields QT must match tray_capacity")
     detail = {
         "master_label_code": master_label_code,

@@ -114,7 +114,14 @@ def _validate_history_complete_details(details: Dict[str, Any]) -> None:
     tray_capacity = _history_int_field(details, "tray_capacity", minimum=1)
     if any(str(master_label_fields.get(key) or "").strip() for key in ("QT", "QTY", "QUANTITY")) and "tray_capacity" in details:
         parsed_label_quantity = parse_positive_quantity(master_label_fields)
-        if parsed_label_quantity is None or parsed_label_quantity <= 0 or tray_capacity is None or parsed_label_quantity != tray_capacity:
+        if parsed_label_quantity is None or parsed_label_quantity <= 0 or tray_capacity is None:
+            raise ValueError("master_label_code QT must match tray_capacity")
+        # Keep printed QT while counting the completed current PHS2 members.
+        if parsed_label_quantity != tray_capacity and not (
+            str(master_label_fields.get("PHS") or "") == "2"
+            and str(master_label_fields.get("SRC") or "") == "KMTECH_INPUT_TAG"
+            and parsed_label_quantity > tray_capacity
+        ):
             raise ValueError("master_label_code QT must match tray_capacity")
     scan_count = _history_int_field(details, "scan_count", minimum=0)
     barcode_count = _history_int_field(details, "barcode_count", minimum=0)
