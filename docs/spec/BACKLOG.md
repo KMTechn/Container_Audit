@@ -7,6 +7,12 @@ SYSTEM task XML의 unsupported ServiceAccount 요소를 제거했다(trigger/act
 보호 evidence run 결속을 유지한다. 실제 단일 설치 결과·독립 수용과 소스 회귀를 구별한다.
 CA-A2는 누락된 선택 조상을 생성 전에 거절하며 부모/대상 미생성을 PS5.1/7에서 검증했다.
 CA-D1의 역사 전수표79행은 AST로 소속22행을 고쳤으며 제품 경로나 guard 변경이 아니다.
+예행 E(2012a5c, 2026-10-03)는 교정 XML의 비활성 등록/되읽기/해제와 PlanOnly를 통과했다.
+단일 설치는 INSTALL_THIS_PC.ps1:999의 STARTUP_UPDATE_TASK_READBACK_FAILED로 실패했다.
+native 73과 원 진단은 canonical/부모 journal에 보존됐고 protected direct binding은 통과했다.
+지원 rollback 후 old2302파일·Run·ACL·일반 relay 복원은 PROVEN이다. 비활성 probe의 trigger
+계정명 정규화와 literal SID 비교가 원인이라는 추론은 별도 교정/독립 검토에 남는다.
+설치 재시도·시작 화면·지원 업데이트 확인0; [실제 9/10구간](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-151/CA-5TH-REHEARSAL-E.md)을 따른다.
 
 설치 증거의 권한 분리는 sub-107 소스 교정 범위다. 최종 컷의 선언/pin·stock과
 5차 실제 설치에서 메모리 wrapper 실행, Administrators owner/operator read-only,

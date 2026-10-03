@@ -178,6 +178,11 @@ SYSTEM 로그온 작업의 XML은 SYSTEM SID와 HighestAvailable을 유지하고
 LogonType 요소를 생략한다. ServiceAccount는 cmdlet/COM enum이며 XML schema 값이
 아니다. trigger/action/조건·Task 1.4는 그대로다. 호스트 schema 회귀와 랩 등록 수용을
 구별하며 [전수와 원 실패](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-151/TASK-XML-SITES.md)를 따른다.
+2026-10-03 랩 예행 E는 교정 XML을 비활성 등록/해제했으나 단일 설치의 task 되읽기
+guard에서 실패했다(native 73 보존, protected helper 결속 통과). 옛 코드/Run/ACL/일반 relay
+지원 복원은 PROVEN이며 새 설치의 시작 화면/업데이트 확인은 NOT TESTED다.
+[예행 E 증거](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-151/CA-5TH-REHEARSAL-E.md)는
+probe의 SID→계정명 되읽기와 설치 실패를 구별하며 실제 설치 task XML은 rollback 전에 수집하지 않았다.
 켜진 작업자가 이미 있으면 로그온 작업은 DEFERRED로 남기며 업무를 멈추지 않는다.
 수명주기 교체/복구는 진행 중 자동 전이나 실행 중 작업이 있으면 거절한다.
 기존 policy·pointer·journal·task XML/ACL은 보호된 `.startup-update-install.<attempt>`에
