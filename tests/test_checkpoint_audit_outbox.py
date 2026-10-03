@@ -183,7 +183,7 @@ def test_undo_checkpoint_keeps_audit_when_outbox_storage_is_unavailable(flow, mo
     assert len(_rows(app, 'SCAN_UNDO')) == 1
 
 
-def test_exchange_then_undo_replays_both_original_events(flow, windows, monkeypatch):
+def test_exchange_rejection_and_later_undo_replay_original_events(flow, windows, monkeypatch):
     app = _active(flow)
     old, new = ITEM + '-SERIAL-001', ITEM + '-SERIAL-999'
     app._process_barcode_logic(old)
@@ -197,14 +197,25 @@ def test_exchange_then_undo_replays_both_original_events(flow, windows, monkeypa
         for value in ('KMCMD:EXCHANGE', old, new):
             app._process_barcode_logic(value)
         _pump_until(app.root, lambda: not app._ui_task_lane().is_busy())
+        before = app._current_tray_state_snapshot()
         app.undo_last_scan()
-        assert app.current_tray.scanned_barcodes == []
+        _pump_until(app.root, lambda: not app._ui_task_lane().is_busy())
+        # sub-228 decision: a durable exchange is final even while CSV retries.
+        assert app._current_tray_state_snapshot() == before
+        assert app.current_tray.scanned_barcodes == [new]
+        assert _rows(app, 'SCAN_UNDO') == []
+        later = ITEM + '-SERIAL-002'
+        app._process_barcode_logic(later)
+        _pump_until(app.root, lambda: not app._ui_task_lane().is_busy())
+        app.undo_last_scan()
+        _pump_until(app.root, lambda: not app._ui_task_lane().is_busy())
+        assert app.current_tray.scanned_barcodes == [new]
     assert app._flush_pending_event_logs()
     exchange, = _rows(app, 'PRODUCT_EXCHANGE_COMPLETED')
     undone, = _rows(app, 'SCAN_UNDO')
     assert json.loads(exchange['details'])['defective_barcodes'] == [old]
     assert json.loads(exchange['details'])['good_barcodes'] == [new]
-    assert json.loads(undone['details'])['undone_barcode'] == new
+    assert json.loads(undone['details'])['undone_barcode'] == later
     assert app._flush_pending_event_logs()
     assert _rows(app, 'PRODUCT_EXCHANGE_COMPLETED') == [exchange]
     assert _rows(app, 'SCAN_UNDO') == [undone]

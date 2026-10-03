@@ -14723,7 +14723,7 @@ class ContainerAudit:
         self._update_center_display()
         self._update_tray_image_display()
 
-    def undo_last_scan(self):
+    def undo_last_scan(self, *, _exchange_checked=False):
         if getattr(self, "_inline_exchange_mode", ""):
             self._inline_exchange_mode = ""
             self._inline_exchange_target = ""
@@ -14743,6 +14743,31 @@ class ContainerAudit:
             return
         if self._transfer_member_exchange_blocks_local_action("마지막 스캔 취소"):
             return
+        if self.current_tray.exchange_idempotency_keys and not _exchange_checked:
+            tray = self.current_tray
+            store = self._transfer_member_exchange_runtime().store
+            def steps():
+                rows = yield store.scan_exchange_rows
+                keys = set(tray.exchange_idempotency_keys)
+                scans = [normalize_barcode(value) for value in tray.scanned_barcodes]
+                for row in rows:
+                    if "container-member-exchange:" + row["intent_hash"] not in keys:
+                        continue
+                    context = json.loads(row["context_json"])
+                    exchanged = [normalize_barcode(value) for value in
+                                 context["after_state"]["scanned_barcodes"]]
+                    replacements = {normalize_barcode(value) for value in
+                                    json.loads(row["new_barcodes_json"])}
+                    if scans and (scans == exchanged or scans[-1] in replacements):
+                        self.show_status_message(
+                            "교환은 이미 확정됨 — 바꾸려면 교환을 다시 하세요",
+                            self.COLOR_DANGER, duration=0,
+                        )
+                        self._start_warning_beep()
+                        self._schedule_focus_return()
+                        return False
+                return self.undo_last_scan(_exchange_checked=True)
+            return self._submit_scan_steps(steps())
         self._update_last_activity_time()
         if not self.current_tray.scanned_barcodes:
             self.show_status_message("되돌릴 스캔이 없습니다. 완료된 작업은 되돌릴 수 없습니다.", self.COLOR_DANGER)

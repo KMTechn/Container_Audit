@@ -202,6 +202,8 @@ notice를 구분한다. scanner/held 감사 ACK·동기 복구·coordinator tran
 
 정본 [MEMBER_EXCHANGE_POLICY](../MEMBER_EXCHANGE_POLICY.md)의 현재 스캐너 경로는 `replacement_mode:SCAN_REGISTER_GOOD`이며 pair는 `old_barcode/new_barcode`다. 검사 단계 공여 묶음은 다중 구성원도 이동하고 미등록 대체품은 GOOD 등록한다. NG·다른 품목·봉인/포장/출고는 거절한다. 로컬 intent·상태·CSV를 먼저 저장하고 배경에서 기존 authenticated context/CAS로 반영한다. 요청의 교환 시각·PC·작업자를 보존한다.
 
+대체품 접수로 내구 기록된 교환은 ACKED·UNKNOWN·오프라인 및 재시작 뒤에도 UNDO로 되돌리지 않는다. 기존 거절음과 창 안 안내를 표시하고 로컬·중앙 기록을 유지하며, 잘못 찍은 대체품은 그 제품을 대상으로 다시 교환한다. 이후 일반 제품 스캔의 UNDO와 대체품 접수 전 선택 취소는 유지한다.
+
 receipt pair의 unit/source IDs·barcode·source kind 및 exact target membership/hash·불량 이동·version을 검증한다. 이전 singleton 및 lease rotation 경로의 durable 전송·복구는 호환 원장용으로 유지한다. [스캐너 흐름과 경계](member-exchange-view.md).
 
 capability의 `max_pairs=2`, `atomic`, `two_bundle_cas` 등은 [logistics_transfer_client_from_env](../../transfer_seal.py)가 대조한다. 실제 설치 서버의 활성 값과 동시 경쟁 결과는 미확인이다. [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05).
