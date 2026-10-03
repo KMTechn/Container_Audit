@@ -44,6 +44,8 @@ def test_native_shared_ancestor_admission(tmp_path, engine, guard, scenario):
         'New-InstallationProtectedDirectory', 'Set-InstallationEvidenceAcl',
         'Assert-BootstrapNoReparsePoint',
     ], r'''
+$ownerRule=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Test-BootstrapPrivilegedOwnerSid'},$true)
+if($null -ne $ownerRule){Invoke-Expression $ownerRule.Extent.Text}
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $script:nativeRoot=[IO.Path]::GetFullPath($env:CA_NATIVE_ROOT)
 [void][IO.Directory]::CreateDirectory($script:nativeRoot)
