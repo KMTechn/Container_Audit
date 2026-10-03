@@ -1048,7 +1048,7 @@ function Protect-KmtechCodeAncestors([string]$CodeParent,[switch]$AdmissionOnly,
             $failure.Data['installation_preparation_exit_code']=if($entry.Attributes -band [IO.FileAttributes]::ReparsePoint){62}elseif($owner -cne 'S-1-5-32-544'){63}else{61}
             throw $failure
         }
-        $plans+=@{path=$path;shape_key=$actualKey;owner=$owner;group=$acl.GetGroup([Security.Principal.SecurityIdentifier]).Value;
+        $plans+=@{path=$path;shape_key=$actualKey;comparison_key=(Get-BootstrapAclComparisonKey $before);owner=$owner;group=$acl.GetGroup([Security.Principal.SecurityIdentifier]).Value;
             protected=$acl.AreAccessRulesProtected;
             default_shape=$defaultShape;target_shape=$targetShape}
     }
@@ -1062,7 +1062,7 @@ function Protect-KmtechCodeAncestors([string]$CodeParent,[switch]$AdmissionOnly,
         $freshSddl=$fresh.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Group -bor [Security.AccessControl.AccessControlSections]::Access)
         # Our preceding parent write can reorder this child's inherited ACEs.
         # Reject changed permissions/identity/flags, then transform the fresh ACL.
-        if((Get-KmtechAncestorAclShapeKey $fresh) -cne $plan.shape_key -or
+        if((Get-BootstrapAclComparisonKey $freshSddl) -cne $plan.comparison_key -or
             $fresh.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne $plan.owner -or
             $fresh.GetGroup([Security.Principal.SecurityIdentifier]).Value -cne $plan.group -or
             $fresh.AreAccessRulesProtected -ne $plan.protected){throw 'Ancestor ACL changed during protection admission.'}
@@ -1513,6 +1513,38 @@ function Assert-BootstrapNoReparsePoint([string]$Path, [string]$Purpose, [switch
             throw "$Purpose contains a reparse point: $($item.FullName)"
         }
     }
+}
+
+function Get-BootstrapAclComparisonKey([string]$Sddl) {
+    # Descriptor identity, except Windows' DACL auto-inherited bookkeeping bit.
+    # Every ACE byte remains bound, including inherited/explicit and deny flags.
+    if ([string]::IsNullOrWhiteSpace($Sddl) -or $Sddl.Length -gt 65536) {
+        throw 'ACL comparison descriptor is invalid.'
+    }
+    $raw=[Security.AccessControl.RawSecurityDescriptor]::new($Sddl)
+    $flags=[int]$raw.ControlFlags -band (-bnot [int][Security.AccessControl.ControlFlags]::DiscretionaryAclAutoInherited)
+    $parts=@([string]$flags,[string]$raw.Owner.Value,[string]$raw.Group.Value)
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try {
+        foreach($name in @('DiscretionaryAcl','SystemAcl')) {
+            $acl=$raw.$name
+            if($null -eq $acl){$parts+='NULL';continue}
+            $aces=@(foreach($ace in $acl){
+                $bytes=[byte[]]::new($ace.BinaryLength)
+                $ace.GetBinaryForm($bytes,0)
+                ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()
+            })
+            # Allow/deny precedence can change permissions. The supported
+            # all-Allow shapes are sets; mixed access ACEs retain their order.
+            $allow=@($acl | Where-Object {$_.AceType -in @(0,5,9,11)})
+            $deny=@($acl | Where-Object {$_.AceType -in @(1,6,10,12)})
+            if($name -cne 'DiscretionaryAcl' -or -not($allow.Count -and $deny.Count)){
+                [Array]::Sort($aces,[StringComparer]::Ordinal)
+            }
+            $parts+=([string]$acl.Revision+':'+(@($aces) -join ','))
+        }
+    } finally {$sha.Dispose()}
+    return ($parts -join '|')
 }
 
 function Get-BootstrapAclIdentity([string]$Path) {

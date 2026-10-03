@@ -867,7 +867,7 @@ function Restore-ContainerStartupUpdatePreimage([string]$Root, [string]$Director
             $service = New-Object -ComObject 'Schedule.Service'; $service.Connect()
             $registered = $service.GetFolder('\').GetTask($name)
             $registered.SetSecurityDescriptor([string]$saved.task.sddl,0)
-            if ([string]$registered.GetSecurityDescriptor(7) -cne [string]$saved.task.sddl -or [string]$registered.Xml -cne [string]$saved.task.xml) { throw 'STARTUP_UPDATE_RESTORE_TASK_READBACK_FAILED' }
+            if ((Get-BootstrapAclComparisonKey ([string]$registered.GetSecurityDescriptor(7))) -cne (Get-BootstrapAclComparisonKey ([string]$saved.task.sddl)) -or [string]$registered.Xml -cne [string]$saved.task.xml) { throw 'STARTUP_UPDATE_RESTORE_TASK_READBACK_FAILED' }
         } elseif ($null -ne $existing) {
             Unregister-ScheduledTask -TaskName $name -Confirm:$false
             if ($null -ne (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue)) { throw 'STARTUP_UPDATE_RESTORE_TASK_REMOVAL_FAILED' }

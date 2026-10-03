@@ -890,3 +890,16 @@ admission is translated for the non-elevated host). Old committed helpers reject
 the supported shape. Rehearsal-only declarations/packet and lab repair/install
 evidence are separate from the formal source change; see
 [the task report](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-142/REPORT.md).
+
+### ACL descriptor readback — 2026-10-03
+
+Get-BootstrapAclComparisonKey ignores only native DACL AI bookkeeping and ACE
+order for the supported all-Allow models; mixed Allow/Deny order stays exact.
+Shared-ancestor admission still checks its exact supported model; task
+restore still checks exact XML. PS5.1/PS7 executable task-restore regression
+changes the original AI/order failures to PASS and rejects owner/group,
+protection, ACE/inherited flag, other control and invalid-descriptor drift.
+Owned native D: ACE addition and protection removal remain rejected. This
+evidence does not prove reproduction of the lab's parent-induced AI transition,
+privileged ownership, lab repair or installation. Raw hash-only receipt recovery
+is unchanged while its compatibility scope is awaiting the coordinator.

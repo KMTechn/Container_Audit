@@ -17,7 +17,7 @@ SOURCE_ROOT = Path(os.environ.get('CA_SHARED_ADMISSION_SOURCE_ROOT', str(ROOT)))
 def test_native_shared_ancestor_admission(tmp_path, engine, guard, scenario):
     native_root = Path(os.environ.get('CA_NTFS_TEST_ROOT', str(tmp_path))) / ('a-' + uuid.uuid4().hex[:8])
     result = run_functions(tmp_path, SOURCE_ROOT / 'tools/bootstrap_integrity.ps1', [
-        'Protect-KmtechCodeAncestors', 'Assert-BootstrapProtectedRelayPath',
+        'Get-BootstrapAclComparisonKey', 'Protect-KmtechCodeAncestors', 'Assert-BootstrapProtectedRelayPath',
         'Assert-InstallationEvidenceProtectedPath', 'Get-StrictFullPath',
         'New-InstallationProtectedDirectory', 'Set-InstallationEvidenceAcl',
         'Assert-BootstrapNoReparsePoint',

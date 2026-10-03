@@ -503,3 +503,10 @@ owned. This source verification does not prove privileged repair/ordinary relay
 readiness or release acceptance.
 Ordinary repair admission now validates the actual owning-thread lease; its
 PS5.1/PS7 mutex RED/GREEN includes absent/wrong lease rejection before UAC.
+
+2026-10-03 sub-149: central raw-descriptor comparison implemented for ancestor
+race readback and startup-task restore. Baseline41ab6b4 has four AI/order
+failures; edited source passes the 22-case PS5.1/PS7 regression, including two
+owned native ACL checks. Historical hash-only receipts cannot recover ACE order;
+compatibility decision, packet, supported lab repair, rehearsal D and independent
+acceptance remain open. See the sub-149 report and SDDL-COMPARE-SITES.md.

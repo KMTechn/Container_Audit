@@ -16,7 +16,7 @@ def test_shipped_installers_keep_utf8_bom_for_windows_powershell_korean_errors()
 
 
 def test_windows_powershell_decodes_actual_shared_rejection_literal(tmp_path):
-    result = run_functions(tmp_path, ROOT/'tools/bootstrap_integrity.ps1', ['Protect-KmtechCodeAncestors'], r'''
+    result = run_functions(tmp_path, ROOT/'tools/bootstrap_integrity.ps1', ['Get-BootstrapAclComparisonKey', 'Protect-KmtechCodeAncestors'], r'''
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile($env:CA_REAL_HELPER,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'Actual shipped helper parse failed.'}
@@ -52,7 +52,7 @@ def test_shared_protection_with_native_ntfs_inheritance(tmp_path, engine, scenar
     # its short-path basetemp. No shared/installed folder is an input or a target.
     native_parent = Path(os.environ.get('CA_NTFS_TEST_ROOT', str(tmp_path)))
     native_root = native_parent / ('n-' + uuid.uuid4().hex[:8])
-    result = run_functions(tmp_path, ROOT/'tools/bootstrap_integrity.ps1', ['Protect-KmtechCodeAncestors'], r'''
+    result = run_functions(tmp_path, ROOT/'tools/bootstrap_integrity.ps1', ['Get-BootstrapAclComparisonKey', 'Protect-KmtechCodeAncestors'], r'''
 $ErrorActionPreference='Stop'
 $script:nativeRoot=[IO.Path]::GetFullPath($env:CA_NATIVE_ROOT)
 $script:mapped=@{'C:\KMTech'=Join-Path $script:nativeRoot 'KMTech';'C:\KMTech\Apps'=Join-Path $script:nativeRoot 'KMTech\Apps'}
@@ -162,7 +162,7 @@ if($env:CA_NATIVE_SCENARIO -ceq 'changed_set'){
 @pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
 @pytest.mark.parametrize('scenario', ('default', 'target', 'lab_intermediate', 'user_owner', 'deny', 'extra_sid', 'partial', 'reparse', 'post_guard_failure'))
 def test_shared_protection_admits_only_reviewed_shapes_and_keeps_creation(tmp_path, engine, scenario):
-    result = run_functions(tmp_path, ROOT/'tools/bootstrap_integrity.ps1', ['Protect-KmtechCodeAncestors'], r'''
+    result = run_functions(tmp_path, ROOT/'tools/bootstrap_integrity.ps1', ['Get-BootstrapAclComparisonKey', 'Protect-KmtechCodeAncestors'], r'''
 $ErrorActionPreference='Stop'
 $script:events=@();$script:writes=@();$script:acls=@{}
 function Write-InstallationEvidenceEvent {param($Payload) $script:events+=,$Payload}

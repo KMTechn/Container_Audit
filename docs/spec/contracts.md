@@ -427,3 +427,16 @@ admission lifetime; early/late/unknown/ambiguous/direct unfenced calls are rejec
 계약을 유지한다. TLS는 디렉터리 생성 전 existing ancestor와 복사 전 target,
 writer-fence는 기존 구성 요소 검사로 재분석 지점을 쓰기 전에 거절한다.
 사용자 소유 protocol/config 전체의 동시 변경 방지를 증명한 결과는 아니다.
+
+### Descriptor equality and native DACL bookkeeping — 2026-10-03
+
+Raw-descriptor readback uses one bootstrap comparison key: exact owner/group,
+all descriptor control bits except SE_DACL_AUTO_INHERITED, and sorted complete
+ACE identities for the supported all-Allow models, preserving explicit/inherited
+flags and duplicates. Mixed Allow/Deny descriptors retain ACE order because
+precedence changes can change effective permission.
+Protection removal, another control bit, changed owner/group or changed ACEs
+remain different. Original SDDL is retained in evidence. Shared-ancestor race
+readback and startup-task restoration use this rule; XML and other bindings
+remain exact. Hash-only historical replacement receipts retain their existing
+raw SHA contract pending the documented compatibility decision.
