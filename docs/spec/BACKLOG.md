@@ -7,6 +7,13 @@ PS5.1/7 실제 소비자 회귀에서 이름 표현은 수용하고 다른 SID·
 TrustedInstaller 거절 회귀는 PS5.1/7에서 RED→GREEN이며 helper 로딩 전 신뢰 검사와
 hardened BA/원본 owner 결속은 유지한다. IW/LM 같은 부류는 해당 소유 레인에 남는다.
 
+예행 F(205f877): CA-T1의 native task 되읽기는 통과했으나 설치는 FAILED_ROLLED_BACK이다.
+후속 CA-R1: INSTALL_THIS_PC.ps1:1564에서 쓴 replacement receipt를 :1588에서 다시 쓰며
+bootstrap_integrity.ps1:1799의 `Replacement receipt path already exists.`가 첫 실패(native 73)다.
+receipt 원본/경로·startup preimage 결속을 보존하는 별도 교정과 독립 검토가 필요하다. 이번 범위에서
+AllowReplace guard 교정·우회와 재시도0이다. 실제 9/10구간 및 old2302파일·Run·ACL·비상승 relay
+복원 PROVEN, 시작 화면/업데이트 NOT TESTED는 [예행 F](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-156/CA-5TH-REHEARSAL-F.md)를 따른다.
+
 SYSTEM task XML의 unsupported ServiceAccount 요소를 제거했다(trigger/action/주체/조건 불변).
 호스트 회귀 PROVEN과 랩 등록·단일 설치 수용은 별도이며
 [sub-151 결과](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-151/REPORT.md)에서 실제 실행 범위를 확인한다. IW/LM의 같은 XML 문제는 각 소유 레인에 남는다.

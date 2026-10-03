@@ -191,6 +191,12 @@ canonical relay 작업의 주체 판정도 같은 SID 해석을 쓴다. PS5.1/7�
 설치·relay·업데이트 적용이 같은 pure 함수를 쓰며, helper를 신뢰하기 전 업데이트 검사는
 그 함수의 동일한 로컬 사본을 사용한다. hardened 폴더의 정확 BA 소유자 및 원본 receipt/operator
 소유자 결속은 유지한다. [전수표](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-156/OWNER-RULE-SITES.md)는 이 두 요구와 형제 앱의 미교정 소비자를 구별한다.
+예행 F(205f877, 2026-10-03)는 native 비활성 작업의 SID 판정과 실제 설치의 task 등록·되읽기를 통과했다.
+설치 1회는 뒤이은 receipt 결속에서 bootstrap_integrity.ps1:1799의
+`Replacement receipt path already exists.`로 FAILED_ROLLED_BACK(native 73, 부모 1)이다.
+INSTALL_THIS_PC.ps1:1564의 최초 receipt 작성 뒤 :1588이 같은 경로를 교체 허용 없이 다시 작성한다.
+지원 rollback과 독립 old2302파일·Run·ACL·비상승 relay 복원은 PROVEN이다. 시작 화면/업데이트 확인은
+NOT TESTED이며 재시도0이다. 원 예외·보호 원본·실제 9/10구간은 위 예행 F 문서에 보존한다.
 켜진 작업자가 이미 있으면 로그온 작업은 DEFERRED로 남기며 업무를 멈추지 않는다.
 수명주기 교체/복구는 진행 중 자동 전이나 실행 중 작업이 있으면 거절한다.
 기존 policy·pointer·journal·task XML/ACL은 보호된 `.startup-update-install.<attempt>`에
