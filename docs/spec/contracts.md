@@ -178,6 +178,16 @@ READY는 초기화된 GUI의 nonce·판 SHA·PID·생성 시각과 현재 사용
 [결정·실패 주입 시험](../../tests/test_auto_update.py), [운영 경계](operations.md#ca-startup-update),
 [남은 실기 검증](BACKLOG.md#ca-g19).
 
+지원 제거는 update-control의 정상 여부를 전제로 하지 않는다. 외부의 검증된 stock 지원
+호스트와 기존 writer admission 아래 사용자 Run/relay의 정지를 확인하고, 각 판의 읽을 수
+있는 bootstrap 파일 목록과 실제 SHA가 같은 일반 파일만 제거 증거로 하나씩 옮긴다.
+목록 불가용·내용 불일치·목록 밖 파일·reparse는 원 경로에 남긴다. 읽은 목록은 원 SHA를
+재대조하여 마지막에 옮긴다. SHA 관측 실패/잠금은 미완이며 REMOVED를 게시하지 않는다.
+제거 실패는 이미 제거한 코드·task·Run을 되살리지 않고 같은 제거 재실행으로 수렴한다.
+등록/credential/업무 자료/전송 대기는 열거하거나 되감지 않는다. current에 남은 항목은
+후속 설치가 덮어쓰지 않는다. 파일 목록 자체의 마지막 이동과 SHA 없는 incoming signature
+보존은 검사에서 확정된 메타데이터 예외와 같다.
+
 <a id="ca-c01"></a>
 ## CA-C01 로컬 상태·내구성·소유권
 

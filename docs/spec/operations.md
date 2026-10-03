@@ -109,6 +109,13 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 <a id="ca-startup-update"></a>
 ## 로그온 자동 갱신 운영
 
+지원 `-Uninstall`은 외부 stock 지원 소스를 실행 호스트로 사용한다. 각 current/versions 및
+보호 packet의 해시 일치 파일을 `removal-evidence/<UUID>`로 개별 보존 이동한다. 고정 legacy
+작업과 실제 경로/SID 및 고정 SYSTEM action이 맞는 StartupUpdate 작업만 제거/부재 확인한다.
+목록 없는 폴더·외부 정션·내용이 다른 같은 이름 파일은 그대로 남고 `removed.json`에 경로를
+기록한다. 잠긴/관측 불명 파일은 미완으로 남기며 같은 제거를 재실행한다. 업무 자료와 등록,
+전송 대기는 보존한다. 잔여 current는 관리자가 보존 이관한 뒤 지원 설치를 다시 실행한다.
+
 자동 feed는 설치 키로 검증한 manifest의 정확한 양방향 쌍 하나만 권한으로 쓴다.
 실제 stock 판 번호·계약 원문 SHA를 사용자 준비와 SYSTEM 적용/재개에서 다시 대조한다.
 같은/낮은 판·unsigned 정책 목록·Unicode 호스트·redirect/응답 URL 불일치는 거절한다.

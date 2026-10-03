@@ -434,6 +434,10 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g19"></a>
 ## CA-G19 로그온 자동 갱신 실기 수용
 
+- **sub-189 내용 소유 제거:** 실제 NTFS에서 PS5.1/7의 개별 이동·중단 재개·None/Read 잠금·
+  다른 내용/목록 밖 자료·목록 부재/손상/디렉터리·외부 정션 30 PASS다. scheduler/CIM/보호 JSON
+  ACL은 주입 경계이며 실제 외부 지원 caller/승격·task·ACL 제거와 재설치는 NOT TESTED다.
+
 - **sub-189 서명 규칙 이식:** 정확한 서명 쌍·실제 계약 재해시·stock/literal 판 번호·엄격 증가·ASCII feed를 이식했다.
   Windows11/Python3.12.10 격리 focused 170 PASS(새 규칙 19 RED→GREEN), 기존 crypto/READY 복귀 포함.
   선언/pin은 동결이며 실제 feed·SYSTEM·packet 수용은 NOT TESTED다. [이식 보고](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-189/REPORT.md).

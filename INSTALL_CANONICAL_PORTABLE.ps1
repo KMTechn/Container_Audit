@@ -989,8 +989,9 @@ function Assert-CanonicalRuntimePreimage(
         stop_marker_absent=$true
     }
 }
-function Product([string]$Root,[string]$Mode) {
-    $args = @('-I','-B',(Join-Path $Root 'app\main.py'),$Mode,'--app-root',(Join-Path $Root 'app'))
+function Product([string]$Root,[string]$Mode,[string]$AppRoot='') {
+    if (-not $AppRoot) { $AppRoot=Join-Path $Root 'app' }
+    $args = @('-I','-B',(Join-Path $Root 'app\main.py'),$Mode,'--app-root',$AppRoot)
     if ($Mode -ceq '--onboard-current-user' -and $onboardingServerBaseUrl) {
         $args += @('--server-base-url',$onboardingServerBaseUrl)
     }
@@ -2353,7 +2354,7 @@ if ($RestoreVerifiedReplacement) {
     # quiescence. No prepared receipt or authority from the old install is reused.
     $publicRestore = Read-CanonicalReplacementRestore
 }
-if ($Uninstall) {
+if ($Uninstall -and $CompleteRetiredRemoval) {
     foreach ($pair in @(@($source, $install), @($lad, $install), @($source, $lad),
         @($lifecycleSource, $install), @($lifecycleSource, $lad))) {
         if ((Same $pair[0] $pair[1]) -or
@@ -2396,7 +2397,7 @@ $retirement = if ($CompleteRetiredRemoval) { Read-CanonicalRetiredRemoval } else
 $runId = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')+'-'+[Guid]::NewGuid().ToString('N')
 $auditRoot = Join-Path $activeDataRoot 'install-audit'
 $abandonedRecovery=$null
-try{$abandonedPending=if($rollbackContinuation){$null}else{Read-InstallationAbandonedRollback $install $lad $operatorSid}}
+try{$abandonedPending=if($rollbackContinuation -or $Uninstall){$null}else{Read-InstallationAbandonedRollback $install $lad $operatorSid}}
 catch{throw [InvalidOperationException]::new('이전 설치 복구 상태를 확인할 수 없습니다. 지원 담당자에게 문의하세요.',$_.Exception)}
 $auditPath = Join-Path $auditRoot "canonical-portable-$runId.json"
 $canonicalWriterFencePreparedPath = Join-Path $auditRoot "canonical-portable-$runId-writer-prepared.json"
@@ -2451,7 +2452,7 @@ if ($rollbackContinuation) {
 $installedCommand = if ($CompleteRetiredRemoval) {
     # The exact admitted old packet remains available after code removal.
     Command $install -Installed -InstalledPacket $lifecycleSource
-} else { Command $install -Installed }
+} elseif ($Uninstall) { '' } else { Command $install -Installed }
 if ($retirementResume) {
     if ($retirementResumeBeforeRemoval) {
         if ([bool]$before.exists -ne [bool]$retirementResume.preimage.exists -or
@@ -2537,6 +2538,9 @@ if ($retirementResume) {
 elseif($rollbackContinuation) {
     $runtimePreimageBinding=$rollbackContinuation.runtime_preimage_binding
 }
+elseif($Uninstall -and -not $CompleteRetiredRemoval) {
+    $runtimePreimageBinding=@{status='CURRENT_USER_REMOVAL_SCOPE';machine_control_authority=$false}
+}
 elseif($null -eq $abandonedPending) {
     $runtimePreimageBinding = Assert-CanonicalRuntimePreimage `
         -Before $before `
@@ -2545,7 +2549,7 @@ elseif($null -eq $abandonedPending) {
         -ExpectedRoot $install `
         -StopMarkerExists (Test-Path -LiteralPath $stop)
 }
-$writerBefore = if ($testMode) {
+$writerBefore = if ($testMode -or ($Uninstall -and -not $CompleteRetiredRemoval)) {
     [ordered]@{ present=$false; classification='TEST_BYPASS'; restore_required=$false }
 }
 else { Get-CanonicalWriterPreimageForQuiesce $install }
@@ -2750,7 +2754,7 @@ $enteredPlacementTry = $true
 
     $placement = 'INSTALL_REQUIRED'
     $existingVerified = $false
-    if (Test-Path $install -PathType Container) {
+    if ((-not $Uninstall -or $CompleteRetiredRemoval) -and (Test-Path $install -PathType Container)) {
         try {
             $candidate = InstalledManifest $install $SkipSignatureValidationForTest
             $helper = (Join-Path $source 'tools\bootstrap_integrity.ps1').Replace("'","''")
@@ -2910,6 +2914,47 @@ $enteredPlacementTry = $true
         return
     }
     Set-InstallationEvidenceStage 'canonical.uninstall'
+    if ($Uninstall -and -not $CompleteRetiredRemoval) {
+        # Execute only the externally verified support host. Damaged installed
+        # code and update-control records are not prerequisites or authorities.
+        $mutated=$true
+        Product $source '--remove-current-user-setup' (Join-Path $install 'app')
+        $removal=Get-Content -LiteralPath $removalPath -Raw -Encoding UTF8|ConvertFrom-Json
+        [void](Confirm-CanonicalRuntimeQuiescence -Removal $removal -ExpectedRelays $old -StopRequestPath $stop)
+        $uninstallStopSha256=Sha $stop
+        $args=@('-NoLogo','-NoProfile','-NonInteractive','-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
+            '-Uninstall','-SourceRoot',$source,'-InstallRoot',$install,'-OperatorLocalAppDataRoot',$lad,'-OperatorSid',$operatorSid,
+            '-QuiesceReceiptPath',$removalPath,'-ExpectedQuiesceReceiptSha256',(Sha $removalPath),
+            '-WriterFenceHelperPath',(Join-Path $source 'tools\container_writer_fence.ps1'),
+            '-ExpectedWriterFenceHelperSha256',([string]$sourceManifest.writer_fence_helper_sha256),
+            '-WriterFencePreparedReceiptPath',([string]$canonicalWriterFencePreparedReceipt.path),
+            '-WriterFencePreparedReceiptSha256',([string]$canonicalWriterFencePreparedReceipt.sha256),
+            '-WriterFenceSessionId',$Script:CanonicalWriterFenceSessionId,'-WriterFenceAttemptId',$Script:CanonicalWriterFenceAttemptId,
+            '-WriterFenceReplacementTransactionId',$Script:CanonicalWriterFenceTransactionId,'-WriterFenceDelegationToken',$Script:CanonicalWriterFenceDelegationToken,
+            '-ElevationLogPath',$elevationLogPath)
+        if($testMode){$args+='-AllowNoncanonicalLayoutForTest'}
+        $child=Invoke-InstallationEvidenceChild 'supported-content-removal' $winps $args
+        if($child.ExitCode -ne 0){throw '지원 제거를 마치지 못했습니다. 자료를 보존하고 같은 제거를 다시 실행하세요.'}
+        $removed=Get-Content -LiteralPath (Join-Path (Split-Path -Parent $install) 'removed.json') -Raw -Encoding UTF8|ConvertFrom-Json
+        if([string]$removed.schema -cne 'container-audit-supported-removal-v1' -or [string]$removed.lifecycle_state -cne 'REMOVED' -or
+            (Snapshot).exists -or @(Relays).Count){throw 'REMOVAL_END_STATE_NOT_PROVEN'}
+        if((Sha $stop) -cne $uninstallStopSha256){throw 'REMOVAL_STOP_MARKER_CHANGED'}
+        Remove-Item -LiteralPath $stop -ErrorAction Stop
+        $audit.status='UNINSTALL_AWAITING_FENCE_RELEASE';$audit.code_placement='REMOVED';$audit.after=Snapshot
+        $audit['retained_paths']=@($removed.retained_paths);$audit['removal_evidence_root']=[string]$removed.evidence_root
+        Save $auditPath $audit
+        $releaseAuthorization=New-CanonicalWriterFenceReleaseAuthorization -Path $productCompleteAuthorizationPath -Phase 'PRODUCT_COMPLETE' -AuditPath $auditPath
+        Set-CanonicalWriterFenceReleaseAuthorization $releaseAuthorization
+        Clear-CanonicalWriterFenceReleaseDelegation
+        Stop-CanonicalWriterFenceRelease $releaseAuthorization
+        $canonicalWriterFenceActive=$false
+        $audit.status='PASS_UNINSTALLED_DATA_PRESERVED';$audit.completed_at=[DateTime]::UtcNow.ToString('o')
+        Save $auditPath $audit
+        if($evidenceFull){Save $evidenceFull $audit}
+        'uninstall_status=PASS_UNINSTALLED_DATA_PRESERVED';'lifecycle_state=REMOVED';'user_state_preserved=true'
+        'retained_path_count='+@($removed.retained_paths).Count
+        return
+    }
     if ($Uninstall) {
         $resumeCodeAbsent = $retirementResume -and -not (Test-Path -LiteralPath $install)
         if (-not $resumeCodeAbsent -and (-not $existingVerified -or $placement -cne 'REUSED_VERIFIED' -or
@@ -3420,6 +3465,17 @@ catch {
 
             throw "CANONICAL_WRITER_REFENCE_FAILED: $($_.Exception.GetType().Name)"
         }
+    }
+    if ($Uninstall -and -not $CompleteRetiredRemoval) {
+        # Removal converges on removal; never resurrect moved code, tasks or Run.
+        if($canonicalWriterFenceActive){
+            [void](Abort-ContainerWriterFence -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
+                -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId -AuthorityLease $canonicalWriterFenceAuthority)
+            $canonicalWriterFenceActive=$false
+        }
+        $audit.status='FAILED_REMOVAL_INCOMPLETE';$audit.rollback.applied=$false;$audit.rollback.runtime_restored=$false
+        try{Save $auditPath $audit;if($evidenceFull){Save $evidenceFull $audit}}catch{Write-InstallationCaughtFailure $_}
+        throw $original
     }
     if ($Uninstall) {
         # The source survives code removal. Renew this same live delegation even

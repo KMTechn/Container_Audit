@@ -1388,146 +1388,372 @@ if (-not $DryRun.IsPresent -and -not $testOverride) {
     Write-ElevationLog 'STARTED' 'Elevated Container code placement started.'
 }
 
+function Get-ContainerRemovalIoPath([string]$Path) {
+    if ($Path.Length -lt 240 -or $Path.StartsWith('\\?\')) { return $Path }
+    $native = $Path.Replace('/','\')
+    if ($native.StartsWith('\\')) { return '\\?\UNC\' + $native.Substring(2) }
+    return '\\?\' + $native
+}
+
+function Assert-ContainerRemovalBoundary([string]$Path) {
+    # Inspect ancestors, never enumerate opaque control/code children.
+    $component = [IO.Path]::GetFullPath((Get-ContainerRemovalIoPath $Path))
+    while ($component) {
+        if (Test-Path -LiteralPath (Get-ContainerRemovalIoPath $component) -ErrorAction Stop) {
+            $item = Get-Item -LiteralPath (Get-ContainerRemovalIoPath $component) -Force -ErrorAction Stop
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'REMOVAL_BOUNDARY_REDIRECTED' }
+        }
+        $component = [IO.Path]::GetDirectoryName($component)
+    }
+}
+
+function Assert-ContainerRemovalQuiescent([string]$ApplicationRoot, [int[]]$ExcludeProcessIds = @()) {
+    $prefix = (Get-StrictFullPath $ApplicationRoot 'removal process root') + '\'
+    $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+    if ($rows.Count -eq 0) { throw 'REMOVAL_PROCESS_OBSERVATION_UNKNOWN' }
+    foreach ($row in $rows) {
+        if ($null -eq $row.ProcessId) { throw 'REMOVAL_PROCESS_OBSERVATION_UNKNOWN' }
+        if ([int]$row.ProcessId -eq $PID -or [int]$row.ProcessId -in $ExcludeProcessIds) { continue }
+        if (([string]$row.ExecutablePath).StartsWith($prefix, 'OrdinalIgnoreCase') -or
+            ([string]$row.CommandLine).IndexOf($prefix, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            throw 'REMOVAL_REQUIRES_PRODUCT_PROCESS_STOP'
+        }
+    }
+}
+
+function Get-ContainerRemovalTaskNames($Folder, [string]$CurrentRoot) {
+    $names = @('direct-sync-relay-container-audit','container-audit-isolated-qualification-authority')
+    foreach ($task in @($Folder.GetTasks(1))) {
+        if ([string]$task.Name -cnotmatch '^KMTech\.ContainerAudit\.StartupUpdate\.[0-9a-f]{24}$') { continue }
+        $xml = [xml]$task.Xml
+        $sid = [string]$xml.Task.Triggers.LogonTrigger.UserId
+        if ($sid -cnotmatch '^S-1-(?:[0-9]+-)+[0-9]+$') { throw 'REMOVAL_TASK_IDENTITY_UNKNOWN' }
+        $raw = [Text.Encoding]::UTF8.GetBytes($CurrentRoot.ToLowerInvariant().Replace('/','\') + "`n" + $sid)
+        $hash = [Security.Cryptography.SHA256]::Create()
+        try { $suffix = ([BitConverter]::ToString($hash.ComputeHash($raw))).Replace('-','').ToLowerInvariant().Substring(0,24) }
+        finally { $hash.Dispose() }
+        if ([string]$task.Name -cne ('KMTech.ContainerAudit.StartupUpdate.' + $suffix)) { continue }
+        $expected = '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -File "' + (Join-Path $CurrentRoot 'tools\apply_prepared_update.ps1') + '" -InstallRoot "' + $CurrentRoot + '"'
+        $command = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+        if ([string]$xml.Task.Actions.Exec.Arguments -cne $expected -or
+            -not (Test-SamePath ([string]$xml.Task.Actions.Exec.Command) $command) -or
+            [string]$xml.Task.Principals.Principal.UserId -cne 'S-1-5-18' -or
+            @($xml.Task.Actions.Exec).Count -ne 1) { throw 'REMOVAL_TASK_IDENTITY_UNKNOWN' }
+        $names += [string]$task.Name
+    }
+    return $names
+}
+
+function Remove-ContainerScheduledTasks($Folder, [string]$EvidenceRoot, [string]$CurrentRoot) {
+    foreach ($name in @(Get-ContainerRemovalTaskNames $Folder $CurrentRoot)) {
+        $task = $null
+        try { $task = $Folder.GetTask($name) }
+        catch { $failure=$_.Exception; while ($null -ne $failure.InnerException) { $failure=$failure.InnerException }; if ($failure.HResult -ne -2147024894) { throw } }
+        if ($null -ne $task) {
+            Write-ContainerStartupUpdateRecord -Path (Join-Path $EvidenceRoot ($name + '.json')) -Payload @{
+                name=$name; xml=$task.Xml; sddl=$task.GetSecurityDescriptor(7)
+            }
+            $task.Stop(0)
+            $Folder.DeleteTask($name, 0)
+        }
+        try { [void]$Folder.GetTask($name); throw 'REMOVAL_TASK_ABSENCE_NOT_PROVEN' }
+        catch { $failure=$_.Exception; while ($null -ne $failure.InnerException) { $failure=$failure.InnerException }; if ($failure.HResult -ne -2147024894) { throw } }
+    }
+}
+
+function Test-ContainerRemovalFile([string]$Path, [string]$Sha256) {
+    try {
+        Assert-ContainerRemovalBoundary $Path
+        if (-not (Test-Path -LiteralPath (Get-ContainerRemovalIoPath $Path) -ErrorAction Stop)) { return $false }
+        $file = Get-Item -LiteralPath (Get-ContainerRemovalIoPath $Path) -Force -ErrorAction Stop
+        if ($file.PSIsContainer -or $Sha256 -cnotmatch '^[0-9a-f]{64}$') { return $false }
+        $sha = [Security.Cryptography.SHA256]::Create()
+        $reader = $null
+        try {
+            $reader = [IO.File]::OpenRead((Get-ContainerRemovalIoPath $Path))
+            return ([BitConverter]::ToString($sha.ComputeHash($reader))).Replace('-','').ToLowerInvariant() -ceq $Sha256
+        } finally { if ($null -ne $reader) { $reader.Dispose() }; $sha.Dispose() }
+    } catch {
+        if ($_.Exception.Message -ceq 'REMOVAL_BOUNDARY_REDIRECTED') { return $false }
+        # Unknown content cannot retire the inventory needed for the next try.
+        throw "제거 미완 — 사용 중인 파일: $Path [REMOVAL_FILE_OBSERVATION_UNKNOWN]"
+    }
+}
+
+function Get-ContainerArtifactFilePlan([string]$Path, [switch]$Incoming) {
+    # No registration census can prove that an opaque tree contains only code.
+    # Read only the manifest and its declared files, never unknown subtrees.
+    $empty = @{artifacts=@();hashes=@{};metadata_roots=@{};directories=@();retained_paths=@($Path);
+        decisions=@(@{path=$Path;disposition='UNREADABLE_INVENTORY_RETAINED'})}
+    try {
+        Assert-ContainerRemovalBoundary $Path
+        $folder = Get-Item -LiteralPath (Get-ContainerRemovalIoPath $Path) -Force -ErrorAction Stop
+        if (-not $folder.PSIsContainer) { return $empty }
+        $inventoryName = if ($Incoming) { 'manifest.json' } else { 'bootstrap-integrity.json' }
+        $inventoryPath = Join-Path $Path $inventoryName
+        Assert-ContainerRemovalBoundary $inventoryPath
+        $inventoryFile = Get-Item -LiteralPath (Get-ContainerRemovalIoPath $inventoryPath) -Force -ErrorAction Stop
+        $inventoryLimit = if ($Incoming) { 1048576 } else { 4194304 }
+        if ($inventoryFile.PSIsContainer -or $inventoryFile.Length -gt $inventoryLimit) { return $empty }
+        $raw = if ($Incoming) { [IO.File]::ReadAllBytes((Get-ContainerRemovalIoPath $inventoryPath)) }
+               else { [IO.File]::ReadAllBytes((Get-ContainerRemovalIoPath $inventoryPath)) }
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $inventoryHash = ([BitConverter]::ToString($sha.ComputeHash($raw))).Replace('-','').ToLowerInvariant() }
+        finally { $sha.Dispose() }
+        $inventory = [Text.Encoding]::UTF8.GetString($raw).TrimStart([char]0xfeff) | ConvertFrom-Json -ErrorAction Stop
+        if ($Incoming) {
+            if ([string]$inventory.app_id -cne 'Container_Audit') { return $empty }
+            $packetHash = [string]$inventory.artifact.sha256
+            if (-not $packetHash) { $packetHash = [string]$inventory.packet_sha256 }
+            $rows = @(@{path='packet.zip';sha256=$packetHash})
+        } elseif ([string]$inventory.schema_version -ceq 'container-audit-bootstrap-integrity-v1' -and
+            [string]$inventory.status -ceq 'PASS' -and $inventory.files -is [Array] -and $inventory.files.Count) {
+            $rows = @($inventory.files)
+        } else { return $empty }
+        $hashes = @{}; $directories = @{}
+        foreach ($row in $rows) {
+            $relative = [string]$row.path; $hash = [string]$row.sha256
+            if ($relative -cnotmatch '^[^:/\\]+(?:/[^:/\\]+)*$' -or
+                @($relative.Split('/') | Where-Object { $_ -in @('.','..') -or $_.EndsWith('.') -or $_.EndsWith(' ') }).Count -or
+                $hash -cnotmatch '^[0-9a-f]{64}$') { return $empty }
+            $filePath = Join-Path $Path $relative
+            if ($hashes.ContainsKey($filePath)) { return $empty }
+            $hashes[$filePath] = $hash
+            $parent = [IO.Path]::GetDirectoryName($filePath)
+            while (-not (Test-SamePath $parent $Path)) {
+                $directories[$parent] = $true
+                $parent = [IO.Path]::GetDirectoryName($parent)
+            }
+        }
+    } catch { return $empty }
+    $owned = @($hashes.Keys | Sort-Object | Where-Object { Test-ContainerRemovalFile $_ $hashes[$_] })
+    # Explicit metadata exception: the readable list itself is retired last,
+    # only while its bytes still match the exact snapshot used for this plan.
+    # Unlisted signatures have no such authority and stay in place.
+    $ordered = @($owned | Sort-Object { if ((Split-Path -Leaf $_) -cin @('portable-manifest.json','bootstrap-integrity.json','manifest.json')) { 1 } else { 0 } })
+    $hashes[$inventoryPath] = $inventoryHash
+    $ordered = @($ordered | Where-Object { -not (Test-SamePath $_ $inventoryPath) }) + @($inventoryPath)
+    return @{artifacts=$ordered;hashes=$hashes;metadata_roots=@{$inventoryPath=$Path};directories=(@($directories.Keys) + @($Path));
+        retained_paths=@($Path);decisions=@(@{path=$Path;disposition='HASH_MATCHED_FILES_AND_LAST_METADATA'})}
+}
+
+function Get-ContainerRemovalArtifacts([string]$ApplicationRoot, [string[]]$RetainedArtifactRoots = @()) {
+    $artifacts = @(); $hashes = @{}; $metadataRoots = @{}; $directories = @(); $retained = @(); $decisions = @()
+    foreach ($name in @('current', 'versions', 'update-control')) {
+        $parent = Join-Path $ApplicationRoot $name
+        if (-not (Test-Path -LiteralPath $parent -ErrorAction Stop)) { continue }
+        try {
+            Assert-ContainerRemovalBoundary $parent
+            $container = Get-Item -LiteralPath $parent -Force -ErrorAction Stop
+        } catch { $retained += $parent; continue }
+        if (-not $container.PSIsContainer) { $retained += $parent; continue }
+        if ($name -ceq 'current') {
+            if ($parent -in $RetainedArtifactRoots) { $retained += $parent; continue }
+            $plan = Get-ContainerArtifactFilePlan $parent
+            $artifacts += $plan.artifacts; $retained += $plan.retained_paths; $directories += $plan.directories
+            $decisions += $plan.decisions
+            foreach ($path in $plan.hashes.Keys) { $hashes[$path] = $plan.hashes[$path] }
+            foreach ($path in $plan.metadata_roots.Keys) { $metadataRoots[$path] = $plan.metadata_roots[$path] }
+            continue
+        }
+        foreach ($child in @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction Stop)) {
+            if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { $retained += $child.FullName; continue }
+            if ($name -ceq 'versions') {
+                if ($child.Name -cmatch '^[0-9a-f]{40}$' -and $child.PSIsContainer) {
+                    if ($child.FullName -in $RetainedArtifactRoots) { $retained += $child.FullName; continue }
+                    $plan = Get-ContainerArtifactFilePlan $child.FullName
+                    $artifacts += $plan.artifacts; $retained += $plan.retained_paths; $directories += $plan.directories
+                    $decisions += $plan.decisions
+                    foreach ($path in $plan.hashes.Keys) { $hashes[$path] = $plan.hashes[$path] }
+                    foreach ($path in $plan.metadata_roots.Keys) { $metadataRoots[$path] = $plan.metadata_roots[$path] }
+                } else { $retained += $child.FullName }
+            } elseif (-not $child.PSIsContainer) {
+                if ($child.Name -cin @('policy.json','active.json','transition.json','installation-observation.json',
+                    'reinstall-intent.json','uninstall-task-preimage.json') -or
+                    $child.Name -cmatch '^(?:task-preimage|support-placement|policy-before|failure)-[0-9a-f]{32}\.json$' -or
+                    $child.Name -cmatch '^failed-[0-9a-f]{32}-(?:policy|active)\.json$') {
+                    $artifacts += $child.FullName
+                } else { $retained += $child.FullName }
+            } elseif ($child.Name -cmatch '^packet-[0-9a-f]{32}$') {
+                $plan = Get-ContainerArtifactFilePlan $child.FullName -Incoming
+                $artifacts += $plan.artifacts; $retained += $plan.retained_paths; $directories += $plan.directories
+                $decisions += $plan.decisions
+                foreach ($path in $plan.hashes.Keys) { $hashes[$path] = $plan.hashes[$path] }
+                foreach ($path in $plan.metadata_roots.Keys) { $metadataRoots[$path] = $plan.metadata_roots[$path] }
+            } elseif ($child.Name -cin @('incoming','failures')) {
+                foreach ($entry in @(Get-ChildItem -LiteralPath $child.FullName -Force -ErrorAction Stop)) {
+                    if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { $retained += $entry.FullName; continue }
+                    if ($child.Name -ceq 'incoming' -and $entry.PSIsContainer -and $entry.Name -cmatch '^[0-9a-f]{32}$') {
+                        if ($entry.FullName -in $RetainedArtifactRoots) { $retained += $entry.FullName; continue }
+                        $plan = Get-ContainerArtifactFilePlan $entry.FullName -Incoming
+                        $artifacts += $plan.artifacts; $retained += $plan.retained_paths; $directories += $plan.directories
+                        $decisions += $plan.decisions
+                        foreach ($path in $plan.hashes.Keys) { $hashes[$path] = $plan.hashes[$path] }
+                        foreach ($path in $plan.metadata_roots.Keys) { $metadataRoots[$path] = $plan.metadata_roots[$path] }
+                    } elseif ($child.Name -ceq 'failures' -and -not $entry.PSIsContainer -and $entry.Name -cmatch '^[0-9a-f]{32}\.json$') {
+                        $artifacts += $entry.FullName
+                    } else { $retained += $entry.FullName }
+                }
+            } else { $retained += $child.FullName }
+        }
+    }
+    return @{artifacts=@($artifacts);hashes=$hashes;metadata_roots=$metadataRoots;directories=$directories;retained_paths=@($retained);decisions=@($decisions)}
+}
+
+function Remove-ContainerEmptiedParents([string]$Path, [string[]]$Directories) {
+    $parent = [IO.Path]::GetDirectoryName($Path)
+    while ($parent -in $Directories) {
+        try {
+            Assert-ContainerRemovalBoundary $parent
+            $io = Get-ContainerRemovalIoPath $parent
+            if (-not (Test-Path -LiteralPath $io -ErrorAction Stop)) {
+                $parent = [IO.Path]::GetDirectoryName($parent); continue
+            }
+            $folder = Get-Item -LiteralPath $io -Force -ErrorAction Stop
+            if (-not $folder.PSIsContainer -or @(Get-ChildItem -LiteralPath $io -Force -ErrorAction Stop).Count) { return }
+            # Only a proven file move authorizes this now-empty parent.
+            # Never change attributes of a preexisting or nonempty directory.
+            if ($folder.Attributes -band [IO.FileAttributes]::ReadOnly) {
+                $folder.Attributes = $folder.Attributes -band (-bnot [IO.FileAttributes]::ReadOnly)
+            }
+            Remove-Item -LiteralPath $io -ErrorAction Stop
+        } catch {
+            # Empty-directory cleanup is best effort; report a surviving path.
+            return $parent
+        }
+        $parent = [IO.Path]::GetDirectoryName($parent)
+    }
+}
+
+function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [int[]]$ExcludeProcessIds = @()) {
+    $current = Get-StrictFullPath $InstallRoot 'removal current'
+    if ((Split-Path -Leaf $current) -cne 'current') { throw 'REMOVAL_CURRENT_PATH_INVALID' }
+    $application = Get-StrictFullPath (Split-Path -Parent $current) 'removal application'
+    Assert-ContainerRemovalBoundary $application
+    Assert-ContainerRemovalQuiescent $application $ExcludeProcessIds
+    $markerPath = Join-Path $application 'removed.json'
+    if (Test-Path -LiteralPath $markerPath -ErrorAction Stop) {
+        Assert-ContainerRemovalBoundary $markerPath
+        $markerFile = Get-Item -LiteralPath $markerPath -Force -ErrorAction Stop
+        if ($markerFile.PSIsContainer) {
+            throw "제거 표식을 만드는 경로와 자료가 겹칩니다. 자료를 보존하고 경로를 확인하세요: $markerPath"
+        }
+    }
+    $evidenceParent = Join-Path $application 'removal-evidence'
+    Assert-ContainerRemovalBoundary $evidenceParent
+    if (-not (Test-Path -LiteralPath $evidenceParent)) {
+        New-Item -ItemType Directory -Path $evidenceParent | Out-Null
+        if (-not $testOverride) { Set-HardenedCodeAcl $evidenceParent }
+    } elseif (-not $testOverride) { Assert-HardenedCodeAcl $evidenceParent }
+    $evidence = Join-Path $evidenceParent ([Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $evidence | Out-Null
+    if (-not $testOverride) { Set-HardenedCodeAcl $evidence }
+    if ($null -eq $TaskFolder -and -not $testOverride) { throw 'REMOVAL_TASK_OBSERVATION_UNKNOWN' }
+    if ($null -ne $TaskFolder) { Remove-ContainerScheduledTasks $TaskFolder $evidence $current }
+    Assert-ContainerRemovalQuiescent $application $ExcludeProcessIds
+    $plan = Get-ContainerRemovalArtifacts $application
+    if (Test-Path -LiteralPath $markerPath) { $plan.artifacts += $markerPath }
+    $changedMetadataRoots = @(); $cleanupRetained = @()
+    foreach ($path in $plan.artifacts) {
+        $prefix = $application.TrimEnd('\') + '\'
+        if (-not $path.StartsWith($prefix, 'OrdinalIgnoreCase')) { throw 'REMOVAL_PATH_ESCAPED' }
+        if ($plan.hashes.ContainsKey($path) -and -not (Test-ContainerRemovalFile $path $plan.hashes[$path])) {
+            if ($plan.metadata_roots.ContainsKey($path)) {
+                $changedMetadataRoots += $plan.metadata_roots[$path]
+                $plan.decisions += @{path=$plan.metadata_roots[$path];disposition='METADATA_CHANGED_RETAINED'}
+            }
+            continue
+        }
+        Assert-ContainerRemovalBoundary $path
+        if ((Get-Item -LiteralPath (Get-ContainerRemovalIoPath $path) -Force -ErrorAction Stop).PSIsContainer) { throw 'REMOVAL_DIRECTORY_MOVE_FORBIDDEN' }
+        $destination = Join-Path $evidence $path.Substring($prefix.Length)
+        # Evidence adds a UUID segment; normal source paths can cross MAX_PATH
+        # at the destination. The literal extended path stays inside evidence.
+        $destinationIo = Get-ContainerRemovalIoPath $destination
+        New-Item -ItemType Directory -Path (Split-Path -Parent $destinationIo) -Force | Out-Null
+        try {
+            Move-Item -LiteralPath (Get-ContainerRemovalIoPath $path) -Destination $destinationIo -ErrorAction Stop
+            if (Test-Path -LiteralPath (Get-ContainerRemovalIoPath $path) -ErrorAction Stop) { throw 'REMOVAL_PATH_ABSENCE_NOT_PROVEN' }
+        } finally {
+            # A rename may succeed before the caller receives its exception.
+            # Clean only parents of that proven move, including on retry cuts.
+            if ($plan.hashes.ContainsKey($path) -and
+                -not (Test-Path -LiteralPath (Get-ContainerRemovalIoPath $path) -ErrorAction Stop) -and
+                (Test-ContainerRemovalFile $destination $plan.hashes[$path])) {
+                $cleanupRetained += @(Remove-ContainerEmptiedParents $path $plan.directories)
+            }
+        }
+    }
+    $remaining = Get-ContainerRemovalArtifacts $application -RetainedArtifactRoots $changedMetadataRoots
+    if ($remaining.artifacts.Count) { throw 'REMOVAL_MACHINE_ARTIFACT_REMAINS' }
+    foreach ($path in @($cleanupRetained | Sort-Object -Unique)) {
+        if (Test-Path -LiteralPath (Get-ContainerRemovalIoPath $path) -ErrorAction Stop) {
+            $remaining.retained_paths += $path
+            $plan.decisions += @{path=$path;disposition='EMPTY_OWNED_PARENT_RETAINED'}
+        }
+    }
+    Write-ContainerStartupUpdateRecord -Path $markerPath -Payload @{
+        schema='container-audit-supported-removal-v1'; lifecycle_state='REMOVED';
+        evidence_root=$evidence; business_data_and_registration_preserved=$true
+        retained_paths=@($remaining.retained_paths); artifact_dispositions=@($plan.decisions)
+    }
+    $marker = Get-Content -LiteralPath $markerPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$marker.lifecycle_state -cne 'REMOVED') { throw 'REMOVAL_MARKER_READBACK_FAILED' }
+    return @{status='PASS';lifecycle_state='REMOVED';evidence_root=$evidence;retained_paths=@($remaining.retained_paths)}
+}
+
+
 if ($Uninstall.IsPresent) {
-    if ($DryRun.IsPresent) {
-        Write-Output "uninstall_status=DRY_RUN_CODE_ONLY"
-        Write-Output "user_state_preserved=true"
-        exit 0
-    }
-    $uninstallSource = Get-StrictFullPath $SourceRoot 'uninstall source'
-    if ($ExpectedInstalledManifestSha256 -cnotmatch '^[0-9a-f]{64}$' -or
-        $ExpectedInstalledAggregateSha256 -cnotmatch '^[0-9a-f]{64}$' -or
-        (Test-SamePath $uninstallSource $installRootFull) -or
-        (Test-PathWithin $uninstallSource $installRootFull) -or
-        (Test-PathWithin $installRootFull $uninstallSource)) {
-        throw 'UNINSTALL_EXACT_IDENTITY_REQUIRED: use the canonical uninstall entrypoint.'
-    }
-    Assert-NoReparsePoint $uninstallSource 'uninstall source'
-    Assert-NoReparsePoint $installRootFull 'uninstall target'
+    if ($DryRun.IsPresent) { 'uninstall_status=DRY_RUN_CODE_ONLY'; 'user_state_preserved=true'; exit 0 }
+    $uninstallSource = Get-StrictFullPath $SourceRoot 'supported removal source'
+    $application = Split-Path -Parent $installRootFull
+    if ((Test-SamePath $uninstallSource $application) -or (Test-PathWithin $uninstallSource $application) -or
+        (Test-PathWithin $application $uninstallSource)) { throw 'REMOVAL_EXTERNAL_VERIFIED_SOURCE_REQUIRED' }
+    Assert-NoReparsePoint $uninstallSource 'supported removal source'
     [void](Assert-RequiredRelease $uninstallSource $testOverride)
     if (-not (Test-SamePath $BootstrapScriptPath (Join-Path $uninstallSource 'INSTALL_THIS_PC.ps1'))) {
-        throw 'Uninstall helper must execute from the admitted SourceRoot.'
+        throw 'Removal helper must execute from the admitted external SourceRoot.'
     }
-    $uninstallRecord = Assert-BootstrapIntegrityRecord $installRootFull
-    $uninstallRecordSha = Get-FileSha256 (Join-Path $installRootFull $IntegrityFileName)
-    if ((Get-FileSha256 (Join-Path $installRootFull 'portable-manifest.json')) -cne $ExpectedInstalledManifestSha256 -or
-        (Get-FileSha256 (Join-Path $uninstallSource 'portable-manifest.json')) -cne $ExpectedInstalledManifestSha256 -or
-        (Get-InventoryAggregate @(Get-CodeInventory $uninstallSource)) -cne $ExpectedInstalledAggregateSha256 -or
-        [string]$uninstallRecord.aggregate_sha256 -cne $ExpectedInstalledAggregateSha256) {
-        throw 'UNINSTALL_IDENTITY_MISMATCH: source or installed bytes differ.'
-    }
+    if (-not $testOverride) { Assert-ProtectedCodeAncestors $application }
     $quiesceFull = Get-StrictFullPath $QuiesceReceiptPath 'current-user removal receipt'
-    $expectedQuiescePath = Join-Path $OperatorLocalAppDataRoot 'KMTech\DirectSync\container_audit\status\current_user_removal.json'
     Assert-NoReparsePoint $quiesceFull 'current-user removal receipt'
-    if (-not (Test-SamePath $quiesceFull $expectedQuiescePath) -or
-        $ExpectedQuiesceReceiptSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+    if ($ExpectedQuiesceReceiptSha256 -cnotmatch '^[0-9a-f]{64}$' -or
         (Get-FileSha256 $quiesceFull) -cne $ExpectedQuiesceReceiptSha256 -or
-        (Get-Item -LiteralPath $quiesceFull).Length -gt 65536) {
-        throw 'Uninstall current-user removal receipt binding differs.'
-    }
+        (Get-Item -LiteralPath $quiesceFull).Length -gt 65536) { throw 'Removal current-user receipt binding differs.' }
     $quiesce = Get-Content -LiteralPath $quiesceFull -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ([string]$quiesce.status -cne 'PASS_DATA_PRESERVED' -or
-        [string]$quiesce.state_scope -cne 'current_user' -or
+    if ([string]$quiesce.status -cne 'PASS_DATA_PRESERVED' -or [string]$quiesce.state_scope -cne 'current_user' -or
         $quiesce.data_preserved -isnot [bool] -or -not $quiesce.data_preserved -or
-        [string]$quiesce.relay_autostart.status -cne 'ABSENT' -or
-        [string]$quiesce.relay_process.status -cne 'ABSENT' -or
+        [string]$quiesce.relay_autostart.status -cne 'ABSENT' -or [string]$quiesce.relay_process.status -cne 'ABSENT' -or
         -not (Test-SamePath ([string]$quiesce.machine_code_root) (Join-Path $installRootFull 'app'))) {
-        throw 'Uninstall current-user quiescence was not proven.'
+        throw 'Removal current-user quiescence was not proven.'
     }
-    Assert-ContainerReplacementRestoreQuiescent -CurrentRoot $installRootFull -SkipOwnedTaskCheckForGuardedTest:$testOverride
-    if (-not $testOverride) {
-        foreach ($name in @($LegacyQualificationTaskName, $LegacyRelayTaskName)) {
-            if ($null -ne (Get-LegacyTaskByNameFailClosed $name)) {
-                throw 'Uninstall requires the current-user layout without legacy scheduled writers.'
-            }
-        }
+    # Only actual ancestors running the admitted external canonical source can
+    # be excluded. Installed code and unrelated processes cannot claim this.
+    $excluded = @(); $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+    $parentPid = [int](@($rows | Where-Object { [int]$_.ProcessId -eq $PID })[0].ParentProcessId)
+    for ($depth=0; $parentPid -gt 0 -and $depth -lt 16; $depth++) {
+        $ancestor = @($rows | Where-Object { [int]$_.ProcessId -eq $parentPid })
+        if ($ancestor.Count -ne 1) { break }
+        $canonical = Join-Path $uninstallSource 'INSTALL_CANONICAL_PORTABLE.ps1'
+        if ((Test-SamePath ([string]$ancestor[0].ExecutablePath) (Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe')) -and
+            ([string]$ancestor[0].CommandLine).IndexOf($canonical,[StringComparison]::OrdinalIgnoreCase) -ge 0) { $excluded += $parentPid }
+        $parentPid = [int]$ancestor[0].ParentProcessId
     }
-    $uninstallParent = Get-StrictFullPath (Split-Path -Parent $installRootFull) 'uninstall parent'
-    $uninstallBackup = Get-StrictFullPath (Join-Path $uninstallParent ('.current.uninstall.' + $WriterFenceAttemptId)) 'uninstall recovery tree'
-    if (-not (Test-PathWithin $uninstallBackup $uninstallParent)) { throw 'Uninstall backup escaped its parent.' }
-    if (Test-Path -LiteralPath $uninstallBackup) { throw 'Uninstall recovery tree already exists.' }
-    $uninstallMutationStarted = $false
-    $startupUninstallPreimage = $null
+    $scheduler = New-Object -ComObject 'Schedule.Service'; $scheduler.Connect(); $folder = $scheduler.GetFolder('\')
+    $control = Join-Path $application 'update-control'
+    $identity = Get-ContainerWriterFenceStringSha256 $control.ToLowerInvariant()
+    $gate = New-Object Threading.Mutex($false,('Global\KMTech.ContainerAudit.Update.'+$identity.Substring(0,24)))
+    $gateHeld=$false
     try {
-        Copy-Item -LiteralPath $installRootFull -Destination $uninstallBackup -Recurse
-        if ($applyHardenedAcl) { Set-HardenedCodeAcl $uninstallBackup -Recursive }
-        if ((Get-InventoryAggregate @(Get-CodeInventory $uninstallBackup)) -cne $ExpectedInstalledAggregateSha256 -or
-            (Get-FileSha256 (Join-Path $uninstallBackup $IntegrityFileName)) -cne $uninstallRecordSha) {
-            throw 'Uninstall code preimage copy readback failed.'
-        }
-        Assert-ContainerReplacementRestoreQuiescent -CurrentRoot $installRootFull -SkipOwnedTaskCheckForGuardedTest:$testOverride
-        $uninstallMutationStarted = $true
-        if (-not $testOverride -and (Test-Path -LiteralPath (Join-Path $uninstallParent 'update-control\policy.json'))) {
-            $startupUninstallPreimage = Save-ContainerStartupUpdatePreimage $installRootFull 'uninstall'
-            $savedTask = Get-Content -LiteralPath (Join-Path $startupUninstallPreimage.path 'preimage.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-            Invoke-ContainerStartupUpdateTaskMutation {
-                if ($savedTask.task.exists) { Unregister-ScheduledTask -TaskName ([string]$savedTask.task.name) -Confirm:$false }
-                if ($null -ne (Get-ScheduledTask -TaskName ([string]$savedTask.task.name) -ErrorAction SilentlyContinue)) { throw 'STARTUP_UPDATE_UNINSTALL_TASK_STILL_PRESENT' }
-            } | Out-Null
-            foreach ($name in @('update-control','versions')) {
-                $target = Get-StrictFullPath (Join-Path $uninstallParent $name) 'startup update uninstall code target'
-                if (-not (Test-PathWithin $target $uninstallParent)) { throw 'STARTUP_UPDATE_UNINSTALL_PATH_ESCAPED' }
-                Assert-NoReparsePoint $target 'startup update uninstall code target'
-                if (Test-Path -LiteralPath $target) {
-                    if($name -ceq 'update-control'){Move-ContainerStartupUpdateControl $target (Join-Path $startupUninstallPreimage.path $name)}
-                    else{Move-Item -LiteralPath $target -Destination (Join-Path $startupUninstallPreimage.path $name)}
-                }
-            }
-            Write-Output ('startup_update_uninstall_preimage=' + $startupUninstallPreimage.path)
-        }
-        Remove-Item -LiteralPath $installRootFull -Recurse -ErrorAction Stop
-        if (Test-Path -LiteralPath $installRootFull) { throw 'Hardened code root removal postcondition failed.' }
-        $uninstallMutationStarted = $false
-        try { Remove-Item -LiteralPath $uninstallBackup -Recurse -ErrorAction Stop }
-        catch {
-    Write-InstallationCaughtFailure $_
- Write-Output "code_recovery_cleanup_status=RETAINED:$uninstallBackup" }
-        if (-not $testOverride) { Write-ElevationLog 'PASS' 'Elevated Container code removal completed.' }
-        Write-Output 'uninstall_status=PASS_CODE_REMOVED_STATE_PRESERVED'
-        Write-Output 'application_root_status=ABSENT'
-        Write-Output 'user_state_preserved=true'
-    }
-    catch {
-    Write-InstallationCaughtFailure $_
-
-        $uninstallFailure = $_
-        if ($uninstallMutationStarted) {
-            Assert-NoReparsePoint $uninstallBackup 'uninstall recovery tree'
-            Assert-NoReparsePoint $installRootFull 'partial uninstall target'
-            foreach ($item in @(Get-ChildItem -LiteralPath $uninstallBackup -Force -Recurse)) {
-                $destination = Join-Path $installRootFull (Get-RelativeCodePath $uninstallBackup $item.FullName)
-                if ($item.PSIsContainer) { New-Item -ItemType Directory -Path $destination -Force | Out-Null }
-                else {
-                    New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-                    if (-not (Test-Path -LiteralPath $destination) -or (Get-FileSha256 $destination) -cne (Get-FileSha256 $item.FullName)) {
-                        Copy-Item -LiteralPath $item.FullName -Destination $destination -Force
-                    }
-                }
-            }
-            if ($applyHardenedAcl) { Set-HardenedCodeAcl $installRootFull -Recursive }
-            [void](Assert-BootstrapIntegrityRecord $installRootFull)
-            if ((Get-InventoryAggregate @(Get-CodeInventory $installRootFull)) -cne $ExpectedInstalledAggregateSha256 -or
-                (Get-FileSha256 (Join-Path $installRootFull $IntegrityFileName)) -cne $uninstallRecordSha) {
-                throw "UNINSTALL_CODE_RESTORE_FAILED: recovery_tree=$uninstallBackup"
-            }
-            Write-Output 'code_restore_status=PASS_VERIFIED'
-            if ($null -ne $startupUninstallPreimage) {
-                foreach ($name in @('update-control','versions')) {
-                    $saved = Join-Path $startupUninstallPreimage.path $name
-                    $target = Join-Path $uninstallParent $name
-                    if (Test-Path -LiteralPath $saved) {
-                        if($name -ceq 'update-control'){Move-ContainerStartupUpdateControl $saved $target}
-                        else{
-                            if (Test-Path -LiteralPath $target) { throw 'STARTUP_UPDATE_UNINSTALL_RESTORE_TARGET_EXISTS' }
-                            Move-Item -LiteralPath $saved -Destination $target
-                        }
-                    }
-                }
-                Restore-ContainerStartupUpdatePreimage $installRootFull $startupUninstallPreimage.path $startupUninstallPreimage.sha256
-            }
-        }
-        throw $uninstallFailure
-    }
+        try { $gateHeld=$gate.WaitOne(5000) } catch [Threading.AbandonedMutexException] { $gateHeld=$true; throw 'REMOVAL_UPDATE_GATE_ABANDONED' }
+        if (-not $gateHeld) { throw 'REMOVAL_UPDATE_GATE_BUSY' }
+        $removed = Invoke-ContainerConvergentRemoval -InstallRoot $installRootFull -TaskFolder $folder -ExcludeProcessIds $excluded
+        'uninstall_status=PASS_KNOWN_FILES_REMOVED_STATE_PRESERVED'
+        'lifecycle_state=REMOVED'
+        'removal_evidence_root='+[string]$removed.evidence_root
+        'retained_path_count='+@($removed.retained_paths).Count
+        'user_state_preserved=true'
+    } finally { if ($gateHeld) { $gate.ReleaseMutex() }; $gate.Dispose() }
     exit 0
 }
 
