@@ -1598,8 +1598,7 @@ function Get-CanonicalWriterProcesses([string]$InstallRootValue) {
 function Get-PrincipalSid([string]$UserId) {
     if ([string]::IsNullOrWhiteSpace($UserId)) { return '' }
     try {
-        $account = New-Object Security.Principal.NTAccount($UserId)
-        return [string]$account.Translate([Security.Principal.SecurityIdentifier]).Value
+        return ConvertTo-BootstrapPrincipalSid $UserId
     }
     catch {
     Write-InstallationCaughtFailure $_

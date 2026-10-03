@@ -761,6 +761,14 @@ function Invoke-ContainerStartupUpdateTaskMutation([scriptblock]$Action) {
         -ReplacementTransactionId $WriterFenceReplacementTransactionId -DelegationToken $WriterFenceDelegationToken -Action $Action
 }
 
+function Test-ContainerStartupUpdateTaskIdentity([xml]$Actual, [xml]$Expected, [string]$Sid) {
+    return ($Actual.Task.Actions.Exec.Command -ceq $Expected.Task.Actions.Exec.Command -and
+        $Actual.Task.Actions.Exec.Arguments -ceq $Expected.Task.Actions.Exec.Arguments -and
+        (ConvertTo-BootstrapPrincipalSid ([string]$Actual.Task.Principals.Principal.UserId)) -ceq 'S-1-5-18' -and
+        (ConvertTo-BootstrapPrincipalSid ([string]$Actual.Task.Triggers.LogonTrigger.UserId)) -ceq
+            ([Security.Principal.SecurityIdentifier]::new($Sid).Value))
+}
+
 function Get-ContainerStartupUpdateTaskPreimage([string]$Root) {
     $spec = Get-ContainerStartupUpdateTaskSpec $Root $OperatorSid
     $existing = Get-ScheduledTask -TaskName $spec.name -ErrorAction SilentlyContinue
@@ -773,10 +781,7 @@ function Get-ContainerStartupUpdateTaskPreimage([string]$Root) {
         if ([int]$registered.GetInstances(0).Count -ne 0) { throw 'STARTUP_UPDATE_TASK_IS_RUNNING' }
         $actual = [xml]$registered.Xml
         $expected = [xml]$spec.xml
-        if ($actual.Task.Actions.Exec.Command -cne $expected.Task.Actions.Exec.Command -or
-            $actual.Task.Actions.Exec.Arguments -cne $expected.Task.Actions.Exec.Arguments -or
-            $actual.Task.Principals.Principal.UserId -cne 'S-1-5-18' -or
-            $actual.Task.Triggers.LogonTrigger.UserId -cne $OperatorSid) { throw 'STARTUP_UPDATE_OWNED_TASK_DIFFERS' }
+        if (-not (Test-ContainerStartupUpdateTaskIdentity $actual $expected $OperatorSid)) { throw 'STARTUP_UPDATE_OWNED_TASK_DIFFERS' }
         $result.xml = [string]$registered.Xml
         $result.sddl = [string]$registered.GetSecurityDescriptor(7)
     }
@@ -980,10 +985,7 @@ function Initialize-ContainerStartupUpdate([string]$Root) {
             if ($null -ne $existing) {
                 $oldXml = [xml](Export-ScheduledTask -TaskName $spec.name)
                 $newXml = [xml]$spec.xml
-                if ($oldXml.Task.Actions.Exec.Command -cne $newXml.Task.Actions.Exec.Command -or
-                    $oldXml.Task.Actions.Exec.Arguments -cne $newXml.Task.Actions.Exec.Arguments -or
-                    $oldXml.Task.Principals.Principal.UserId -cne 'S-1-5-18' -or
-                    $oldXml.Task.Triggers.LogonTrigger.UserId -cne $OperatorSid) { throw 'STARTUP_UPDATE_OWNED_TASK_DIFFERS' }
+                if (-not (Test-ContainerStartupUpdateTaskIdentity $oldXml $newXml $OperatorSid)) { throw 'STARTUP_UPDATE_OWNED_TASK_DIFFERS' }
                 if ([string]$existing.State -ceq 'Running') { throw 'STARTUP_UPDATE_TASK_IS_RUNNING' }
             }
             Register-ScheduledTask -TaskName $spec.name -Xml $spec.xml -Force | Out-Null
@@ -993,10 +995,7 @@ function Initialize-ContainerStartupUpdate([string]$Root) {
             $registered.SetSecurityDescriptor(('D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;' + $OperatorSid + ')'),0)
             $actual = [xml]$registered.Xml
             $expected = [xml]$spec.xml
-            if ($actual.Task.Actions.Exec.Command -cne $expected.Task.Actions.Exec.Command -or
-                $actual.Task.Actions.Exec.Arguments -cne $expected.Task.Actions.Exec.Arguments -or
-                $actual.Task.Principals.Principal.UserId -cne 'S-1-5-18' -or
-                $actual.Task.Triggers.LogonTrigger.UserId -cne $OperatorSid) { throw 'STARTUP_UPDATE_TASK_READBACK_FAILED' }
+            if (-not (Test-ContainerStartupUpdateTaskIdentity $actual $expected $OperatorSid)) { throw 'STARTUP_UPDATE_TASK_READBACK_FAILED' }
         } | Out-Null
     Complete-InstallationEvidenceStage 'startup'
     Write-Output 'startup_update_status=REGISTERED_LOGON_SYSTEM_CODE_ONLY'

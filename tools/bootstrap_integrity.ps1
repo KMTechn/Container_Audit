@@ -1,6 +1,16 @@
 ﻿$BootstrapIntegrityFileName = "bootstrap-integrity.json"
 $BootstrapIntegritySchema = "container-audit-bootstrap-integrity-v1"
 
+function ConvertTo-BootstrapPrincipalSid([string]$Identity) {
+    try {
+        if ([string]::IsNullOrWhiteSpace($Identity)) { throw 'Empty task identity.' }
+        if ($Identity.StartsWith('S-', [StringComparison]::Ordinal)) {
+            return [Security.Principal.SecurityIdentifier]::new($Identity).Value
+        }
+        return [Security.Principal.NTAccount]::new($Identity).Translate([Security.Principal.SecurityIdentifier]).Value
+    } catch { throw [InvalidOperationException]::new('Task user SID cannot be resolved.', $_.Exception) }
+}
+
 function Protect-InstallationText([string]$Text, [int]$Limit = 4096) {
     # Same known-value replacement and message markers as the runtime redactors.
     $values = [Collections.Generic.List[string]]::new()

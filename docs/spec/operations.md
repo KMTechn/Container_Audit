@@ -183,6 +183,10 @@ guard에서 실패했다(native 73 보존, protected helper 결속 통과). 옛 
 지원 복원은 PROVEN이며 새 설치의 시작 화면/업데이트 확인은 NOT TESTED다.
 [예행 E 증거](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-151/CA-5TH-REHEARSAL-E.md)는
 probe의 SID→계정명 되읽기와 설치 실패를 구별하며 실제 설치 task XML은 rollback 전에 수집하지 않았다.
+예약 작업의 preimage·기존 작업·등록 뒤 되읽기는 주체와 trigger의 계정 표현을 이 PC에서
+SID로 해석해 기대 SID와 비교한다. 해석 실패·다른 SID·다른 action은 거절하고 원 XML을 보존한다.
+canonical relay 작업의 주체 판정도 같은 SID 해석을 쓴다. PS5.1/7의 세 소비자 회귀는
+소스 검증이며 [예행 F](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-156/CA-5TH-REHEARSAL-F.md)의 native 결과와 구별한다.
 켜진 작업자가 이미 있으면 로그온 작업은 DEFERRED로 남기며 업무를 멈추지 않는다.
 수명주기 교체/복구는 진행 중 자동 전이나 실행 중 작업이 있으면 거절한다.
 기존 policy·pointer·journal·task XML/ACL은 보호된 `.startup-update-install.<attempt>`에
