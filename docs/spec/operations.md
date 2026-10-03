@@ -983,3 +983,15 @@ G처럼 고치기 전 installer의 기록만 있는 상태는 이 계약의 입�
 legacy receipt self-path 규칙은 그대로이고, 새 journal로 검증된 사본만 최초 binding
 경로와 구별한다. 128개를 넘는 retained continuation은 보수적으로 거절하며 자동
 정리하지 않는다. 독립 native 랩 수용과 장기간 보관 정책은 별도 확인이 필요하다.
+
+2026-10-04 실제 랩 근거는 [sub-172 REPORT](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-172/REPORT.md),
+[G 수선 결과](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-172/LAB-REPAIR-RESULT-G.md),
+[H 예행](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-172/CA-5TH-REHEARSAL-H.md)로 구별한다.
+G는 새 계약 journal이 없어 NOT_FOUND였고 제품 밖 기존 지원 함수로 원2302/Run/task/pointer/보호/일반 relay를 복원했다.
+예행 packet9ca39a8의 H 설치1회는 native0/PASS/REPLACED_VERIFIED이며 실제 보호 child receipt 소비를 확인했다.
+원 보호 G receipt와 보험 사본은 유지했고 새 H 보호 parent/helper raw는 D에 byte/SHA 차이0으로 회수했다.
+비상승 SID1000/session1/integrity8192 relay RUNNING, 일반 세션 시작 화면/조작0,
+지원 check_for_updates1회/provider off/후보 없음/적용0을 확인했다. 외부 feed 조회/실제 업데이트 적용의 증명은 아니다.
+H 성공으로 native 미완 rollback 이어 하기를 실행하지 않았으며 그 장애 경로와 독립 검토는 여전히 별도다.
+현재 새 복구 수용 범위는 원 startup task 부재/retired writer 부재/원 relay0~1이다.
+반복 복구가 fresh controller 생성 뒤 중단된 경우의 native 검증은 없으며 fail-closed 한계를 독립 검토에 남긴다.

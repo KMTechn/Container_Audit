@@ -7,10 +7,24 @@ PROVEN(재진입2 PASS·변조10 PASS)이며 결과는 sub-172 REPORT에서 버�
 
 sub-172 receipt 전달: canonical의 보호 self-path·journal-bound 부모 소비 및 restore evidence 소비를
 교정했다. PS5.1/7 post-child RED2→GREEN4, 기존 startup/export 합계34 PASS; 위조·덮어쓰기 거절 유지.
-relay 대기·새 미완 rollback 재진입·G 랩 수선과 예행 H의 실제 수용은 진행 중이며 정식 선언/pin은 재생성하지 않는다.
+relay 대기·새 미완 rollback 재진입은 아래 소스 회귀 범위다. G 랩 수선과 예행 H의 실제 결과는 아래 sub-172 마감 근거로 구별하며 정식 선언/pin은 재생성하지 않는다.
 
 sub-172 relay 대기: 설치·되돌리기 공통 360초와 timeout 뒤 끝 상태 기록을 교정했고
-PS5.1/7 RED4→GREEN4다. 새 지원 복구·랩 G 수선·H 수용 및 독립 검토는 아직 미증명이다.
+PS5.1/7 RED4→GREEN4다. G 수선/H의 실제 증명은 아래에 기록하며 새 지원 복구의 native 미완 장애 실증과 독립 검토는 남아 있다.
+
+2026-10-04 sub-172 마감: 정식 소스8ba359f의 PS5.1/7 실제 NTFS 재진입2 PASS와
+불일치 변경0의10 PASS를 구별한다. 최종 기존17파일594 PASS/동일한 선언 실패3/SKIP2,
+새 실패0이다. 정식 네 선언/bootstrap literal 재생성0, 예행9ca39a8만 선언을 갱신했다.
+새 계약이 G를 알아보지 않음(PlanOnly NOT_FOUND/journal0)을 먼저 읽고 제품 밖
+지원 함수 수선으로 옛2302/원 Run·task/pointer/보호·일반 relay를 실제 복원했다.
+새 packet의 H 설치1회는 native0/PASS/REPLACED_VERIFIED, 실제10구간을 마쳤다.
+새 코드/pointer·SYSTEM startup task·비상승 RUNNING relay와 조작0의 시작 화면을
+확인했고 지원 업데이트 확인1회는 provider off/후보 없음/적용0이다.
+업무82·공용3·Machine2·상위/App/control ACL·형제 manifest 차이0이다.
+H 성공으로 미완 rollback 재진입은 guest에서 실행하지 않았다. 그 native 장애 실증,
+원 startup task가 있는 복구 preimage, 반복 복구 중단 및 독립 검토는 별도 남아 있다.
+전체 suite/실제 update 적용도 NOT TESTED다. 정확한 버전·raw·한계는
+[sub-172 REPORT](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-172/REPORT.md)에 있다.
 
 CA-T1: task 주체·trigger를 SID로 해석하는 같은 함수가 세 소비자와 canonical 주체 판정에 적용된다.
 PS5.1/7 실제 소비자 회귀에서 이름 표현은 수용하고 다른 SID·해석 실패·action 변조는 거절한다.
