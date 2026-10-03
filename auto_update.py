@@ -6,6 +6,7 @@ switching a code pointer; business data is never copied or restored here.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import ast
 import hashlib
 import json
 import os
@@ -268,13 +269,92 @@ def bidirectional_pins(
 
 def manifest_transition_pins(manifest: Mapping[str, Any], *, current: Mapping[str, Any], candidate: Mapping[str, Any]) -> tuple[str, str, dict[str, str], str]:
     """Only call after authentication of this complete manifest and packet."""
-    pair = dict(zip(PIN_FIELDS, (current["source_commit"], candidate["source_commit"], current["writer_sink_inventory_contract_sha256"], candidate["writer_sink_inventory_contract_sha256"])))
-    reverse = dict(zip(PIN_FIELDS, (pair["to_commit"], pair["from_commit"], pair["to_contract_sha256"], pair["from_contract_sha256"])))
-    approvals = manifest.get("approved_transitions", [])
-    if not isinstance(approvals, list) or (approvals and (len(approvals) != 2 or any(entry not in (pair, reverse) for entry in approvals))):
-        raise ValueError("signed approvals must contain only the current/candidate pair and its reverse")
-    forward, rollback = bidirectional_pins(approvals, current=current, candidate=candidate)
-    return forward, rollback, reverse, "SIGNED_EXACT_PAIR" if approvals else "IDENTICAL_WRITER_DATA_API"
+    result = authorize_feed_transition(manifest, current=current, candidate=candidate)
+    pair = result["pair"]
+    return pair["forward_contract_sha256"], pair["rollback_contract_sha256"], result["rollback"], result["authority"]
+
+
+CONTRACT_FILES = ("tools/container_writer_session_contract.json", "tools/container_writer_sink_inventory.json")
+
+
+def source_version_literal(source: bytes) -> str:
+    """Build consistency only; release authority is the signed manifest."""
+    try:
+        tree = ast.parse(source.decode("utf-8-sig"))
+    except (UnicodeError, SyntaxError, ValueError) as error:
+        raise ValueError("daily_update_actual_version_invalid") from error
+    values = []
+    for node in tree.body:
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+        if any(isinstance(target, ast.Name) and target.id == "CURRENT_VERSION" for target in targets):
+            values.append(node.value)
+    if (len(values) != 1 or not isinstance(values[0], ast.Constant) or not isinstance(values[0].value, str)
+            or re.fullmatch(r"v[0-9]+(?:\.[0-9]+){2,3}", values[0].value) is None):
+        raise ValueError("daily_update_actual_version_invalid")
+    return values[0].value
+
+
+def version_identity(read_bytes) -> dict[str, Any]:
+    """Hash actual portable bytes without importing or executing candidate code."""
+    portable = json.loads(read_bytes("portable-manifest.json").decode("utf-8-sig"), object_pairs_hook=unique_object)
+    if not isinstance(portable, dict) or portable.get("schema") != "container-audit-portable-tree-v1":
+        raise ValueError("daily_update_requires_stock_portable_packet")
+    version = portable.get("version")
+    if not isinstance(version, str) or re.fullmatch(r"v[0-9]+(?:\.[0-9]+){2,3}", version) is None:
+        raise ValueError("daily_update_stock_version_record_missing: 설치 판 번호 기록이 없는 옛 설치 파일입니다. 새 설치 파일로 지원 재설치를 진행하세요.")
+    if source_version_literal(read_bytes("app/Container_Audit.py")) != version:
+        raise ValueError("daily_update_stock_version_literal_mismatch")
+    hashes = []
+    for names in (CONTRACT_FILES, tuple("app/" + name for name in DATA_API_FILES)):
+        digest = hashlib.sha256()
+        for name in names:
+            digest.update((name + "\n").encode("ascii"))
+            digest.update(hashlib.sha256(read_bytes(name)).digest())
+        hashes.append(digest.hexdigest())
+    return dict(source_commit=_sha(portable.get("source_commit")), version=version,
+                contract_sha256=hashes[0], data_api_contract_sha256=hashes[1])
+
+
+def authorize_feed_transition(manifest: Mapping[str, Any], *, current: Mapping[str, Any], candidate: Mapping[str, Any]) -> dict[str, Any]:
+    """Shared user/SYSTEM rule after installed-key signature and ZIP verification."""
+    pair = manifest.get("auto_update")
+    if not isinstance(pair, dict) or set(pair) != {"from_commit", "to_commit", "forward_contract_sha256", "rollback_contract_sha256"}:
+        raise ValueError("invalid_bidirectional_update_pair")
+    for name, value in pair.items():
+        _sha(value, length=40 if name.endswith("commit") else 64)
+    if pair["from_commit"] == pair["to_commit"]:
+        raise ValueError("update_pair_same_commit")
+    if pair["from_commit"] != _sha(current.get("source_commit")):
+        raise ValueError("daily_update_from_commit_mismatch")
+    if pair["to_commit"] != _sha(candidate.get("source_commit")):
+        raise ValueError("daily_update_packet_commit_mismatch")
+    if manifest.get("version") != candidate.get("version"):
+        raise ValueError("daily_update_signed_version_mismatch")
+    ordered = []
+    for version in (current.get("version"), manifest.get("version")):
+        if not isinstance(version, str) or re.fullmatch(r"v[0-9]+(?:\.[0-9]+){2,3}", version) is None:
+            raise ValueError("daily_update_actual_version_invalid")
+        parts = tuple(int(part) for part in version[1:].split("."))
+        ordered.append(parts + (0,) * (4 - len(parts)))
+    if ordered[1] <= ordered[0]:
+        raise ValueError("daily_update_version_must_increase")
+    forward = dict(from_commit=pair["from_commit"], to_commit=pair["to_commit"],
+                   from_contract_sha256=_sha(current.get("contract_sha256"), length=64),
+                   to_contract_sha256=_sha(candidate.get("contract_sha256"), length=64))
+    reverse = dict(from_commit=forward["to_commit"], to_commit=forward["from_commit"],
+                   from_contract_sha256=forward["to_contract_sha256"], to_contract_sha256=forward["from_contract_sha256"])
+    approvals = manifest.get("approved_transitions")
+    if not isinstance(approvals, list) or len(approvals) != 2 or forward not in approvals or reverse not in approvals:
+        raise ValueError("daily_update_signed_exact_pair_required")
+    for name, direction in (("forward_contract_sha256", forward), ("rollback_contract_sha256", reverse)):
+        actual = directional_pin(approvals, **direction)
+        if pair[name] != actual:
+            raise ValueError("daily_update_direction_contract_mismatch")
+    previous = _sha(current.get("data_api_contract_sha256"), length=64)
+    target = _sha(candidate.get("data_api_contract_sha256"), length=64)
+    return {"pair": dict(pair), "authority": "SIGNED_EXACT_PAIR", "rollback": reverse,
+            "evidence": {"previous_data_api_sha256": previous, "candidate_data_api_sha256": target,
+                         "consumer_bytes_equal": previous == target}}
 
 
 DATA_API_FILES = (
@@ -409,19 +489,18 @@ def version_bundle(control: Path, sha: str) -> Path:
     return control.parent / "versions" / _sha(sha)
 
 
-def version_manifest(bundle: Path) -> dict[str, Any]:
+def version_manifest(bundle: Path, *, require_version: bool = False) -> dict[str, Any]:
     value = read_json(bundle / "portable-manifest.json")
     if type(value.get("startup_update_protocol")) is not int or value["startup_update_protocol"] != 1:
         raise ValueError("version has no supported startup readiness protocol")
     _sha(value.get("source_commit"))
     _sha(value.get("writer_sink_inventory_contract_sha256"), length=64)
-    if "version" not in value:
-        version_source = (bundle / "app/Container_Audit.py").read_text(encoding="utf-8-sig")
-        match = re.search(r'^CURRENT_VERSION\s*=\s*["\'](v[0-9]+\.[0-9]+\.[0-9]+)["\']\s*$', version_source, re.MULTILINE)
-        if not match:
-            raise ValueError("installed version literal is absent")
-        value["version"] = match.group(1)
-    value["data_api_contract_sha256"] = data_api_contract_sha256(bundle / "app")
+    def read_bytes(name):
+        path = bundle / name
+        _assert_no_reparse_components(path)
+        return path.read_bytes()
+    if require_version or 'version' in value:
+        value.update(version_identity(read_bytes))
     return value
 
 
@@ -671,7 +750,8 @@ def _apply_prepared(control: Path) -> int:
                 write_json_durable(control / "transition.json", deferred)
                 return 0  # A late task defers; it never stops an existing application.
             active = read_json(control / "active.json")
-            current = version_manifest(version_bundle(control, active["sha"]))
+            fixed_helper(control, "Verify", code_root=version_bundle(control, active["sha"]))
+            current = version_manifest(version_bundle(control, active["sha"]), require_version=True)
             key = read_json(control.parent / "current/app/update-manifest-key-config.json")["manifest_public_key"]
             # Copy user-owned bytes, then authenticate the protected copy. No path,
             # executable or command supplied by the prepared marker is executed.
@@ -686,7 +766,9 @@ def _apply_prepared(control: Path) -> int:
             extracted = protected / "extracted"
             extract_prepared_code(protected / "packet.zip", extracted, candidate["archive_policy"])
             target = extracted / "Container_Audit"
-            candidate_manifest = version_manifest(target)
+            # Verify stock bytes before reading version/contract authority.
+            fixed_helper(control, "Verify", code_root=target)
+            candidate_manifest = version_manifest(target, require_version=True)
             if candidate_manifest["source_commit"] != sha or candidate_manifest["version"] != manifest["version"]:
                 raise ValueError("signed target SHA differs from the packet")
             if file_sha256(target / "app/update-manifest-key-config.json") != file_sha256(control.parent / "current/app/update-manifest-key-config.json"):
@@ -694,7 +776,6 @@ def _apply_prepared(control: Path) -> int:
             forward, rollback, rollback_pair, pin_authority = manifest_transition_pins(manifest, current=current, candidate=candidate_manifest)
             # The fixed helper validates the portable tree and writes its own
             # integrity record. It never imports or executes candidate code.
-            fixed_helper(control, "Verify", code_root=target)
             target_bundle = version_bundle(control, sha)
             if target_bundle.exists():
                 fixed_helper(control, "Verify", code_root=target_bundle)
@@ -702,7 +783,8 @@ def _apply_prepared(control: Path) -> int:
             state = prepare_transition(previous_sha=active["sha"], candidate_sha=sha, packet_sha256=candidate["sha256"], forward_pin=forward, rollback_pin=rollback, transition_id=uuid.uuid4().hex, nonce=uuid.uuid4().hex, now=now_utc(), failed_shas=(state or {}).get("failed_shas", []))
             preimage = "policy-before-" + state["transition_id"] + ".json"
             write_json_durable(control / preimage, policy)
-            state = {**state, "rollback_pair": rollback_pair, "pin_authority": pin_authority, "policy_preimage": preimage}
+            state = {**state, "rollback_pair": rollback_pair, "pin_authority": pin_authority, "policy_preimage": preimage,
+                     "protected_packet": protected.name}
             write_json_durable(control / "transition.json", state)
             state = apply_transition(state, writers_absent=not writer_processes(process_snapshot(control), own_pid=os.getpid()), packet_verified=True, durable_prepared=True, now=now_utc())
             persist_switch(control, state, sha)
@@ -711,6 +793,22 @@ def _apply_prepared(control: Path) -> int:
         else:
             pointer = read_json(control / "active.json")
             if state["phase"] == "PREPARED":
+                protected_name = state.get("protected_packet")
+                if not isinstance(protected_name, str) or re.fullmatch(r"packet-[0-9a-f]{32}", protected_name) is None:
+                    raise ValueError("daily_update_prepared_authentication_missing")
+                old_bundle = version_bundle(control, state["previous_sha"])
+                target_bundle = version_bundle(control, state["candidate_sha"])
+                fixed_helper(control, "Verify", code_root=old_bundle)
+                fixed_helper(control, "Verify", code_root=target_bundle)
+                key = read_json(control.parent / "current/app/update-manifest-key-config.json")["manifest_public_key"]
+                resumed_manifest, resumed_candidate = verify_prepared_packet(control / protected_name, key_config=key,
+                    current_version=version_manifest(old_bundle, require_version=True)["version"], channel=policy["channel"])
+                forward, reverse, rollback_pair, authority = manifest_transition_pins(resumed_manifest,
+                    current=version_manifest(old_bundle, require_version=True), candidate=version_manifest(target_bundle, require_version=True))
+                if (resumed_candidate["sha256"] != state["packet_sha256"] or forward != state["forward_pin"]
+                        or reverse != state["rollback_pin"] or rollback_pair != state.get("rollback_pair")
+                        or authority != state.get("pin_authority")):
+                    raise ValueError("daily_update_prepared_binding_mismatch")
                 if writer_processes(process_snapshot(control), own_pid=os.getpid()):
                     return 20
                 fixed_helper(control, "Verify", code_root=version_bundle(control, state["candidate_sha"]))
@@ -1008,8 +1106,10 @@ def prepare_feed_packet(app_root: Path) -> dict[str, Any]:
     """The ordinary relay downloads; only completed authenticated bytes are marked."""
     from urllib.parse import urlsplit, urlunsplit
     import requests
-    from update_service import verify_update_manifest_signature, update_candidate_from_private_manifest, file_sha256
-    from current_user_onboarding import resolve_current_user_onboarding_paths, _default_profile_loader
+    from update_service import (verify_update_manifest_signature, update_candidate_from_private_manifest,
+                                file_sha256, assert_https_update_url, is_github_hosted_update_url,
+                                validate_update_archive_layout, _is_zip_symlink, _validate_windows_archive_path)
+    from current_user_onboarding import resolve_current_user_onboarding_paths, _default_profile_loader, verify_bootstrap_integrity
 
     control = control_root(app_root)
     if control is None:
@@ -1019,17 +1119,26 @@ def prepare_feed_packet(app_root: Path) -> dict[str, Any]:
         return {"status": "OFF"}
     key = read_json(control.parent / "current/app/update-manifest-key-config.json")["manifest_public_key"]
     active = read_json(control / "active.json")
-    current = version_manifest(version_bundle(control, active["sha"]))
+    active_bundle = version_bundle(control, active["sha"])
+    if verify_bootstrap_integrity(resolve_current_user_onboarding_paths(active_bundle / "app")).get("status") != "PASS":
+        raise ValueError("daily update requires verified installed stock bytes")
+    current = version_manifest(active_bundle, require_version=True)
     profile = _default_profile_loader(resolve_current_user_onboarding_paths(app_root).logistics_profile_path) if policy.get("profile_auth") else None
-    feed = urlsplit(policy["feed_url"])
+    feed_url = assert_https_update_url(policy["feed_url"])
+    if is_github_hosted_update_url(feed_url):
+        raise ValueError("daily update feed cannot use hosted update aliases")
+    feed = urlsplit(feed_url)
     origin = lambda url: (url.scheme.lower(), (url.hostname or "").lower(), url.port or 443)
     if profile is not None and origin(feed) != origin(urlsplit(profile.base_url)):
         raise ValueError("profile authentication requires the configured authority origin")
     def fetch(session, url):
+        url = assert_https_update_url(url)
+        if is_github_hosted_update_url(url):
+            raise ValueError("daily update download cannot use hosted update aliases")
         session.cookies.clear()
         headers = {"Authorization": "Bearer " + profile.bearer_token} if profile is not None and origin(urlsplit(url)) == origin(feed) else {}
         response = session.get(url, headers=headers, timeout=10, stream=True, allow_redirects=False, verify=(profile.tls_ca_bundle_path or True) if profile is not None else True)
-        if response.status_code != 200:
+        if response.status_code != 200 or response.url != url:
             response.close()
             raise ValueError("update download HTTP status differs")
         return response
@@ -1045,7 +1154,7 @@ def prepare_feed_packet(app_root: Path) -> dict[str, Any]:
             return b"".join(chunks)
     with requests.Session() as session:
         session.trust_env = False  # No ambient proxy/netrc credentials.
-        manifest_bytes = bounded(fetch(session, policy["feed_url"]), 1024 * 1024)
+        manifest_bytes = bounded(fetch(session, feed_url), 1024 * 1024)
         manifest = json.loads(manifest_bytes, object_pairs_hook=unique_object)
         signature_url = urlunsplit((feed.scheme, feed.netloc, feed.path + ".sig", feed.query, ""))
         signature = bounded(fetch(session, signature_url), 16384)
@@ -1078,6 +1187,20 @@ def prepare_feed_packet(app_root: Path) -> dict[str, Any]:
                 write_download_chunk(attempt / "packet.zip", chunk)
         if count != manifest["artifact"]["size_bytes"] or file_sha256(attempt / "packet.zip") != candidate["sha256"]:
             raise ValueError("downloaded packet size or SHA256 differs")
+        import zipfile
+        with zipfile.ZipFile(attempt / "packet.zip") as archive:
+            entries = archive.infolist()
+            validate_update_archive_layout([entry.filename for entry in entries], candidate["archive_policy"])
+            for entry in entries:
+                _validate_windows_archive_path(entry.filename)
+                if _is_zip_symlink(entry):
+                    raise ValueError("update ZIP contains a redirected entry")
+            def read_candidate_bytes(name):
+                entry = archive.getinfo(name)
+                if entry.file_size > 16 * 1024 * 1024:
+                    raise ValueError("update identity input is oversized")
+                return archive.read(entry)
+            authorize_feed_transition(manifest, current=current, candidate=version_identity(read_candidate_bytes))
         # Final fixed-name copies are replaced only after every byte is verified.
         publish_download(attempt, stage)
         write_json_durable(stage / "prepared.json", {"source_commit": sha, "packet_sha256": candidate["sha256"], "prepared_at": now_utc()})

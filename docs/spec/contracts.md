@@ -145,7 +145,11 @@ writer 의미가 달라지는 판은 `from/to commit + from/to writer contract S
 승인 두 개가 필요하다. 두 승인은 기존 앱 키로 서명한 manifest 안에만 두며,
 현재 설치 SHA→후보 SHA와 정확한 역방향만 허용한다. unsigned 설정이나 다른 키,
 다른 출발점, 역방향 미승인, wildcard, 변조된 계약은 거절한다.
-writer 계약과 데이터/API 계약이 모두 같은 판은 기존 호환 규칙을 유지한다.
+계약이 같은 판도 서명 manifest의 정확한 두 방향 쌍과 `auto_update`의 방향 SHA가 필요하다.
+설치 정책의 목록은 자동 적용 권한이 아니다. 판 번호는 검증된 stock manifest의 version이며
+source의 단일 CURRENT_VERSION 문자열 literal과 일치해야 한다. feed는 숫자 3/4자리 판 번호의
+엄격한 증가만 허용하고, 같은/낮은 판은 거절한다. 두 계약 원문 파일의 경로+LF와 실제
+SHA256 digest를 다시 해시하며 manifest의 설명값을 계약 원문으로 사용하지 않는다.
 CONFIRMED 전 실패는 원래 policy를 보존하고, 확인 뒤에만 역방향 승인 감사를
 보호 policy에 기록한다. 설치 설정의 핀은 관리자 canonical 교체용이며 자동 갱신
 승인을 대신하지 않는다.
@@ -153,10 +157,11 @@ CONFIRMED 전 실패는 원래 policy를 보존하고, 확인 뒤에만 역방�
 방향별로 넣는다. `RestoreVerifiedReplacement`도 검증된 successor packet의 정확한
 역방향 핀을 요구하며, 원 교체 receipt·이전 코드/record/ACL·새 writer fence 검증을 유지한다.
 목록 밖 출발 판·계약 변조·wildcard·범위·중복 핀은 허용하지 않는다.
-`DATA_API_FILES`의 실제 바이트 해시도 같아야 하며 장부·API migration은 이 기능 범위가 아니다.
+`DATA_API_FILES`의 실제 바이트 해시 차이는 서명 쌍 판정의 증거다. 장부·API migration은 이 기능 범위가 아니다.
 해시는 실제 DDL 소유자와 저장·명령 직렬화·마이그레이션·복구 소비자 38파일을 포함한다.
 교환 DB DDL의 같은 길이 변경도 동일 계약 예외로 통과하지 못한다. 데이터/API가 달라지면
-자동 복귀 자체를 거절하며 정확한 writer 승인 쌍으로도 이 제한을 우회하지 않는다.
+자동 복귀 권한은 READY 실패 뒤 writer 부재·이전 판 무결성 아래의 로컬 복구에만 쓰며,
+feed의 낮은 판 적용 권한으로 사용하지 않는다.
 새 root/tools DDL 소유 파일은 기계적 소유자 검사로 해시 목록과 대조한다.
 프로토콜 1이 없는 옛 묶음은 자동 전환·READY 복귀 대상으로 허용하지 않는다.
 

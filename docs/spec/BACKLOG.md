@@ -434,6 +434,10 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g19"></a>
 ## CA-G19 로그온 자동 갱신 실기 수용
 
+- **sub-189 서명 규칙 이식:** 정확한 서명 쌍·실제 계약 재해시·stock/literal 판 번호·엄격 증가·ASCII feed를 이식했다.
+  Windows11/Python3.12.10 격리 focused 170 PASS(새 규칙 19 RED→GREEN), 기존 crypto/READY 복귀 포함.
+  선언/pin은 동결이며 실제 feed·SYSTEM·packet 수용은 NOT TESTED다. [이식 보고](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-189/REPORT.md).
+
 - **구현:** 서명된 HTTPS 묶음 준비, 고정 SYSTEM 적용 작업, protected SHA 판/내구 journal,
   GUI/relay 시작 gate, 정확한 양방향 핀과 변경 없는 데이터/API 바이트 확인,
   nonce/SHA/PID/생성 시각과 사용자 저장소·일반 relay READY, 정상 종료 뒤 코드 복귀.

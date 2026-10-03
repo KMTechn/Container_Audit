@@ -173,11 +173,11 @@ UPDATE_SECRET_QUERY_PREFIXES = ("x_amz_", "x_goog_")
 GITHUB_UPDATE_HOSTS = frozenset({"api.github.com", "github.com", "www.github.com"})
 
 
-def parse_version_tag(version: str) -> tuple[int, int, int] | None:
-    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", str(version).strip(), flags=re.IGNORECASE)
+def parse_version_tag(version: str) -> tuple[int, ...] | None:
+    match = re.fullmatch(r"v?([0-9]+(?:\.[0-9]+){2,3})", str(version).strip(), flags=re.IGNORECASE)
     if not match:
         return None
-    return tuple(int(part) for part in match.groups())
+    return tuple(int(part) for part in match.group(1).split('.'))
 
 
 def is_newer_version(latest_version: str, current_version: str) -> bool:
@@ -185,7 +185,7 @@ def is_newer_version(latest_version: str, current_version: str) -> bool:
     current_parts = parse_version_tag(current_version)
     if latest_parts is None or current_parts is None:
         return False
-    return latest_parts > current_parts
+    return latest_parts + (0,) * (4 - len(latest_parts)) > current_parts + (0,) * (4 - len(current_parts))
 
 
 def validate_release_asset_url(
@@ -233,6 +233,13 @@ def assert_https_update_url(url: str, *, require_zip: bool = False) -> str:
     parsed = urlparse(text)
     if parsed.scheme.lower() != "https" or not parsed.netloc or not parsed.hostname:
         raise ValueError("업데이트 URL은 HTTPS 절대 URL이어야 합니다.")
+    if (not parsed.netloc.isascii() or any(character.isspace() for character in parsed.netloc)
+            or '\\' in parsed.netloc or parsed.netloc.endswith(':')):
+        raise ValueError("업데이트 호스트는 ASCII 주소여야 합니다. 국제 도메인은 punycode 원문을 사용하세요.")
+    try:
+        parsed.port
+    except ValueError as error:
+        raise ValueError("업데이트 포트가 올바르지 않습니다.") from error
     if parsed.username or parsed.password:
         raise ValueError("업데이트 URL에 사용자 정보를 포함할 수 없습니다.")
     if parsed.fragment:

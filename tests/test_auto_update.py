@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 import auto_update as updates
 
@@ -254,8 +255,17 @@ def test_engine_candidate_exit_restarts_previous_version_without_reverting_data(
     monkeypatch.setattr(updates, "update_lock", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(updates, "fixed_helper", lambda _control, mode, **kwargs: verified.append((mode, kwargs.get("code_root"))) or "")
     monkeypatch.setattr(updates, "now_utc", lambda: LATER)
-    monkeypatch.setattr(updates, "version_manifest", lambda bundle: dict(source_commit=OLD if bundle.name == OLD else NEW, version="v2.0.99", writer_sink_inventory_contract_sha256="a" * 64 if bundle.name == OLD else "b" * 64, data_api_contract_sha256="c" * 64))
-    monkeypatch.setattr(updates, "verify_prepared_packet", lambda *_args, **_kwargs: ({"source_commit": NEW, "version": "v2.0.99", "approved_transitions": pins()}, {"archive_policy": {}, "sha256": "3" * 64}))
+    from tests.test_signed_pairrule import signed
+    def version_manifest(bundle, **_kwargs):
+        return dict(source_commit=OLD if bundle.name == OLD else NEW,
+                    version="v2.0.99" if bundle.name == OLD else "v2.0.100",
+                    contract_sha256="a" * 64 if bundle.name == OLD else "b" * 64,
+                    writer_sink_inventory_contract_sha256="a" * 64 if bundle.name == OLD else "b" * 64,
+                    data_api_contract_sha256="c" * 64)
+    monkeypatch.setattr(updates, "version_manifest", version_manifest)
+    monkeypatch.setattr(updates, "verify_prepared_packet", lambda *_args, **_kwargs: (
+        {**signed(version_manifest(Path(OLD)), version_manifest(Path(NEW))), "source_commit": NEW},
+        {"archive_policy": {}, "sha256": "3" * 64}))
     monkeypatch.setattr(updates, "copy_prepared_file", lambda source, target, **_kwargs: target.write_bytes(source.read_bytes()))
     monkeypatch.setattr(updates, "preserve_candidate_version", lambda *_args: None)
     monkeypatch.setattr(update_service, "safe_extract_update_zip", lambda *_args, **_kwargs: None)
@@ -348,8 +358,8 @@ def test_portable_relay_gate_does_not_require_the_gui_pid(monkeypatch, tmp_path)
 
 
 def manifests():
-    current = dict(source_commit=OLD, writer_sink_inventory_contract_sha256="a" * 64, data_api_contract_sha256="c" * 64)
-    candidate = dict(source_commit=NEW, writer_sink_inventory_contract_sha256="b" * 64, data_api_contract_sha256="c" * 64)
+    current = dict(source_commit=OLD, version="v2.0.99", contract_sha256="a" * 64, writer_sink_inventory_contract_sha256="a" * 64, data_api_contract_sha256="c" * 64)
+    candidate = dict(source_commit=NEW, version="v2.0.100", contract_sha256="b" * 64, writer_sink_inventory_contract_sha256="b" * 64, data_api_contract_sha256="c" * 64)
     return current, candidate
 
 
@@ -358,7 +368,9 @@ def test_signed_manifest_pairs_use_existing_es256_and_reject_other_key_and_tampe
     import update_service
     from vendor.kmtech_zero_pe.cng_p256 import P256KeyPair
 
-    manifest = dict(schema_version="kmtech-private-update-manifest-v1", manifest_version=1, signature_version="es256-v1", app_id="Container_Audit", approved_transitions=pins())
+    from tests.test_signed_pairrule import signed
+    current, candidate = manifests()
+    manifest = dict(schema_version="kmtech-private-update-manifest-v1", manifest_version=1, signature_version="es256-v1", app_id="Container_Audit", **signed(current, candidate))
     # Existing migration fixture uses ephemeral CNG keys; none are persisted.
     with P256KeyPair.generate() as key:
         signature = key.sign_es256(update_service.canonical_manifest_bytes(manifest))
@@ -382,13 +394,11 @@ def test_unsigned_or_foreign_pair_cannot_authorize_changed_contract(approvals):
         updates.manifest_transition_pins(manifest, current=current, candidate=candidate)
 
 
-def test_identical_writer_and_data_contract_remains_compatible_without_extra_approval():
+def test_identical_writer_and_data_contract_still_requires_signed_exact_pair():
     current, candidate = manifests()
     candidate["writer_sink_inventory_contract_sha256"] = current["writer_sink_inventory_contract_sha256"]
-    forward, reverse, pair, rule = updates.manifest_transition_pins({}, current=current, candidate=candidate)
-    assert forward != reverse
-    assert pair["from_commit"] == NEW and pair["to_commit"] == OLD
-    assert rule == "IDENTICAL_WRITER_DATA_API"
+    with pytest.raises(ValueError, match='invalid_bidirectional_update_pair'):
+        updates.manifest_transition_pins({}, current=current, candidate=candidate)
 
 
 def test_reverse_policy_audit_is_written_only_after_confirmation(monkeypatch, tmp_path):

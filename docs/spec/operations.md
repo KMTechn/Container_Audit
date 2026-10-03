@@ -109,6 +109,12 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 <a id="ca-startup-update"></a>
 ## 로그온 자동 갱신 운영
 
+자동 feed는 설치 키로 검증한 manifest의 정확한 양방향 쌍 하나만 권한으로 쓴다.
+실제 stock 판 번호·계약 원문 SHA를 사용자 준비와 SYSTEM 적용/재개에서 다시 대조한다.
+같은/낮은 판·unsigned 정책 목록·Unicode 호스트·redirect/응답 URL 불일치는 거절한다.
+국제 도메인은 ASCII punycode로 설정한다. 판 번호가 없는 옛 stock은 지원 재설치를 안내하며,
+feed가 꺼진 기존 실행/relay의 SHA 식별 경로에는 판 번호를 새 전제로 넣지 않는다.
+
 관리자 설치기는 기존 보호 코드 배치와 같은 writer delegation 아래서
 `versions/<source SHA>`·`update-control`을 보호하고, 지정 작업자 SID의 로그온으로
 숨겨진 SYSTEM 작업 `KMTech.ContainerAudit.StartupUpdate.<경로/SID 식별값>`을 등록한다.

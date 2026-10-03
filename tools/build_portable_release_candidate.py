@@ -596,12 +596,16 @@ def build(
     if shared_check.returncode:
         raise PortableBuildError("shared source pin check failed: " + shared_check.stderr.strip())
     writer_inventory = _assert_writer_sink_inventory(repo_root)
+    from auto_update import source_version_literal
+    version = source_version_literal((repo_root / 'Container_Audit.py').read_bytes())
     if output.exists():
         raise PortableBuildError(f"portable output already exists: {output}")
     output.mkdir(parents=True)
     _runtime_source(python_home, output / "runtime")
     app_root = output / "app"
     tool_sources = _copy_application(repo_root, app_root)
+    if source_version_literal((app_root / 'Container_Audit.py').read_bytes()) != version:
+        raise PortableBuildError('copied application version differs from source literal')
     update_key_config_sha256 = _write_update_key_config(
         app_root,
         update_manifest_public_key_config,
@@ -635,6 +639,7 @@ def build(
     file_count, byte_count = _tree_metrics(output)
     manifest = {
         "schema": PORTABLE_SCHEMA,
+        "version": version,
         "startup_update_protocol": 1,
         "relay_identity_protocol": 1,
         "startup_update_helper_sha256": _sha256(output / "tools/apply_prepared_update.ps1"),
