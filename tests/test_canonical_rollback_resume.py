@@ -67,7 +67,7 @@ def _fixture(tmp_path):
     protected=[short_profile/p.relative_to(old_profile) if p.is_relative_to(old_profile) else p for p in protected]
     env['LOCALAPPDATA']=str(short_profile)
     env['CA_UNINSTALL_CONTROL']=str(short_profile/'c')
-    task_root = os.environ.get('KMTECH_TEST_CA_TASK_ROOT')
+    task_root = os.environ.get('KMTECH_TEST_CA_EVIDENCE_ROOT') or os.environ.get('KMTECH_TEST_CA_TASK_ROOT')
     preview = Path(task_root) / 'evidence/inventory-preview-rehearsal-producer.json' if task_root else None
     inventory = json.loads((preview if preview and preview.is_file() else source / 'tools/container_writer_sink_inventory.json').read_text())
     if any(inventory[key] for key in ('uncovered_direct_mutation_functions', 'caller_fence_reference_failures', 'powershell_guard_failures')):
@@ -98,7 +98,7 @@ def _fixture(tmp_path):
     proof = _ps(tmp_path / 'record.ps1', env)
     assert proof.returncode == 0, proof.stderr
     host = Path(env['CA_UNINSTALL_HOST'])
-    text = host.read_text().replace('import writer_session_fence as fence', 'import writer_session_fence as fence\nfence.WRITER_INVENTORY_SHA256 = ' + repr(digest) + "\nfence.control_root = lambda *args, **kwargs: Path(os.environ['CA_UNINSTALL_CONTROL'])")
+    text = host.read_text().replace('import writer_session_fence as fence', 'import writer_session_fence as fence\nfence.WRITER_INVENTORY_SHA256 = ' + repr(digest) + "\nfence.canonical_control_root = lambda *args, **kwargs: Path(os.environ['CA_UNINSTALL_CONTROL'])")
     text = text.replace("(direct / 'control/writer-session/active.json')", "(Path(os.environ['CA_UNINSTALL_CONTROL']) / 'active.json')")
     host.write_text(text, encoding='utf-8')
     old_tree = _tree(install)
@@ -106,6 +106,12 @@ def _fixture(tmp_path):
     evidence = tmp_path / 'protected-control/installation-evidence' / ('run-' + '1' * 32) / 'helper'
     evidence.mkdir(parents=True)
     canonical = source / 'INSTALL_CANONICAL_PORTABLE.ps1'
+    baseline = os.environ.get('CA_RESUME_CANONICAL_SOURCE')
+    if baseline:
+        from tests.test_canonical_portable_uninstall import OS_BOUNDARIES
+        baseline_text=Path(baseline).read_text(encoding='utf-8-sig')
+        baseline_text=baseline_text.replace('$wanted = Command $install',OS_BOUNDARIES+'\n$wanted = Command $install')
+        canonical.write_text(baseline_text,encoding='utf-8-sig')
     text = canonical.read_text(encoding='utf-8-sig')
     text=text.replace(' -WindowStyle Hidden -PassThru'," -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:CA_UNINSTALL_ROOT 'resumed-relay.stdout') -RedirectStandardError (Join-Path $env:CA_UNINSTALL_ROOT 'resumed-relay.stderr') -PassThru")
     text = text.replace("Join-Path $env:LOCALAPPDATA 'KMTech\\DirectSync\\container_audit\\control\\writer-session'", "Join-Path $env:LOCALAPPDATA 'c'")
@@ -129,6 +135,8 @@ def _fixture(tmp_path):
     text = text.replace(receipt_assignment, receipt_assignment + '\n$replacementReceiptPath=Join-Path $env:CA_RESUME_EVIDENCE "replacement-receipt.json"')
     text = text.replace('if (-not $testMode -and $codeRestoreNeeded -and -not $RestoreVerifiedReplacement)',
                         'if ($codeRestoreNeeded -and -not $RestoreVerifiedReplacement)')
+    anchor="[void](Write-ContainerWriterFenceAtomic '' $resumedFence)"
+    text=text.replace(anchor,anchor+"\n        $cut=Join-Path $env:CA_UNINSTALL_ROOT 'interrupt-resume';if(Test-Path -LiteralPath $cut){$remaining=[int]([IO.File]::ReadAllText($cut));if($remaining -gt 0){[IO.File]::WriteAllText($cut,[string]($remaining-1));[Environment]::Exit(86)}}",1)
     text = text.replace("    $child=Invoke-InstallationEvidenceChild 'record-rollback-continuation'",
                         "    if($testMode){$args+='-AllowNoncanonicalLayoutForTest'}\n    $child=Invoke-InstallationEvidenceChild 'record-rollback-continuation'")
     # An external product failure occurs after real replacement. The first
@@ -139,7 +147,7 @@ def _fixture(tmp_path):
     text = helper.read_text(encoding='utf-8-sig')
     text = text.replace(r'KMTech\DirectSync\container_audit\control\writer-session', 'c')
     text = text.replace('$testOverride = (', PROTECTED_OS + r'''
-function Test-InstallationEvidencePrivileged {return @((Get-PSCallStack)|Where-Object {$_.FunctionName -ceq 'Complete-ContainerRollbackContinuation'}).Count -gt 0}
+function Test-InstallationEvidencePrivileged {return @((Get-PSCallStack)|Where-Object {$_.FunctionName -cin @('Complete-ContainerRollbackContinuation','Write-ContainerRollbackContinuationAuthority')}).Count -gt 0}
 function Read-ContainerRollbackRunPreimage {return Get-Content (Join-Path $env:CA_UNINSTALL_ROOT 'registry.json') -Raw|ConvertFrom-Json}
 function Assert-ContainerStartupUpdateTrust([string]$Root) {Assert-InstallationEvidenceProtectedPath $Root}
 function Set-HardenedCodeAcl([string]$Path,[switch]$Recursive) {Assert-InstallationEvidenceProtectedPath $Path}
@@ -261,6 +269,44 @@ def test_corrected_installer_resumes_its_pending_ntfs_rollback_on_rerun(tmp_path
         _assert_one_live_relay(tmp_path, env)
         settled = _invoke(tmp_path, env, source, install, engine, 'settled-plan', '-PlanOnly')
         assert settled.returncode == 0 and 'rollback_resume_status=NOT_FOUND' in settled.stdout, settled.stderr
+
+
+@pytest.mark.parametrize('engine', ['powershell.exe', 'pwsh.exe'])
+def test_same_receipt_can_resume_after_two_more_controller_interruptions(tmp_path, engine):
+    env, source, install, protected, old_tree = _fixture(tmp_path)
+    with _launch_relay(tmp_path, env) as child:
+        _live_preimage(tmp_path, env, source, install, child)
+        journal, record = _produce_pending(tmp_path, env, source, install, engine)
+        original_journal=journal.read_bytes();original_receipt=Path(record['receipt_path']).read_bytes()
+        (tmp_path/'interrupt-resume').write_text('2')
+        for label in ('again-1','again-2'):
+            result=_invoke(tmp_path,env,source,install,engine,label)
+            assert result.returncode==86,result.stdout+result.stderr
+        planned=_invoke(tmp_path,env,source,install,engine,'after-two-plan','-PlanOnly')
+        assert planned.returncode==0 and 'rollback_resume_status=VERIFIED_PENDING' in planned.stdout,planned.stdout+planned.stderr
+        assert len(list(journal.parent.glob('authority-*.json')))==2
+        assert journal.read_bytes()==original_journal and Path(record['receipt_path']).read_bytes()==original_receipt
+        # Completion uses the separate P2-2 change; this regression ends at
+        # authenticated reentry while the original NTFS receipt stays pending.
+
+
+@pytest.mark.parametrize('engine', ['powershell.exe', 'pwsh.exe'])
+def test_same_tuple_forged_lineage_refuses_before_restore_mutation(tmp_path, engine):
+    env,source,install,protected,_=_fixture(tmp_path)
+    with _launch_relay(tmp_path,env) as child:
+        _live_preimage(tmp_path,env,source,install,child)
+        journal,record=_produce_pending(tmp_path,env,source,install,engine)
+        (tmp_path/'interrupt-resume').write_text('1')
+        interrupted=_invoke(tmp_path,env,source,install,engine,'link-cut')
+        assert interrupted.returncode==86,interrupted.stdout+interrupted.stderr
+        links=list(journal.parent.glob('authority-*.json'));assert len(links)==1
+        link=json.loads(links[0].read_text(encoding='utf-8-sig'))
+        link['owner_process_id']=2147483646
+        links[0].write_text(json.dumps(link),encoding='utf-8')
+        before=_tree(install)
+        refused=_invoke(tmp_path,env,source,install,engine,'forged-link-plan','-PlanOnly')
+        assert refused.returncode!=0
+        assert _tree(install)==before and not (journal.parent/'continuation-completed.json').exists()
 
 
 @pytest.mark.parametrize('engine', ['powershell.exe', 'pwsh.exe'])

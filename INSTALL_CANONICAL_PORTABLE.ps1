@@ -1571,10 +1571,27 @@ function Complete-CanonicalRollbackContinuation($Record) {
 }
 
 function Enter-CanonicalRollbackContinuationClaim($Record) {
-    return Enter-ContainerWriterSessionAuthority -SessionId ([string]$Record.session_id) `
-        -AttemptId ([string]$Record.attempt_id) -OrchestratorSha256 ([string]$Record.orchestrator_sha256) `
-        -ReplacementTransactionId ([string]$Record.transaction_id) -WriterContractSha256 ([string]$Record.writer_contract_sha256)
+    $tuple=if($continuationPriorFence){(Read-BootstrapRollbackContinuationAuthority $Record ([string]$Record.record_path) ([string]$Record.record_sha256) $continuationPriorFence).tuple}else{[pscustomobject]@{session_id=$Record.session_id;attempt_id=$Record.attempt_id;orchestrator_sha256=$Record.orchestrator_sha256;replacement_transaction_id=$Record.transaction_id;writer_contract_sha256=$Record.writer_contract_sha256}}
+    return Enter-ContainerWriterSessionAuthority -SessionId ([string]$tuple.session_id) -AttemptId ([string]$tuple.attempt_id) `
+        -OrchestratorSha256 ([string]$tuple.orchestrator_sha256) -ReplacementTransactionId ([string]$tuple.replacement_transaction_id) -WriterContractSha256 ([string]$tuple.writer_contract_sha256)
 }
+function Write-CanonicalRollbackContinuationAuthority($Record) {
+    $args=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
+        '-InstallRoot',$install,'-OperatorLocalAppDataRoot',$lad,'-OperatorSid',$operatorSid,'-ElevationLogPath',($elevationLogPath+'.authority-link'),
+        '-RecordRollbackContinuationAuthority','-ContinuationOwnerProcessId',$PID,'-ContinuationOwnerStartedAtUtc',((Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')),
+        '-RollbackContinuationPath',([string]$Record.record_path),'-RollbackContinuationSha256',([string]$Record.record_sha256),
+        '-WriterFencePreparedReceiptPath',([string]$canonicalWriterFencePreparedReceipt.path),'-WriterFencePreparedReceiptSha256',([string]$canonicalWriterFencePreparedReceipt.sha256),
+        '-WriterFenceHelperPath',$writerFenceHelperPath,'-ExpectedWriterFenceHelperSha256',([string]$sourceManifest.writer_fence_helper_sha256),
+        '-WriterFenceSessionId',$Script:CanonicalWriterFenceSessionId,'-WriterFenceAttemptId',$Script:CanonicalWriterFenceAttemptId,
+        '-WriterFenceReplacementTransactionId',$Script:CanonicalWriterFenceTransactionId)
+    if($testMode){$args+='-AllowNoncanonicalLayoutForTest'}
+    $child=Invoke-InstallationEvidenceChild 'record-rollback-authority-link' $winps $args
+    if($child.ExitCode -ne 0){throw 'Protected rollback authority linkage was not recorded.'}
+    $path=Join-Path (Split-Path -Parent ([string]$Record.record_path)) ('authority-'+$Script:CanonicalWriterFenceAttemptId+'.json')
+    Assert-InstallationEvidenceProtectedPath $path
+    return [pscustomobject]@{path=$path;sha256=Sha $path}
+}
+
 function Exit-CanonicalRollbackContinuationClaim($Claim) {Exit-ContainerWriterSessionAuthority $Claim}
 
 function ReadReplacementReceipt(
@@ -2279,6 +2296,7 @@ $lad = Full $env:LOCALAPPDATA 'LOCALAPPDATA'
 $operatorSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $Script:CanonicalRollbackContinuationCreated=$null
 $rollbackContinuation=$null
+$continuationAuthorityBinding=$null
 $continuationPriorFence=$null
 $continuationPriorFenceSha=''
 if (-not $testMode -and -not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
@@ -2288,10 +2306,7 @@ if (-not $testMode -and -not $Uninstall -and -not $RestoreVerifiedReplacement -a
 if ($rollbackContinuation) {
     $continuationPriorFence=Read-ContainerWriterFence -AllowAbsent
     if ($continuationPriorFence) {
-        foreach($name in @('session_id','attempt_id','orchestrator_sha256','writer_contract_sha256')) {
-            if ([string]$continuationPriorFence.$name -cne [string]$rollbackContinuation.$name) {throw '끝나지 않은 되돌리기의 쓰기 잠금이 달라 변경하지 않았습니다.'}
-        }
-        if ([string]$continuationPriorFence.replacement_transaction_id -cne [string]$rollbackContinuation.transaction_id) {throw '끝나지 않은 되돌리기의 교체 기록이 달라 변경하지 않았습니다.'}
+        [void](Read-BootstrapRollbackContinuationAuthority $rollbackContinuation ([string]$rollbackContinuation.record_path) ([string]$rollbackContinuation.record_sha256) $continuationPriorFence)
         $continuationPriorFenceSha=Get-ContainerWriterFenceFileSha256 (Get-ContainerWriterFenceActivePath)
     }
 }
@@ -2628,6 +2643,9 @@ if ($continuationPriorFence) {
             -DelegationToken $Script:CanonicalWriterFenceDelegationToken -DelegatedSources $canonicalWriterFenceDelegatedSources `
             -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(20).ToString('o'))
         Assert-ContainerWriterSessionAuthority $resumedFence $canonicalWriterFenceAuthority
+        $continuationAuthorityBinding=Write-CanonicalRollbackContinuationAuthority $rollbackContinuation
+        $resumedFence.prepared_receipt_path=[string]$continuationAuthorityBinding.path
+        $resumedFence.prepared_receipt_sha256=[string]$continuationAuthorityBinding.sha256
         [void](Write-ContainerWriterFenceAtomic '' $resumedFence)
     } finally {Exit-ContainerWriterAdmission $continuationAdmission}
 }
@@ -2668,6 +2686,8 @@ elseif ($retirementResume) {
     finally { Exit-ContainerWriterAdmission $resumeAdmission }
 }
 else {
+$fencePreparedBinding=$canonicalWriterFencePreparedReceipt
+if($rollbackContinuation){$continuationAuthorityBinding=Write-CanonicalRollbackContinuationAuthority $rollbackContinuation;$fencePreparedBinding=$continuationAuthorityBinding}
 [void](Start-ContainerWriterFence `
     -Status 'INSTALLING' `
     -OwnerKind 'canonical_installer' `
@@ -2677,8 +2697,8 @@ else {
     -SessionStartedAtUtc $canonicalWriterFenceStartedAtUtc `
     -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
     -WriterContractSha256 $canonicalWriterFenceContractSha256 `
-    -PreparedReceiptPath ([string]$canonicalWriterFencePreparedReceipt.path) `
-    -PreparedReceiptSha256 ([string]$canonicalWriterFencePreparedReceipt.sha256) `
+    -PreparedReceiptPath ([string]$fencePreparedBinding.path) `
+    -PreparedReceiptSha256 ([string]$fencePreparedBinding.sha256) `
     -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
     -DelegatedSources $canonicalWriterFenceDelegatedSources `
     -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(20).ToString('o')) `
@@ -2716,6 +2736,7 @@ $audit = [ordered]@{
         restore_failure_code=''
     }
     code_replacement=[ordered]@{
+        continuation_authority_link=$continuationAuthorityBinding
         status='NOT_REQUIRED'
         prestate='NOT_EVALUATED'
         transaction_id=$replacementTransactionId

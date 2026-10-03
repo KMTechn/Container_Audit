@@ -1014,3 +1014,7 @@ H 성공으로 native 미완 rollback 이어 하기를 실행하지 않았으며
 A≠B일 때 INSTALL_CANONICAL_PORTABLE.ps1이 실제 B를 from으로 선택하며, direct helper의 current 통째 교체는 거절한다. 새 C와 기존 A/B를 검증하고 보호 receipt를 제어 게시보다 먼저 만든다. 부분 게시/후속 실패는 같은 receipt 복원으로 C를 보존하고 원 policy/active/transition/task와 사용자 Run·relay를 복원한다. 보호 기록에 없는 bytes나 권한 변화는 수용하지 않는다. 미완 복구는 정확한 successor packet과 protected 원 기록이 있어야 이어 간다.
 
 NTFS 함수 회귀의 코드 이동·hash·반복 복원은 실제다. Task Scheduler/CIM/ACL/승격/사용자 token 관측은 시험 seam이며 실제 PC의 A≠B→C 성공·실패·전원 단절 수용은 아직 NOT TESTED다. 첫 설치/A=B 경로의 기존 집중 회귀를 재검증하고, 배포 전 랩에서 옛 판 위 설치 1회 및 내용 소유 제거 수렴 1회를 진행한다. 정식 선언·pin·서명 쌍 재생성은 coordinator 수용 단계로 남긴다.
+
+### sub-189 P2-1 검증 범위
+
+PS5.1/PS7 owned NTFS fixture에서 최초 미완 복구 뒤 controller를 두 번 더 중단하고 같은 원 receipt/journal로 VERIFIED_PENDING에 재진입한다. 실제 Python admission root는 PS의 canonical control root와 일치시킨다. 보호 ACL/registry/task/token 관측은 seam이며 native 상승·전원 단절은 NOT TESTED다. D 경합 timeout은 C의 같은 90초 조건으로 대조하며 실패 로그를 보존한다.

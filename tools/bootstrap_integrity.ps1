@@ -1,4 +1,4 @@
-﻿$BootstrapIntegrityFileName = "bootstrap-integrity.json"
+$BootstrapIntegrityFileName = "bootstrap-integrity.json"
 $BootstrapIntegritySchema = "container-audit-bootstrap-integrity-v1"
 
 function ConvertTo-BootstrapPrincipalSid([string]$Identity) {
@@ -1829,6 +1829,63 @@ function Read-BootstrapReplacementReceipt(
     catch { throw 'Replacement receipt JSON is invalid.' }
 }
 
+
+
+function Read-BootstrapRollbackContinuationAuthority($Record,[string]$JournalPath,[string]$JournalSha256,$Fence,[int]$Depth=0,[switch]$AllowLiveOwner) {
+    if($Depth -gt 128){throw 'Rollback authority lineage exceeds its bound.'}
+    $names=@('session_id','attempt_id','orchestrator_sha256','writer_contract_sha256','replacement_transaction_id')
+    $original=[pscustomobject]@{session_id=[string]$Record.session_id;attempt_id=[string]$Record.attempt_id;
+        orchestrator_sha256=[string]$Record.orchestrator_sha256;writer_contract_sha256=[string]$Record.writer_contract_sha256;replacement_transaction_id=[string]$Record.transaction_id}
+    $matches=$true;foreach($name in $names){if([string]$Fence.$name -cne [string]$original.$name){$matches=$false}}
+    if($matches){return [pscustomobject]@{tuple=$original;link_sha256='';owner_process_id=[int]$Record.owner_process_id;owner_started_at_utc=[string]$Record.owner_started_at_utc}}
+    if([string]$Fence.attempt_id -cnotmatch '^[0-9a-f]{32}$'){throw 'Rollback authority attempt differs.'}
+    $path=Join-Path (Split-Path -Parent $JournalPath) ('authority-'+[string]$Fence.attempt_id+'.json')
+    Assert-InstallationEvidenceProtectedPath $path
+    Assert-BootstrapNoReparsePoint $path 'rollback authority link' -PathOnly
+    if((Get-Item -LiteralPath $path).Length -gt 131072){throw 'Rollback authority link is oversized.'}
+    $sha=Get-FileSha256 $path
+    $link=Read-BootstrapReplacementReceipt $path $sha
+    if(-not(Test-WriterSessionContractExactPropertySet $link @('schema','transaction_id','journal_sha256','receipt_sha256','previous','authority','owner_process_id','owner_started_at_utc','prepared_receipt_path','prepared_receipt_sha256','previous_link_sha256','secret_values_recorded')) -or
+        [string]$link.schema -cne 'container-audit-rollback-authority-link-v1' -or
+        [string]$link.transaction_id -cne [string]$Record.transaction_id -or [string]$link.journal_sha256 -cne $JournalSha256 -or
+        (Get-FileSha256 $JournalPath) -cne $JournalSha256 -or [string]$link.receipt_sha256 -cne [string]$Record.receipt_sha256 -or
+        $link.secret_values_recorded -isnot [bool] -or $link.secret_values_recorded -or
+        -not(Test-WriterSessionContractExactPropertySet $link.previous $names) -or -not(Test-WriterSessionContractExactPropertySet $link.authority $names) -or
+        [string]$link.authority.attempt_id -cne [string]$Fence.attempt_id -or
+        [string]$link.authority.orchestrator_sha256 -cne [string]$Record.orchestrator_sha256 -or
+        [string]$link.authority.writer_contract_sha256 -cne [string]$Record.writer_contract_sha256 -or
+        [int]$link.owner_process_id -le 0){throw 'Rollback authority link binding differs.'}
+    foreach($name in $names){if([string]$link.authority.$name -cne [string]$Fence.$name){throw 'Rollback linked fence tuple differs.'}}
+    if($Depth -eq 0) {
+        if(Test-BootstrapSamePath ([string]$Fence.prepared_receipt_path) $path) {
+            if([string]$Fence.prepared_receipt_sha256 -cne $sha){throw 'Rollback fence-to-link hash differs.'}
+        }else{
+            # A release authorization can replace the fence's preparation only
+            # when its audited bytes bind this exact protected link as well.
+            $release=Read-BootstrapReplacementReceipt ([string]$Fence.prepared_receipt_path) ([string]$Fence.prepared_receipt_sha256)
+            if([string]$release.schema -cne 'container-audit-writer-release-authorization-v1' -or
+                [string]$release.session_id -cne [string]$Fence.session_id -or [string]$release.attempt_id -cne [string]$Fence.attempt_id -or
+                [string]$release.replacement_transaction_id -cne [string]$Fence.replacement_transaction_id){throw 'Rollback link publication differs.'}
+            $auditPath=Get-StrictFullPath ([string]$release.install_audit_path) 'rollback release audit'
+            Assert-BootstrapNoReparsePoint $auditPath 'rollback release audit' -PathOnly
+            if((Get-Item -LiteralPath $auditPath).Length -gt 1048576 -or (Get-FileSha256 $auditPath) -cne [string]$release.install_audit_sha256){throw 'Rollback release audit bytes differ.'}
+            $audit=Get-Content -LiteralPath $auditPath -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+            if((Get-FileSha256 $auditPath) -cne [string]$release.install_audit_sha256){throw 'Rollback release audit changed.'}
+            if(-not(Test-BootstrapSamePath ([string]$audit.code_replacement.continuation_authority_link.path) $path) -or
+                [string]$audit.code_replacement.continuation_authority_link.sha256 -cne $sha){throw 'Rollback release audit link differs.'}
+        }
+    }
+    $previous=Read-BootstrapRollbackContinuationAuthority $Record $JournalPath $JournalSha256 $link.previous ($Depth+1)
+    if([string]$link.previous_link_sha256 -cne [string]$previous.link_sha256){throw 'Rollback authority predecessor hash differs.'}
+    [void][DateTime]::Parse([string]$link.owner_started_at_utc)
+    $owners=@(Get-Process -Id ([int]$link.owner_process_id) -ErrorAction SilentlyContinue)
+    if($owners.Count -and (-not $AllowLiveOwner -or $Depth -ne 0 -or
+        $owners[0].StartTime.ToUniversalTime().ToString('o') -cne ([DateTime]$link.owner_started_at_utc).ToUniversalTime().ToString('o'))){throw 'Rollback linked owner is alive or PID reused.'}
+    if([string]$link.prepared_receipt_sha256 -cnotmatch '^[0-9a-f]{64}$'){throw 'Rollback linked preparation hash differs.'}
+    # The immutable protected link is the durable preparation binding. Rotating
+    # caller evidence is not required to remain available on a later retry.
+    return [pscustomobject]@{tuple=$link.authority;link_sha256=$sha;owner_process_id=[int]$link.owner_process_id;owner_started_at_utc=[string]$link.owner_started_at_utc}
+}
 
 function Get-BootstrapSupportedVersionRestoreState($Receipt,[string]$ReceiptPath,[string]$InstallRoot,[string]$ExpectedAppId,[string]$ExpectedTransactionId,[string]$ExpectedHelperSha256) {
     $fixed=Get-StrictFullPath $InstallRoot 'supported fixed owner'

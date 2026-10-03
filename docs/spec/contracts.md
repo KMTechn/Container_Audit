@@ -500,3 +500,7 @@ legacy receipt self-path 규칙은 그대로이고, 새 journal로 검증된 사
 정상 자동 적용 뒤 fixed owner A와 actual active B가 다를 때만 지원 설치가 versions/C를 준비하고 B→C를 선택한다. A와 B는 이동하지 않는다. 기존 immutable replacement receipt에 active_version 선택, A/B/C 전체 파일·record·ACL identity, 원 제어 preimage와 허용된 게시 cut의 SHA를 결속한다. 같은 protected rollback journal, 원 receipt 사본, 복구 권한, Run 복원, ordinary relay READY와 끝 상태를 소비한다. 첫 설치와 A=B의 current 교체는 기존 경로다.
 
 설치/이종 active 등록은 실제 stock 기록·bytes·보호·신뢰 키와 derived SYSTEM task를 확인한다. 불안정/잔재/namespace 충돌은 한국어 지원 제거 안내로 멈춘다. 제거와 사용자 정리는 손상된 machine control 해석을 전제로 삼지 않는다. 오류는 제한된 cause chain/native errno·winerror/exit code를 보존하고 credential text를 마스킹한다. data/API 동일성으로 unsigned 쌍을 승인하던 미사용 fallback은 제거했다.
+
+### sub-189 P2-1: 반복 중단 복구 권한 결속
+
+최초 보호 journal/receipt는 불변이다. 새 복구 controller는 원 journal SHA·receipt SHA·직전 authority tuple/link SHA·새 caller preparation SHA·살아 있는 owner PID/시작 시각을 보호된 immutable authority link로 결속한 뒤 그 링크 path/SHA를 fence에 게시한다. 다음 재진입은 보호 링크 사슬과 직전 owner 종료를 검증하며 같은 기록의 반복 중단을 이어 간다. 임의 tuple, 같은 tuple의 바뀐 링크, 살아 있거나 재사용된 owner는 거절한다. DISPLACED/current 부재는 기존 지원 범위 밖이다.

@@ -37,6 +37,9 @@ param(
     [switch]$RepairAbandonedInstallationParent,
     [switch]$RepairOwnedInstallationParent,
     [switch]$RecordRollbackContinuation,
+    [switch]$RecordRollbackContinuationAuthority,
+    [int]$ContinuationOwnerProcessId=0,
+    [string]$ContinuationOwnerStartedAtUtc="",
     [switch]$CompleteRollbackContinuation,
     [string]$RollbackAuditPath = '',
     [string]$RollbackAuditSha256 = '',
@@ -314,6 +317,44 @@ function Read-ContainerRollbackContinuation([string]$Path,[string]$ExpectedSha25
     return $record
 }
 
+
+function Write-ContainerRollbackContinuationAuthority {
+    if(-not(Test-InstallationEvidencePrivileged)){throw 'Rollback authority linkage requires protected evidence authority.'}
+    $record=Read-ContainerRollbackContinuation $RollbackContinuationPath $RollbackContinuationSha256
+    $prior=Read-ContainerWriterFence -AllowAbsent
+    if($null -eq $prior){$prior=[pscustomobject]@{session_id=$record.session_id;attempt_id=$record.attempt_id;orchestrator_sha256=$record.orchestrator_sha256;writer_contract_sha256=$record.writer_contract_sha256;replacement_transaction_id=$record.transaction_id}}
+    $previous=Read-BootstrapRollbackContinuationAuthority $record $RollbackContinuationPath $RollbackContinuationSha256 $prior
+    if(@(Get-Process -Id ([int]$record.owner_process_id) -ErrorAction SilentlyContinue).Count){throw 'Rollback original owner is alive or reused.'}
+    Assert-BootstrapNoReparsePoint $WriterFencePreparedReceiptPath 'rollback renewed preparation' -PathOnly
+    if((Get-Item -LiteralPath $WriterFencePreparedReceiptPath).Length -gt 65536 -or
+        (Get-FileSha256 $WriterFencePreparedReceiptPath) -cne $WriterFencePreparedReceiptSha256){throw 'Rollback renewed preparation bytes differ.'}
+    $prepared=Get-Content -LiteralPath $WriterFencePreparedReceiptPath -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+    if((Get-FileSha256 $WriterFencePreparedReceiptPath) -cne $WriterFencePreparedReceiptSha256 -or $prepared.secret_values_recorded -ne $false){throw 'Rollback renewed preparation changed or records secrets.'}
+    if([string]$prepared.schema -cne 'container-audit-canonical-writer-prepared-v1' -or [string]$prepared.status -cne 'PREPARED' -or
+        [string]$prepared.operator_sid -cne $OperatorSid -or -not(Test-SamePath ([string]$prepared.operator_local_appdata_root) $OperatorLocalAppDataRoot) -or
+        [string]$prepared.source_manifest_sha256 -cne [string]$record.source_manifest_sha256 -or
+        [string]$prepared.orchestrator_sha256 -cne [string]$record.orchestrator_sha256 -or
+        [string]$prepared.writer_contract_sha256 -cne [string]$record.writer_contract_sha256){throw 'Rollback renewed preparation binding differs.'}
+    foreach($name in @('session_id','attempt_id','replacement_transaction_id')) {
+        $expected=switch($name){'session_id'{$WriterFenceSessionId};'attempt_id'{$WriterFenceAttemptId};'replacement_transaction_id'{$WriterFenceReplacementTransactionId}}
+        if([string]$prepared.$name -cnotmatch '^[0-9a-f]{32}$' -or [string]$prepared.$name -cne [string]$expected){throw 'Rollback renewed authority tuple differs.'}
+    }
+    $owner=Get-Process -Id $ContinuationOwnerProcessId -ErrorAction Stop
+    if($owner.StartTime.ToUniversalTime().ToString('o') -cne $ContinuationOwnerStartedAtUtc){throw 'Rollback renewed owner identity differs.'}
+    $mutex=$null;$acquired=$false
+    try {
+        $name=Get-ContainerWriterSessionAuthorityMutexName ([string]$prepared.session_id) ([string]$prepared.attempt_id) ([string]$prepared.orchestrator_sha256) ([string]$prepared.replacement_transaction_id) ([string]$prepared.writer_contract_sha256)
+        $mutex=[Threading.Mutex]::OpenExisting($name)
+        try{$acquired=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$acquired=$true}
+        if($acquired){throw 'Rollback renewed authority is not held by its controller.'}
+    }finally{if($acquired){$mutex.ReleaseMutex()};if($null -ne $mutex){$mutex.Dispose()}}
+    $tuple=[ordered]@{};foreach($name in @('session_id','attempt_id','orchestrator_sha256','writer_contract_sha256','replacement_transaction_id')){$tuple[$name]=[string]$prepared.$name}
+    $link=[ordered]@{schema='container-audit-rollback-authority-link-v1';transaction_id=[string]$record.transaction_id;journal_sha256=$RollbackContinuationSha256;receipt_sha256=[string]$record.receipt_sha256;
+        previous=$previous.tuple;authority=$tuple;owner_process_id=$ContinuationOwnerProcessId;owner_started_at_utc=$ContinuationOwnerStartedAtUtc;
+        prepared_receipt_path=$WriterFencePreparedReceiptPath;prepared_receipt_sha256=$WriterFencePreparedReceiptSha256;previous_link_sha256=[string]$previous.link_sha256;secret_values_recorded=$false}
+    [void](Write-BootstrapReplacementReceipt (Join-Path (Split-Path -Parent $RollbackContinuationPath) ('authority-'+$WriterFenceAttemptId+'.json')) $link)
+}
+
 function Read-ContainerRollbackRunPreimage {
     $key=[Microsoft.Win32.Registry]::Users.OpenSubKey(($OperatorSid+'\Software\Microsoft\Windows\CurrentVersion\Run'))
     try {
@@ -436,6 +477,13 @@ function Enter-ContainerPlacementWriterFence {
             (Test-SamePath ([string]$active.prepared_receipt_path) ([string]$operatorBinding.receipt_path)) -and
             [string]$active.prepared_receipt_sha256 -ceq [string]$operatorBinding.receipt_sha256
         )
+        if(-not $preparedMatches -and $RollbackContinuationPath) {
+            $record=Read-ContainerRollbackContinuation $RollbackContinuationPath $RollbackContinuationSha256
+            [void](Read-BootstrapRollbackContinuationAuthority $record $RollbackContinuationPath $RollbackContinuationSha256 $active -AllowLiveOwner)
+            $link=Read-BootstrapReplacementReceipt ([string]$active.prepared_receipt_path) ([string]$active.prepared_receipt_sha256)
+            $preparedMatches=(Test-SamePath ([string]$link.prepared_receipt_path) ([string]$operatorBinding.receipt_path)) -and
+                [string]$link.prepared_receipt_sha256 -ceq [string]$operatorBinding.receipt_sha256
+        }
         $uninstallRecovery = (
             -not [string]::IsNullOrWhiteSpace($RestoreUninstallRecordPath) -and
             [string]$ExpectedUninstallRecordSha256 -cmatch '^[0-9a-f]{64}$' -and
@@ -1243,7 +1291,7 @@ if (-not $DryRun.IsPresent -and ($ElevationLogPath -or (Test-InstallationEvidenc
 }
 $placementWriterFenceLease = $null
 $Script:StartupUpdatePreimage = $null
-if (-not $DryRun.IsPresent -and (-not $testOverride -or $Uninstall.IsPresent -or $RestoreUninstallRecordPath)) {
+if (-not $RecordRollbackContinuationAuthority -and -not $DryRun.IsPresent -and (-not $testOverride -or $Uninstall.IsPresent -or $RestoreUninstallRecordPath)) {
     try {
         $placementWriterFenceLease = Enter-ContainerPlacementWriterFence
         . (Get-InstallationVerifiedScript $WriterFenceHelperPath $ExpectedWriterFenceHelperSha256)
@@ -1282,6 +1330,13 @@ if (-not $DryRun.IsPresent -and (-not $testOverride -or $Uninstall.IsPresent -or
     }
 }
 try {
+if($RecordRollbackContinuationAuthority) {
+    if($DryRun -or $Uninstall -or $ReplaceExistingVerifiedPortable -or $RestoreVerifiedReplacement -or $CompleteRollbackContinuation -or $RecordRollbackContinuation){throw 'Rollback authority linkage accepts only protected evidence inputs.'}
+    . ( Get-InstallationVerifiedScript $WriterFenceHelperPath $ExpectedWriterFenceHelperSha256)
+    Write-ContainerRollbackContinuationAuthority
+    'rollback_continuation_authority=RECORDED'
+    exit 0
+}
 if ($CompleteRollbackContinuation) {
     if ($DryRun -or $Uninstall -or $RecordRollbackContinuation -or $ReplaceExistingVerifiedPortable -or $RestoreVerifiedReplacement -or $testOverride) {throw 'Rollback completion accepts only protected evidence inputs.'}
     Complete-ContainerRollbackContinuation
