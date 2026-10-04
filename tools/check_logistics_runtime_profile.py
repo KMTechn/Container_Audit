@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from logistics_runtime_profile import default_profile_path, load_logistics_runtime_profile  # noqa: E402
+from logistics_runtime_profile import default_profile_path, load_logistics_runtime_profile, resolve_logistics_profile_path  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -21,14 +21,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--optional", action="store_true")
     args = parser.parse_args(argv)
     try:
-        from data_generation_guard import record_before_data_open
+        from data_generation_guard import record_before_owner_paths
         from storage_policy import build_container_audit_storage_paths
         from writer_session_fence import writer_admission
         # The optional absent-profile branch opens no user file and writes no state.
-        if not (args.optional and not Path(args.profile_path).is_file()):
+        args.profile_path = resolve_logistics_profile_path(args.profile_path)
+        if not (args.optional and not args.profile_path.is_file()):
             with writer_admission("logistics_profile_install"):
                 storage = build_container_audit_storage_paths(application_path=str(REPO_ROOT))
-                record_before_data_open(storage.data_root)
+                record_before_owner_paths(storage.data_root, file_paths=(args.profile_path,))
         profile = load_logistics_runtime_profile(
             required=not args.optional,
             profile_path=args.profile_path,

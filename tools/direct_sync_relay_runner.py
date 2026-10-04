@@ -27,7 +27,7 @@ from direct_sync_runtime import (  # noqa: E402
     run_relay_once,
 )
 from writer_session_fence import writer_sink  # noqa: E402
-from data_generation_guard import DataGenerationBlocked, record_before_data_open  # noqa: E402
+from data_generation_guard import DataGenerationBlocked, record_before_owner_paths  # noqa: E402
 
 
 ALLOWED_SOURCE_PREFIX = "이적작업이벤트로그_"
@@ -767,11 +767,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.enqueue_source_file and args.scan_source_dir:
         parser.error("--enqueue-source-file and --scan-source-dir are mutually exclusive")
 
+    from data_generation_guard import resolve_owner_path
+    from logistics_runtime_profile import resolve_logistics_profile_path
+    files, directories = [], []
+    for name, value in vars(args).copy().items():
+        if value and name.endswith(('_path', '_file', '_dir')):
+            path = resolve_owner_path(value)
+            setattr(args, name, path)
+            (directories if name.endswith('_dir') else files).append(path)
+    profile_path = resolve_logistics_profile_path()
+    if profile_path.is_file():
+        files.append(profile_path)
     config = _build_config(args)
     try:
         # Explicit raw queue roots may differ from the GUI root; the shared SID
         # control slot ensures installer probes also observe this process.
-        record_before_data_open(Path(args.db_path).absolute().parent)
+        record_before_owner_paths(Path(args.db_path).parent, file_paths=files, directory_paths=directories)
     except DataGenerationBlocked as exc:
         print(str(exc))
         return 1

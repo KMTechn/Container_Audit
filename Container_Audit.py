@@ -213,7 +213,7 @@ from tk_serial_ui_lane import (
     TkSerialUiLane,
 )
 from writer_session_fence import WriterFencedError, writer_admission, writer_sink
-from data_generation_guard import DataGenerationBlocked, probe_before_data_open, record_before_data_open
+from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, record_before_owner_paths, resolve_owner_path
 from tray_state import (
     ACTIVATION_EVENT_STATE_KEY,
     ACTIVATION_EVENT_STATE_SCHEMA_VERSION,
@@ -21531,7 +21531,13 @@ def _prepare_gui_startup(*, data_root=None):
             )
             if storage_paths.custom_data_root and not storage_paths.data_root.is_dir():
                 raise DataRootUnavailableError("GUI data root is unavailable")
-            probe_before_data_open(storage_paths.data_root)
+            from logistics_runtime_profile import resolve_logistics_profile_path
+            profile_candidates = [resolve_logistics_profile_path()]
+            profile_override = os.getenv(LOGISTICS_PROFILE_PATH_ENV, "").strip()
+            if profile_override:
+                profile_candidates.append(resolve_owner_path(profile_override))
+            profile_candidates = [path for path in profile_candidates if path.is_file()]
+            probe_before_owner_paths(storage_paths.data_root, file_paths=profile_candidates)
             if storage_paths.custom_data_root:
                 validate_existing_data_root(storage_paths.data_root)
         except (OSError, ValueError) as exc:
@@ -21581,7 +21587,7 @@ def _prepare_gui_startup(*, data_root=None):
                         application_path
                     ).onboarding_report_path
                 )
-        record_before_data_open(storage_paths.data_root)
+        record_before_owner_paths(storage_paths.data_root, file_paths=profile_candidates)
         try:
             catalog_unconfirmed = False
             catalog_context = {}

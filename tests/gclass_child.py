@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 
 source, scenario, root, generation_case = sys.argv[1:]
+is_external = generation_case.startswith('external')
 sys.path.insert(0, source)
 root = Path(root)
 data = root / 'data'
@@ -28,7 +29,7 @@ for path in paths:
     path.parent.mkdir(parents=True, exist_ok=True)
     if generation_case == 'corrupt':
         path.write_text('{', encoding='utf-8')
-    elif generation_case != 'missing':
+    elif generation_case != 'missing' and not is_external:
         generation.record_generation(path, app_id='container_audit', subject_sid=registration._current_user_sid(),
             version='v999.0.0' if generation_case == 'newer' else release['version'],
             build_id='b'*40 if generation_case != 'allow' else release['build_id'],
@@ -36,18 +37,38 @@ for path in paths:
             compatibility_verified=False)
 
 identity = storage.direct_sync_root / registration.PRODUCER_IDENTITY_FILENAME
+external = root/'external'
+if is_external:
+    external.mkdir()
+    generation.record_generation(external/'data-generation.json', app_id='container_audit',
+        subject_sid=registration._current_user_sid(), version='v999.0.0',build_id='b'*40,
+        data_compatible_min_version='v999.0.0',compatibility_verified=False)
+    identity = external/'identity.json'
 identity.parent.mkdir(parents=True, exist_ok=True)
 identity.write_text(json.dumps({'schema_version': registration.PRODUCER_IDENTITY_SCHEMA_VERSION,
     **{name: 'synthetic-' + name.replace('_', '-') for name in registration.PRODUCER_IDENTITY_REQUIRED_FIELDS}}), encoding='utf-8')
 credential = storage.credential_path
+if is_external: credential = external/'credential.bin'
 credential.parent.mkdir(parents=True, exist_ok=True)
 credential.write_text('{}', encoding='utf-8')
 manifest = storage.producer_manifest_path
+if is_external: manifest = external/'manifest.json'
 manifest.write_text('{}', encoding='utf-8')
 profile = root/'profile/logistics-profile.json'
+if is_external: profile = external/'profile.json'
+if generation_case == 'external-default':
+    from logistics_runtime_profile import default_logistics_profile_path
+    for name in ('CONTAINER_AUDIT_DATA_ROOT','KM_LOGISTICS_PROFILE_PATH','CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH'):
+        os.environ.pop(name, None)
+    profile = default_logistics_profile_path()
+    profile.parent.mkdir(parents=True, exist_ok=True)
+    generation.record_generation(profile.parent/'data-generation.json',app_id='container_audit',
+        subject_sid=registration._current_user_sid(),version='v999.0.0',build_id='b'*40,
+        data_compatible_min_version='v999.0.0',compatibility_verified=False)
 profile.parent.mkdir(parents=True, exist_ok=True)
 profile.write_text('{}', encoding='utf-8')
 queue = storage.direct_sync_root/'queue/relay.sqlite3'
+if is_external: queue = external/'queue.sqlite3'
 queue.parent.mkdir(parents=True, exist_ok=True)
 queue.write_bytes(b'synthetic owner queue')
 resident_status = storage.direct_sync_root/'status/resident-existing.json'
@@ -60,6 +81,24 @@ raw_status = storage.direct_sync_root/'status/direct_sync_relay_status.json'
 raw_status.write_text('{"status":"PASS"}', encoding='utf-8')
 os.environ['CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH'] = str(profile)
 os.environ['KM_LOGISTICS_PROFILE_PATH'] = str(profile)
+if generation_case == 'external-default':
+    os.environ.pop('KM_LOGISTICS_PROFILE_PATH',None)
+    os.environ.pop('CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH',None)
+if generation_case == 'external-tilde': os.environ['USERPROFILE'] = str(root)
+if generation_case == 'external-link':
+    import subprocess
+    link = root/'link'
+    assert external.resolve().is_relative_to(root.resolve())
+    completed = subprocess.run(['cmd.exe','/c','mklink','/J',str(link),str(external)],
+        capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    assert completed.returncode == 0, 'isolated junction creation failed'
+
+def argument(path):
+    if generation_case == 'external-tilde': return '~/' + path.relative_to(root).as_posix()
+    if generation_case == 'external-relative': return os.path.relpath(path, Path.cwd())
+    if generation_case == 'external-case': return str(path).swapcase()
+    if generation_case == 'external-link': return str(link/path.relative_to(external))
+    return str(path)
 watched = {str(p.resolve()).casefold() for p in (identity, credential, manifest, profile, queue, raw_status)}
 observed = {'data_reads': 0, 'network_calls': 0, 'relay_stops': 0, 'autostart_changes': 0, 'task_changes': 0}
 
@@ -123,7 +162,7 @@ user_relay.start_user_relay_process = child
 
 def execute():
     if scenario.startswith('register'):
-        args = ['--app-root', source, '--producer-identity-path', str(identity), '--report-path', str(root/'registration-report.json')]
+        args = ['--app-root', source, '--producer-identity-path', argument(identity), '--report-path', str(root/'registration-report.json')]
         if scenario == 'register-hash':
             args += ['--manifest-path', str(manifest), '--verify-manifest-hash', '0'*64]
         if scenario == 'register-2pc':
@@ -133,10 +172,11 @@ def execute():
         from current_user_onboarding import onboarding_main
         return onboarding_main(['--app-root', source])
     if scenario == 'supervisor':
-        return user_relay.main(['--app-root', source, '--data-root', str(data), '--once'])
+        return user_relay.main(['--app-root', source, '--data-root', str(data), '--once'] +
+            (['--direct-sync-root',str(external)] if is_external else []))
     if scenario == 'resident-cycle':
         result = user_relay.run_persistent_relay_loop(
-            lambda: user_relay._runtime_cycle(app_root=Path(source), direct_sync_root=storage.direct_sync_root,
+            lambda: user_relay._runtime_cycle(app_root=Path(source), direct_sync_root=external if is_external else storage.direct_sync_root,
                                              scan_source_dir=storage.events_dir),
             status_path=storage.direct_sync_root/'status/resident-existing.json', max_cycles=1)
         print(result.get('last_cycle', {}).get('error_message', ''))
@@ -152,7 +192,7 @@ def execute():
         if mode == 'status':
             args = [mode, '--db-path', str(queue)]
         elif mode in ('pause', 'resume'):
-            args = [mode, '--operator-pause-path', str(root/'pause.json'), '--operator-id', 'test', '--reason', 'synthetic']
+            args = [mode, '--operator-pause-path', str((external if is_external else root)/'pause.json'), '--operator-id', 'test', '--reason', 'synthetic']
         elif mode == 'resolve-review':
             args = [mode, '--db-path', str(queue), '--relay-id', 'synthetic', '--operator-id', 'test', '--reason', 'synthetic',
                 '--resolution', 'historical_local_only', '--evidence-path', str(root/'evidence.json'), '--evidence-sha256', 'a'*64,
@@ -166,7 +206,13 @@ def execute():
         return main(args)
     if scenario == 'profile-check':
         from tools.check_logistics_runtime_profile import main
-        return main(['--profile-path', str(profile)])
+        return main(['--profile-path', argument(profile)])
+    if scenario == 'profile-check-default':
+        from tools.check_logistics_runtime_profile import main
+        return main([])
+    if scenario in ('profile-check-empty','profile-check-env'):
+        from tools.check_logistics_runtime_profile import main
+        return main(['--profile-path',''] if scenario=='profile-check-empty' else [])
     if scenario == 'profile-install':
         from tools.install_logistics_runtime_profile import main
         os.environ['KMTECH_GCLASS_SYNTHETIC_TOKEN'] = 'synthetic-test-input'
@@ -175,7 +221,8 @@ def execute():
             '--token-env', 'KMTECH_GCLASS_SYNTHETIC_TOKEN', '--replace'])
     if scenario == 'install-pack':
         from tools.direct_sync_relay_install_pack import main
-        return main(['--app-root', source, '--report-path', str(root/'install-pack-report.json')])
+        return main(['--app-root', source, '--report-path', str(root/'install-pack-report.json')] +
+            (['--credential-path',str(credential)] if is_external else []))
     if scenario == 'lifecycle':
         from current_user_onboarding import restore_current_user_lifecycle_after_replacement
         return restore_current_user_lifecycle_after_replacement(source, code_root=source,
@@ -186,6 +233,11 @@ def execute():
         from current_user_onboarding import remove_current_user_setup
         return remove_current_user_setup(source, relay_stopper=stop)
     if scenario == 'active-probe':
+        if is_external:
+            from types import SimpleNamespace
+            from kmtech_factory_contracts.active_work_probe import adapters
+            adapters.create_adapter = lambda app, target: SimpleNamespace(data_root=data,
+                direct_sync_root=external,profile_path=profile,legacy_profile_paths=())
         from tools.active_work_probe import main
         return main(['-Mode', 'active-work-evidence', '-App', 'Container_Audit', '-OutputPath', str(root/'active-work.json')])
     if scenario == 'review-report':
@@ -200,7 +252,8 @@ def execute():
         mode = scenario.removeprefix('hosted-')
         if mode == 'onboarding':
             return dispatch_product_mode([ONBOARD_CURRENT_USER_MODE, '--app-root', source])
-        return dispatch_product_mode([USER_RELAY_MODE, '--app-root', source, '--data-root', str(data), '--once'])
+        return dispatch_product_mode([USER_RELAY_MODE, '--app-root', source, '--data-root', str(data), '--once'] +
+            (['--direct-sync-root',str(external)] if is_external else []))
     raise AssertionError(scenario)
 
 capture = io.StringIO()

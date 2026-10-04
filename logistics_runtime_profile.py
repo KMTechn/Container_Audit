@@ -438,6 +438,11 @@ def default_logistics_profile_path(
 default_profile_path = default_logistics_profile_path
 
 
+def resolve_logistics_profile_path(profile_path=None, *, environ=None):
+    value = profile_path if str(profile_path or "").strip() else default_logistics_profile_path(environ)
+    return assert_path_has_no_reparse_components(value, label="runtime profile")
+
+
 def _safe_text(value: Any, field_name: str) -> str:
     text = str(value or "").strip()
     if (
@@ -668,10 +673,7 @@ def load_logistics_runtime_profile(
         return None
     required_value = logistics_runtime_required(values) if required is None else bool(required)
     explicit_path = profile_path or str(values.get(PROFILE_PATH_ENV) or "").strip()
-    path = assert_path_has_no_reparse_components(
-        Path(profile_path) if profile_path else default_logistics_profile_path(values),
-        label="runtime profile",
-    )
+    path = resolve_logistics_profile_path(profile_path, environ=values)
     if not path.exists():
         if required_value or explicit_path:
             raise LogisticsRuntimeConfigurationError("machine logistics profile is missing")

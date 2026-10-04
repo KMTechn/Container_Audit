@@ -924,13 +924,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    from data_generation_guard import DataGenerationBlocked, probe_before_data_open, record_before_data_open
+    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, record_before_owner_paths
     from storage_policy import build_container_audit_storage_paths
     from writer_session_fence import writer_admission
     try:
+        from logistics_runtime_profile import resolve_logistics_profile_path
+        args.profile_path = resolve_logistics_profile_path(args.profile_path)
         with writer_admission("logistics_profile_install"):
             storage = build_container_audit_storage_paths(application_path=str(REPO_ROOT))
-            probe_before_data_open(storage.data_root)
+            probe_before_owner_paths(storage.data_root, file_paths=(args.profile_path,))
     except DataGenerationBlocked as exc:
         print(exc.user_message, file=sys.stderr)
         return 2
@@ -940,7 +942,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         with writer_admission("logistics_profile_install"):
-            record_before_data_open(storage.data_root)
+            record_before_owner_paths(storage.data_root, file_paths=(args.profile_path,))
         report = install_runtime_profile(
             profile_path=args.profile_path,
             base_url=args.base_url,

@@ -348,13 +348,16 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(__file__).resolve().parents[1]
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
-    from data_generation_guard import DataGenerationBlocked, record_before_data_open
+    from data_generation_guard import DataGenerationBlocked, record_before_owner_paths, resolve_owner_path
     from storage_policy import build_container_audit_storage_paths
     from writer_session_fence import writer_admission
     try:
         with writer_admission("relay_operator_report"):
             storage = build_container_audit_storage_paths(application_path=str(root))
-            record_before_data_open(storage.data_root)
+            args.case = [resolve_owner_path(path) for path in args.case]
+            args.quarantine_detail = resolve_owner_path(args.quarantine_detail)
+            args.relay_status = resolve_owner_path(args.relay_status) if args.relay_status else None
+            record_before_owner_paths(storage.data_root, file_paths=(*args.case, args.quarantine_detail, args.relay_status))
     except DataGenerationBlocked as exc:
         print(exc.user_message)
         return 2

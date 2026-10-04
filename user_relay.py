@@ -386,11 +386,14 @@ def _runtime_cycle(
 ) -> dict[str, Any]:
     # Launch/control observation alone does not open user data. The raw runner
     # records under its existing admission immediately before queue/profile IO.
-    from data_generation_guard import DataGenerationBlocked, probe_before_data_open
+    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths
+    from logistics_runtime_profile import resolve_logistics_profile_path
     try:
         with writer_admission("persistent_relay_status"):
             storage = build_container_audit_storage_paths(application_path=str(app_root), data_root=data_root)
-            probe_before_data_open(storage.data_root)
+            profile = resolve_logistics_profile_path()
+            probe_before_owner_paths(storage.data_root, directory_paths=(direct_sync_root, scan_source_dir),
+                                     file_paths=(profile,) if profile.is_file() else ())
     except DataGenerationBlocked as exc:
         return {"status": "runtime_error", "error_code": exc.decision["message_key"], "error_message": exc.user_message}
     process_result = run_session_direct_sync_once(
@@ -402,7 +405,8 @@ def _runtime_cycle(
     )
     try:
         with writer_admission("persistent_relay_status"):
-            probe_before_data_open(storage.data_root)
+            probe_before_owner_paths(storage.data_root, directory_paths=(direct_sync_root, scan_source_dir),
+                                     file_paths=(profile,) if profile.is_file() else ())
             runtime_status = _read_json(
                 direct_sync_root / "status" / "direct_sync_relay_status.json"
             )
@@ -500,10 +504,15 @@ def main(argv: list[str] | None = None) -> int:
     if custom_root and not storage.data_root.is_dir():
         _notify_data_root_error()
         return 1
-    from data_generation_guard import DataGenerationBlocked, probe_before_data_open
+    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, resolve_owner_path
+    from logistics_runtime_profile import resolve_logistics_profile_path
+    direct_sync_root = resolve_owner_path(args.direct_sync_root) if args.direct_sync_root else storage.direct_sync_root
+    scan_source_dir = resolve_owner_path(args.scan_source_dir) if args.scan_source_dir else storage.events_dir
+    profile = resolve_logistics_profile_path()
     try:
         with writer_admission("persistent_relay_status"):
-            probe_before_data_open(storage.data_root)
+            probe_before_owner_paths(storage.data_root, directory_paths=(direct_sync_root, scan_source_dir),
+                                     file_paths=(profile,) if profile.is_file() else ())
     except DataGenerationBlocked as exc:
         print(exc.user_message)
         return 1

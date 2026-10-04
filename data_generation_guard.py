@@ -67,8 +67,43 @@ def _runtime_release():
 
 
 def marker_paths(data_root, subject_sid, *, environ=None):
-    return (Path(os.path.abspath(os.fspath(data_root))) / "data-generation.json",
+    return (resolve_owner_path(data_root) / "data-generation.json",
             canonical_control_root(environ) / "data-generation" / (subject_sid + ".json"))
+
+
+def resolve_owner_path(value):
+    """Use one expansion and filesystem resolution for the guard and reader."""
+    return Path(value).expanduser().resolve(strict=False)
+
+
+def owner_roots(data_root, *, file_paths=(), directory_paths=()):
+    root = resolve_owner_path(data_root)
+    roots = {root}
+    for value in file_paths:
+        if value:
+            path = resolve_owner_path(value)
+            if not path.is_relative_to(root):
+                roots.add(path.parent)
+    for value in directory_paths:
+        if value:
+            path = resolve_owner_path(value)
+            if not path.is_relative_to(root):
+                roots.add(path)
+    return sorted(roots, key=lambda path: os.path.normcase(str(path)))
+
+
+def probe_before_owner_paths(data_root, *, file_paths=(), directory_paths=()):
+    for root in owner_roots(data_root, file_paths=file_paths, directory_paths=directory_paths):
+        probe_before_data_open(root)
+
+
+def record_before_owner_paths(data_root, *, file_paths=(), directory_paths=()):
+    roots = owner_roots(data_root, file_paths=file_paths, directory_paths=directory_paths)
+    # Refusal in any external owner root must precede all marker mutations.
+    for root in roots:
+        probe_before_data_open(root)
+    for root in roots:
+        record_before_data_open(root)
 
 
 @writer_sink("data_generation_marker")

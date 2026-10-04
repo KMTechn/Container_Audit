@@ -98,7 +98,7 @@ def test_raw_relay_refusal_prevents_queue_open(tmp_path, monkeypatch, capsys):
     from kmtech_shared import data_generation as generation
 
     opened = []
-    monkeypatch.setattr(runner, "record_before_data_open", lambda *args: (_ for _ in ()).throw(DataGenerationBlocked(
+    monkeypatch.setattr(runner, "record_before_owner_paths", lambda *args, **kwargs: (_ for _ in ()).throw(DataGenerationBlocked(
         {"status": "UNKNOWN", "allowed": False, "message_key": "data_generation_unknown", "message": generation.UNKNOWN_MESSAGE})))
     monkeypatch.setattr(runner, "run_relay_once", lambda *args: opened.append(True))
     arguments = []

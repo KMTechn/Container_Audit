@@ -718,6 +718,21 @@ def _registration_target_paths(args: argparse.Namespace, storage_paths) -> tuple
     return manifest_path, credential_path
 
 
+def _registration_owner_paths(args, storage_paths):
+    from data_generation_guard import resolve_owner_path
+    from logistics_runtime_profile import resolve_logistics_profile_path
+    paths = list(_registration_target_paths(args, storage_paths))
+    paths.append(_default_producer_identity_path(args, storage_paths))
+    for name in ('producer_identity_path','admin_recovery_secret_file','report_path'):
+        value = str(getattr(args, name, '') or '').strip()
+        if value:
+            paths.append(resolve_owner_path(value))
+    profile = resolve_logistics_profile_path(getattr(args, 'logistics_profile_path', None))
+    args.resolved_logistics_profile_path = profile
+    paths.append(profile)
+    return paths
+
+
 def _resolve_producer_identity(
     args: argparse.Namespace,
     storage_paths,
@@ -1697,7 +1712,8 @@ def _finalize_server_registration(
             expected_source_host_id=str(identity["source_host_id"]),
             expected_device_id=str(identity["pc_id"]),
             profile_path=(
-                str(getattr(args, "logistics_profile_path", "") or "").strip()
+                getattr(args, "resolved_logistics_profile_path", None)
+                or str(getattr(args, "logistics_profile_path", "") or "").strip()
                 or None
             ),
             tls_ca_bundle_path=(
@@ -1723,7 +1739,7 @@ def _finalize_server_registration(
         )
     if configured_ca_bundle_path:
         if machine_profile is not None:
-            selected_profile_path = (
+            selected_profile_path = getattr(args, "resolved_logistics_profile_path", None) or (
                 Path(
                     str(getattr(args, "logistics_profile_path", "") or "")
                 ).expanduser()
@@ -2894,8 +2910,8 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
     with writer_admission("worker_pc_registration"):
         hostname = args.hostname or socket.gethostname()
         storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
-        from data_generation_guard import record_before_data_open
-        record_before_data_open(storage_paths.data_root)
+        from data_generation_guard import record_before_owner_paths
+        record_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
         ensure_container_audit_storage_dirs(storage_paths)
         identity = _resolve_producer_identity(
             args,
@@ -3012,7 +3028,7 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
         ),
     }
     with writer_admission("worker_pc_registration"):
-        profile_path = Path(str(getattr(args, "logistics_profile_path", "") or default_profile_path())).expanduser()
+        profile_path = getattr(args, "resolved_logistics_profile_path", None) or Path(str(getattr(args, "logistics_profile_path", "") or default_profile_path())).expanduser()
         args._registration_artifact_paths = (
             Path(identity["identity_persist_path"]).expanduser(),
             *_registration_target_paths(args, storage_paths),
@@ -3160,11 +3176,15 @@ def main(argv: list[str] | None = None) -> int:
 
     # Includes verification and completed 2PC recovery: these are independent
     # owner-data entrances even when no enrollment request is needed.
-    from data_generation_guard import DataGenerationBlocked, probe_before_data_open
+    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, resolve_owner_path
     try:
+        for name in ('producer_identity_path','manifest_path','credential_path','admin_recovery_secret_file','report_path'):
+            value = str(getattr(args, name, '') or '').strip()
+            if value:
+                setattr(args, name, str(resolve_owner_path(value)))
         with writer_admission("worker_pc_registration"):
             storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
-            probe_before_data_open(storage_paths.data_root)
+            probe_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
     except DataGenerationBlocked as exc:
         print(exc.user_message)
         return 2
@@ -3190,8 +3210,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.verify_manifest_hash:
         try:
             with writer_admission("worker_pc_registration"):
-                from data_generation_guard import record_before_data_open
-                record_before_data_open(storage_paths.data_root)
+                from data_generation_guard import record_before_owner_paths
+                record_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
             manifest_path = Path(args.manifest_path).expanduser()
             if not args.manifest_path or not manifest_path.is_file():
                 raise DirectSyncPushError("producer manifest is absent")
@@ -3209,8 +3229,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if bool(getattr(args, "admin_recovery_two_phase", False)):
         with writer_admission("worker_pc_registration"):
-            from data_generation_guard import record_before_data_open
-            record_before_data_open(storage_paths.data_root)
+            from data_generation_guard import record_before_owner_paths
+            record_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
         resume_storage_paths = build_container_audit_storage_paths(
             application_path=args.app_root
         )

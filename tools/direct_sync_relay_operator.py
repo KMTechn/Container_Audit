@@ -162,13 +162,17 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
-        from data_generation_guard import DataGenerationBlocked, probe_before_data_open, record_before_data_open
+        from data_generation_guard import DataGenerationBlocked, record_before_owner_paths, resolve_owner_path
         from storage_policy import build_container_audit_storage_paths
         with writer_admission("relay_operator_report"):
             storage = build_container_audit_storage_paths(application_path=str(ROOT))
-            probe_before_data_open(storage.data_root)
-            data_root = Path(args.db_path).absolute().parent if getattr(args, "db_path", "") else storage.data_root
-            record_before_data_open(data_root)
+            files, directories = [], []
+            for name, value in vars(args).copy().items():
+                if value and name.endswith(('_path', '_root')):
+                    path = resolve_owner_path(value)
+                    setattr(args, name, path)
+                    (directories if name.endswith('_root') else files).append(path)
+            record_before_owner_paths(storage.data_root, file_paths=files, directory_paths=directories)
         if args.command == "status":
             return _emit(
                 operator_status(

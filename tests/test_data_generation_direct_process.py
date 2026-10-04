@@ -30,14 +30,14 @@ def run_entry(tmp_path, scenario, generation_case):
     return json.loads(completed.stdout.splitlines()[-1])
 
 @pytest.mark.parametrize('scenario', SCENARIOS)
-@pytest.mark.parametrize('generation_case', ('newer', 'other-build', 'corrupt'))
+@pytest.mark.parametrize('generation_case', ('newer', 'other-build', 'corrupt', 'external'))
 def test_direct_entry_refuses_before_identity_and_preserves_state(tmp_path, scenario, generation_case):
     observed = run_entry(tmp_path, scenario, generation_case)
     assert observed['data_reads'] == 0, observed
     assert observed['network_calls'] == 0, observed
     assert observed['relay_stops'] == observed['autostart_changes'] == observed['task_changes'] == 0, observed
     assert observed['korean_refusal'], observed
-    assert observed['g_status'] == ('REFUSE' if generation_case == 'newer' else 'UNKNOWN'), observed
+    assert observed['g_status'] == ('REFUSE' if generation_case in ('newer','external') else 'UNKNOWN'), observed
     assert observed['state_changes'] == [], observed
     assert observed['marker_changes'] == [], observed
 
@@ -49,3 +49,22 @@ def test_allowed_entry_reaches_existing_owner_read(tmp_path, scenario, generatio
     assert not observed['korean_refusal'], observed
     if scenario == 'supervisor':
         assert observed['result'] == 0, observed
+
+
+@pytest.mark.parametrize('scenario', ('profile-check-empty','profile-check-env'))
+def test_effective_external_profile_is_guarded_with_no_control_marker(tmp_path, scenario):
+    observed = run_entry(tmp_path, scenario, 'external')
+    assert observed['g_status'] == 'REFUSE', observed
+    assert observed['data_reads'] == observed['network_calls'] == 0, observed
+    assert observed['state_changes'] == observed['marker_changes'] == [], observed
+
+
+@pytest.mark.parametrize('scenario,generation_case', [
+    ('register','external-tilde'),('register','external-relative'),('register','external-case'),('register','external-link'),
+    ('profile-check','external-tilde'),('profile-check','external-relative'),('profile-check','external-case'),
+    ('profile-check-default','external-default')])
+def test_effective_path_interpretation_matches_guard(tmp_path, scenario, generation_case):
+    observed = run_entry(tmp_path, scenario, generation_case)
+    assert observed['g_status'] == 'REFUSE', observed
+    assert observed['data_reads'] == observed['network_calls'] == 0, observed
+    assert observed['state_changes'] == observed['marker_changes'] == [], observed

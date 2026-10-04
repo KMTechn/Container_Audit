@@ -1261,8 +1261,8 @@ def onboard_current_user(
                 bootstrap_integrity_detail.get("status") or "UNKNOWN"
             ).lower()
             report["bootstrap_integrity_detail"] = bootstrap_integrity_detail
-            from data_generation_guard import record_before_data_open
-            record_before_data_open(paths.data_root)
+            from data_generation_guard import record_before_owner_paths
+            record_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values())
             attempt = RemoteAttempt.begin(paths.onboarding_report_path, "current_user_onboarding")
             for directory in (
                 paths.data_root, paths.events_dir, paths.direct_sync_root,
@@ -1432,10 +1432,10 @@ def remove_current_user_setup(
 ) -> dict[str, Any]:
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
     status_dir: Path = paths.status_dir
-    from data_generation_guard import DataGenerationBlocked, probe_before_data_open
+    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths
     try:
         with writer_admission("current_user_setup_removal"):
-            probe_before_data_open(paths.data_root)
+            probe_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values())
     except DataGenerationBlocked as exc:
         raise CurrentUserOnboardingError(
             exc.user_message, report_path=paths.removal_report_path, status="FAILED",
@@ -1553,9 +1553,9 @@ def restore_current_user_lifecycle_after_replacement(
             report_path=report_path,
             status="FAILED",
         )
-    from data_generation_guard import DataGenerationBlocked, record_before_data_open
+    from data_generation_guard import DataGenerationBlocked, record_before_owner_paths
     try:
-        record_before_data_open(paths.data_root)
+        record_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values())
     except DataGenerationBlocked as exc:
         raise CurrentUserOnboardingError(
             exc.user_message, report_path=report_path, status="FAILED",
