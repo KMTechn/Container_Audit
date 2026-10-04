@@ -1,5 +1,14 @@
 # 운영·환경·장애 복구
 
+명시·기본 TLS CA, 보호 관리자 profile, replacement/retirement receipt, task 암호 파일,
+등록 2PC journal과 qualification context도 실제 선택한 입력 경로의 parent를 최초 G에 포함한다.
+TLS/관리자 등 읽기 전용 보안 입력은 probe만 하며 그 폴더에 새 세대 기록을 만들지 않는다.
+onboarding은 선택 CA를 등록 runner에도 전달하고 GUI는 승인한 관리자 profile을 인증 reader에
+전달한다. PowerShell의 외부 입력은 FileSystem 현재 위치에서 한 번 Full로 해석한 값을
+G와 reader가 공유하며 초기 검사는 report/placement ownership/INSTALLING보다 앞에 둔다.
+기존 plan-only/dry-run probe와 공용 G/helper/신원 계약은 유지한다. 실제 검증 범위와 실패는
+[외부 입력 교정](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-263/REPORT.md)에 기록한다.
+
 직접 등록(검증·2PC 복구 포함), relay 운영 명령, 사용자 profile 설치/확인,
 앱의 active-work wrapper·review report, lifecycle 복구·제거도 기존 admission 아래
 최초 신원/자료 판독 전에 G를 검사한다. 온보딩은 G 뒤에 attempt와 디렉터리를 만든다.

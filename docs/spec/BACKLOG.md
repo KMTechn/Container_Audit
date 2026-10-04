@@ -1,5 +1,11 @@
 # 남은 요구·검증·문서·추가 제안
 
+G 외부 입력 부류는 TLS CA·보호 관리자 profile·지원 receipt/password·등록 journal/context를
+초기 guard와 실제 reader의 동일 경로로 결속한다. Python 별도 프로세스와 PS5.1/PS7의
+허용/REFUSE/UNKNOWN 및 상대 경로 근거, 실제 stock 전진 pair와 남은 수용 범위는
+[sub-263 보고서](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-263/REPORT.md)를 따른다.
+호스트 실설치·GUI·Run/task·live relay·자격 저장소·VM/서버는 이 교정에서 실행하지 않는다.
+
 G 직접 입구/거절 부류: registrar 검증·2PC resume, support operator/profile,
 앱 active-work wrapper/report, lifecycle 복구·제거의 판독 전 보호와 온보딩/relay
 거절 시 기존 상태 보존을 교정한다. 별도 프로세스 RED/GREEN·선언 재생성·stock·

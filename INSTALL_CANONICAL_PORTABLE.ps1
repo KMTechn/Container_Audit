@@ -1780,6 +1780,43 @@ if (Test-Path -LiteralPath $install -PathType Container) {
 }
 $lad = Full $env:LOCALAPPDATA 'LOCALAPPDATA'
 $operatorSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+# External input admission precedes receipt reads, reports and INSTALLING.
+$containerExternalInputs = @('ResumeRetirementReceiptPath', 'RestoreReceiptPath')
+foreach ($inputName in $containerExternalInputs) {
+    $inputValue = [string](Get-Variable -Name $inputName -ValueOnly)
+    if ([string]::IsNullOrWhiteSpace($inputValue)) { continue }
+    try {
+        $inputFull = Full ($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($inputValue)) $inputName
+    } catch {
+        throw '이 PC의 자료 판을 확인할 수 없어 옛 판으로 되돌릴 수 없습니다. 자료와 확인 기록을 보존하고 관리자 지원 복구를 요청하세요.'
+    }
+    Set-Variable -Name $inputName -Value $inputFull
+    Assert-ContainerDataGenerationTarget -CandidateRoot $source -TargetSid $operatorSid `
+        -LocalAppDataRoot $lad -DataRoot (Split-Path -Parent $inputFull) -HelperRoot $source
+}
+if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
+    $containerEnvironmentInputs = @{
+        CONTAINER_AUDIT_ENROLLMENT_TLS_CA_BUNDLE_PATH = $env:CONTAINER_AUDIT_ENROLLMENT_TLS_CA_BUNDLE_PATH
+        CONTAINER_AUDIT_PROTECTED_ADMIN_PROFILE = $env:CONTAINER_AUDIT_PROTECTED_ADMIN_PROFILE
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$containerEnvironmentInputs.CONTAINER_AUDIT_PROTECTED_ADMIN_PROFILE)) {
+        $programData = if (-not [string]::IsNullOrWhiteSpace($env:PROGRAMDATA)) { $env:PROGRAMDATA.Trim() } else { 'C:\ProgramData' }
+        $containerEnvironmentInputs.CONTAINER_AUDIT_PROTECTED_ADMIN_PROFILE = Join-Path $programData 'KMTech\ContainerAudit\protected\protected_admin.json'
+    }
+    foreach ($inputName in $containerEnvironmentInputs.Keys) {
+        $inputValue = [string]$containerEnvironmentInputs[$inputName]
+        if ([string]::IsNullOrWhiteSpace($inputValue)) { continue }
+        try {
+            $inputFull = Full ($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($inputValue)) $inputName
+        } catch {
+            throw '이 PC의 자료 판을 확인할 수 없어 옛 판으로 되돌릴 수 없습니다. 자료와 확인 기록을 보존하고 관리자 지원 복구를 요청하세요.'
+        }
+        Assert-ContainerDataGenerationTarget -CandidateRoot $source -TargetSid $operatorSid `
+            -LocalAppDataRoot $lad -DataRoot (Split-Path -Parent $inputFull) -HelperRoot $source
+        [Environment]::SetEnvironmentVariable($inputName, $inputFull, 'Process')
+    }
+}
+# End external input admission.
 $retirementResume = if ($ResumeRetirementReceiptPath) { Read-CanonicalRetirementResume } else { $null }
 $retirementResumeBeforeRemoval = $retirementResume -and [string]$retirementResume.status -ceq 'PREIMAGE_SAVED'
 if ($RestoreVerifiedReplacement) {
@@ -1829,7 +1866,23 @@ if (-not [string]::IsNullOrWhiteSpace($env:CONTAINER_AUDIT_DATA_ROOT)) {
     $activeDataRoot = Full $env:CONTAINER_AUDIT_DATA_ROOT 'data root'
     $activeRelayRoot = Join-Path $activeDataRoot 'direct_sync'
 }
+if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval -and
+    [string]::IsNullOrWhiteSpace($env:CONTAINER_AUDIT_ENROLLMENT_TLS_CA_BUNDLE_PATH)) {
+    $bootstrapCaInput = if ([string]::IsNullOrWhiteSpace($env:CONTAINER_AUDIT_DATA_ROOT)) {
+        Join-Path $lad 'KMTech\Bootstrap\Container_Audit\ca-bundle.pem'
+    } else { Join-Path $activeDataRoot 'bootstrap\ca-bundle.pem' }
+    if (Test-Path -LiteralPath $bootstrapCaInput -PathType Leaf) {
+        $bootstrapCaInput = Full $bootstrapCaInput 'bootstrap TLS CA source'
+        Assert-ContainerDataGenerationTarget -CandidateRoot $source -TargetSid $operatorSid `
+            -LocalAppDataRoot $lad -DataRoot (Split-Path -Parent $bootstrapCaInput) -HelperRoot $source
+        $env:CONTAINER_AUDIT_ENROLLMENT_TLS_CA_BUNDLE_PATH = $bootstrapCaInput
+    }
+}
 $statusRoot = Join-Path $activeRelayRoot 'status'
+if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
+    Assert-ContainerDataGenerationTarget -CandidateRoot $source -TargetSid $operatorSid `
+        -LocalAppDataRoot $lad -DataRoot $activeDataRoot -HelperRoot $source
+}
 $stop = Join-Path $activeRelayRoot 'control\container_audit_user_relay.stop.json'
 $onboardingPath = Join-Path $statusRoot 'current_user_onboarding.json'
 $removalPath = Join-Path $statusRoot 'current_user_removal.json'
@@ -2131,11 +2184,6 @@ $currentTreeInventorySha256 = $Script:ContainerWriterFenceInventorySha256
 $audit.code_replacement.writer_inventory_transitions = @()
 $audit.code_replacement.candidate_writer_inventory_sha256 = $Script:ContainerWriterFenceInventorySha256
 $enteredPlacementTry = $true
-    if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
-        Assert-ContainerDataGenerationTarget -CandidateRoot $source -TargetSid $operatorSid `
-            -LocalAppDataRoot $lad -DataRoot $activeDataRoot -HelperRoot $source
-    }
-
     $placement = 'INSTALL_REQUIRED'
     $existingVerified = $false
     if (Test-Path $install -PathType Container) {
