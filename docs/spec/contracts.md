@@ -6,6 +6,8 @@
 
 # 데이터·상태·통합 계약
 
+유지보수 active fence가 있으면 중앙 봉인·임대·PIN·등록·relay 전송은 첫 HTTP 전에 거절한다. 원 명령과 멱등 키, pending 임대 요청, UNKNOWN 및 복구 원본은 보존하며 해제 뒤 같은 내구 요청을 재시도한다. 원격 전송은 admission 확인 뒤 쓰기 mutex를 반환한다.
+
 작업자 선택은 `worker-roster.v1`의 ACTIVE 공용 명단만 사용하며 직접 입력·PC 이름 등록은 없다. 기존 생산자 HMAC으로 `POST /api/worker-roster/v1/query`에 현장 ID와 `known_version`을 보내고 명단 응답만 262,144B까지 받는다. 시작·변경·60초 배경 조회는 writer admission 밖에서 수행하며 현재 조회 시도·로그인 epoch가 같은 응답만 적용한다. 조회 지연·실패는 스캔 내구 저장을 기다리게 하지 않는다.
 
 사용자 config의 `roster.json`은 contract_version·authority_scope_id·version·workers·source_row_count·fetched_at·sha256을 원자 저장한다. 동일 판 응답은 정상 캐시가 있어야 적용하며 실패는 빈 명단으로 바꾸지 않는다. 형식·현장·번호 중복·digest 손상은 원본을 `.bad-*`로 보존하고 `roster.last-good.json`을 사용한다. 정상본도 없거나 정상 응답 원본 행이 0개면 기존 PC 이름 목록에서 한시 선택한다. 원본 행 수는 잘못된 이름을 제외한 뒤에도 보존하여, 행은 있는데 ACTIVE가 0인 명단에서는 로컬 선택을 허용하지 않는다. 새 작업 세션·현재 트레이·hold·보류·완료 intent·교환·감사 outbox에는 optional worker_id(UUID 또는 null)와 worker_name_snapshot(묶음 시작 이름)을 함께 저장한다. 번호 있는 기록의 복구 소유는 UUID로 비교하며 번호 없는 옛 기록은 기존 이름 절차를 유지한다. 명단 없는 한시 선택은 번호를 만들거나 과거 설정에서 추정하지 않는다. 서버는 이름을 trim·NFC 정규화하고 Zs를 일반 공백으로 바꾸며 연속 공백을 합친다. 앱은 받은 이름을 trim하고 빈 이름·65자 이상(code point)·경로 문자 `\ / : * ? " < > |`·첫 글자 `= + - @`·Cc/Cf/Cs/Zl/Zp가 섞인 이름의 행만 버린다. 최소 길이·언어 제한은 없다. 파일 이름과 CSV 형식은 기준 판 그대로이며 이름을 해시로 바꾸지 않는다. 기존 PC의 무번호 로컬 이름은 기준 등록 규칙으로 한시 선택하므로 기존 65자 이상 이름과 기준에서 허용했던 숨은 문자도 유지한다.
