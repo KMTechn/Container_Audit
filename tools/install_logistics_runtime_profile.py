@@ -929,7 +929,7 @@ def main(argv: list[str] | None = None) -> int:
     from writer_session_fence import writer_admission
     try:
         from logistics_runtime_profile import resolve_logistics_profile_path
-        args.profile_path = resolve_logistics_profile_path(args.profile_path)
+        args.profile_path = str(resolve_logistics_profile_path(args.profile_path))
         with writer_admission("logistics_profile_install"):
             storage = build_container_audit_storage_paths(application_path=str(REPO_ROOT))
             probe_before_owner_paths(storage.data_root, file_paths=(args.profile_path,))

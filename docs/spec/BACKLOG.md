@@ -6,6 +6,8 @@ G 직접 입구/거절 부류: registrar 검증·2PC resume, support operator/pr
 집중/전체 실패 집합 근거는
 [sub-233 보고서](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-233/REPORT.md)를 따른다.
 실제 frozen GUI·운영 설치·서버/VM·현장 장비는 이번 host headless 범위에서 NOT TESTED다.
+G 교정으로 달라진 두 writer route의 전진 전환은 앱 전용 선언/reader로 한 쌍만
+결속한다. 파일 hash·route·sink/guard 위조와 역전환 거절 근거도 같은 보고서에 남긴다.
 
 자료 세대 내림 guard(sub-219)는 두 leaf·같은 판 새 build 하한 교집합의 격리 묶음31 PASS까지 PROVEN이다.
 CA의 자료-open 3곳과 restore/reinstall 7곳에 호출을 연결했으며 관련52 PASS와 native

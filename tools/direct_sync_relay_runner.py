@@ -773,7 +773,7 @@ def main(argv: list[str] | None = None) -> int:
     for name, value in vars(args).copy().items():
         if value and name.endswith(('_path', '_file', '_dir')):
             path = resolve_owner_path(value)
-            setattr(args, name, path)
+            setattr(args, name, str(path))
             (directories if name.endswith('_dir') else files).append(path)
     profile_path = resolve_logistics_profile_path()
     if profile_path.is_file():

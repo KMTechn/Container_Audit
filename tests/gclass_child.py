@@ -163,6 +163,7 @@ user_relay.start_user_relay_process = child
 def execute():
     if scenario.startswith('register'):
         args = ['--app-root', source, '--producer-identity-path', argument(identity), '--report-path', str(root/'registration-report.json')]
+        if scenario == 'register-apply': args += ['--apply']
         if scenario == 'register-hash':
             args += ['--manifest-path', str(manifest), '--verify-manifest-hash', '0'*64]
         if scenario == 'register-2pc':
@@ -239,7 +240,9 @@ def execute():
             adapters.create_adapter = lambda app, target: SimpleNamespace(data_root=data,
                 direct_sync_root=external,profile_path=profile,legacy_profile_paths=())
         from tools.active_work_probe import main
-        return main(['-Mode', 'active-work-evidence', '-App', 'Container_Audit', '-OutputPath', str(root/'active-work.json')])
+        return main(['-Mode', 'active-work-evidence', '-App', 'Container_Audit', '-OutputPath', str(root/'active-work.json'),
+            '-TargetPc','TEST1','-ReleaseRunId','23323323-3233-4233-8233-233233233233',
+            '-CanaryRunId','23323323-3233-4233-8233-233233233234'])
     if scenario == 'review-report':
         from tools.build_operator_review_case_report import main
         return main(['--case', str(manifest), '--quarantine-detail', str(credential), '--out-json', str(root/'review.json'), '--out-md', str(root/'review.md')])

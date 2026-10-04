@@ -354,9 +354,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with writer_admission("relay_operator_report"):
             storage = build_container_audit_storage_paths(application_path=str(root))
-            args.case = [resolve_owner_path(path) for path in args.case]
-            args.quarantine_detail = resolve_owner_path(args.quarantine_detail)
-            args.relay_status = resolve_owner_path(args.relay_status) if args.relay_status else None
+            args.case = [str(resolve_owner_path(path)) for path in args.case]
+            args.quarantine_detail = str(resolve_owner_path(args.quarantine_detail))
+            args.relay_status = str(resolve_owner_path(args.relay_status)) if args.relay_status else ''
             record_before_owner_paths(storage.data_root, file_paths=(*args.case, args.quarantine_detail, args.relay_status))
     except DataGenerationBlocked as exc:
         print(exc.user_message)

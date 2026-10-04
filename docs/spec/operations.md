@@ -3,9 +3,14 @@
 직접 등록(검증·2PC 복구 포함), relay 운영 명령, 사용자 profile 설치/확인,
 앱의 active-work wrapper·review report, lifecycle 복구·제거도 기존 admission 아래
 최초 신원/자료 판독 전에 G를 검사한다. 온보딩은 G 뒤에 attempt와 디렉터리를 만든다.
+G와 실제 판독은 동일한 빈 값/env/default 및 expanduser·상대 경로·대소문자·링크 해석을
+사용한다. 외부 owner 경로도 모두 먼저 probe하고 허용 뒤에만 marker를 기록한다.
 resident 시작과 scheduled-task install pack은 먼저 읽기 전용 G 판단을 하며,
 REFUSE/UNKNOWN은 한국어 안내만 내고 기존 report·relay·Run·예약 작업 상태를 보존한다.
 공용 독립 frozen active-work probe는 별도 도구 신원 계약으로 이 앱 판 검사 범위 밖이다.
+0af642291에서 이 교정 후보로의 설치 전진은 앱 전용 G 전환 선언의 정확한 코드 파일
+before/after hash와 resident/raw 두 route의 지정 G 변화로만 허용한다. 기존 writer
+의미 비교는 유지하며 다른 sink/guard/route, 파일 변경·추가, 역전환은 예외가 아니다.
 검증 버전·실제 subprocess 결과·제외와 한계는
 [G 직접 입구 교정](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-233/REPORT.md)에 기록한다.
 

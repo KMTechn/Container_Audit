@@ -170,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
             for name, value in vars(args).copy().items():
                 if value and name.endswith(('_path', '_root')):
                     path = resolve_owner_path(value)
-                    setattr(args, name, path)
+                    setattr(args, name, str(path))
                     (directories if name.endswith('_root') else files).append(path)
             record_before_owner_paths(storage.data_root, file_paths=files, directory_paths=directories)
         if args.command == "status":

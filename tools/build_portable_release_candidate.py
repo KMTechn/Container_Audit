@@ -129,6 +129,7 @@ PORTABLE_INSTALL_ASSETS = (
     ("kmtech_shared/powershell/portable.ps1", "app/kmtech_shared/powershell/portable.ps1"),
     ("tools/container_writer_fence.ps1", "tools/container_writer_fence.ps1"),
     ("tools/container_writer_session.ps1", "tools/container_writer_session.ps1"),
+    ("tools/container_data_generation_transition.json", "tools/container_data_generation_transition.json"),
     (
         "tools/container_writer_session_contract.json",
         "tools/container_writer_session_contract.json",

@@ -3174,6 +3174,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report-path", default="")
     args = parser.parse_args(argv)
 
+    # Keep the existing policy decision on the operator's original spelling.
+    output_path_policy = _explicit_output_path_policy_report(args)
     # Includes verification and completed 2PC recovery: these are independent
     # owner-data entrances even when no enrollment request is needed.
     from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, resolve_owner_path
@@ -3184,12 +3186,16 @@ def main(argv: list[str] | None = None) -> int:
                 setattr(args, name, str(resolve_owner_path(value)))
         with writer_admission("worker_pc_registration"):
             storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
-            probe_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
+            if output_path_policy['status'] == 'PASS':
+                owner_paths = _registration_owner_paths(args, storage_paths)
+            else:
+                report_blocked = any(item['field']=='report_path' for item in output_path_policy['unsafe_paths'])
+                owner_paths = (args.report_path,) if args.report_path and not report_blocked else ()
+            probe_before_owner_paths(storage_paths.data_root, file_paths=owner_paths)
     except DataGenerationBlocked as exc:
         print(exc.user_message)
         return 2
 
-    output_path_policy = _explicit_output_path_policy_report(args)
     if output_path_policy["status"] != "PASS":
         blocked_report = {
             "report_version": "container-audit-worker-pc-registration-v1",

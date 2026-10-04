@@ -412,6 +412,106 @@ function Get-WriterInventorySemantics($Inventory) {
     Remove-WriterInventoryPositions $copy
     return ($copy | ConvertTo-Json -Depth 40 -Compress)
 }
+# App-only, forward-only admission for the exact sub-233 G source transition.
+# The existing writer-semantic predicate and common helpers remain unchanged.
+function Get-ContainerTransitionCodeFiles([string]$Root) {
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $pending = New-Object 'System.Collections.Generic.Queue[string]'
+    $pending.Enqueue($rootFull)
+    $files = @{}
+    while ($pending.Count) {
+        $directory = $pending.Dequeue()
+        foreach ($item in @(Get-ChildItem -LiteralPath $directory -Force)) {
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'G_TRANSITION_REPARSE_POINT' }
+            if ($item.PSIsContainer) { $pending.Enqueue($item.FullName); continue }
+            $relative = $item.FullName.Substring($rootFull.Length + 1).Replace('\','/')
+            if ($item.Extension -in @('.py','.ps1','.sql') -or
+                $relative -cin @('tools/container_writer_sink_inventory.json','tools/container_writer_session_contract.json')) {
+                if ($files.ContainsKey($relative)) { throw 'G_TRANSITION_PATH_COLLISION' }
+                $files[$relative] = $item.FullName
+            }
+        }
+    }
+    return $files
+}
+
+function Test-ContainerDataGenerationForwardTransition {
+    param([string]$BeforeRoot, [string]$AfterRoot, $BeforeInventory, $AfterInventory)
+    try {
+        $declarationPath = Join-Path $AfterRoot 'tools\container_data_generation_transition.json'
+        $declarationFile = Get-Item -LiteralPath $declarationPath -ErrorAction Stop
+        if ($declarationFile.Length -gt 2MB -or $declarationFile.Length -lt 1) { return $false }
+        $declaration = Get-Content -LiteralPath $declarationPath -Raw | ConvertFrom-Json
+        if ([string]$declaration.schema_version -cne 'container-audit-g-forward-transition-v1' -or
+            [string]$declaration.direction -cne 'forward' -or
+            [string]$declaration.before_source_commit -cne '0af642291d29b888eeeaaca58bb206d3ea14bf88' -or
+            [string]$declaration.before_inventory_sha256 -cne [string]$BeforeInventory.inventory_sha256 -or
+            [string]$declaration.after_inventory_sha256 -cne [string]$AfterInventory.inventory_sha256 -or
+            [string]$BeforeInventory.inventory_sha256 -ceq [string]$AfterInventory.inventory_sha256) { return $false }
+        $beforeManifest = Get-Content -LiteralPath (Join-Path $BeforeRoot 'portable-manifest.json') -Raw | ConvertFrom-Json
+        if ([string]$beforeManifest.source_commit -cne [string]$declaration.before_source_commit) { return $false }
+
+        # Only the two named routes may change, and only these exact G edges.
+        if (@($declaration.route_replacements).Count -ne 2) { return $false }
+        $adjusted = $BeforeInventory | ConvertTo-Json -Depth 40 | ConvertFrom-Json
+        $seenRoutes = @{}
+        foreach ($replacement in @($declaration.route_replacements)) {
+            $id = [string]$replacement.route_id
+            if ($id -cnotin @('persistent_relay','raw_runner') -or $seenRoutes.ContainsKey($id)) { return $false }
+            $seenRoutes[$id] = $true
+            $old = @($adjusted.known_route_coverage | Where-Object {$_.route_id -ceq $id})
+            $new = @($AfterInventory.known_route_coverage | Where-Object {$_.route_id -ceq $id})
+            if ($old.Count -ne 1 -or $new.Count -ne 1) { return $false }
+            foreach ($field in @('reachable_sources','reachable_direct_mutation_functions')) {
+                $before = @($replacement.before.$field)
+                $after = @($replacement.after.$field)
+                if (($old[0].$field | ConvertTo-Json -Compress) -cne ($before | ConvertTo-Json -Compress) -or
+                    ($new[0].$field | ConvertTo-Json -Compress) -cne ($after | ConvertTo-Json -Compress)) { return $false }
+                if ($id -ceq 'persistent_relay') {
+                    $added = if ($field -ceq 'reachable_sources') { @('data_generation_marker') }
+                        else { @('data_generation_guard._runtime_release','kmtech_shared.data_generation.record_generation') }
+                    $expected = @(@($before) + @($added) | Sort-Object -Unique)
+                } else {
+                    $removed = if ($field -ceq 'reachable_sources') { @('hosted_relay_failure','hosted_relay_json','hosted_relay_jsonl') }
+                        else { @('container_audit_product_host._append_jsonl','container_audit_product_host._write_json_atomic') }
+                    $expected = @($before | Where-Object {$_ -cnotin $removed})
+                    if (@($before | Where-Object {$_ -cin $removed}).Count -ne $removed.Count) { return $false }
+                }
+                if (($expected | ConvertTo-Json -Compress) -cne ($after | ConvertTo-Json -Compress)) { return $false }
+                $old[0].$field = $after
+            }
+        }
+        if ((Get-WriterInventorySemantics $adjusted) -cne (Get-WriterInventorySemantics $AfterInventory)) { return $false }
+
+        # Every code file is bound, including unchanged files and added files.
+        # Generated release metadata keeps its existing integrity validation.
+        $beforeFiles = Get-ContainerTransitionCodeFiles $BeforeRoot
+        $afterFiles = Get-ContainerTransitionCodeFiles $AfterRoot
+        $expectedPaths = @(@($beforeFiles.Keys) + @($afterFiles.Keys) | Sort-Object -Unique)
+        $entries = @($declaration.files)
+        if ($entries.Count -ne $expectedPaths.Count) { return $false }
+        $seenFiles = @{}
+        foreach ($entry in $entries) {
+            $relative = [string]$entry.path
+            if ($relative -cnotmatch '^[A-Za-z0-9_./-]+$' -or $relative.StartsWith('/') -or
+                '..' -cin @($relative.Split('/')) -or $seenFiles.ContainsKey($relative) -or
+                $relative -cnotin $expectedPaths) { return $false }
+            $seenFiles[$relative] = $true
+            foreach ($side in @('before','after')) {
+                $files = if ($side -ceq 'before') { $beforeFiles } else { $afterFiles }
+                $expectedHash = $entry.$side
+                if (-not $files.ContainsKey($relative)) {
+                    return $false
+                } else {
+                    if ([string]$expectedHash -cnotmatch '^[0-9a-f]{64}$' -or
+                        (Get-FileHash -LiteralPath $files[$relative] -Algorithm SHA256).Hash.ToLowerInvariant() -cne [string]$expectedHash) { return $false }
+                }
+            }
+        }
+        return $true
+    } catch { return $false }
+}
+
 function Sync-CanonicalWriterFenceInventory([string]$InventorySha256) {
     $active = Read-ContainerWriterFence
     if ([string]$active.writer_inventory_sha256 -ceq $InventorySha256) { return }
@@ -423,6 +523,7 @@ function Sync-CanonicalWriterFenceInventory([string]$InventorySha256) {
         -AuthorityLease $canonicalWriterFenceAuthority)
     $audit.code_replacement.writer_inventory_transitions += $InventorySha256
 }
+
 function Snapshot {
     $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($RunKey, $false)
     if ($null -eq $key) { return [ordered]@{exists=$false;kind='';data=''} }
@@ -1671,7 +1772,9 @@ if (Test-Path -LiteralPath $install -PathType Container) {
         (Join-Path $install 'tools\container_writer_sink_inventory.json') `
         ([string]$preflightCandidate.writer_sink_inventory_sha256) `
         ([string]$preflightCandidate.writer_sink_inventory_contract_sha256)
-    if ((Get-WriterInventorySemantics $preflightInventory) -cne (Get-WriterInventorySemantics $lifecycleWriterInventory)) {
+    if ((Get-WriterInventorySemantics $preflightInventory) -cne (Get-WriterInventorySemantics $lifecycleWriterInventory) -and
+        ($Uninstall -or $RestoreVerifiedReplacement -or $CompleteRetiredRemoval -or
+         -not (Test-ContainerDataGenerationForwardTransition -BeforeRoot $install -AfterRoot $source -BeforeInventory $preflightInventory -AfterInventory $lifecycleWriterInventory))) {
         throw 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER'
     }
 }
@@ -2046,14 +2149,19 @@ $enteredPlacementTry = $true
                 (Join-Path $install 'tools\container_writer_sink_inventory.json') `
                 ([string]$candidate.writer_sink_inventory_sha256) `
                 ([string]$candidate.writer_sink_inventory_contract_sha256)
-            if ((Get-WriterInventorySemantics $installedInventory) -cne (Get-WriterInventorySemantics $lifecycleWriterInventory)) {
+            $writerSemanticsIdentical = (Get-WriterInventorySemantics $installedInventory) -ceq (Get-WriterInventorySemantics $lifecycleWriterInventory)
+            $declaredGenerationTransition = -not $writerSemanticsIdentical -and
+                -not ($Uninstall -or $RestoreVerifiedReplacement -or $CompleteRetiredRemoval) -and
+                (Test-ContainerDataGenerationForwardTransition -BeforeRoot $install -AfterRoot $source -BeforeInventory $installedInventory -AfterInventory $lifecycleWriterInventory)
+            if (-not $writerSemanticsIdentical -and -not $declaredGenerationTransition) {
                 throw 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER'
             }
             $installedInventorySha256 = [string]$candidate.writer_sink_inventory_contract_sha256
             $currentTreeInventorySha256 = $installedInventorySha256
             $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = $installedInventorySha256
             $audit.code_replacement.installed_writer_inventory_sha256 = $installedInventorySha256
-            $audit.code_replacement.writer_semantics_identical = $true
+            $audit.code_replacement.writer_semantics_identical = $writerSemanticsIdentical
+            $audit.code_replacement.data_generation_transition_declared = $declaredGenerationTransition
             $existingVerified = $true
             $audit.code_replacement.prestate='VERIFIED_REPLACE'
             if (

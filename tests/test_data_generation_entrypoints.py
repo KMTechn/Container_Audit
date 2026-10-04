@@ -7,6 +7,21 @@ from types import SimpleNamespace
 import pytest
 
 
+def test_registration_preserves_original_path_policy_before_resolving_owner_alias(tmp_path, monkeypatch):
+    from tools import register_container_audit_worker_pc as registration
+    import data_generation_guard as guard
+    captured = []
+    def policy(args):
+        captured.append(args.producer_identity_path)
+        return {'status':'BLOCKED','blocked_reason':'legacy_owner_alias','unsafe_paths':[]}
+    monkeypatch.setattr(registration, '_explicit_output_path_policy_report', policy)
+    monkeypatch.setattr(guard, 'probe_before_owner_paths', lambda *args, **kwargs: None)
+    monkeypatch.setattr(registration, 'build_registration_payloads', lambda *args: pytest.fail('blocked alias opened owner data'))
+    monkeypatch.setenv('CONTAINER_AUDIT_DATA_ROOT', str(tmp_path/'data'))
+    assert registration.main(['--producer-identity-path','~/original-owner.json']) == 2
+    assert captured == ['~/original-owner.json']
+
+
 def test_direct_main_records_before_gui_constructor(tmp_path, monkeypatch):
     import Container_Audit as app
 

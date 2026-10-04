@@ -13,7 +13,9 @@ from kmtech_factory_contracts.active_work_probe.cli import main as common_main
 def main(argv=None):
     arguments = list(sys.argv[1:] if argv is None else argv)
     # Independent frozen common probes have their own tool identity/contract.
-    if not getattr(sys, 'frozen', False) and '-Mode' in arguments and arguments[arguments.index('-Mode') + 1:][:1] == ['active-work-evidence']:
+    if (not getattr(sys, 'frozen', False) and '-Mode' in arguments
+        and arguments[arguments.index('-Mode') + 1:][:1] == ['active-work-evidence']
+        and '-App' in arguments and arguments[arguments.index('-App') + 1:][:1] == ['Container_Audit']):
         from data_generation_guard import DataGenerationBlocked, probe_before_data_open
         from storage_policy import build_container_audit_storage_paths
         from writer_session_fence import writer_admission
