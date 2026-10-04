@@ -4,9 +4,20 @@
 `kmtech_shared/powershell/data_generation.ps1`은 사용자 자료를 열었던 가장 새 판과
 서명 검증된 최소 호환 판을 기록한다. 기록 없음은 ALLOW, 손상·읽기 실패·판 비교
 불가는 UNKNOWN 거절이다. 원자 기록 뒤 readback을 확인하며 Python 3.12.10·PS5.1·PS7 격리 함수 시험 24 PASS는
-helper 근거이며 **CA 설치기·GUI·relay 입구는 아직 미연결**이다. shared 선언 확대와
-portable 서명 version/floor binding은 coordinator 설계 답 대기다.
+helper 근거이며 **CA 설치기·GUI·relay 입구는 아직 미연결**이다. shared 선언 확대는
+허용되었으며 기존 canonical 원본/생성 절차의 배정과 root/build 의미 결정이 남아 있다.
 [API·현재 한계](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/HELPER-READY.md).
+
+출시 때 stock builder는 실제 `CURRENT_VERSION`에서 portable manifest의 `version`을
+만들고 `--data-compatible-min-version` 입력을 받는다(누락은 자기 판). 출시 담당자는
+자료 의미·독자/복구 호환을 확인한 가장 낮은 판을 private update manifest의
+`data_compatible_min_version`에 **기존 ES256 서명 전**에 넣는다. 호환 근거가 없으면
+자기 판이다. 이 필드는 canonical manifest bytes 전체의 기존 서명에 포함한다.
+`verified_data_compatibility_from_manifest`로 기존 서명·앱/판/floor를 검증한 결과만
+기록 helper의 `compatibility_verified=True`로 전달한다. unsigned portable manifest의
+floor나 CPython Authenticode만으로 호환을 허가하지 않으며 지원 portable 설치에서는
+최소 판을 자기 판으로 강제한다. signed floor 변조/서명 없음·미래 floor 거절과 builder
+기본값을 포함한 관련 3파일 101 PASS(격리 소스), 실제 출시 서명 발행/stock은 미검증이다.
 
 옛 v2.0.33 위 첫 현장 설치는 업무 종료 뒤에 진행한다. 옛 GUI·relay·writer의 정상
 정지/ABSENT를 확인한 뒤 exact 옛 코드, 전체 실제 data/DirectSync root와 외부 신원 상태,

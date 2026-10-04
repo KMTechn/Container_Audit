@@ -9,6 +9,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CHECK_RELEASE_VERSION_SCRIPT = REPO_ROOT / "tools" / "check_release_version.py"
 
 
+def test_portable_builder_data_metadata_uses_actual_release_and_defaults_to_self(tmp_path):
+    from tools.build_portable_release_candidate import _release_data_metadata
+    (tmp_path / "Container_Audit.py").write_text('CURRENT_VERSION = "v2.0.99"\n', encoding="utf-8")
+    assert _release_data_metadata(tmp_path, None) == {
+        "version": "v2.0.99", "data_compatible_min_version": "v2.0.99",
+    }
+    assert _release_data_metadata(tmp_path, "v2.0.98")["data_compatible_min_version"] == "v2.0.98"
+
+
 def test_release_version_reader_extracts_current_version(tmp_path):
     source = tmp_path / "Container_Audit.py"
     source.write_text('CURRENT_VERSION = "v9.8.7"\n', encoding="utf-8")

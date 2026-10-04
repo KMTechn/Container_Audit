@@ -576,6 +576,33 @@ def verify_update_manifest_signature(manifest: Mapping[str, Any], signature: byt
         raise ValueError("업데이트 manifest 서명 검증에 실패했습니다.") from exc
 
 
+def _data_compatibility_metadata(manifest: Mapping[str, Any]) -> dict[str, str]:
+    from kmtech_shared.data_generation import DataGenerationError, version_key
+
+    try:
+        version = version_key(manifest.get("version"))
+        floor = version_key(manifest.get("data_compatible_min_version", manifest.get("version")))
+        if floor > version:
+            raise DataGenerationError("compatibility floor exceeds release")
+    except DataGenerationError as exc:
+        raise ValueError("업데이트 manifest 자료 호환 판이 올바르지 않습니다.") from exc
+    return {"version": "v" + ".".join(map(str, version)),
+            "data_compatible_min_version": "v" + ".".join(map(str, floor))}
+
+
+def verified_data_compatibility_from_manifest(
+    manifest: Mapping[str, Any], signature: bytes, public_key_config: str,
+) -> dict[str, str]:
+    """Use the existing release verifier; an unsigned floor grants no permission."""
+    verify_update_manifest_signature(manifest, signature, public_key_config)
+    if (manifest.get("schema_version") != UPDATE_MANIFEST_SCHEMA_VERSION
+            or manifest.get("manifest_version") != UPDATE_MANIFEST_VERSION
+            or manifest.get("app_id") != UPDATE_APP_ID
+            or manifest.get("package_id") != UPDATE_APP_ID):
+        raise ValueError("업데이트 manifest 자료 호환 프로그램 결속이 올바르지 않습니다.")
+    return _data_compatibility_metadata(manifest)
+
+
 def archive_policy_from_manifest(archive: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "top_level": archive.get("top_level"),
@@ -605,6 +632,7 @@ def update_candidate_from_private_manifest(
     latest_version = str(manifest.get("version") or "").strip()
     if not parse_version_tag(latest_version):
         raise ValueError("업데이트 manifest version 형식이 올바르지 않습니다.")
+    compatibility = _data_compatibility_metadata(manifest) if "data_compatible_min_version" in manifest else None
     if not is_newer_version(latest_version, current_version):
         return None
 
@@ -642,7 +670,7 @@ def update_candidate_from_private_manifest(
 
     if not rollout_allows_current_pc(manifest):
         return None
-    return {
+    candidate = {
         "download_url": artifact_url,
         "version": latest_version,
         "sha256": expected_sha256,
@@ -650,6 +678,9 @@ def update_candidate_from_private_manifest(
         "archive_policy": archive_policy_from_manifest(archive),
         "install_policy": install_policy,
     }
+    if compatibility is not None:
+        candidate["data_compatible_min_version"] = compatibility["data_compatible_min_version"]
+    return candidate
 
 
 def _normalized_archive_path(member_name: str) -> str:

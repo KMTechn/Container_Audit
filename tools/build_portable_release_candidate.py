@@ -566,17 +566,34 @@ def _assert_writer_sink_inventory(repo_root: Path) -> dict[str, object]:
     return derived
 
 
+def _release_data_metadata(repo_root: Path, compatible_min_version: str | None) -> dict[str, str]:
+    from kmtech_shared.data_generation import DataGenerationError, version_key
+    from tools.check_release_version import read_current_version
+
+    try:
+        version = version_key(read_current_version(repo_root / "Container_Audit.py"))
+        floor = version_key(compatible_min_version) if compatible_min_version is not None else version
+        if floor > version:
+            raise DataGenerationError("compatibility floor exceeds release")
+    except (ValueError, DataGenerationError) as exc:
+        raise PortableBuildError("release data compatibility version is invalid") from exc
+    return {"version": "v" + ".".join(map(str, version)),
+            "data_compatible_min_version": "v" + ".".join(map(str, floor))}
+
+
 def build(
     repo_root: Path,
     python_home: Path,
     output: Path,
     *,
     update_manifest_public_key_config: str,
+    data_compatible_min_version: str | None = None,
 ) -> dict[str, object]:
     repo_root = repo_root.resolve()
     python_home = python_home.resolve()
     output = output.resolve()
     _assert_clean_source(repo_root)
+    data_metadata = _release_data_metadata(repo_root, data_compatible_min_version)
     shared_check = subprocess.run(
         [sys.executable, "-I", "-B", str(repo_root / "qualification/check_kmtech_shared.py"),
          "--check", "--root", str(repo_root)],
@@ -622,6 +639,7 @@ def build(
     file_count, byte_count = _tree_metrics(output)
     manifest = {
         "schema": PORTABLE_SCHEMA,
+        **data_metadata,
         "source_commit": _git_value(repo_root, "HEAD^{commit}"),
         "source_tree": _git_value(repo_root, "HEAD^{tree}"),
         "python_version": ".".join(str(value) for value in EXPECTED_PYTHON),
@@ -682,6 +700,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         "--repo-root", type=Path, default=Path(__file__).resolve().parents[1]
     )
     parser.add_argument("--update-manifest-public-key-config", required=True)
+    parser.add_argument("--data-compatible-min-version", help="Release data floor; portable installers still require a verified signed binding before trusting a lower floor")
     return parser.parse_args(argv)
 
 
@@ -692,6 +711,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.python_home,
         args.output,
         update_manifest_public_key_config=args.update_manifest_public_key_config,
+        data_compatible_min_version=args.data_compatible_min_version,
     )
     print(json.dumps(result, ensure_ascii=True, sort_keys=True))
     return 0
