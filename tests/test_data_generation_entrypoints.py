@@ -70,7 +70,7 @@ def test_onboarding_refusal_prevents_state_or_ledger_open(tmp_path, monkeypatch)
     assert not captured.value.report_path.exists()
 
 
-def test_persistent_relay_reports_child_refusal_without_launch_time_marker(tmp_path, monkeypatch):
+def test_persistent_relay_reports_child_refusal_without_launch_time_marker(tmp_path, monkeypatch, capsys):
     import user_relay as relay
     from kmtech_shared import data_generation as generation
 
@@ -89,9 +89,10 @@ def test_persistent_relay_reports_child_refusal_without_launch_time_marker(tmp_p
     assert calls == [True]
     assert not (data / "data-generation.json").exists()
     assert not (data / "direct_sync/status/container_audit_user_relay.json").exists()
+    assert "옛 판으로 되돌릴 수 없습니다" in capsys.readouterr().out
 
 
-def test_raw_relay_refusal_prevents_queue_open(tmp_path, monkeypatch):
+def test_raw_relay_refusal_prevents_queue_open(tmp_path, monkeypatch, capsys):
     from tools import direct_sync_relay_runner as runner
     from data_generation_guard import DataGenerationBlocked
     from kmtech_shared import data_generation as generation
@@ -108,6 +109,7 @@ def test_raw_relay_refusal_prevents_queue_open(tmp_path, monkeypatch):
     assert runner.main(arguments) == 1
     assert not opened and not (tmp_path / "queue.sqlite3").exists()
     assert not (tmp_path / "status.json").exists()
+    assert "자료 판을 확인할 수 없어" in capsys.readouterr().out
 
 
 def test_gui_duplicate_lease_does_not_record_unused_generation(tmp_path, monkeypatch):
