@@ -142,6 +142,10 @@ else:
 '''
 
 OS_BOUNDARIES = r'''
+# PowerShell 7 prepends its own module directory after Python env isolation.
+# Restore this fixture's existing Windows PowerShell module path for the
+# actual WinPS placement child; keep every child/receipt assertion intact.
+$env:PSModulePath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules'
 function Get-AuthenticodeSignature { return [pscustomobject]@{ Status='NotTested' } }
 function Snapshot { return Get-Content (Join-Path $env:CA_UNINSTALL_ROOT 'registry.json') -Raw | ConvertFrom-Json }
 function Restore($Before) { Save (Join-Path $env:CA_UNINSTALL_ROOT 'registry.json') $Before }
