@@ -3,7 +3,7 @@
 자료 세대 보호 helper `kmtech_shared/data_generation.py`와
 `kmtech_shared/powershell/data_generation.ps1`은 사용자 자료를 열었던 가장 새 판과
 서명 검증된 최소 호환 판을 기록한다. 기록 없음은 ALLOW, 손상·읽기 실패·판 비교
-불가·같은 판 다른 build(서명된 명시 호환 없음)는 UNKNOWN 거절이다. 원자 기록 뒤 readback을 확인하며 Python 3.12.10·PS5.1·PS7 격리 함수 시험 27 PASS는
+불가·같은 판 다른 build(서명된 명시 호환 없음)는 UNKNOWN 거절이다. 원자 기록 뒤 readback을 확인하며 Python 3.12.10·PS5.1·PS7 새 helper 묶음31 PASS(기존 모듈+RED 재현+host guard)는
 helper 근거다. **CA 실제 입구 관련52 PASS, native 자료 사용 뒤 복원 거절 PASS**이며 GUI/relay/onboarding
 3곳과 코드 restore/reinstall 7곳에 호출을 연결했다. shared 선언 확대는
 허용되었다. G-DECISIONS대로 실제 자료를 처음 여는 경계의 기존 admission 아래에서
@@ -21,6 +21,8 @@ resident supervisor의 process launch/control 상태 조회는 기록하지 않�
 최종 집중+신규307건은305 PASS/2 FAIL이다. 두 실패는 실제 온보딩으로 자료를 연 뒤
 다른 옛 build로 복원을 허용하던 기대이며 G 결정과 충돌하여 코디 판단을 기다린다.
 새 adapter는 stock builder의 고정 app 목록에도 포함하고 실제 복사 회귀로 검증한다.
+builder는 새 metadata helper 사용 전에 기존 공용 pin 검사를 끝낸다. 독립 checker
+시험 사본에는 기존 conftest의 lock guard dependency도 함께 복사하여 guard를 유지한다.
 명시 호환으로 허용된 같은 판의 다른 build가 자료를 쓰면 marker에 새 build를 기록하고
 두 선언의 더 엄격한 하한/신뢰 교집합을 유지한다. 이전 build의 넓은 호환을 그대로
 물려주지 않는다. 같은 build와 더 높은 기존 판의 바이트 보존은 유지한다.

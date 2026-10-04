@@ -594,7 +594,6 @@ def build(
     python_home = python_home.resolve()
     output = output.resolve()
     _assert_clean_source(repo_root)
-    data_metadata = _release_data_metadata(repo_root, data_compatible_min_version)
     shared_check = subprocess.run(
         [sys.executable, "-I", "-B", str(repo_root / "qualification/check_kmtech_shared.py"),
          "--check", "--root", str(repo_root)],
@@ -603,6 +602,7 @@ def build(
     )
     if shared_check.returncode:
         raise PortableBuildError("shared source pin check failed: " + shared_check.stderr.strip())
+    data_metadata = _release_data_metadata(repo_root, data_compatible_min_version)
     writer_inventory = _assert_writer_sink_inventory(repo_root)
     if output.exists():
         raise PortableBuildError(f"portable output already exists: {output}")
