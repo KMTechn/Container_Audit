@@ -7,6 +7,7 @@ param(
     [string]$TlsCaBundlePath = "",
     [string]$OperatorLocalAppDataRoot = "",
     [string]$OperatorSid = "",
+    [string]$OperatorDataRoot = "",
     [string]$ElevationLogPath = "",
     [switch]$ReplaceExistingVerifiedPortable,
     [string]$ReplacementTransactionId = "",
@@ -622,6 +623,14 @@ if ([string]::IsNullOrWhiteSpace($OperatorLocalAppDataRoot)) {
     $OperatorLocalAppDataRoot = [IO.Path]::GetFullPath($env:LOCALAPPDATA)
     $BootstrapBoundParameters["OperatorLocalAppDataRoot"] = $OperatorLocalAppDataRoot
 }
+if (-not $OperatorSid) {
+    $OperatorSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $BootstrapBoundParameters['OperatorSid'] = $OperatorSid
+}
+if (-not $OperatorDataRoot -and $env:CONTAINER_AUDIT_DATA_ROOT) {
+    $OperatorDataRoot = Get-StrictFullPath $env:CONTAINER_AUDIT_DATA_ROOT 'operator data root'
+    $BootstrapBoundParameters['OperatorDataRoot'] = $OperatorDataRoot
+}
 if ($ApplyHardenedAclForTest.IsPresent -and -not $testOverride) {
     throw "ApplyHardenedAclForTest requires the guarded noncanonical test layout."
 }
@@ -710,6 +719,9 @@ if ($RestoreVerifiedReplacement.IsPresent) {
         $receipt = Read-BootstrapReplacementReceipt `
             -Path $ReplacementReceiptPath `
             -ExpectedSha256 $ReplacementReceiptSha256
+        Assert-ContainerDataGenerationTarget -CandidateRoot ([string]$receipt.rollback_root) `
+            -TargetSid $OperatorSid -LocalAppDataRoot $OperatorLocalAppDataRoot `
+            -DataRoot $OperatorDataRoot -HelperRoot $PSScriptRoot
         $result = Invoke-BootstrapVerifiedReplacementRestore `
             -Receipt $receipt `
             -ReceiptPath $ReplacementReceiptPath `
@@ -886,6 +898,8 @@ if (Test-SamePath $sourceRootFull $installRootFull) {
 }
 Assert-NoReparsePoint $sourceRootFull "Frozen release"
 $releaseLayout = Assert-RequiredRelease $sourceRootFull $testOverride
+Assert-ContainerDataGenerationTarget -CandidateRoot $sourceRootFull -TargetSid $OperatorSid `
+    -LocalAppDataRoot $OperatorLocalAppDataRoot -DataRoot $OperatorDataRoot -HelperRoot $PSScriptRoot
 if ($releaseLayout -ceq 'PORTABLE_CPYTHON') {
     if (-not (Test-SamePath $BootstrapScriptPath (Join-Path $sourceRootFull 'INSTALL_THIS_PC.ps1'))) {
         throw 'Code helper must execute from the admitted SourceRoot.'
@@ -1030,6 +1044,8 @@ try {
                     -not (Test-Path -LiteralPath $installRootFull) -and
                     (Test-Path -LiteralPath $replacementRollbackRoot -PathType Container)
                 ) {
+                    Assert-ContainerDataGenerationTarget -CandidateRoot $replacementRollbackRoot -TargetSid $OperatorSid `
+                        -LocalAppDataRoot $OperatorLocalAppDataRoot -DataRoot $OperatorDataRoot -HelperRoot $PSScriptRoot
                     Move-Item -LiteralPath $replacementRollbackRoot -Destination $installRootFull
                 }
                 throw
@@ -1143,6 +1159,8 @@ catch {
         Remove-Item -LiteralPath $stagingFull -Recurse -Force -ErrorAction SilentlyContinue
     }
     if ($replacementApplied) {
+        Assert-ContainerDataGenerationTarget -CandidateRoot $replacementRollbackRoot -TargetSid $OperatorSid `
+            -LocalAppDataRoot $OperatorLocalAppDataRoot -DataRoot $OperatorDataRoot -HelperRoot $PSScriptRoot
         $failedRoot = Join-Path $applicationParent ('.current.failed.' + $ReplacementTransactionId)
         if (Test-Path -LiteralPath $installRootFull -PathType Container) {
             if (Test-Path -LiteralPath $failedRoot) {

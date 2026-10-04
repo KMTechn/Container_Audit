@@ -55,7 +55,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '7e2760ec1d54508b395c0d9f1a6343fecd6b665c0c1d904273ddd210f96762a1'
+$ExpectedBootstrapIntegritySha256 = '4fbea71c57163d3435d9c513b3f563a4ca8be3c8fce2bff3e653582e4d7af895'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -2028,6 +2028,10 @@ $currentTreeInventorySha256 = $Script:ContainerWriterFenceInventorySha256
 $audit.code_replacement.writer_inventory_transitions = @()
 $audit.code_replacement.candidate_writer_inventory_sha256 = $Script:ContainerWriterFenceInventorySha256
 $enteredPlacementTry = $true
+    if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
+        Assert-ContainerDataGenerationTarget -CandidateRoot $source -TargetSid $operatorSid `
+            -LocalAppDataRoot $lad -DataRoot $activeDataRoot -HelperRoot $source
+    }
 
     $placement = 'INSTALL_REQUIRED'
     $existingVerified = $false
@@ -2075,6 +2079,8 @@ $enteredPlacementTry = $true
         if (-not $existingVerified) { throw 'Canonical restore current tree is not verified.' }
         $publicRestore = Read-CanonicalReplacementRestore
         $selectedReceipt = $publicRestore.receipt
+        Assert-ContainerDataGenerationTarget -CandidateRoot ([string]$selectedReceipt.rollback_root) `
+            -TargetSid $operatorSid -LocalAppDataRoot $lad -DataRoot $activeDataRoot -HelperRoot $source
         $selectedTransactionId = [string]$selectedReceipt.transaction_id
         $audit.code_replacement.transaction_id = $selectedTransactionId
         $audit.code_replacement.controller_transaction_id = $Script:CanonicalWriterFenceTransactionId
@@ -2100,6 +2106,7 @@ $enteredPlacementTry = $true
             '-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
             '-InstallRoot',$install, '-ElevationLogPath',$elevationLogPath,
             '-OperatorLocalAppDataRoot',$lad, '-OperatorSid',$operatorSid,
+            '-OperatorDataRoot',$activeDataRoot,
             '-WriterFencePreparedReceiptPath',([string]$canonicalWriterFencePreparedReceipt.path),
             '-WriterFencePreparedReceiptSha256',([string]$canonicalWriterFencePreparedReceipt.sha256),
             '-RestoreVerifiedReplacement', '-ReplacementTransactionId',$selectedTransactionId,
@@ -2312,6 +2319,7 @@ $enteredPlacementTry = $true
             '-InstallRoot',$install,
             '-OperatorLocalAppDataRoot',$lad,
             '-OperatorSid',$operatorSid,
+            '-OperatorDataRoot',$activeDataRoot,
             '-ElevationLogPath',$elevationLogPath,
             '-WriterFencePreparedReceiptPath',([string]$canonicalWriterFencePreparedReceipt.path),
             '-WriterFencePreparedReceiptSha256',([string]$canonicalWriterFencePreparedReceipt.sha256),
@@ -2698,6 +2706,10 @@ catch {
     $codeRollbackFailure=''
     if ($codeRestoreNeeded) {
         try {
+            $generationRestoreReceipt = Read-BootstrapReplacementReceipt -Path $replacementReceiptPath `
+                -ExpectedSha256 $replacementReceiptSha256
+            Assert-ContainerDataGenerationTarget -CandidateRoot ([string]$generationRestoreReceipt.rollback_root) `
+                -TargetSid $operatorSid -LocalAppDataRoot $lad -DataRoot $activeDataRoot -HelperRoot $source
             Sync-CanonicalWriterFenceInventory $Script:ContainerWriterFenceInventorySha256
             Product $install '--remove-current-user-setup'
             if ((Snapshot).exists -or @(Relays).Count -ne 0) {
@@ -2709,6 +2721,7 @@ catch {
                 '-InstallRoot',$install,
                 '-OperatorLocalAppDataRoot',$lad,
                 '-OperatorSid',$operatorSid,
+                '-OperatorDataRoot',$activeDataRoot,
                 '-ElevationLogPath',$elevationLogPath,
                 '-WriterFencePreparedReceiptPath',([string]$canonicalWriterFencePreparedReceipt.path),
                 '-WriterFencePreparedReceiptSha256',([string]$canonicalWriterFencePreparedReceipt.sha256),

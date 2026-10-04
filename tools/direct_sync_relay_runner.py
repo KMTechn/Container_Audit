@@ -27,6 +27,7 @@ from direct_sync_runtime import (  # noqa: E402
     run_relay_once,
 )
 from writer_session_fence import writer_sink  # noqa: E402
+from data_generation_guard import DataGenerationBlocked, record_before_data_open  # noqa: E402
 
 
 ALLOWED_SOURCE_PREFIX = "이적작업이벤트로그_"
@@ -766,6 +767,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.enqueue_source_file and args.scan_source_dir:
         parser.error("--enqueue-source-file and --scan-source-dir are mutually exclusive")
 
+    try:
+        # Explicit raw queue roots may differ from the GUI root; the shared SID
+        # control slot ensures installer probes also observe this process.
+        record_before_data_open(Path(args.db_path).absolute().parent)
+    except DataGenerationBlocked as exc:
+        from container_audit_product_host import _record_hosted_relay_failure
+        _record_hosted_relay_failure(list(argv or sys.argv[1:]), exc)
+        print(str(exc))
+        return 1
     config = _build_config(args)
     if args.require_runtime_lease_before_scan:
         preflight_status = run_relay_once(config)

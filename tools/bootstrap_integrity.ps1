@@ -36,7 +36,7 @@ function Get-RelativeCodePath([string]$Root, [string]$Path) {
     return $pathFull.Substring($rootFull.Length).Replace('\', '/')
 }
 
-function Get-BootstrapSharedPortableLeaf([string]$Root) {
+function Get-BootstrapSharedPortableLeaf([string]$Root, [string]$Leaf = 'portable.ps1') {
     # This bootstrap is trusted with the installer. Never use shared code to
     # authenticate itself, or derive the expected release pin from input bytes.
     $rootFull = Get-StrictFullPath $Root 'shared installer root'
@@ -47,25 +47,26 @@ function Get-BootstrapSharedPortableLeaf([string]$Root) {
     }
     $lockPath = Join-Path $appRoot 'kmtech_shared.lock.json'
     $manifestPath = Join-Path $appRoot 'kmtech_shared.manifest.json'
-    $sharedLeaf = Join-Path $appRoot 'kmtech_shared\powershell\portable.ps1'
+    if ($Leaf -cnotin @('portable.ps1','data_generation.ps1')) { throw 'Shared PowerShell leaf is not approved.' }
+    $sharedLeaf = Join-Path $appRoot ('kmtech_shared\powershell\' + $Leaf)
     foreach ($path in @($lockPath, $manifestPath, $sharedLeaf)) {
         Assert-BootstrapNoReparsePoint $path 'shared installer input' -PathOnly
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             throw 'Shared installer input must be a file.'
         }
     }
-    $expectedManifestSha = 'feaed459688e915eb5f52f264501a4287261d9dcbdbc50e0c6f4bde59d8e7117'
+    $expectedManifestSha = '8ca8078dc921485085ad79212d9213e31fbc8d78629461c82e622e16bf5664e6'
     if ((Get-Item -LiteralPath $lockPath).Length -gt 65536) { throw 'Shared consumer lock is oversized.' }
     $lock = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if (@($lock.PSObject.Properties.Name).Count -ne 2 -or
-        $lock.version -cne '0.3.1' -or $lock.manifest_sha256 -cne $expectedManifestSha) {
+        $lock.version -cne '0.3.2' -or $lock.manifest_sha256 -cne $expectedManifestSha) {
         throw 'Shared consumer lock pin mismatch.'
     }
     if ((Get-FileSha256 $manifestPath) -cne $expectedManifestSha) {
         throw 'Shared manifest pin mismatch.'
     }
     $pinnedSharedManifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $expectedLeafSha = $pinnedSharedManifest.files.'kmtech_shared/powershell/portable.ps1'
+    $expectedLeafSha = $pinnedSharedManifest.files.('kmtech_shared/powershell/' + $Leaf)
     if ((Get-FileHash -LiteralPath $sharedLeaf -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expectedLeafSha) {
         throw 'Shared PowerShell leaf pin mismatch.'
     }
@@ -87,6 +88,54 @@ function Get-CodeInventory([string]$Root) {
         })
     }
     return @($result.Values)
+}
+
+function Assert-ContainerDataGenerationTarget(
+    [string]$CandidateRoot, [string]$TargetSid, [string]$LocalAppDataRoot,
+    [string]$DataRoot, [string]$HelperRoot
+) {
+    # Caller already owns the existing deployment/writer admission and authenticates
+    # the candidate tree. Unsigned portable floors never grant downgrade permission.
+    $dataGenerationLeaf = Get-BootstrapSharedPortableLeaf $HelperRoot 'data_generation.ps1'
+    . $dataGenerationLeaf
+    try {
+        Assert-KmtechDataIdentity 'container_audit' $TargetSid
+        $local = Get-StrictFullPath $LocalAppDataRoot 'operator LOCALAPPDATA'
+        if (-not $DataRoot) { $DataRoot = Join-Path $local 'KMTech\ContainerAudit' }
+        $data = Get-StrictFullPath $DataRoot 'operator data root'
+        $markers = @((Join-Path $data 'data-generation.json'),
+            (Join-Path $local ('KMTech\DirectSync\container_audit\control\writer-session\data-generation\' + $TargetSid + '.json')))
+        $present = $false
+        foreach ($marker in $markers) {
+            if ($null -ne (Read-KmtechDataGeneration $marker 'container_audit' $TargetSid)) { $present = $true }
+        }
+        # A pre-G candidate can lack version metadata. No generation means the
+        # existing before-data-open restoration still proceeds; no claim is written.
+        if (-not $present) { return }
+        $candidate = Get-StrictFullPath $CandidateRoot 'candidate code root'
+        $manifestPath = Join-Path $candidate 'portable-manifest.json'
+        $frozen = -not (Test-Path -LiteralPath $manifestPath -PathType Leaf)
+        if ($frozen) { $manifestPath = Join-Path $candidate 'build-identity.json' }
+        Assert-BootstrapNoReparsePoint $manifestPath 'candidate release metadata' -PathOnly
+        if ((Get-Item -LiteralPath $manifestPath).Length -gt 65536) { throw 'Release metadata is oversized.' }
+        $metadata = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $version = [string]$metadata.version
+        if ($frozen) { $version = [string]$metadata.app_version }
+        if (-not $version) {
+            $sourceFile = Join-Path $candidate 'app\Container_Audit.py'
+            if (-not (Test-Path -LiteralPath $sourceFile -PathType Leaf)) { $sourceFile = Join-Path $candidate 'Container_Audit.py' }
+            Assert-BootstrapNoReparsePoint $sourceFile 'candidate version source' -PathOnly
+            if ((Get-Item -LiteralPath $sourceFile).Length -gt 2097152) { throw 'Version source is oversized.' }
+            $sourceText = Get-Content -LiteralPath $sourceFile -Raw -Encoding UTF8
+            if ($sourceText -cmatch '(?m)^CURRENT_VERSION\s*=\s*"(v[0-9]+\.[0-9]+\.[0-9]+)"\s*$') { $version = $Matches[1] }
+        }
+        $decision = Get-KmtechDataDowngradeDecision -MarkerPaths $markers -TargetVersion $version `
+            -AppId 'container_audit' -SubjectSid $TargetSid -TargetBuildId ([string]$metadata.source_commit)
+    }
+    catch {
+        throw '이 PC의 자료 판을 확인할 수 없어 옛 판으로 되돌릴 수 없습니다. 자료와 확인 기록을 보존하고 관리자 지원 복구를 요청하세요.'
+    }
+    if (-not $decision.allowed) { throw $decision.message }
 }
 
 function Get-InventoryAggregate([object[]]$Inventory) {

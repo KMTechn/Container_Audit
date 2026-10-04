@@ -25,6 +25,7 @@ from storage_policy import (
     validate_existing_data_root,
 )
 from writer_session_fence import WriterFenceError, writer_admission, writer_sink
+from data_generation_guard import DataGenerationBlocked, record_before_data_open
 
 
 USER_RELAY_MODE = "--container-audit-user-relay"
@@ -478,6 +479,7 @@ def main(argv: list[str] | None = None) -> int:
         with writer_admission("persistent_relay_status"):
             if custom_root:
                 validate_existing_data_root(storage.data_root)
+            record_before_data_open(storage.data_root)
             ensure_container_audit_storage_dirs(storage)
             direct_sync_root = (
                 Path(args.direct_sync_root).expanduser().resolve()
@@ -496,6 +498,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             direct_sync_root.mkdir(parents=True, exist_ok=True)
             scan_source_dir.mkdir(parents=True, exist_ok=True)
+    except DataGenerationBlocked as exc:
+        _write_json_atomic(user_relay_status_path(storage.direct_sync_root), {
+            "status": "runtime_error", "error_code": exc.decision["message_key"],
+            "error_message": str(exc), "updated_at": _now()})
+        return 1
     except (OSError, ValueError):
         if not custom_root:
             raise

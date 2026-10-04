@@ -20,6 +20,7 @@ SHIPPED_PACKAGE_DIRS = ("kmtech_factory_contracts", "kmtech_shared", "vendor")
 SHIPPED_PORTABLE_ENTRYPOINTS = (Path("portable/main.py"),)
 POWERSHELL_PATHS = (
     Path("kmtech_shared/powershell/portable.ps1"),
+    Path("kmtech_shared/powershell/data_generation.ps1"),
     Path("tools/bootstrap_integrity.ps1"),
     Path("tools/container_writer_session.ps1"),
     Path("INSTALL_CANONICAL_PORTABLE.ps1"),
@@ -29,6 +30,7 @@ POWERSHELL_PATHS = (
 POWERSHELL_LIBRARY_PATHS = frozenset(
     {
         Path("kmtech_shared/powershell/portable.ps1"),
+        Path("kmtech_shared/powershell/data_generation.ps1"),
         Path("tools/bootstrap_integrity.ps1"),
         Path("tools/container_writer_fence.ps1"),
     }
@@ -64,6 +66,7 @@ POWERSHELL_NON_PRODUCTION_FUNCTION_MODES: dict[Path, dict[str, str]] = {
     },
 }
 POWERSHELL_APPROVED_DOT_SOURCE_SYMBOLS: dict[Path, frozenset[str]] = {
+    Path("tools/bootstrap_integrity.ps1"): frozenset({"$dataGenerationLeaf"}),
     Path("INSTALL_CANONICAL_PORTABLE.ps1"): frozenset(
         {"$writerFenceHelperPath", "$BootstrapIntegrityFunctions", "$sharedLeaf"}
     ),
@@ -131,6 +134,16 @@ POWERSHELL_NATIVE_PROCESS_APIS = (
 INVENTORY_ALL_SOURCES_SENTINEL = "__INVENTORY_ALL_SOURCES__"
 TRUSTED_CONTROL_PLANE_MUTATIONS: dict[str, str] = {}
 CALLER_FENCED_MUTATIONS: dict[str, dict[str, tuple[str, ...] | str]] = {
+    "data_generation_guard._runtime_release": {
+        "callers": ("data_generation_guard.record_before_data_open",),
+        "sources": ("data_generation_marker",),
+        "reason": "release-identity git reads run only inside the exact guarded data-open adapter",
+    },
+    "kmtech_shared.data_generation.record_generation": {
+        "callers": ("data_generation_guard.record_before_data_open",),
+        "sources": ("data_generation_marker",),
+        "reason": "byte-pinned atomic marker writes run only inside the exact guarded CA adapter",
+    },
     "kmtech_shared.runtime.init_runtime_schema": {
         "callers": (
             "producer_runtime_client.init_runtime_schema",

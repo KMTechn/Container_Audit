@@ -213,6 +213,7 @@ from tk_serial_ui_lane import (
     TkSerialUiLane,
 )
 from writer_session_fence import WriterFencedError, writer_admission, writer_sink
+from data_generation_guard import DataGenerationBlocked, record_before_data_open
 from tray_state import (
     ACTIVATION_EVENT_STATE_KEY,
     ACTIVATION_EVENT_STATE_SCHEMA_VERSION,
@@ -21469,6 +21470,9 @@ def main(argv: list[str] | None = None):
     options, _ = parser.parse_known_args(arguments)
     try:
         startup = _prepare_gui_startup(data_root=options.data_root)
+    except DataGenerationBlocked as exc:
+        messagebox.showerror("자료 판 확인", str(exc))
+        return 1
     except DataRootUnavailableError:
         # Display the recovery action after releasing writer admission.
         notify_data_root_error()
@@ -21507,6 +21511,7 @@ def _prepare_gui_startup(*, data_root=None):
         if storage_paths.custom_data_root:
             # Keep onboarding, GUI constructors and subprocesses on this selection.
             os.environ[DATA_ROOT_ENV] = str(storage_paths.data_root)
+        record_before_data_open(storage_paths.data_root)
         try:
             instance_lease = acquire_runtime_instance(storage_paths.data_root)
         except OSError:

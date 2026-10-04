@@ -1225,6 +1225,15 @@ def onboard_current_user(
     relay_launcher: Callable[..., Mapping[str, Any]] = start_user_relay_process,
 ) -> dict[str, Any]:
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
+    from data_generation_guard import DataGenerationBlocked, record_before_data_open
+
+    try:
+        record_before_data_open(paths.data_root, environ=environ)
+    except DataGenerationBlocked as exc:
+        _write_json_atomic(paths.onboarding_report_path, {
+            "status": "FAILED", "failure": str(exc), "error_code": exc.decision["message_key"],
+            "captured_at": _now(), "state_scope": "current_user"})
+        raise CurrentUserOnboardingError(str(exc), report_path=paths.onboarding_report_path) from exc
     tls_ca_source = _configured_tls_ca_bundle_source(paths, environ)
     attempt = RemoteAttempt.begin(paths.onboarding_report_path, "current_user_onboarding")
     with writer_admission("current_user_onboarding"):
