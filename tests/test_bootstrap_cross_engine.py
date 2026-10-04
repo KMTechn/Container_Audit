@@ -159,6 +159,7 @@ $sections = [Security.AccessControl.AccessControlSections]::Access -bor
         owner_sid = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
         access_rules_protected = $acl.AreAccessRulesProtected
         sddl_sha256 = Get-BootstrapStringSha256 $acl.GetSecurityDescriptorSddlForm($sections)
+        sddl = $acl.GetSecurityDescriptorSddlForm($sections)
     }
 } | ConvertTo-Json -Compress
 ''', CA_TREE=tree)

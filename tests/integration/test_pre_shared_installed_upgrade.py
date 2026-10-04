@@ -69,6 +69,7 @@ def test_pre_shared_installed_tree_passes_current_preflight_and_verified_replace
 [Threading.Thread]::CurrentThread.CurrentUICulture = [Threading.Thread]::CurrentThread.CurrentCulture
 $source=$env:CA_UPGRADE_SOURCE
 $install=$env:CA_UPGRADE_INSTALLED
+$supportedRemovalResume=$null
 $SkipSignatureValidationForTest=$true
 $sourceManifest=Manifest $source $true
 $sourceWriterInventory=Assert-WriterSinkInventory `

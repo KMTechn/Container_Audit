@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 
 $Script:ContainerWriterFenceActiveSchema = 'container-audit-all-writer-fence-active-v1'
 $Script:ContainerWriterFenceReleaseSchema = 'container-audit-all-writer-fence-release-v1'
@@ -143,7 +143,7 @@ function Assert-ContainerWriterFenceOperatorRoot {
     if ((Get-ContainerWriterFenceFileSha256 $prepared 65536) -cne $PreparedReceiptSha256) {
         throw 'CONTAINER_OPERATOR_PREPARED_RECEIPT_MISMATCH'
     }
-    try { $receipt = Get-Content -LiteralPath $prepared -Raw -Encoding UTF8 | ConvertFrom-Json }
+    try { $receipt = Get-Content -LiteralPath $prepared -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson }
     catch { throw 'CONTAINER_OPERATOR_PREPARED_RECEIPT_INVALID' }
     if (
         -not (Test-ContainerWriterFenceExactPropertySet $receipt @(
@@ -400,6 +400,17 @@ function Assert-ContainerWriterFencePayload($Payload) {
     return $Payload
 }
 
+function ConvertFrom-ContainerWriterFenceJson {
+    param([Parameter(ValueFromPipeline=$true)][string]$Json)
+    process {
+        # PS 7.5+ otherwise changes UTC JSON strings into DateTime objects.
+        # Keep the strict wire contract identical to Windows PowerShell 5.1.
+        if((Get-Command Microsoft.PowerShell.Utility\ConvertFrom-Json).Parameters.ContainsKey('DateKind')){
+            Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json -DateKind String
+        }else{Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json}
+    }
+}
+
 function Read-ContainerWriterFence {
     param([string]$ControlRoot = '', [switch]$AllowAbsent)
     $root = Get-ContainerWriterFenceControlRoot $ControlRoot
@@ -416,7 +427,7 @@ function Read-ContainerWriterFence {
     }
     $beforeLength = [int64]$item.Length
     $beforeMtime = $item.LastWriteTimeUtc.Ticks
-    $payload = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $payload = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson
     $after = Get-Item -LiteralPath $path -Force -ErrorAction Stop
     if ([int64]$after.Length -ne $beforeLength -or $after.LastWriteTimeUtc.Ticks -ne $beforeMtime) {
         throw 'CONTAINER_WRITER_FENCE_CHANGED_DURING_READ'
@@ -437,7 +448,7 @@ function Read-ContainerWriterFenceReleaseReceipt([string]$PathValue) {
     $beforeLength = [int64]$item.Length
     $beforeMtime = $item.LastWriteTimeUtc.Ticks
     try {
-        $payload = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $payload = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-ContainerWriterFenceJson -ErrorAction Stop
     }
     catch { throw 'CONTAINER_WRITER_FENCE_RELEASE_RECEIPT_JSON_INVALID' }
     $after = Get-Item -LiteralPath $path -Force -ErrorAction Stop

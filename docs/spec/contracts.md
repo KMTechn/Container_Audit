@@ -1,4 +1,4 @@
-> 2026-10-01 w9scanonly 현재 계약: 7칸 QT=1–9999 즉시 시작, snapshot 구성원 수 우선, 로컬 intent/checkpoint/TRAY_COMPLETE → 표시 → 독립 배경 교환 ACK/lease/seal. 공통 payload는 scan_payload/local_completion_id/local_completed_at/deferred_reflection/short_confirmed/exchange_idempotency_keys다. short는 전체 topology 증거와 스캔 subset을 보내고 exact 잔량을 검증한다. UPSTREAM_COMPLETION_PENDING 409는 retry, COMPLETION_REVIEW_REQUIRED는 해당 intent review다. 유효 PHS2_LOCAL_ONLY도 같은 대기열로 보내며 옛 13자리 현품표는 기존 과도기 기록만 유지한다.
+﻿> 2026-10-01 w9scanonly 현재 계약: 7칸 QT=1–9999 즉시 시작, snapshot 구성원 수 우선, 로컬 intent/checkpoint/TRAY_COMPLETE → 표시 → 독립 배경 교환 ACK/lease/seal. 공통 payload는 scan_payload/local_completion_id/local_completed_at/deferred_reflection/short_confirmed/exchange_idempotency_keys다. short는 전체 topology 증거와 스캔 subset을 보내고 exact 잔량을 검증한다. UPSTREAM_COMPLETION_PENDING 409는 retry, COMPLETION_REVIEW_REQUIRED는 해당 intent review다. 유효 PHS2_LOCAL_ONLY도 같은 대기열로 보내며 옛 13자리 현품표는 기존 과도기 기록만 유지한다.
 
 원격 전송은 fence probe 뒤 mutex 밖에서 수행한다. 결과의 로컬 저장은 admission을 다시 받고 기존 identity/version/CAS를 재확인한다. 스캔의 로컬 durable → 표시 → 같은 key의 배경 전송 순서는 유지한다. runtime lease는 HTTP 전 DB transaction을 닫고 적용 transaction에서 pending request와 row 소유를 다시 확인한다.
 
@@ -126,6 +126,100 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 | 소비 화면 | 해당 API/flag/필터에서 실제 데이터 readback 및 렌더 확인 | 다른 기간·다른 화면·다른 환경에서도 최신이라는 주장 |
 
 위 표는 [TransferSealStore / Coordinator](../../transfer_seal.py), [complete_tray](../../Container_Audit.py), [direct_sync_push receipt 검사](../../direct_sync_push.py), [Web projection](../../../WorkerAnalysisGUI-web/common_projection.py)의 경계를 설명한다. 모든 효과가 한 transaction인 것은 아니며 물류 명령과 producer 전송의 도착 순서를 보장하지 않는다.
+
+<a id="ca-startup-update"></a>
+## 로그온 자동 갱신 계약
+
+`auto_update.py`의 프로토콜 1은 `PREPARED → APPLIED_PENDING_READY → CONFIRMED`와
+실패 시 `ROLLBACK_PENDING → ROLLBACK_PENDING_READY → ROLLED_BACK`을 기록한다.
+canonical 교체 전 HKCU Run·실행 중 relay는 설치된 판의 정확한 명령으로 검증한다.
+Run이 `current/app/auto_update.py --bootstrap --role relay --`이면 실행 중 relay의
+실제 경로는 보호된 active 포인터와 해당 version의 manifest·bootstrap aggregate에서 구한다.
+bootstrap launcher PID의 생존을 resident relay 증거로 쓰지 않는다. INSTALLING의 유효한
+writer 위임 아래 onboarding은 Run·사용자 상태를 완료하고 `DEFERRED_CANONICAL_RELEASE/PID0`를
+기록한다. fence 해제 뒤 기존 `0x18B` 일반 사용자 launcher로 시작하고, 75초 안에
+새 resident PID·정확한 version argv·SID/세션·비승격·medium token·fresh RUNNING status와
+settled transition을 함께 확인한다. 새 packet의 `relay_identity_protocol=1`은 status의
+실제 PID·source commit·ordinary_user를 필수로 한다. 이전 packet의 부재 필드는 관측 부재로
+기록하며 실제 process/version 관측으로 구별한다. timeout·stale PID/status/commit은 실패 복구로 간다.
+복귀한 코드의 유한 lifecycle producer도 같은 일반 사용자 launcher를 사용한다. 필요한
+writer 위임 네 변수와 data root만 메모리의 user environment block에 전달하며, 일반 사용자
+guard·원 read lock·receipt·inventory 검증을 유지한다. 위임 값을 wrapper 파일이나 journal에 저장하지 않는다.
+후보 설정은 교체 뒤의 새 명령에만 적용하며 실패 복귀는 원 Run 값과 인자를 그대로 복원한다.
+canonical 오류 증거는 최초 `failure`와 각 복구 오류를 구분하며 native 실패의 호출명·
+Win32 번호를 남긴다. 정확한 Run 복원 후 relay 시작 실패는 다음 로그온 복구 가능 상태로
+구분하되 runtime 복구 성공·설치 성공으로 승격하지 않는다.
+SYSTEM이 신뢰하는 bootstrap·control·version은 파일과 모든 조상의 소유자·실효 변경 권한을
+확인한다. 일반 사용자가 바꿀 수 있는 배치는 거절한다. 승인된 shared 조상
+`C:\KMTech`와 `C:\KMTech\Apps`는 default/goal 모양을 둘 다 선검사한 뒤 AU self
+권한만 `0x1301BF → 0x1200AF`로 보호한다. owner/group·child-only 상속을 보존하고
+unsupported owner/deny/custom/reparse는 변경 전에 거절한다. 이 보호는 제거·rollback 뒤에도 유지한다.
+READY/trial 읽기 I/O 오류는 미확인 증거로 기록하고 원 기한·정상 복귀를 유지한다.
+원본은 보존하며 atomic JSON 읽기의 일시적 PermissionError만 3회/0.05초 간격으로 재시도한다.
+SYSTEM은 사용자 staging의 고정 세 파일을 보호된 작업 폴더로 복사한 다음 기존
+ES256 검증기로 manifest 서명, ZIP 크기·SHA, portable source SHA와 공개 설정 일치를 다시 확인한다.
+활성 writer 0과 검증된 묶음, 내구 PREPARED 기록이 없으면 포인터를 바꾸지 않는다.
+내구 journal이 포인터보다 먼저 저장되며 중단 후 재시작은 그 기록으로 재개한다.
+
+writer 의미가 달라지는 판은 `from/to commit + from/to writer contract SHA256`의 정확한 방향별
+승인 두 개가 필요하다. 두 승인은 기존 앱 키로 서명한 manifest 안에만 두며,
+현재 설치 SHA→후보 SHA와 정확한 역방향만 허용한다. unsigned 설정이나 다른 키,
+다른 출발점, 역방향 미승인, wildcard, 변조된 계약은 거절한다.
+계약이 같은 판도 서명 manifest의 정확한 두 방향 쌍과 `auto_update`의 방향 SHA가 필요하다.
+설치 정책의 목록은 자동 적용 권한이 아니다. 판 번호는 검증된 stock manifest의 version이며
+source의 단일 CURRENT_VERSION 문자열 literal과 일치해야 한다. feed는 숫자 3/4자리 판 번호의
+엄격한 증가만 허용하고, 같은/낮은 판은 거절한다. 두 계약 원문 파일의 경로+LF와 실제
+SHA256 digest를 다시 해시하며 manifest의 설명값을 계약 원문으로 사용하지 않는다.
+USER 준비는 검증한 단일 `Container_Audit/` 접두 아래의 stock·계약 원문을 읽는다.
+canonical ZIP의 `runtime/` 예외는 서명된 packet SHA에 결속된 stock manifest의
+`runtime_files`(정확한 경로·SHA256)와 실제 ZIP 구성·바이트가 모두 일치할 때만 적용한다.
+빌더가 그 목록을 기록하며 USER 준비와 SYSTEM 압축 해제가 같은 검사를 사용한다.
+목록 밖 runtime 파일·루트 파일·중복 경로와 runtime 아래 장부·로그·credential은 거절한다.
+runtime 목록이 없는 옛 stock에는 이 예외를 적용하지 않는다.
+CONFIRMED 전 실패는 원래 policy를 보존하고, 확인 뒤에만 역방향 승인 감사를
+보호 policy에 기록한다. 설치 설정의 핀은 관리자 canonical 교체용이며 자동 갱신
+승인을 대신하지 않는다.
+관리자 첫 교체는 검증된 packet의 실제 출발/도착 SHA와 writer 계약 해시를 설치 설정에
+방향별로 넣는다. `RestoreVerifiedReplacement`도 검증된 successor packet의 정확한
+역방향 핀을 요구하며, 원 교체 receipt·이전 코드/record/ACL·새 writer fence 검증을 유지한다.
+목록 밖 출발 판·계약 변조·wildcard·범위·중복 핀은 허용하지 않는다.
+`DATA_API_FILES`의 실제 바이트 해시 차이는 서명 쌍 판정의 증거다. 장부·API migration은 이 기능 범위가 아니다.
+해시는 실제 DDL 소유자와 저장·명령 직렬화·마이그레이션·복구 소비자 38파일을 포함한다.
+교환 DB DDL의 같은 길이 변경도 동일 계약 예외로 통과하지 못한다. 데이터/API가 달라지면
+자동 복귀 권한은 READY 실패 뒤 writer 부재·이전 판 무결성 아래의 로컬 복구에만 쓰며,
+feed의 낮은 판 적용 권한으로 사용하지 않는다.
+새 root/tools DDL 소유 파일은 기계적 소유자 검사로 해시 목록과 대조한다.
+프로토콜 1이 없는 옛 묶음은 자동 전환·READY 복귀 대상으로 허용하지 않는다.
+
+READY는 초기화된 GUI의 nonce·판 SHA·PID·생성 시각과 현재 사용자 identity,
+기존 장부·미완성·outbox 읽기, 같은 판 일반 권한 relay 한 개를 함께 확인한다.
+단순 프로세스 생존·heartbeat는 READY가 아니다. 후보 GUI는 확인 전 스캔을 받지 않는다.
+실패한 trial은 기존 쓰기의 정상 flush/종료를 요청하며, writer 0이 확인된 뒤에만
+보존한 이전 코드로 돌아간다. 정상 종료나 관측이 불명확하면 UNKNOWN으로 남기고
+강제 종료·포인터 변경·업무 데이터 snapshot/복원을 하지 않는다.
+
+설치 설정은 feed 빈 값·허용 전이 빈 목록·`apply_during_work=false`가 기본이다.
+업무 중 전환은 아직 거절한다. 승인된 공개 키는 저장소
+`update-manifest-key-config.json`을 기본 빌드 입력으로 사용하며 기존 서명 계약은 그대로다.
+[결정·실패 주입 시험](../../tests/test_auto_update.py), [운영 경계](operations.md#ca-startup-update),
+[남은 실기 검증](BACKLOG.md#ca-g19).
+
+지원 제거는 update-control의 정상 여부를 전제로 하지 않는다. 외부의 검증된 stock 지원
+호스트와 기존 writer admission 아래 사용자 Run/relay의 정지를 확인하고, 각 판의 읽을 수
+있는 bootstrap 파일 목록과 실제 SHA가 같은 일반 파일만 제거 증거로 하나씩 옮긴다.
+목록 불가용·내용 불일치·목록 밖 파일·reparse는 원 경로에 남긴다. 읽은 목록은 원 SHA를
+재대조하여 마지막에 옮긴다. SHA 관측 실패/잠금은 미완이며 REMOVED를 게시하지 않는다.
+제거 실패는 이미 제거한 코드·task·Run을 되살리지 않고 같은 제거 재실행으로 수렴한다.
+내용 이동 전에 권한 있는 하위 설치기가 `update-control/supported-removals/<transaction>/`에
+원 제거 감사의 불변 사본과 정확한 source manifest·fence tuple·prepared SHA·controller PID/시작 시각을
+보호 기록으로 남긴다. controller는 실제 검증된 외부 source 조상이어야 한다.
+재진입은 그 보호 기록·원 감사 사본·같은 source와 fence를 재검사하고 원 owner 종료 및
+같은 tuple의 배타적 session authority를 함께 확인한 뒤 위임만 새로 만든다.
+새 controller의 추가 중단에도 원 감사/tuple을 유지한다. 사용자 쓰기 가능 감사 하나,
+live/reused owner·살아 있는 session authority·기록 불일치로 잔류 fence를 채택하거나 삭제하지 않는다.
+등록/credential/업무 자료/전송 대기는 열거하거나 되감지 않는다. current에 남은 항목은
+후속 설치가 덮어쓰지 않는다. 파일 목록 자체의 마지막 이동과 SHA 없는 incoming signature
+보존은 검사에서 확정된 메타데이터 예외와 같다.
 
 <a id="ca-c01"></a>
 ## CA-C01 로컬 상태·내구성·소유권
@@ -342,6 +436,116 @@ claim으로 한 개만 받는다. writer admission 안에서 journal·두 marker
 
 **공개 사후 코드 복원 계약:** 현재 canonical의 `RestoreVerifiedReplacement`는 정확한 successor source/원 replacement receipt SHA·old/new 코드/record/ACL과 현재 사용자 runtime preimage에 결속한다. 과거 install owner/session/prepared 증명을 재사용하지 않고 새 controller session/attempt/transaction으로 현재 quiescence와 fence를 만든다. `code_replacement.transaction_id`는 원 교체, `controller_transaction_id`는 새 소유권이며 기존 replacement/code-restore receipt schema는 바뀌지 않는다. 정상 removal이 보존한 현 owner·업무 자료를 유지한 채 old code를 복원하고, 기존 Run 값을 fence 안에서 복원·검사한 뒤 fence 해제를 확인하고 원 relay 명령으로 process를 시작한다. 재등록·key/credential 복제·중앙 물류 rollback·오래된 DB snapshot 복원은 이 동작에 없다. 다른 historical sibling은 이 transaction의 입력이 아니지만 선택 root 이름은 동일 receipt transaction이어야 하고, 선택 tree나 integrity record drift는 그대로 거부한다. 자세한 지원/실패 상태와 실제 적용 범위는 [CA-O05/O09](operations.md#ca-o05)에 기록한다.
 
+canonical의 replacement receipt는 보호 helper run의 실제 경로에 자기 경로를 결속하고 한 번만 작성한다.
+부모는 bound helper/PID·보호 run·journal의 원본 SHA를 확인해 그 자리에서 읽는다. standalone helper의
+caller/export 경로와 기존 바이트/hash 계약은 유지한다. startup 설정이
+있으면 원 startup preimage를 먼저 보관해 그 경로·SHA를 receipt에 포함하고, 그 뒤에 startup을
+변경한다. 같은 실행에서 receipt를 재작성하거나 다른 실행의 receipt를 덮어쓰지 않는다.
+
+예행 G(dac6157)의 단일 receipt/helper native0는 PROVEN이지만 전체 caller 전달 계약은 FAILED다.
+이미 상승한 BOUND_DIRECT_CHILD의 protected receipt는 존재하나 원 caller 경로 파일은 없어서
+부모2887의 Sha가 FileNotFound로 끝났다. ordinary elevation wrapper 경로의 export 회귀와
+direct-child carrier의 실제 증거를 구별한다. 새 canonical 전달 경로는 실제 post-child 소비자에서
+PS5.1/7 RED2→GREEN4이고 기존 startup/export와 합쳐 34 PASS다. 새 helper만 보호 자기 경로를
+기록하며 G 원 기록은 소급 변경하지 않는다. 현재 랩의 retained code/control/task는 old-normal이 아니다.
+
 **최종 d440 별도 대상의 실제 등록 경계:** [CA-O10](operations.md#ca-o10)의 c029 VM은 실제 CA 코드/사용자·identity·relay 부재와 ordinary kmadmin session1/medium 및 PlanOnly0를 확인한 fresh-app 대상이며, 복사 OS의 MachineGuid/SID는 유지했다. 최초 정상 Install01은 실제 `producer_identity_conflict`로 native1 / `FAILED_RUNTIME_RESTORED_CODE_RETAINED`였고 exact d440 코드 배치는 `PASS_NEW_VERIFIED`다. 이 실패와 원본13파일을 보존하며 새 Hyper-V GUID나 빈 폴더를 무지원 중앙 등록 PASS로 해석하지 않는다.
 
 Main의 새 QA 소유 배정 뒤 Web이 발행한 단회 recovery를 기존 지원 등록 명령으로 실행한 Recovery01은 ordinary native/task0 / `ADMIN_RECOVERY_REGISTERED`, epoch8이다. 제품이 이 대상에서 만든 실제 current_user fingerprint `bqMrBqbmdGBJjoPnV-JasvUTsdGnMdQKrdXCZrrc3S4`를 그대로 사용했고 producer/source `container-audit-source-20da23dc1c762b3c1055a10e3e2450c1`·install `container-audit-install-87f6d7d8b6e36067490c1d1146fcebeb`, semantic manifest `27c471d693d0de73377beaeeddbbc93aad90ac676b3b2a6c2fa388c37f4b7538`를 확인했다. [Web의14:06:14Z 독립 확인](E:/KMTech/web-integration-20260908/ca-final-recovery-central-readback-01.json)은 recovery 단회 소모와 기존97 receipt의 ID·full row hash/rowid 보존을 입증한다. 기존 key/identity·token·clock·ledger를 시험 도구로 바꾸지 않았으며 `OPERATION_PENDING`은 등록 성공과 별도 권한 상태다. 실제 상태가 회복된 뒤 Install02는 native/task0 / `PASS`·`REUSED_VERIFIED`로 정상 계속했다. [전체 원본·후속 lifecycle](E:/KMTech/ca-final-qualification-20260908/REPORT.md)을 따르며, 기존 Restore09는 원 receipt/VM 범위에서만 재사용하고 이 대상의 무지원 첫 등록 성공으로 승계하지 않는다.
+# Installation evidence and shared ancestor protection — 2026-10-02
+
+Installer failures preserve the original redacted message, line, inner chain,
+HResult/native error and ordered stage start/end/result. Finite installer children
+retain separate stdout/stderr bytes, capped at1MiB each, with redaction/truncation,
+exit and SHA metadata in operator/SYSTEM/Administrators-only evidence. Detached
+pythonw relay launches retain security/status evidence; their installer stdio
+pipes are not attached. Placement records STARTED_CHILD/FAILED_CHILD or explicit
+PREPLACEMENT_REJECTED_ANCESTORS rather than remaining NOT_STARTED after execution.
+
+Ancestor owners are compared by SID: SYSTEM, Administrators, and the exact
+TrustedInstaller service SID; arbitrary service/user SIDs remain rejected.
+Before code placement, only literal C:\KMTech and C:\KMTech\Apps are admitted for
+non-recursive shared protection. The observed five inherited Allow ACEs with BA
+ownership are converted to explicit protected ACEs; only AU's self mask changes
+0x1301BF→0x1200AF. Its child-only generic mask, owner/group and other entries stay
+unchanged. Both shapes are checked before the first ACL write; exact target shape
+is idempotent, unknown/deny/reparse/partial states are rejected. The actual app
+leaf/ancestor guard runs again, including rejection of user-owned name squatters.
+This protection is intentionally persistent across app rollback/uninstall.
+Its before/after SDDL is evidence, never unbound privileged restore authority.
+All three shipped installer/bootstrap PowerShell files keep UTF8 BOM so PS5.1
+decodes bounded Korean path/reason errors consistently. Shared child execution
+is admitted only when every shipped caller terminates in a byte-pinned installer
+admission lifetime; early/late/unknown/ambiguous/direct unfenced calls are rejected.
+# 설치 실행·증거 권한 경계 (2026-10-02 소스 구현)
+
+상승 요청은 operator 소유 wrapper 파일을 실행하지 않는다. 검증한 helper/library
+바이트를 그대로 평가하며, 관리자 증거는 보호된 `update-control\installation-evidence`
+아래 최근 5회로 보관한다. operator 증거와 최종 요약은 일반 프로세스가 쓴다.
+관리자 결과의 PID·helper digest·run/capture/stream 경로·digest와 incomplete 상태를
+일반 부모가 확인한다. replacement/restore 결과의 operator 사본도 일반 부모가
+보호된 원본을 읽어 생성한다. source pin 재생성과 실제 Windows 설치/제거/복원은
+[검증 보고서](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-107/REPORT.md)의
+별도 미검증 범위다.
+
+교체 영수증 내부 `receipt_path`는 최초 요청의 ordinary export 경로를 유지한다.
+관리자가 쓰는 물리 경로와 구별하며, export는 바이트와 digest를 그대로 보존해
+기존 replacement 검증·복원 consumer의 정확한 경로 바인딩을 유지한다.
+
+기존 사용자 TLS 구성 복사와 delegated writer-fence 상태는 사용자 프로필 저장
+계약을 유지한다. TLS는 디렉터리 생성 전 existing ancestor와 복사 전 target,
+writer-fence는 기존 구성 요소 검사로 재분석 지점을 쓰기 전에 거절한다.
+사용자 소유 protocol/config 전체의 동시 변경 방지를 증명한 결과는 아니다.
+
+### Descriptor equality and native DACL bookkeeping — 2026-10-03
+
+Raw-descriptor readback uses one bootstrap comparison key: exact owner/group,
+all descriptor control bits except SE_DACL_AUTO_INHERITED, and sorted complete
+ACE identities for the supported all-Allow models, preserving explicit/inherited
+flags and duplicates. Mixed Allow/Deny descriptors retain ACE order because
+precedence changes can change effective permission.
+Protection removal, another control bit, changed owner/group or changed ACEs
+remain different. Original SDDL is retained in evidence. Shared-ancestor race
+readback and startup-task restoration use this rule; XML and other bindings
+remain exact. Hash-only historical replacement receipts retain their existing
+raw SHA contract. New replacement and lifecycle identities carry raw SDDL bound
+to that unchanged SHA and use the central comparison. Legacy hash-only identities
+accept exact bytes, or actual SDDL with only its DACL AI marker toggled; any other
+unrecoverable difference, including ACE order, remains rejected. Raw-field hash,
+owner or protection inconsistency fails closed. Python recovery calls the trusted
+library beside its executing module, without executing receipt-selected trees.
+
+### 끝나지 않은 되돌리기 이어 하기 — sub-172 소스 계약
+
+고친 설치기의 보호 control/rollback-continuations/transaction 자리에는 최초 receipt의
+바이트 그대로인 사본과 SHA, 최초 자기 경로, 옛·새 manifest, 원 Run/relay 증명,
+owner PID/시작 시각과 session/attempt를 묶은 불변 journal을 한 번만 쓴다. 최근 실행
+증거 회전과 별도로 남기며 완료 표식도 한 번만 작성한다. canonical 준비/release와
+복구 journal의 시각은 기존 fence JSON 문자열 파서를 써 PS5.1/7의 wire 값이 같다.
+
+같은 successor packet으로 설치기를 다시 실행하면 원 owner가 종료했고 원 receipt,
+양쪽 전체 코드/record/ACL, startup preimage, source와 operator가 모두 같은지 먼저
+검사한다. PlanOnly는 VERIFIED_PENDING만 보고한다. 실제 재진입은 기존 authority와
+placement admission 안에서 원 receipt가 가리키는 옛 트리, 정확한 Run, task/pointer,
+옛 일반 사용자 relay를 복원한다. 코드가 이미 복원된 경우도 남은 단계를 확인하며
+완료 표식 뒤 다음 PlanOnly는 NOT_FOUND다. 불일치는 기록·트리 변경 전에 한국어로
+거절한다. 기록 자체를 다시 쓰거나 guard를 우회하지 않는다.
+
+G처럼 고치기 전 installer의 기록만 있는 상태는 이 계약의 입력이 아니다. 공개
+legacy receipt self-path 규칙은 그대로이고, 새 journal로 검증된 사본만 최초 binding
+경로와 구별한다. 128개를 넘는 retained continuation은 보수적으로 거절하며 자동
+정리하지 않는다. 독립 native 랩 수용과 장기간 보관 정책은 별도 확인이 필요하다.
+
+## sub-189 지원 설치와 상태 판정 (2026-10-04)
+
+정상 자동 적용 뒤 fixed owner A와 actual active B가 다를 때만 지원 설치가 versions/C를 준비하고 B→C를 선택한다. A와 B는 이동하지 않는다. 기존 immutable replacement receipt에 active_version 선택, A/B/C 전체 파일·record·ACL identity, 원 제어 preimage와 허용된 게시 cut의 SHA를 결속한다. 같은 protected rollback journal, 원 receipt 사본, 복구 권한, Run 복원, ordinary relay READY와 끝 상태를 소비한다. 첫 설치와 A=B의 current 교체는 기존 경로다.
+
+설치/이종 active 등록은 실제 stock 기록·bytes·보호·신뢰 키와 derived SYSTEM task를 확인한다. 불안정/잔재/namespace 충돌은 한국어 지원 제거 안내로 멈춘다. 제거와 사용자 정리는 손상된 machine control 해석을 전제로 삼지 않는다. 오류는 제한된 cause chain/native errno·winerror/exit code를 보존하고 credential text를 마스킹한다. data/API 동일성으로 unsigned 쌍을 승인하던 미사용 fallback은 제거했다.
+
+### sub-189 P2-1: 반복 중단 복구 권한 결속
+
+최초 보호 journal/receipt는 불변이다. 새 복구 controller는 원 journal SHA·receipt SHA·직전 authority tuple/link SHA·새 caller preparation SHA·살아 있는 owner PID/시작 시각을 보호된 immutable authority link로 결속한 뒤 그 링크 path/SHA를 fence에 게시한다. 다음 재진입은 보호 링크 사슬과 직전 owner 종료를 검증하며 같은 기록의 반복 중단을 이어 간다. 임의 tuple, 같은 tuple의 바뀐 링크, 살아 있거나 재사용된 owner는 거절한다. DISPLACED/current 부재는 기존 지원 범위 밖이다.
+
+### sub-189 P2-2: 보호 완료와 ordinary writer 해제
+
+relay READY 뒤 복구 완료 기록은 새 INSTALLING fence를 열지 않는다. privileged helper는 원 보호 journal/receipt·exact restored tree/Run/task·runtime audit·실제 protected RELEASED receipt와 authorization SHA·같은 살아 있는 controller PID/시작 시각 및 이미 잡힌 authority mutex를 확인하고 CreateNew 보호 완료를 기록한다. 실제 fence/stop 부재를 요구하며 relay를 재기동하지 않는다. controller는 helper 뒤 같은 resident PID와 READY를 다시 관측한다.

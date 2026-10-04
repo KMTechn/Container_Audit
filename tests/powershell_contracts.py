@@ -57,6 +57,10 @@ def canonical_leaf_prelude(source):
 . '{root}/tools/bootstrap_integrity.ps1'
 $contractSharedLeaf = Get-BootstrapSharedPortableLeaf '{root}'
 . $contractSharedLeaf
+$jsonAst=[Management.Automation.Language.Parser]::ParseFile('{root}/tools/container_writer_fence.ps1',[ref]$null,[ref]$null)
+$jsonFunction=@($jsonAst.EndBlock.Statements|Where-Object {{$_.Name -ceq 'ConvertFrom-ContainerWriterFenceJson'}})
+if($jsonFunction.Count -ne 1){{throw 'actual writer JSON parser missing'}}
+Invoke-Expression $jsonFunction[0].Extent.Text
 """
 
 

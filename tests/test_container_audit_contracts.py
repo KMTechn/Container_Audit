@@ -39,6 +39,14 @@ def _headless_app():
     return app
 
 
+def _approved_update_public_key():
+    # Current frozen packets carry the approved public-only key bundle.
+    path = Path(__file__).resolve().parents[1] / "update-manifest-key-config.json"
+    raw = path.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == "d7fb6ecb06b23ecf2fceea6c893c8d1162dad302720ab0e97d19dfae6368d1e5"
+    return json.dumps(json.loads(raw)["manifest_public_key"], sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
 def _append_event_log_worker(args):
     log_path, worker_name, count = args
     for index in range(count):
@@ -1396,7 +1404,7 @@ def test_frozen_release_bootstraps_signed_private_manifest_without_saved_setting
     )
     assert (
         container_audit_module._get_update_manifest_public_key()
-        == container_audit_module.UPDATE_BOOTSTRAP_MANIFEST_PUBLIC_KEY
+        == _approved_update_public_key()
     )
 
 
@@ -1430,7 +1438,7 @@ def test_legacy_test1_settings_bootstrap_private_update_prompt_on_tk_thread(tmp_
         "container_audit/stable/latest.json"
     )
     signature_url = f"{manifest_url}.sig"
-    public_key = "10d3baf546e05daaa0bbbbdd3f69630c90a245293a1690e2cfa47071292ac4a2"
+    public_key = _approved_update_public_key()
     assert json.loads(config_path.read_text(encoding="utf-8")) == legacy_settings
     assert container_audit_module._get_update_provider() == "private_manifest"
     assert container_audit_module._get_update_channel() == "stable"
