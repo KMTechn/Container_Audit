@@ -428,10 +428,10 @@ def _enable_valid_test1_legacy_override(monkeypatch):
     monkeypatch.setattr(
         runtime_module.Path,
         "stat",
-        lambda path: (
+        lambda path, *args, **kwargs: (
             SimpleNamespace(st_size=20)
-            if path == ca_bundle
-            else original_stat(path)
+            if (path == ca_bundle) and kwargs.get("follow_symlinks", True)
+            else original_stat(path, *args, **kwargs)
         ),
     )
     return run_root, ca_bundle
