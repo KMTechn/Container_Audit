@@ -23,6 +23,8 @@ def test_recovery_choice_parks_original_before_public_scan(flow, windows, other_
     saved = app._current_tray_state_snapshot()
     if other_worker:
         saved['worker_name'] = 'other-worker'
+        if 'worker_name_snapshot' in saved:
+            saved['worker_name_snapshot'] = saved['worker_name']
         assert app._save_tray_state_snapshot(saved)
     app.current_tray = ca.TraySession()
     app._load_current_tray_state()
