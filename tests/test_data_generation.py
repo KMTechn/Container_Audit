@@ -1,0 +1,196 @@
+"""Executable Python/PS5.1/PS7 parity with literal, synthetic user data."""
+import json
+from pathlib import Path
+import shutil
+
+import pytest
+
+from kmtech_shared import data_generation as generation
+from tests.powershell_contracts import run_powershell
+
+APP = "container_audit"
+SID = "S-1-5-21-219"
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def record(path, version="v2.0.99", **options):
+    return generation.record_generation(path, version, app_id=APP, subject_sid=SID, **options)
+
+
+def probe(paths, target="v2.0.33"):
+    return generation.probe_downgrade(paths, target, app_id=APP, subject_sid=SID)
+
+
+def test_absent_generation_preserves_before_data_open_rollback(tmp_path):
+    before = set(tmp_path.iterdir())
+    result = probe([tmp_path / "machine.json", tmp_path / "user.json"])
+    assert result["status"] == "ALLOW"
+    assert set(tmp_path.iterdir()) == before
+
+
+def test_direct_application_marker_denies_old_code_without_bootstrap_marker(tmp_path):
+    user = tmp_path / "user.json"
+    record(user)
+    result = probe([tmp_path / "machine.json", user])
+    assert result["status"] == "REFUSE"
+    assert result["allowed"] is False
+    assert "옛 판으로 되돌릴 수 없습니다" in result["message"]
+    assert "백업" in result["message"]
+    assert probe([user], "v2.0.99")["allowed"]
+    assert probe([user], "v2.0.100")["allowed"]
+
+
+def test_verified_compatibility_floor_is_honored_and_unsigned_floor_is_ignored(tmp_path):
+    verified = tmp_path / "signed.json"
+    unsigned = tmp_path / "unsigned.json"
+    record(verified, data_compatible_min_version="v2.0.98", compatibility_verified=True)
+    record(unsigned, data_compatible_min_version="v2.0.33")
+    assert probe([verified], "v2.0.98")["status"] == "ALLOW"
+    assert probe([verified], "v2.0.97")["status"] == "REFUSE"
+    assert probe([unsigned])["status"] == "REFUSE"
+
+
+def test_largest_generation_and_strictest_floor_at_same_generation(tmp_path):
+    first, second = tmp_path / "machine.json", tmp_path / "user.json"
+    record(first, "v2.0.98")
+    record(second, "v2.0.99", data_compatible_min_version="v2.0.97", compatibility_verified=True)
+    assert probe([first, second], "v2.0.97")["status"] == "ALLOW"
+    record(first, "v2.0.99")
+    assert probe([first, second], "v2.0.98")["status"] == "REFUSE"
+
+
+@pytest.mark.parametrize("payload", [b"{", b"", b" " * 4097,
+    b'{"schema":"kmtech-data-generation-v1","schema":"kmtech-data-generation-v1"}',
+    json.dumps({"schema": generation.SCHEMA, "app_id": APP, "subject_sid": SID,
+                "version": "commit-abc", "data_compatible_min_version": "v2.0.33"}).encode(),
+    json.dumps({"schema": generation.SCHEMA, "app_id": APP, "subject_sid": "S-1-5-21-220",
+                "version": "v2.0.99", "data_compatible_min_version": "v2.0.99"}).encode()])
+def test_unreadable_or_invalid_marker_denies_even_with_valid_other_slot(tmp_path, payload):
+    good, bad = tmp_path / "machine.json", tmp_path / "user.json"
+    record(good)
+    bad.write_bytes(payload)
+    assert probe([good, bad], "v2.0.100")["status"] == "UNKNOWN"
+    with pytest.raises((generation.DataGenerationError, ValueError)):
+        record(bad)
+    assert bad.read_bytes() == payload
+
+
+def test_read_error_is_unknown_and_original_is_not_modified(tmp_path, monkeypatch):
+    path = tmp_path / "marker.json"
+    record(path)
+    before = path.read_bytes()
+    original = Path.open
+
+    def denied(self, *args, **kwargs):
+        if self == path:
+            raise PermissionError("synthetic access refusal")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", denied)
+    assert probe([path])["status"] == "UNKNOWN"
+    monkeypatch.setattr(Path, "open", original)
+    assert path.read_bytes() == before
+
+
+def test_atomic_failure_preserves_old_marker_and_high_water_never_decreases(tmp_path, monkeypatch):
+    path = tmp_path / "marker.json"
+    record(path, "v2.0.98")
+    before = path.read_bytes()
+    original = generation.os.replace
+
+    def interrupted(*args):
+        raise OSError("synthetic interrupted replacement")
+
+    monkeypatch.setattr(generation.os, "replace", interrupted)
+    with pytest.raises(OSError):
+        record(path)
+    assert path.read_bytes() == before
+    assert not list(tmp_path.glob("*.tmp.*"))
+    monkeypatch.setattr(generation.os, "replace", original)
+    record(path)
+    newest = path.read_bytes()
+    record(path, "v2.0.33")
+    assert path.read_bytes() == newest
+
+
+@pytest.mark.parametrize("engine", ["powershell.exe", "pwsh.exe"])
+def test_powershell_python_cross_reader_writer_parity(tmp_path, engine):
+    assert shutil.which(engine), f"Required engine is unavailable: {engine}"
+    py_marker, ps_marker = tmp_path / "python.json", tmp_path / "powershell.json"
+    record(py_marker, data_compatible_min_version="v2.0.98", compatibility_verified=True)
+    helper = str(ROOT / "kmtech_shared/powershell/data_generation.ps1").replace("'", "''")
+    py_literal, ps_literal = (str(path).replace("'", "''") for path in (py_marker, ps_marker))
+    driver = tmp_path / "parity.ps1"
+    driver.write_text(f"""
+$ErrorActionPreference='Stop'
+. '{helper}'
+$result = @()
+$result += Get-KmtechDataDowngradeDecision @('{py_literal}') 'v2.0.98' '{APP}' '{SID}'
+$result += Get-KmtechDataDowngradeDecision @('{py_literal}') 'v2.0.97' '{APP}' '{SID}'
+$result += Get-KmtechDataDowngradeDecision @('{ps_literal}') 'v2.0.33' '{APP}' '{SID}'
+[void](Write-KmtechDataGeneration '{ps_literal}' 'v2.0.98' '{APP}' '{SID}')
+[void](Write-KmtechDataGeneration '{ps_literal}' 'v2.0.99' '{APP}' '{SID}' 'v2.0.98' $true)
+$result += Get-KmtechDataDowngradeDecision @('{ps_literal}') 'v2.0.98' '{APP}' '{SID}'
+[void](Write-KmtechDataGeneration '{ps_literal}' 'v2.0.33' '{APP}' '{SID}')
+$result | ConvertTo-Json -Depth 5 -Compress
+""", encoding="utf-8-sig")
+    result = run_powershell([engine, "-NoProfile", "-NonInteractive", "-File", str(driver)])
+    assert result.returncode == 0, result.stderr
+    decisions = json.loads(result.stdout)
+    assert [item["status"] for item in decisions] == ["ALLOW", "REFUSE", "ALLOW", "ALLOW"]
+    assert decisions[1]["message"] == generation.REFUSAL_MESSAGE
+    assert probe([ps_marker], "v2.0.98")["status"] == "ALLOW"
+    assert json.loads(ps_marker.read_bytes())["version"] == "v2.0.99"
+
+
+@pytest.mark.parametrize("engine", ["powershell.exe", "pwsh.exe"])
+def test_powershell_invalid_and_two_slot_decisions(tmp_path, engine):
+    assert shutil.which(engine)
+    older, newer, corrupt = (tmp_path / name for name in ("older.json", "newer.json", "corrupt.json"))
+    record(older, "v2.0.98")
+    record(newer)
+    corrupt.write_bytes(b"{")
+    helper = str(ROOT / "kmtech_shared/powershell/data_generation.ps1").replace("'", "''")
+    literal = lambda path: str(path).replace("'", "''")
+    driver = tmp_path / "invalid.ps1"
+    driver.write_text(f"""
+$ErrorActionPreference='Stop'
+. '{helper}'
+@(
+  (Get-KmtechDataDowngradeDecision @('{literal(older)}','{literal(newer)}') 'v2.0.98' '{APP}' '{SID}')
+  (Get-KmtechDataDowngradeDecision @('{literal(newer)}','{literal(corrupt)}') 'v2.0.100' '{APP}' '{SID}')
+  (Get-KmtechDataDowngradeDecision @('{literal(newer)}') 'commit-abc' '{APP}' '{SID}')
+) | ConvertTo-Json -Depth 5 -Compress
+""", encoding="utf-8-sig")
+    result = run_powershell([engine, "-NoProfile", "-NonInteractive", "-File", str(driver)])
+    assert result.returncode == 0, result.stderr
+    assert [item["status"] for item in json.loads(result.stdout)] == ["REFUSE", "UNKNOWN", "UNKNOWN"]
+
+
+@pytest.mark.parametrize("engine", ["powershell.exe", "pwsh.exe"])
+def test_reparse_and_locked_marker_are_refused_without_changes(tmp_path, engine):
+    target, link, marker = tmp_path / "target", tmp_path / "link", tmp_path / "locked.json"
+    target.mkdir()
+    record(marker)
+    before = marker.read_bytes()
+    helper = str(ROOT / "kmtech_shared/powershell/data_generation.ps1").replace("'", "''")
+    literal = lambda path: str(path).replace("'", "''")
+    driver = tmp_path / "literal.ps1"
+    driver.write_text(f"""
+$ErrorActionPreference='Stop'
+. '{helper}'
+[void](New-Item -ItemType Junction -Path '{literal(link)}' -Target '{literal(target)}')
+$result = @()
+$result += Get-KmtechDataDowngradeDecision @('{literal(link / 'marker.json')}') 'v2.0.33' '{APP}' '{SID}'
+$handle=[IO.File]::Open('{literal(marker)}',[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)
+try {{ $result += Get-KmtechDataDowngradeDecision @('{literal(marker)}') 'v2.0.100' '{APP}' '{SID}' }} finally {{ $handle.Dispose() }}
+$result | ConvertTo-Json -Depth 5 -Compress
+""", encoding="utf-8-sig")
+    result = run_powershell([engine, "-NoProfile", "-NonInteractive", "-File", str(driver)])
+    assert result.returncode == 0, result.stderr
+    assert [item["status"] for item in json.loads(result.stdout)] == ["UNKNOWN", "UNKNOWN"]
+    assert probe([link / "marker.json"])["status"] == "UNKNOWN"
+    with pytest.raises(generation.DataGenerationError):
+        record(link / "marker.json")
+    assert not list(target.iterdir())
+    assert marker.read_bytes() == before
