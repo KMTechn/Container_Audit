@@ -10,15 +10,53 @@ from tests.powershell_contracts import run_powershell
 
 APP = "container_audit"
 SID = "S-1-5-21-219"
+BUILD = "a" * 40
+OTHER_BUILD = "b" * 64
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def record(path, version="v2.0.99", **options):
-    return generation.record_generation(path, version, app_id=APP, subject_sid=SID, **options)
+    return generation.record_generation(path, version, app_id=APP, subject_sid=SID, build_id=options.pop("build_id", BUILD), **options)
 
 
-def probe(paths, target="v2.0.33"):
-    return generation.probe_downgrade(paths, target, app_id=APP, subject_sid=SID)
+def probe(paths, target="v2.0.33", build_id=BUILD):
+    return generation.probe_downgrade(paths, target, app_id=APP, subject_sid=SID, target_build_id=build_id)
+
+
+def test_same_version_other_build_requires_explicit_signed_compatibility(tmp_path):
+    marker = tmp_path / "generation.json"
+    record(marker)
+    assert probe([marker], "v2.0.99", BUILD)["status"] == "ALLOW"
+    assert probe([marker], "v2.0.99", OTHER_BUILD)["status"] == "UNKNOWN"
+    declared = tmp_path / "declared.json"
+    record(declared, data_compatible_min_version="v2.0.99", compatibility_verified=True)
+    assert probe([declared], "v2.0.99", OTHER_BUILD)["status"] == "ALLOW"
+    implicit = tmp_path / "implicit.json"
+    record(implicit, compatibility_verified=True)
+    assert probe([implicit], "v2.0.99", OTHER_BUILD)["status"] == "UNKNOWN"
+    assert probe([marker, declared], "v2.0.99", OTHER_BUILD)["status"] == "UNKNOWN"
+
+
+@pytest.mark.parametrize("engine", ["powershell.exe", "pwsh.exe"])
+def test_powershell_same_version_build_binding(tmp_path, engine):
+    plain, signed = tmp_path / "plain.json", tmp_path / "signed.json"
+    record(plain)
+    record(signed, data_compatible_min_version="v2.0.99", compatibility_verified=True)
+    helper = str(ROOT / "kmtech_shared/powershell/data_generation.ps1").replace("'", "''")
+    literal = lambda path: str(path).replace("'", "''")
+    driver = tmp_path / "build-binding.ps1"
+    driver.write_text(f"""
+$ErrorActionPreference='Stop'
+. '{helper}'
+@(
+ (Get-KmtechDataDowngradeDecision -MarkerPaths @('{literal(plain)}') -TargetVersion 'v2.0.99' -AppId '{APP}' -SubjectSid '{SID}' -TargetBuildId '{BUILD}')
+ (Get-KmtechDataDowngradeDecision -MarkerPaths @('{literal(plain)}') -TargetVersion 'v2.0.99' -AppId '{APP}' -SubjectSid '{SID}' -TargetBuildId '{OTHER_BUILD}')
+ (Get-KmtechDataDowngradeDecision -MarkerPaths @('{literal(signed)}') -TargetVersion 'v2.0.99' -AppId '{APP}' -SubjectSid '{SID}' -TargetBuildId '{OTHER_BUILD}')
+) | ConvertTo-Json -Depth 5 -Compress
+""", encoding="utf-8-sig")
+    result = run_powershell([engine, "-NoProfile", "-NonInteractive", "-File", str(driver)])
+    assert result.returncode == 0, result.stderr
+    assert [item["status"] for item in json.loads(result.stdout)] == ["ALLOW", "UNKNOWN", "ALLOW"]
 
 
 def test_absent_generation_preserves_before_data_open_rollback(tmp_path):
@@ -148,13 +186,13 @@ def test_powershell_python_cross_reader_writer_parity(tmp_path, engine):
 $ErrorActionPreference='Stop'
 . '{helper}'
 $result = @()
-$result += Get-KmtechDataDowngradeDecision @('{py_literal}') 'v2.0.98' '{APP}' '{SID}'
-$result += Get-KmtechDataDowngradeDecision @('{py_literal}') 'v2.0.97' '{APP}' '{SID}'
-$result += Get-KmtechDataDowngradeDecision @('{ps_literal}') 'v2.0.33' '{APP}' '{SID}'
-[void](Write-KmtechDataGeneration '{ps_literal}' 'v2.0.98' '{APP}' '{SID}')
-[void](Write-KmtechDataGeneration '{ps_literal}' 'v2.0.99' '{APP}' '{SID}' 'v2.0.98' $true)
-$result += Get-KmtechDataDowngradeDecision @('{ps_literal}') 'v2.0.98' '{APP}' '{SID}'
-[void](Write-KmtechDataGeneration '{ps_literal}' 'v2.0.33' '{APP}' '{SID}')
+$result += Get-KmtechDataDowngradeDecision @('{py_literal}') 'v2.0.98' '{APP}' '{SID}' '{BUILD}'
+$result += Get-KmtechDataDowngradeDecision @('{py_literal}') 'v2.0.97' '{APP}' '{SID}' '{BUILD}'
+$result += Get-KmtechDataDowngradeDecision @('{ps_literal}') 'v2.0.33' '{APP}' '{SID}' '{BUILD}'
+[void](Write-KmtechDataGeneration '{ps_literal}' 'v2.0.98' '{APP}' '{SID}' -BuildId '{BUILD}')
+[void](Write-KmtechDataGeneration '{ps_literal}' 'v2.0.99' '{APP}' '{SID}' 'v2.0.98' $true -BuildId '{BUILD}')
+$result += Get-KmtechDataDowngradeDecision @('{ps_literal}') 'v2.0.98' '{APP}' '{SID}' '{BUILD}'
+[void](Write-KmtechDataGeneration '{ps_literal}' 'v2.0.33' '{APP}' '{SID}' -BuildId '{BUILD}')
 $result | ConvertTo-Json -Depth 5 -Compress
 """, encoding="utf-8-sig")
     result = run_powershell([engine, "-NoProfile", "-NonInteractive", "-File", str(driver)])
@@ -180,9 +218,9 @@ def test_powershell_invalid_and_two_slot_decisions(tmp_path, engine):
 $ErrorActionPreference='Stop'
 . '{helper}'
 @(
-  (Get-KmtechDataDowngradeDecision @('{literal(older)}','{literal(newer)}') 'v2.0.98' '{APP}' '{SID}')
-  (Get-KmtechDataDowngradeDecision @('{literal(newer)}','{literal(corrupt)}') 'v2.0.100' '{APP}' '{SID}')
-  (Get-KmtechDataDowngradeDecision @('{literal(newer)}') 'commit-abc' '{APP}' '{SID}')
+  (Get-KmtechDataDowngradeDecision @('{literal(older)}','{literal(newer)}') 'v2.0.98' '{APP}' '{SID}' '{BUILD}')
+  (Get-KmtechDataDowngradeDecision @('{literal(newer)}','{literal(corrupt)}') 'v2.0.100' '{APP}' '{SID}' '{BUILD}')
+  (Get-KmtechDataDowngradeDecision @('{literal(newer)}') 'commit-abc' '{APP}' '{SID}' '{BUILD}')
 ) | ConvertTo-Json -Depth 5 -Compress
 """, encoding="utf-8-sig")
     result = run_powershell([engine, "-NoProfile", "-NonInteractive", "-File", str(driver)])
@@ -204,9 +242,9 @@ $ErrorActionPreference='Stop'
 . '{helper}'
 [void](New-Item -ItemType Junction -Path '{literal(link)}' -Target '{literal(target)}')
 $result = @()
-$result += Get-KmtechDataDowngradeDecision @('{literal(link / 'marker.json')}') 'v2.0.33' '{APP}' '{SID}'
+$result += Get-KmtechDataDowngradeDecision @('{literal(link / 'marker.json')}') 'v2.0.33' '{APP}' '{SID}' '{BUILD}'
 $handle=[IO.File]::Open('{literal(marker)}',[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)
-try {{ $result += Get-KmtechDataDowngradeDecision @('{literal(marker)}') 'v2.0.100' '{APP}' '{SID}' }} finally {{ $handle.Dispose() }}
+try {{ $result += Get-KmtechDataDowngradeDecision @('{literal(marker)}') 'v2.0.100' '{APP}' '{SID}' '{BUILD}' }} finally {{ $handle.Dispose() }}
 $result | ConvertTo-Json -Depth 5 -Compress
 """, encoding="utf-8-sig")
     result = run_powershell([engine, "-NoProfile", "-NonInteractive", "-File", str(driver)])
@@ -236,7 +274,7 @@ function Read-KmtechDataGeneration([string]$Path,[string]$AppId,[string]$Subject
     return (& $script:originalRead $Path $AppId $SubjectSid)
 }}
 $rejected=$false
-try {{ [void](Write-KmtechDataGeneration '{literal}' 'v2.0.99' '{APP}' '{SID}') }}
+try {{ [void](Write-KmtechDataGeneration '{literal}' 'v2.0.99' '{APP}' '{SID}' -BuildId '{BUILD}') }}
 catch {{ $rejected=$_.Exception.Message -ceq 'Data generation durable readback differs.' }}
 @{{rejected=$rejected}} | ConvertTo-Json -Compress
 """, encoding="utf-8-sig")
@@ -256,7 +294,7 @@ def test_powershell_file_ancestor_is_unknown_not_absent(tmp_path, engine):
     driver.write_text(f"""
 $ErrorActionPreference='Stop'
 . '{helper}'
-Get-KmtechDataDowngradeDecision @('{literal}') 'v2.0.33' '{APP}' '{SID}' | ConvertTo-Json -Compress
+Get-KmtechDataDowngradeDecision @('{literal}') 'v2.0.33' '{APP}' '{SID}' '{BUILD}' | ConvertTo-Json -Compress
 """, encoding="utf-8-sig")
     result = run_powershell([engine, "-NoProfile", "-NonInteractive", "-File", str(driver)])
     assert result.returncode == 0, result.stderr

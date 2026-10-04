@@ -14,12 +14,12 @@ import stat
 import uuid
 from typing import Iterable
 
-SCHEMA = "kmtech-data-generation-v1"
+SCHEMA = "kmtech-data-generation-v2"
 MAX_BYTES = 4096
 REFUSAL_MESSAGE = "이 PC의 자료가 새 판으로 이미 열려 옛 판으로 되돌릴 수 없습니다. 같은 새 판을 다시 시작하거나 고친 판으로 지원 업데이트하세요. 관리자 지원 복구는 설치 전 백업과 옛 판을 함께 복원해야 합니다."
 UNKNOWN_MESSAGE = "이 PC의 자료 판을 확인할 수 없어 옛 판으로 되돌릴 수 없습니다. 자료와 확인 기록을 보존하고 관리자 지원 복구를 요청하세요."
 _VERSION = re.compile(r"v?(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})")
-_FIELDS = frozenset({"schema", "app_id", "subject_sid", "version", "data_compatible_min_version"})
+_FIELDS = frozenset({"schema", "app_id", "subject_sid", "version", "data_compatible_min_version", "build_id", "compatibility_verified"})
 
 
 class DataGenerationError(RuntimeError):
@@ -44,6 +44,11 @@ def _identity(app_id: str, subject_sid: str) -> None:
         raise DataGenerationError("data generation user identity is invalid")
 
 
+def _build_identity(build_id: str) -> None:
+    if not isinstance(build_id, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", build_id):
+        raise DataGenerationError("data generation build identity is invalid")
+
+
 def _literal_path(path: Path | str) -> Path:
     path = Path(path)
     if not path.is_absolute() or str(path).startswith(("\\\\?\\", "\\\\.\\")):
@@ -61,7 +66,7 @@ def _literal_path(path: Path | str) -> Path:
     return path
 
 
-def _decode(raw: bytes, app_id: str, subject_sid: str) -> dict[str, str]:
+def _decode(raw: bytes, app_id: str, subject_sid: str) -> dict[str, object]:
     def unique(pairs):
         value = {}
         for key, item in pairs:
@@ -75,12 +80,17 @@ def _decode(raw: bytes, app_id: str, subject_sid: str) -> dict[str, str]:
         raise DataGenerationError("data generation fields differ")
     if record["schema"] != SCHEMA or record["app_id"] != app_id or record["subject_sid"] != subject_sid:
         raise DataGenerationError("data generation identity differs")
+    _build_identity(record["build_id"])
+    if type(record["compatibility_verified"]) is not bool:
+        raise DataGenerationError("data generation compatibility trust differs")
     if version_key(record["data_compatible_min_version"]) > version_key(record["version"]):
         raise DataGenerationError("data generation compatibility floor is invalid")
+    if not record["compatibility_verified"] and version_key(record["data_compatible_min_version"]) != version_key(record["version"]):
+        raise DataGenerationError("unverified data generation compatibility floor")
     return record
 
 
-def _read(path: Path | str, app_id: str, subject_sid: str) -> dict[str, str] | None:
+def _read(path: Path | str, app_id: str, subject_sid: str) -> dict[str, object] | None:
     path = _literal_path(path)
     try:
         info = path.lstat()
@@ -96,10 +106,11 @@ def _read(path: Path | str, app_id: str, subject_sid: str) -> dict[str, str] | N
     return _decode(raw, app_id, subject_sid)
 
 
-def probe_downgrade(marker_paths: Iterable[Path | str], target_version: str, *, app_id: str, subject_sid: str) -> dict[str, object]:
+def probe_downgrade(marker_paths: Iterable[Path | str], target_version: str, *, app_id: str, subject_sid: str, target_build_id: str) -> dict[str, object]:
     """ALLOW/REFUSE/UNKNOWN; UNKNOWN denies, even if the other slot is readable."""
     try:
         _identity(app_id, subject_sid)
+        _build_identity(target_build_id)
         target = version_key(target_version)
         paths = list(marker_paths)
         if not paths:
@@ -108,7 +119,10 @@ def probe_downgrade(marker_paths: Iterable[Path | str], target_version: str, *, 
         if not records:
             return {"status": "ALLOW", "allowed": True, "message_key": "no_generation", "message": "", "version": None, "minimum_version": None}
         latest = max(version_key(record["version"]) for record in records)
-        floor = max(version_key(record["data_compatible_min_version"]) for record in records if version_key(record["version"]) == latest)
+        newest = [record for record in records if version_key(record["version"]) == latest]
+        if target == latest and any(record["build_id"] != target_build_id and not record["compatibility_verified"] for record in newest):
+            raise DataGenerationError("same version has a different unverified build")
+        floor = max(version_key(record["data_compatible_min_version"]) for record in newest)
         allowed = target >= floor
         return {"status": "ALLOW" if allowed else "REFUSE", "allowed": allowed,
                 "message_key": "compatible_generation" if allowed else "data_generation_downgrade_refused",
@@ -118,14 +132,19 @@ def probe_downgrade(marker_paths: Iterable[Path | str], target_version: str, *, 
         return {"status": "UNKNOWN", "allowed": False, "message_key": "data_generation_unknown", "message": UNKNOWN_MESSAGE, "version": None, "minimum_version": None}
 
 
-def record_generation(marker_path: Path | str, version: str, *, app_id: str, subject_sid: str,
-                      data_compatible_min_version: str | None = None, compatibility_verified: bool = False) -> dict[str, str]:
+def record_generation(marker_path: Path | str, version: str, *, app_id: str, subject_sid: str, build_id: str,
+                      data_compatible_min_version: str | None = None, compatibility_verified: bool = False) -> dict[str, object]:
     """Atomically record a monotonic generation, before opening user data.
 
-compatibility_verified=True asserts that the caller verified a signed manifest
-binding BOTH version and floor. Never infer it from an unsigned file or hash.
+compatibility_verified=True asserts an EXPLICIT compatibility floor in a signed
+manifest binding version/build/floor. Missing floors are not compatibility grants.
+Probe all slots before opening data; recording alone does not authorize admission.
 """
     _identity(app_id, subject_sid)
+    _build_identity(build_id)
+    if type(compatibility_verified) is not bool:
+        raise DataGenerationError("data generation compatibility trust differs")
+    compatibility_verified = compatibility_verified and data_compatible_min_version is not None
     version = _canonical_version(version)
     floor = _canonical_version(data_compatible_min_version) if compatibility_verified and data_compatible_min_version is not None else version
     if version_key(floor) > version_key(version):
@@ -137,7 +156,8 @@ binding BOTH version and floor. Never infer it from an unsigned file or hash.
     if previous is not None and version_key(previous["version"]) >= version_key(version):
         return previous
     record = {"schema": SCHEMA, "app_id": app_id, "subject_sid": subject_sid,
-              "version": version, "data_compatible_min_version": floor}
+              "version": version, "data_compatible_min_version": floor,
+              "build_id": build_id, "compatibility_verified": compatibility_verified}
     raw = (json.dumps(record, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
     temporary = path.with_name(path.name + ".tmp." + uuid.uuid4().hex)
     try:

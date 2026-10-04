@@ -3,9 +3,10 @@
 자료 세대 보호 helper `kmtech_shared/data_generation.py`와
 `kmtech_shared/powershell/data_generation.ps1`은 사용자 자료를 열었던 가장 새 판과
 서명 검증된 최소 호환 판을 기록한다. 기록 없음은 ALLOW, 손상·읽기 실패·판 비교
-불가는 UNKNOWN 거절이다. 원자 기록 뒤 readback을 확인하며 Python 3.12.10·PS5.1·PS7 격리 함수 시험 24 PASS는
+불가·같은 판 다른 build(서명된 명시 호환 없음)는 UNKNOWN 거절이다. 원자 기록 뒤 readback을 확인하며 Python 3.12.10·PS5.1·PS7 격리 함수 시험 27 PASS는
 helper 근거이며 **CA 설치기·GUI·relay 입구는 아직 미연결**이다. shared 선언 확대는
-허용되었으며 기존 canonical 원본/생성 절차의 배정과 root/build 의미 결정이 남아 있다.
+허용되었다. G-DECISIONS대로 실제 자료를 처음 여는 경계의 기존 admission 아래에서
+자료 root와 기존 control root/SID에 기록하며 launch 직전에 미리 기록하지 않는다.
 [API·현재 한계](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/HELPER-READY.md).
 
 출시 때 stock builder는 실제 `CURRENT_VERSION`에서 portable manifest의 `version`을
@@ -14,7 +15,9 @@ helper 근거이며 **CA 설치기·GUI·relay 입구는 아직 미연결**이�
 `data_compatible_min_version`에 **기존 ES256 서명 전**에 넣는다. 호환 근거가 없으면
 자기 판이다. 이 필드는 canonical manifest bytes 전체의 기존 서명에 포함한다.
 `verified_data_compatibility_from_manifest`로 기존 서명·앱/판/floor를 검증한 결과만
-기록 helper의 `compatibility_verified=True`로 전달한다. unsigned portable manifest의
+명시 호환 필드가 있을 때만 기록 helper의 `compatibility_verified=True`로 전달한다.
+기록과 대상의 검증된 commit/서명 manifest hash도 전달하고, 모든 marker를 probe한 뒤
+자료를 연다. G 이전 빌드가 marker 없이 연 자료는 보호되지 않는다. unsigned portable manifest의
 floor나 CPython Authenticode만으로 호환을 허가하지 않으며 지원 portable 설치에서는
 최소 판을 자기 판으로 강제한다. signed floor 변조/서명 없음·미래 floor 거절과 builder
 기본값을 포함한 관련 3파일 101 PASS(격리 소스), 실제 출시 서명 발행/stock은 미검증이다.

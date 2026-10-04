@@ -1,8 +1,8 @@
 # 남은 요구·검증·문서·추가 제안
 
-자료 세대 내림 guard(sub-219)는 helper 두 면의 원자 기록/readback 격리 회귀 24 PASS까지 PROVEN이다.
+자료 세대 내림 guard(sub-219)는 helper 두 면의 원자 기록/readback·build 결속 격리 회귀 27 PASS까지 PROVEN이다.
 CA restore/reinstall/startup 후보 입구 8종의 실제 호출 결속은 0이며, shared exact
-manifest/lock/consumer pin 확대·두 marker의 기계 보호/SID/custom-root 결속이 남아 있다.
+manifest/lock/consumer pin 확대·자료 root와 기존 control root/SID/custom-root 결속이 남아 있다.
 builder version/최소 호환 판 입력과 기존 ES256 signed private manifest 소비는 관련
 3파일 101 PASS이나 실제 marker adapter·최종 stock·출시 발행은 미완료다. 최초 옛
 v2.0.33 위 설치의 일관 백업·수동

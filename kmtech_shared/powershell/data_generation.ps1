@@ -14,6 +14,12 @@ function Assert-KmtechDataIdentity([string]$AppId, [string]$SubjectSid) {
     }
 }
 
+function Assert-KmtechDataBuildIdentity([string]$BuildId) {
+    if ($BuildId -cnotmatch '\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z') {
+        throw 'Data generation build identity is invalid.'
+    }
+}
+
 function Get-KmtechDataLiteralPath([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path) -or -not [IO.Path]::IsPathRooted($Path) -or
         $Path.StartsWith('\\?\') -or $Path.StartsWith('\\.\')) {
@@ -57,32 +63,38 @@ function Read-KmtechDataGeneration([string]$Path, [string]$AppId, [string]$Subje
     finally { $stream.Dispose() }
     [void](Get-KmtechDataLiteralPath $full)
     $record = $raw | ConvertFrom-Json -ErrorAction Stop
-    $fields = @('schema','app_id','subject_sid','version','data_compatible_min_version')
+    $fields = @('schema','app_id','subject_sid','version','data_compatible_min_version','build_id','compatibility_verified')
     if (@($record.PSObject.Properties.Name).Count -ne $fields.Count) { throw 'Data generation fields differ.' }
     foreach ($field in $fields) {
-        if ($null -eq $record.PSObject.Properties[$field] -or $record.$field -isnot [string] -or
+        if ($null -eq $record.PSObject.Properties[$field] -or
+            ($field -ceq 'compatibility_verified' -and $record.$field -isnot [bool]) -or
+            ($field -cne 'compatibility_verified' -and $record.$field -isnot [string]) -or
             [regex]::Matches($raw, ('"' + $field + '"\s*:')).Count -ne 1) {
             throw 'Data generation field type or uniqueness differs.'
         }
     }
-    if ($record.schema -cne 'kmtech-data-generation-v1' -or $record.app_id -cne $AppId -or $record.subject_sid -cne $SubjectSid) {
+    if ($record.schema -cne 'kmtech-data-generation-v2' -or $record.app_id -cne $AppId -or $record.subject_sid -cne $SubjectSid) {
         throw 'Data generation identity differs.'
     }
+    Assert-KmtechDataBuildIdentity $record.build_id
     $version = ConvertTo-KmtechDataVersion $record.version
     $floor = ConvertTo-KmtechDataVersion $record.data_compatible_min_version
     if ($floor.CompareTo($version) -gt 0) { throw 'Data generation compatibility floor is invalid.' }
+    if (-not $record.compatibility_verified -and $floor.CompareTo($version) -ne 0) { throw 'Unverified data generation compatibility floor.' }
     return $record
 }
 
 function Get-KmtechDataDowngradeDecision(
-    [string[]]$MarkerPaths, [string]$TargetVersion, [string]$AppId, [string]$SubjectSid
+    [string[]]$MarkerPaths, [string]$TargetVersion, [string]$AppId, [string]$SubjectSid, [string]$TargetBuildId
 ) {
     try {
         Assert-KmtechDataIdentity $AppId $SubjectSid
+        Assert-KmtechDataBuildIdentity $TargetBuildId
         $target = ConvertTo-KmtechDataVersion $TargetVersion
         if (@($MarkerPaths).Count -eq 0) { throw 'Data generation marker locations are absent.' }
         $latest = $null
         $floor = $null
+        $newest = @()
         foreach ($path in $MarkerPaths) {
             $record = Read-KmtechDataGeneration $path $AppId $SubjectSid
             if ($null -eq $record) { continue }
@@ -90,8 +102,19 @@ function Get-KmtechDataDowngradeDecision(
             $minimum = ConvertTo-KmtechDataVersion $record.data_compatible_min_version
             if ($null -eq $latest -or $version.CompareTo($latest) -gt 0) {
                 $latest = $version; $floor = $minimum
+                $newest = @($record)
             }
-            elseif ($version.CompareTo($latest) -eq 0 -and $minimum.CompareTo($floor) -gt 0) { $floor = $minimum }
+            elseif ($version.CompareTo($latest) -eq 0) {
+                $newest += $record
+                if ($minimum.CompareTo($floor) -gt 0) { $floor = $minimum }
+            }
+        }
+        if ($target.CompareTo($latest) -eq 0) {
+            foreach ($record in $newest) {
+                if ($record.build_id -cne $TargetBuildId -and -not $record.compatibility_verified) {
+                    throw 'Same version has a different unverified build.'
+                }
+            }
         }
         if ($null -eq $latest) {
             return [pscustomobject]@{status='ALLOW';allowed=$true;message_key='no_generation';message='';version=$null;minimum_version=$null}
@@ -115,9 +138,11 @@ function Get-KmtechDataDowngradeDecision(
 
 function Write-KmtechDataGeneration(
     [string]$MarkerPath, [string]$Version, [string]$AppId, [string]$SubjectSid,
-    [string]$DataCompatibleMinVersion = '', [bool]$CompatibilityVerified = $false
+    [string]$DataCompatibleMinVersion = '', [bool]$CompatibilityVerified = $false, [string]$BuildId
 ) {
     Assert-KmtechDataIdentity $AppId $SubjectSid
+    Assert-KmtechDataBuildIdentity $BuildId
+    $CompatibilityVerified = $CompatibilityVerified -and -not [string]::IsNullOrWhiteSpace($DataCompatibleMinVersion)
     $release = ConvertTo-KmtechDataVersion $Version
     $floor = $release
     if ($CompatibilityVerified -and $DataCompatibleMinVersion) {
@@ -129,8 +154,9 @@ function Write-KmtechDataGeneration(
     $previous = Read-KmtechDataGeneration $full $AppId $SubjectSid
     if ($null -ne $previous -and (ConvertTo-KmtechDataVersion $previous.version).CompareTo($release) -ge 0) { return $previous }
     $record = [ordered]@{
-        schema='kmtech-data-generation-v1';app_id=$AppId;subject_sid=$SubjectSid
+        schema='kmtech-data-generation-v2';app_id=$AppId;subject_sid=$SubjectSid
         version=('v' + $release.ToString());data_compatible_min_version=('v' + $floor.ToString())
+        build_id=$BuildId;compatibility_verified=$CompatibilityVerified
     }
     $temporary = $full + '.tmp.' + [Guid]::NewGuid().ToString('N')
     try {
