@@ -20,7 +20,7 @@ def test_public_restore_after_data_open_retains_new_code_and_runtime(tmp_path):
         receipt = Path(replacement["receipt_path"])
         receipt_before = receipt.read_bytes()
         new_code = _tree(install)
-        registry_before = (tmp_path / "registry.json").read_bytes()
+        registry_before = json.loads((tmp_path / "registry.json").read_text(encoding="utf-8-sig"))
         _, runtime_before = _assert_one_live_relay(tmp_path, env)
         local = Path(env["LOCALAPPDATA"])
         markers = [local / "KMTech/ContainerAudit/data-generation.json",
@@ -35,7 +35,8 @@ def test_public_restore_after_data_open_retains_new_code_and_runtime(tmp_path):
         assert _tree(install) == new_code and _tree(source) == before["source"]
         assert receipt.read_bytes() == receipt_before
         assert {path: path.read_bytes() for path in markers} == marker_before
-        assert (tmp_path / "registry.json").read_bytes() == registry_before
+        # Native registry values are exact; the OS fixture may reserialize JSON.
+        assert json.loads((tmp_path / "registry.json").read_text(encoding="utf-8-sig")) == registry_before
         _assert_preserved_and_released(env, protected)
         launches, runtime = _assert_one_live_relay(tmp_path, env)
         assert runtime["CommandLine"] == runtime_before["CommandLine"]
