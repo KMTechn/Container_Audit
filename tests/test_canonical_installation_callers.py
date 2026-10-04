@@ -84,6 +84,35 @@ def _public_restore(tmp_path, env, source, install, receipt, digest, label='rest
     return result
 
 
+def _runtime_setup_before_data_open(env):
+    """Keep the native runtime fixture, stopping before business onboarding.
+
+    The production onboarding path opens data and must forbid an incompatible
+    restore. These lifecycle cases instead exercise placement, Run readback and
+    the owned relay before that boundary; no generation guard is replaced.
+    """
+    host = Path(env['CA_UNINSTALL_HOST'])
+    body = host.read_text(encoding='utf-8')
+    call = "    raise SystemExit(dispatch_product_mode(['--onboard-current-user', '--app-root', str(app)]))"
+    assert body.count(call) == 1
+    body = body.replace(call, """    user_relay.user_relay_stop_path(direct).unlink(missing_ok=True)
+    autostart = user_relay.install_user_relay_autostart(
+        app, setter=setter, getter=lambda: json.loads(registry.read_text())['data'],
+    )
+    started = relay_launcher(app)
+    report = direct / 'status/current_user_onboarding.json'
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({
+        'status': 'READY', 'relay_autostart': autostart, 'relay_start': started,
+        'action': 'RUNTIME_SETUP_BEFORE_DATA_OPEN', 'state_readback': {'base_url': ''},
+    }))
+    (root / 'runtime-before-data-open.json').write_text(json.dumps({
+        'business_onboarding_called': False, 'relay_process_id': started['process_id'],
+    }))
+    raise SystemExit(0)""")
+    host.write_text(body, encoding='utf-8')
+
+
 def test_operator_profile_mismatch_stops_before_code_and_explains_retry(tmp_path):
     env, source, install, protected = _setup(tmp_path)
     _distinct_replacement(source)
@@ -349,8 +378,11 @@ def test_preflight_log_write_failure_has_own_operator_guidance(tmp_path):
         assert _tree(install) == before['code']
 
 
-def test_public_late_restore_uses_fresh_owner_preserves_history_and_is_repeatable(tmp_path):
+@pytest.mark.parametrize('data_open', [False, True], ids=['before_data_open', 'after_data_open'])
+def test_public_late_restore_uses_fresh_owner_preserves_history_and_is_repeatable(tmp_path, data_open):
     env, source, install, protected = _setup(tmp_path)
+    if not data_open:
+        _runtime_setup_before_data_open(env)
     _distinct_replacement(source)
     history = install.parent / ('.current.rollback.' + 'd' * 32)
     history.mkdir()
@@ -367,6 +399,47 @@ def test_public_late_restore_uses_fresh_owner_preserves_history_and_is_repeatabl
         new_code = _tree(install)
         product_calls = (tmp_path / 'product-calls.log').read_text().splitlines()
         _, original_runtime = _assert_one_live_relay(tmp_path, env)
+        local = Path(env['LOCALAPPDATA'])
+        data_marker = local / 'KMTech/ContainerAudit/data-generation.json'
+        control_markers = list((local / 'KMTech/DirectSync/container_audit/control/writer-session/data-generation').glob('*.json'))
+        if data_open:
+            markers = [data_marker, *control_markers]
+            assert len(markers) == 2 and all(path.is_file() for path in markers)
+            marker_before = {path: path.read_bytes() for path in markers}
+            registry_before = json.loads((tmp_path / 'registry.json').read_text(encoding='utf-8-sig'))
+            refused = _public_restore(tmp_path, env, source, install, receipt, replacement['receipt_sha256'])
+            assert refused.returncode == 1
+            notice = ('이 PC의 자료 판을 확인할 수 없어 옛 판으로 되돌릴 수 없습니다. '
+                      '자료와 확인 기록을 보존하고 관리자 지원 복구를 요청하세요.')
+            assert notice in refused.stderr + refused.stdout
+            audit = json.loads((tmp_path / 'restore-audit.json').read_text(encoding='utf-8-sig'))
+            assert audit['operation'] == 'RESTORE_VERIFIED_REPLACEMENT'
+            assert audit['status'] == 'FAILED_RESTORE_RUNTIME_RECOVERED'
+            assert audit['code_replacement']['status'] == 'PENDING'
+            assert audit['code_replacement']['prestate'] == 'VERIFIED_REPLACE'
+            assert audit['rollback']['runtime_restored'] is True
+            assert _tree(install) == new_code and _tree(source) == before['source']
+            assert _tree(history) == history_before and receipt.read_bytes() == receipt_before
+            assert {path: path.read_bytes() for path in markers} == marker_before
+            assert json.loads((tmp_path / 'registry.json').read_text(encoding='utf-8-sig')) == registry_before
+            assert (tmp_path / 'product-calls.log').read_text().splitlines() == [
+                *product_calls, '--remove-current-user-setup',
+            ]
+            launches, current = _assert_one_live_relay(tmp_path, env)
+            assert current['ProcessId'] != original_runtime['ProcessId']
+            assert current['CommandLine'] == original_runtime['CommandLine']
+            assert launches[-1]['fence_active'] is False
+            _assert_preserved_and_released(env, protected)
+            return
+
+        runtime_only = json.loads((tmp_path / 'runtime-before-data-open.json').read_text())
+        assert original_audit['onboarding']['action'] == 'RUNTIME_SETUP_BEFORE_DATA_OPEN'
+        assert runtime_only == {
+            'business_onboarding_called': False,
+            'relay_process_id': original_audit['exact_launch']['process_id'],
+        }
+        assert not data_marker.exists() and control_markers == []
+        assert not (local / 'KMTech/ContainerAudit/transfer_seal/transfer_seal.db').exists()
 
         # Each invocation is a new native controller process, after the original
         # installer owner and its fence have ended. Its prepared proof is fresh.
@@ -411,6 +484,8 @@ def test_public_late_restore_uses_fresh_owner_preserves_history_and_is_repeatabl
 @pytest.mark.parametrize('failure', ['receipt_hash', 'integrity_record', 'elevation_cancel', 'after_displace', 'after_restore'])
 def test_public_late_restore_failure_preserves_exact_code_and_runtime(tmp_path, failure):
     env, source, install, protected = _setup(tmp_path)
+    if failure == 'after_restore':
+        _runtime_setup_before_data_open(env)
     canonical = source / 'INSTALL_CANONICAL_PORTABLE.ps1'
     text = canonical.read_text(encoding='utf-8-sig')
     call = '        & $winps @publicRestoreArguments'
@@ -446,10 +521,24 @@ def test_public_late_restore_failure_preserves_exact_code_and_runtime(tmp_path, 
         registry_before = json.loads((tmp_path / 'registry.json').read_text(encoding='utf-8-sig'))
         calls_before = (tmp_path / 'product-calls.log').read_bytes()
         _, runtime_before = _assert_one_live_relay(tmp_path, env)
+        if failure == 'after_restore':
+            local = Path(env['LOCALAPPDATA'])
+            installed_audit = json.loads((tmp_path / 'reinstall-audit.json').read_text(encoding='utf-8-sig'))
+            assert installed_audit['onboarding']['action'] == 'RUNTIME_SETUP_BEFORE_DATA_OPEN'
+            runtime_only = json.loads((tmp_path / 'runtime-before-data-open.json').read_text())
+            assert runtime_only == {
+                'business_onboarding_called': False,
+                'relay_process_id': installed_audit['exact_launch']['process_id'],
+            }
+            assert not (local / 'KMTech/ContainerAudit/data-generation.json').exists()
+            assert list((local / 'KMTech/DirectSync/container_audit/control/writer-session/data-generation').glob('*.json')) == []
+            assert not (local / 'KMTech/ContainerAudit/transfer_seal/transfer_seal.db').exists()
 
         result = _public_restore(tmp_path, env, source, install, receipt, digest)
 
         assert result.returncode != 0
+        if failure == 'after_restore':
+            assert 'RESTORE_EVIDENCE_WRITE_FAILURE' in result.stderr
         assert _tree(install) == (before['code'] if failure == 'after_restore' else code_before)
         assert _sha(receipt) == original['receipt_sha256']
         assert _tree(source) == before['source']
