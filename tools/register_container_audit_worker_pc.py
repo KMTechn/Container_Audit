@@ -1712,7 +1712,7 @@ def _finalize_server_registration(
             expected_source_host_id=str(identity["source_host_id"]),
             expected_device_id=str(identity["pc_id"]),
             profile_path=(
-                getattr(args, "resolved_logistics_profile_path", None)
+                str(getattr(args, "resolved_logistics_profile_path", None) or "")
                 or str(getattr(args, "logistics_profile_path", "") or "").strip()
                 or None
             ),
@@ -3194,6 +3194,30 @@ def main(argv: list[str] | None = None) -> int:
             probe_before_owner_paths(storage_paths.data_root, file_paths=owner_paths)
     except DataGenerationBlocked as exc:
         print(exc.user_message)
+        return 2
+    except ValueError as exc:
+        # Invalid storage policy is a pure configuration failure. No owner
+        # payload can be read; retain the existing BLOCKED diagnostic after
+        # checking the actual optional report root and ambient control marker.
+        blocked_report = {
+            "report_version": "container-audit-worker-pc-registration-v1",
+            "status": "BLOCKED",
+            "blocked_reason": str(exc),
+            "raw_secret_written": False,
+        }
+        report_blocked = any(item["field"] == "report_path" for item in output_path_policy["unsafe_paths"])
+        if args.report_path and not report_blocked:
+            fallback_path = Path(args.report_path)
+            try:
+                with writer_admission("worker_pc_registration"):
+                    probe_before_owner_paths(fallback_path.parent, file_paths=(fallback_path,))
+                    _write_registration_json(str(fallback_path), blocked_report, indent=2)
+            except DataGenerationBlocked as blocked:
+                print(blocked.user_message)
+                return 2
+            print(f"registration_report={fallback_path}")
+        else:
+            print(json.dumps(blocked_report, ensure_ascii=False, sort_keys=True))
         return 2
 
     if output_path_policy["status"] != "PASS":

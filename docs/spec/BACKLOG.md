@@ -442,3 +442,6 @@ G10 기존 성공/조합/오류 음원으로 성공·완료·반복 오류를 �
 완료 시험 대역은 `preserve_held_scans` 키워드를 받는 실제 콜백 계약을 따른다. `projected_scan_exchange_keys`는 내구 완료의 교환 키를 SELECT로만 읽는 helper로 분류하며, 기존 writer 32개·owner-first와 읽기 전용/UI-thread 경계 검증은 유지한다.
 
 G 전체 비교의 GUI 직접 예외 표시와 relay 모의의 Git 가로채기를 교정한다: 고정 복구 안내만 UI로 전달하고 모의는 실제 Git identity를 유지한다. 기존 보관/복원 시험 기대와 guard는 약화하지 않는다.
+
+
+- sub-233 follow-up: preserve legitimate removal delegation through a single statically fixed, already-admitted G metadata probe with `probe_only=True`; actual marker writing keeps the original decorator. Add process snapshots of data/control file list, size and mtime and missing/equal/newer/UNKNOWN removal checks; retain legacy identity, string profile-path API and invalid-storage BLOCKED diagnostics. Conditional decision `msg_eb3b375df3eb`; verification remains pending on this follow-up commit until the task report records final results.

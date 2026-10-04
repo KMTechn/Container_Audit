@@ -1435,7 +1435,7 @@ def remove_current_user_setup(
     from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths
     try:
         with writer_admission("current_user_setup_removal"):
-            probe_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values())
+            probe_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values(), admission_source="current_user_setup_removal")
     except DataGenerationBlocked as exc:
         raise CurrentUserOnboardingError(
             exc.user_message, report_path=paths.removal_report_path, status="FAILED",

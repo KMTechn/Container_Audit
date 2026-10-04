@@ -771,3 +771,10 @@ CA-T01의 이름 14개와 실제 register→ValueError, CA-T02의 malformed JSON
 고정 Web committed source `56c32028ce6b30ccf774e7cc635e3e4b377266ed`의 실제 Flask 서명 HTTP 진입점·SQLite 저장소와 CA 승인 진입점·내구 intent를 함께 사용했다. 성공 2건과 틀린 PIN·중앙 ADMIN 잠금·root 철회·역할 없음·잠금+root 철회 5건의 7 PASS를 확인했다. ADMIN 잠금은 서로 다른 3장치에서 5회씩 실패하여 실제 15회 한계를 충족하며 새 장치에서도 서버 `PIN_LOCKED` 감사와 CA REJECTED를 확인한다. 철회된 이전 grant는 REVOKED로 남고 redeem 거절, 원 recovery 파일 보존·PIN 미저장을 단언한다. 권한 상태 준비는 지원 store API를 이용한 격리 fixture이며 실제 root UI·production·네트워크 배포 수용은 NOT TESTED. 초기 fixture/입력 실패와 잘못된 10회 oracle을 지우지 않고 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)에 연결한다.
 
 G 시작 거절 대화상자는 REFUSE/UNKNOWN에 맞는 고정 한국어 원인·복구 안내만 전달한다. 임의 예외 진단은 작업자 대화상자에 전달하지 않는다. 전체 비교에서 드러난 relay 모의는 read-only Git 신원 확인을 보존하며, 실제 자료 경계/호환 판정은 동일하다.
+
+
+### G read-only removal admission (sub-233, 2026-10-05)
+
+The removal entrypoint checks the resolved owner markers inside its existing `current_user_setup_removal` admission. This single caller passes `admission_source` to the G probe; its fixed `probe_only=True` invocation of the original body returns before directory creation or marker publication, and does not request the unrelated marker-writer capability. Marker recording and every other probe retain their original writer decorator. A static regression fixes the sole caller inside that admission, and separate child-process regressions compare data/control file lists, sizes and mtimes and exercise missing, equal, newer and UNKNOWN markers. This narrow exception was conditionally approved in `msg_eb3b375df3eb`; shared helpers, syntax guards and sink identities remain unchanged.
+
+Registration retains string profile-path arguments after shared resolution. Invalid storage configuration reads no owner payload and retains the BLOCKED report contract; an optional report write first probes its actual parent root and the ambient control marker under registration admission.

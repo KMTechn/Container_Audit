@@ -121,9 +121,9 @@ def owner_roots(data_root, *, file_paths=(), directory_paths=()):
     return sorted(roots, key=lambda path: os.path.normcase(str(path)))
 
 
-def probe_before_owner_paths(data_root, *, file_paths=(), directory_paths=()):
+def probe_before_owner_paths(data_root, *, file_paths=(), directory_paths=(), admission_source=None):
     for root in owner_roots(data_root, file_paths=file_paths, directory_paths=directory_paths):
-        probe_before_data_open(root)
+        probe_before_data_open(root, admission_source=admission_source)
 
 
 def record_before_owner_paths(data_root, *, file_paths=(), directory_paths=()):
@@ -163,6 +163,14 @@ def record_before_data_open(data_root, *, probe_only=False):
             "message_key": "data_generation_unknown", "message": generation.UNKNOWN_MESSAGE}) from exc
 
 
-def probe_before_data_open(data_root):
+def probe_before_data_open(data_root, *, admission_source=None):
     """Existing admission must cover this check and the following control read."""
-    return record_before_data_open(data_root, probe_only=True)
+    if admission_source is None:
+        return record_before_data_open(data_root, probe_only=True)
+    if admission_source != "current_user_setup_removal":
+        raise ValueError("unsupported generation probe admission source")
+    # Only remove_current_user_setup supplies this argument, inside its existing
+    # removal admission. A static regression fixes that single call site. This
+    # exact read-only body returns before mkdir or marker publication; marker
+    # writes and all other probes retain their existing writer decorator.
+    return record_before_data_open.__wrapped__(data_root, probe_only=True)

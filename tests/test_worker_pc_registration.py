@@ -1,5 +1,6 @@
 import hashlib
 import json
+import sys
 import os
 import shutil
 from pathlib import Path
@@ -2307,11 +2308,16 @@ def test_worker_pc_registration_blocks_legacy_identity_without_key_or_http(
         "_current_machine_guid",
         lambda: (_ for _ in ()).throw(AssertionError("persisted identity must bypass machine lookup")),
     )
-    monkeypatch.setattr(
-        registration,
-        "_current_user_sid",
-        lambda: (_ for _ in ()).throw(AssertionError("persisted identity must bypass user lookup")),
-    )
+    marker_sid_provider = registration._current_user_sid
+
+    def reject_fresh_identity_sid():
+        # The generation marker needs the operator SID; this does not authorize
+        # deriving a replacement producer identity from the operator identity.
+        if sys._getframe(1).f_globals.get("__name__") == "data_generation_guard":
+            return marker_sid_provider()
+        raise AssertionError("persisted identity must bypass user lookup")
+
+    monkeypatch.setattr(registration, "_current_user_sid", reject_fresh_identity_sid)
     monkeypatch.setattr(
         registration,
         "_post_enrollment_request",

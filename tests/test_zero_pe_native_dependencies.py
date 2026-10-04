@@ -414,6 +414,10 @@ def test_portable_builder_requires_empty_native_closure_and_curated_tools():
             "tools/container_writer_sink_inventory.json",
             "tools/container_writer_sink_inventory.json",
         ),
+        (
+            "tools/container_data_generation_transition.json",
+            "tools/container_data_generation_transition.json",
+        ),
     }
     for forbidden in ("cffi", "cryptography", "pillow", "pygame", "pycparser"):
         assert forbidden not in portable_builder.THIRD_PARTY

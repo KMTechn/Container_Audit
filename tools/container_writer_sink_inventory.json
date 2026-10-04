@@ -4803,7 +4803,7 @@
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 3407,
+          "line": 3431,
           "operation": "recovery_secret_path.unlink",
           "writer_admission_sources": [
             "worker_pc_registration"
@@ -6807,7 +6807,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "e032262a1637a2679cb45134fec98d69c20da953acb11efdf2abaddf3e353103",
+  "inventory_sha256": "7f5c727a2fad4e9319681d6e818a83afc74dd62457d4695d117edb1e54cdfabe",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
