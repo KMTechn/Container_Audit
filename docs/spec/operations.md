@@ -5,10 +5,14 @@
 최초 신원/자료 판독 전에 G를 검사한다. 온보딩은 G 뒤에 attempt와 디렉터리를 만든다.
 G와 실제 판독은 동일한 빈 값/env/default 및 expanduser·상대 경로·대소문자·링크 해석을
 사용한다. 외부 owner 경로도 모두 먼저 probe하고 허용 뒤에만 marker를 기록한다.
+profile dry-run은 probe만 수행하여 외부 폴더·marker를 만들지 않는다. owner root의
+일반 파일 조상 때문에 자료·marker가 존재할 수 없을 때만 그 외부 root를 기록 없음으로
+처리하고 기존 loader의 오류 안내를 유지한다. 다른 parent marker를 대신 읽지 않으며
+reparse 조상으로 존재 불가를 확정할 수 없는 경로는 UNKNOWN으로 거절한다.
 resident 시작과 scheduled-task install pack은 먼저 읽기 전용 G 판단을 하며,
 REFUSE/UNKNOWN은 한국어 안내만 내고 기존 report·relay·Run·예약 작업 상태를 보존한다.
 공용 독립 frozen active-work probe는 별도 도구 신원 계약으로 이 앱 판 검사 범위 밖이다.
-0af642291에서 이 교정 후보로의 설치 전진은 앱 전용 G 전환 선언의 정확한 코드 파일
+ea566d1에서 이 교정 후보로의 설치 전진은 앱 전용 G 전환 선언의 정확한 코드 파일
 before/after hash와 resident/raw 두 route의 지정 G 변화로만 허용한다. 기존 writer
 의미 비교는 유지하며 다른 sink/guard/route, 파일 변경·추가, 역전환은 예외가 아니다.
 검증 버전·실제 subprocess 결과·제외와 한계는
