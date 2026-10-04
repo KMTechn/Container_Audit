@@ -3,7 +3,7 @@
 자료 세대 보호 helper `kmtech_shared/data_generation.py`와
 `kmtech_shared/powershell/data_generation.ps1`은 사용자 자료를 열었던 가장 새 판과
 서명 검증된 최소 호환 판을 기록한다. 기록 없음은 ALLOW, 손상·읽기 실패·판 비교
-불가는 UNKNOWN 거절이다. Python 3.12.10·PS5.1·PS7 격리 함수 시험 18 PASS는
+불가는 UNKNOWN 거절이다. 원자 기록 뒤 readback을 확인하며 Python 3.12.10·PS5.1·PS7 격리 함수 시험 21 PASS는
 helper 근거이며 **CA 설치기·GUI·relay 입구는 아직 미연결**이다. shared 선언 확대와
 portable 서명 version/floor binding은 coordinator 설계 답 대기다.
 [API·현재 한계](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/HELPER-READY.md).

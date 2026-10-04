@@ -138,6 +138,12 @@ function Write-KmtechDataGeneration(
         [void](Get-KmtechDataLiteralPath $full)
         if ([IO.File]::Exists($full)) { [IO.File]::Replace($temporary,$full,[NullString]::Value) }
         else { [IO.File]::Move($temporary,$full) }
+        $readback = Read-KmtechDataGeneration $full $AppId $SubjectSid
+        foreach ($field in $record.Keys) {
+            if ($null -eq $readback -or $readback.$field -cne $record[$field]) {
+                throw 'Data generation durable readback differs.'
+            }
+        }
     }
     finally { if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) } }
     return [pscustomobject]$record

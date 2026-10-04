@@ -113,6 +113,22 @@ def test_atomic_failure_preserves_old_marker_and_high_water_never_decreases(tmp_
     assert path.read_bytes() == newest
 
 
+def test_failed_readback_does_not_report_recording_success(tmp_path, monkeypatch):
+    path = tmp_path / "marker.json"
+    original = generation._read
+    calls = []
+
+    def missing_readback(*args):
+        calls.append(args)
+        return original(*args) if len(calls) == 1 else None
+
+    monkeypatch.setattr(generation, "_read", missing_readback)
+    with pytest.raises(generation.DataGenerationError, match="readback"):
+        record(path)
+    assert json.loads(path.read_bytes())["version"] == "v2.0.99"
+    assert not list(tmp_path.glob("*.tmp.*"))
+
+
 @pytest.mark.parametrize("engine", ["powershell.exe", "pwsh.exe"])
 def test_powershell_python_cross_reader_writer_parity(tmp_path, engine):
     assert shutil.which(engine), f"Required engine is unavailable: {engine}"
@@ -194,3 +210,30 @@ $result | ConvertTo-Json -Depth 5 -Compress
         record(link / "marker.json")
     assert not list(target.iterdir())
     assert marker.read_bytes() == before
+
+
+@pytest.mark.parametrize("engine", ["powershell.exe", "pwsh.exe"])
+def test_powershell_failed_readback_is_not_success(tmp_path, engine):
+    marker = tmp_path / "marker.json"
+    helper = str(ROOT / "kmtech_shared/powershell/data_generation.ps1").replace("'", "''")
+    literal = str(marker).replace("'", "''")
+    driver = tmp_path / "readback.ps1"
+    driver.write_text(f"""
+$ErrorActionPreference='Stop'
+. '{helper}'
+$script:originalRead=(Get-Item Function:Read-KmtechDataGeneration).ScriptBlock
+$script:readCalls=0
+function Read-KmtechDataGeneration([string]$Path,[string]$AppId,[string]$SubjectSid) {{
+    $script:readCalls++
+    if ($script:readCalls -gt 1) {{ return $null }}
+    return (& $script:originalRead $Path $AppId $SubjectSid)
+}}
+$rejected=$false
+try {{ [void](Write-KmtechDataGeneration '{literal}' 'v2.0.99' '{APP}' '{SID}') }}
+catch {{ $rejected=$_.Exception.Message -ceq 'Data generation durable readback differs.' }}
+@{{rejected=$rejected}} | ConvertTo-Json -Compress
+""", encoding="utf-8-sig")
+    result = run_powershell([engine, "-NoProfile", "-NonInteractive", "-File", str(driver)])
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["rejected"] is True
+    assert json.loads(marker.read_bytes())["version"] == "v2.0.99"

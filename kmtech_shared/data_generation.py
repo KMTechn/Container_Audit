@@ -146,6 +146,8 @@ binding BOTH version and floor. Never infer it from an unsigned file or hash.
             os.fsync(handle.fileno())
         _literal_path(path)
         os.replace(temporary, path)
+        if _read(path, app_id, subject_sid) != record:
+            raise DataGenerationError("data generation durable readback differs")
     finally:
         if temporary.exists():
             temporary.unlink()
