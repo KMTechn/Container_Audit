@@ -182,12 +182,13 @@ class LogisticsTransferClient:
         successful_transmission_at: str = "",
     ) -> None:
         with self._connection_observation_lock:
-            if request_sequence != self._connection_request_sequence:
-                return
-            if request_sequence > self._connection_observation_sequence:
+            if (request_sequence == self._connection_request_sequence
+                    and request_sequence > self._connection_observation_sequence):
                 self._connection_observation_sequence = request_sequence
                 if state:
                     self.connection_state = state
+            # A later failure does not erase an earlier successful write.
+            # An earlier success still cannot replace a later successful write.
             if successful_transmission_at and request_sequence > self._successful_transmission_sequence:
                 self._successful_transmission_sequence = request_sequence
                 self.last_successful_transmission_at = successful_transmission_at
