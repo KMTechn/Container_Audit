@@ -815,8 +815,12 @@ def _producer_manifest_report(path: str | os.PathLike[str]) -> dict:
     return report
 
 
-def _credential_report(path: str | os.PathLike[str], *, forbid_raw_secret: bool = False) -> dict:
-    report, payload = _load_json_object_report(path, label="credential")
+def _credential_report(path: str | os.PathLike[str], *, forbid_raw_secret: bool = False, prepared_config=None) -> dict:
+    if prepared_config is None:
+        report, payload = _load_json_object_report(path, label="credential")
+    else:
+        report = {"status": "PASS", "blocked_reason": "", "path": str(prepared_config.credential_path)}
+        payload = prepared_config.payload
     if payload is None:
         return report
     required_missing = [
@@ -1042,7 +1046,8 @@ def build_install_plan(args: argparse.Namespace) -> dict:
     credential = (
         _skipped_report("uninstall does not read producer credentials")
         if uninstall
-        else _credential_report(args.credential_path, forbid_raw_secret=bool(getattr(args, "apply", False)))
+        else _credential_report(args.credential_path, forbid_raw_secret=bool(getattr(args, "apply", False)),
+                                prepared_config=getattr(args, "prepared_credential", None))
     )
     source_scan = _source_scan_config(args)
     source_scan_validation = (
@@ -1273,7 +1278,7 @@ def main(argv: list[str] | None = None) -> int:
         with writer_admission("direct_sync_install_pack"):
             storage = build_container_audit_storage_paths(application_path=args.app_root)
             files = []
-            for name in ('producer_manifest_path','credential_path'):
+            for name in ('producer_manifest_path','credential_path','task_run_password_file','report_path'):
                 value = getattr(args, name, '')
                 if value:
                     path = resolve_owner_path(value)
@@ -1281,6 +1286,9 @@ def main(argv: list[str] | None = None) -> int:
                     files.append(path)
             probe_before_owner_paths(storage.data_root, file_paths=files,
                                      directory_paths=(args.program_data_root, args.scan_source_dir))
+            if not args.uninstall and Path(args.credential_path).is_file():
+                from direct_sync_runtime import prepare_credential_config
+                args.prepared_credential = prepare_credential_config(args.credential_path, data_root=storage.data_root)
         args.container_audit_storage = _apply_container_audit_storage_defaults(args)
     except DataGenerationBlocked as exc:
         print(exc.user_message)

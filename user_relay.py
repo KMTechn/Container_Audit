@@ -394,8 +394,12 @@ def _runtime_cycle(
             profile = resolve_logistics_profile_path()
             probe_before_owner_paths(storage.data_root, directory_paths=(direct_sync_root, scan_source_dir),
                                      file_paths=(profile,) if profile.is_file() else ())
+            credential_path = direct_sync_root / "credential.json"
+            if credential_path.is_file():
+                from direct_sync_runtime import prepare_credential_config
+                prepare_credential_config(credential_path, data_root=storage.data_root)
     except DataGenerationBlocked as exc:
-        return {"status": "runtime_error", "error_code": exc.decision["message_key"], "error_message": exc.user_message}
+        return {"status": "runtime_error", "error_code": exc.decision.get("message_key", "data_generation_unknown"), "error_message": exc.user_message}
     process_result = run_session_direct_sync_once(
         app_root=app_root,
         direct_sync_root=direct_sync_root,
@@ -407,6 +411,10 @@ def _runtime_cycle(
         with writer_admission("persistent_relay_status"):
             probe_before_owner_paths(storage.data_root, directory_paths=(direct_sync_root, scan_source_dir),
                                      file_paths=(profile,) if profile.is_file() else ())
+            credential_path = direct_sync_root / "credential.json"
+            if credential_path.is_file():
+                from direct_sync_runtime import prepare_credential_config
+                prepare_credential_config(credential_path, data_root=storage.data_root)
             runtime_status = _read_json(
                 direct_sync_root / "status" / "direct_sync_relay_status.json"
             )
@@ -513,6 +521,10 @@ def main(argv: list[str] | None = None) -> int:
         with writer_admission("persistent_relay_status"):
             probe_before_owner_paths(storage.data_root, directory_paths=(direct_sync_root, scan_source_dir),
                                      file_paths=(profile,) if profile.is_file() else ())
+            credential_path = direct_sync_root / "credential.json"
+            if credential_path.is_file():
+                from direct_sync_runtime import prepare_credential_config
+                prepare_credential_config(credential_path, data_root=storage.data_root)
     except DataGenerationBlocked as exc:
         print(exc.user_message)
         return 1

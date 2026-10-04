@@ -20,6 +20,7 @@ from event_log_store import LOCK_STALE_SECONDS as EVENT_LOG_LOCK_STALE_SECONDS  
 from direct_sync_push import reset_stale_relay_leases  # noqa: E402
 from direct_sync_runtime import (  # noqa: E402
     DirectSyncRuntimeConfig,
+    prepare_credential_config,
     enqueue_completed_source_file,
     record_scan_drain_status,
     record_scan_result_status,
@@ -735,6 +736,7 @@ def _build_config(args: argparse.Namespace) -> DirectSyncRuntimeConfig:
         operator_pause_path=args.operator_pause_path,
         max_active_queue_count=args.max_active_queue_count,
         max_active_queue_age_seconds=args.max_active_queue_age_seconds,
+        prepared_credential=getattr(args, "prepared_credential", None),
     )
 
 
@@ -778,8 +780,10 @@ def main(argv: list[str] | None = None) -> int:
     profile_path = resolve_logistics_profile_path()
     if profile_path.is_file():
         files.append(profile_path)
-    config = _build_config(args)
     try:
+        if Path(args.credential_path).is_file():
+            args.prepared_credential = prepare_credential_config(args.credential_path, data_root=Path(args.db_path).parent)
+        config = _build_config(args)
         # Explicit raw queue roots may differ from the GUI root; the shared SID
         # control slot ensures installer probes also observe this process.
         record_before_owner_paths(Path(args.db_path).parent, file_paths=files, directory_paths=directories)

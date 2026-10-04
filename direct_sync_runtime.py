@@ -14,10 +14,11 @@ import shutil
 import sqlite3
 import sys
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from types import MappingProxyType
 
 from direct_sync_push import (
     DEFAULT_PRODUCER_ROLE,
@@ -92,6 +93,63 @@ class DirectSyncRuntimeConfig:
     operator_pause_path: str | os.PathLike[str] = ""
     max_active_queue_count: int = 0
     max_active_queue_age_seconds: int = 0
+    prepared_credential: PreparedCredentialConfig | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class PreparedCredentialConfig:
+    credential_path: Path
+    payload: Mapping[str, Any] = field(repr=False)
+    protected_secret_path: Path | None = field(default=None, repr=False)
+
+
+def prepare_credential_config(path, *, data_root) -> PreparedCredentialConfig:
+    """Admit the locator before reading it, then admit its external inputs.
+
+    This is a read-only operation: security input directories acquire no
+    generation records. The returned snapshot is also the loader's input.
+    """
+    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, resolve_owner_path
+
+    try:
+        credential_path = resolve_owner_path(path)
+        probe_before_owner_paths(data_root, file_paths=(credential_path,))
+        payload = _read_credential_payload(credential_path)
+        payload = dict(payload)
+        files, directories = [], []
+        protected_path = None
+        secret_ref = str(payload.get("secret_ref") or "").strip()
+        if secret_ref.lower().startswith("dpapi:"):
+            name = _safe_secret_ref_name(secret_ref.split(":", 1)[1])
+            selected_dir = str(payload.get("secret_data_dir") or "")
+            base_dir = Path(selected_dir).expanduser() if selected_dir else _default_secret_data_dir(credential_path)
+            if selected_dir and is_legacy_syncthing_path(base_dir):
+                raise DirectSyncPushError("secret_data_dir must not point at the legacy Syncthing folder")
+            base_dir = resolve_owner_path(base_dir)
+            protected_path = resolve_owner_path(base_dir / "secrets" / f"{name}.dpapi")
+            payload["secret_data_dir"] = str(base_dir)
+            directories.append(base_dir)
+            files.append(protected_path)
+        ca_value = str(payload.get("tls_ca_bundle_path") or "").strip()
+        if ca_value:
+            ca_path = Path(ca_value).expanduser()
+            if not ca_path.is_absolute() or ca_path.is_symlink():
+                raise DirectSyncPushError("TLS CA bundle path is invalid")
+            ca_path = resolve_owner_path(ca_path)
+            payload["tls_ca_bundle_path"] = str(ca_path)
+            files.append(ca_path)
+        context_value = str(payload.get("isolated_qualification_context_path") or "").strip()
+        if context_value:
+            context_path = resolve_owner_path(context_value)
+            payload["isolated_qualification_context_path"] = str(context_path)
+            files.append(context_path)
+        probe_before_owner_paths(data_root, file_paths=files, directory_paths=directories)
+        return PreparedCredentialConfig(credential_path, MappingProxyType(payload), protected_path)
+    except DataGenerationBlocked:
+        raise
+    except Exception as exc:
+        raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False,
+            "message_key": "data_generation_unknown"}) from exc
 
 
 @writer_sink("relay_runtime_storage")
@@ -372,7 +430,8 @@ def _wincred_target_name(name: str) -> str:
     return f"{WINCRED_TARGET_PREFIX}{safe_name}"
 
 
-def _resolve_secret_ref(secret_ref: str, *, credential_path: Path, secret_data_dir: str = "") -> str:
+def _resolve_secret_ref(secret_ref: str, *, credential_path: Path, secret_data_dir: str = "",
+                        protected_secret_path: Path | None = None) -> str:
     text = str(secret_ref or "").strip()
     if ":" not in text:
         raise DirectSyncPushError("secret_ref must start with env:, dpapi:, or wincred:")
@@ -390,7 +449,7 @@ def _resolve_secret_ref(secret_ref: str, *, credential_path: Path, secret_data_d
         base_dir = Path(secret_data_dir).expanduser() if secret_data_dir else _default_secret_data_dir(credential_path)
         if secret_data_dir and is_legacy_syncthing_path(base_dir):
             raise DirectSyncPushError("secret_data_dir must not point at the legacy Syncthing folder")
-        protected_path = base_dir / "secrets" / f"{name}.dpapi"
+        protected_path = protected_secret_path if protected_secret_path is not None else base_dir / "secrets" / f"{name}.dpapi"
         if not protected_path.is_file():
             raise DirectSyncPushError("dpapi secret_ref artifact is missing")
         return _dpapi_unprotect_current_user(protected_path.read_bytes()).decode("utf-8")
@@ -399,8 +458,7 @@ def _resolve_secret_ref(secret_ref: str, *, credential_path: Path, secret_data_d
     raise DirectSyncPushError("secret_ref must start with env:, dpapi:, or wincred:")
 
 
-def load_credentials_from_json(path: str | os.PathLike[str]) -> ProducerCredentials:
-    credential_path = Path(path)
+def _read_credential_payload(credential_path: Path) -> dict:
     try:
         payload = load_json_no_duplicate_keys(credential_path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -409,6 +467,13 @@ def load_credentials_from_json(path: str | os.PathLike[str]) -> ProducerCredenti
         raise DirectSyncPushError(f"credential file is missing or invalid: {exc}") from exc
     if not isinstance(payload, dict):
         raise DirectSyncPushError("credential file must be a JSON object")
+    return payload
+
+
+def load_credentials_from_json(path: str | os.PathLike[str], *,
+                               prepared_config: PreparedCredentialConfig | None = None) -> ProducerCredentials:
+    credential_path = prepared_config.credential_path if prepared_config is not None else Path(path)
+    payload = prepared_config.payload if prepared_config is not None else _read_credential_payload(credential_path)
     producer_id = str(payload.get("producer_id") or "").strip()
     key_id = str(payload.get("key_id") or "").strip()
     raw_secret = payload.get("secret")
@@ -446,6 +511,7 @@ def load_credentials_from_json(path: str | os.PathLike[str]) -> ProducerCredenti
             secret_ref,
             credential_path=credential_path,
             secret_data_dir=str(payload.get("secret_data_dir") or ""),
+            protected_secret_path=prepared_config.protected_secret_path if prepared_config is not None else None,
         )
     if not producer_id or not key_id or not secret or not endpoint_url:
         raise DirectSyncPushError("credential file is missing producer_id, key_id, secret/secret_ref, or endpoint_url")
@@ -844,7 +910,7 @@ def enqueue_completed_source_file(
         )
         return _append_runtime_event_with_status(config, "enqueue_blocked_disk_pressure", status)
     try:
-        creds = credentials or load_credentials_from_json(config.credential_path)
+        creds = credentials or load_credentials_from_json(config.credential_path, prepared_config=config.prepared_credential)
         row = enqueue_source_file_for_relay(
             db_path=config.db_path,
             spool_dir=config.spool_dir,
@@ -1076,7 +1142,7 @@ def run_relay_once(
     runtime_lease: dict[str, Any] = {}
     try:
         reset_count = reset_stale_relay_leases(db_path=config.db_path, now=cycle_now)
-        creds = credentials or load_credentials_from_json(config.credential_path)
+        creds = credentials or load_credentials_from_json(config.credential_path, prepared_config=config.prepared_credential)
         source_identity = _producer_manifest_identity(config)
         if source_identity.get("status") != "PASS":
             raise DirectSyncPushError(

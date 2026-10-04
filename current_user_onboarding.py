@@ -19,7 +19,7 @@ from typing import Any, Callable, Mapping, MutableMapping
 import uuid
 
 from direct_sync_push import load_json_no_duplicate_keys, manifest_hash
-from direct_sync_runtime import load_credentials_from_json
+from direct_sync_runtime import load_credentials_from_json, prepare_credential_config, PreparedCredentialConfig
 from logistics_runtime_profile import (
     PROFILE_PATH_ENV,
     REQUIRED_ENV,
@@ -1011,6 +1011,7 @@ def inspect_current_user_state(
     *,
     profile_loader: Callable[[Path], Any] = _default_profile_loader,
     credential_loader: Callable[[Path], Any] = load_credentials_from_json,
+    prepared_credential: PreparedCredentialConfig | None = None,
 ) -> dict[str, Any]:
     state_paths = {
         "identity": paths.identity_path,
@@ -1048,7 +1049,8 @@ def inspect_current_user_state(
     try:
         identity = _read_json(paths.identity_path, "producer identity")
         manifest = _read_json(paths.producer_manifest_path, "producer manifest")
-        credential = _read_json(paths.credential_path, "producer credential")
+        credential = (dict(prepared_credential.payload) if prepared_credential is not None
+                      else _read_json(paths.credential_path, "producer credential"))
         registration = _read_json(paths.registration_report_path, "registration report")
         profile_payload = _read_json(paths.logistics_profile_path, "logistics profile")
         required_identity = {
@@ -1117,7 +1119,8 @@ def inspect_current_user_state(
             raise ValueError("producer credential is not current-user scoped")
         if str(profile_payload.get("credential_scope") or "") != "current_user":
             raise ValueError("logistics profile is not current-user scoped")
-        resolved_credential = credential_loader(paths.credential_path)
+        resolved_credential = (credential_loader(paths.credential_path, prepared_config=prepared_credential)
+                               if prepared_credential is not None else credential_loader(paths.credential_path))
         resolved_profile = profile_loader(paths.logistics_profile_path)
         possession_key = _possession_key_readback(identity)
         if resolved_credential is None or resolved_profile is None:
@@ -1169,11 +1172,15 @@ def _registration_runner(
     *,
     server_base_url: str,
     environ: Mapping[str, str] | None = None,
+    tls_ca_bundle_source: str | None = None,
 ) -> int:
     from tools import register_container_audit_worker_pc
 
     endpoint_url = f"{server_base_url.rstrip('/')}{DEFAULT_ENDPOINT_PATH}"
-    tls_ca_source = _configured_tls_ca_bundle_source(paths, environ)
+    tls_ca_source = (
+        _configured_tls_ca_bundle_source(paths, environ)
+        if tls_ca_bundle_source is None else tls_ca_bundle_source
+    )
     arguments = [
         "--app-root",
         str(paths.app_root),
@@ -1261,7 +1268,23 @@ def onboard_current_user(
                 bootstrap_integrity_detail.get("status") or "UNKNOWN"
             ).lower()
             report["bootstrap_integrity_detail"] = bootstrap_integrity_detail
-            from data_generation_guard import record_before_owner_paths
+            from data_generation_guard import probe_before_owner_paths, record_before_owner_paths
+            from protected_admin import default_protected_admin_profile_path
+            from logistics_runtime_profile import assert_path_has_no_reparse_components
+            try:
+                if tls_ca_source:
+                    tls_ca_source = str(assert_path_has_no_reparse_components(
+                        tls_ca_source, label="TLS CA bundle source",
+                    ))
+            except (OSError, ValueError) as exc:
+                raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False}) from exc
+            probe_before_owner_paths(paths.data_root, file_paths=(
+                *_owner_artifact_paths(paths).values(), tls_ca_source,
+                default_protected_admin_profile_path(environ=environ),
+            ))
+            prepared_credential = None
+            if credential_loader is load_credentials_from_json and paths.credential_path.is_file():
+                prepared_credential = prepare_credential_config(paths.credential_path, data_root=paths.data_root)
             record_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values())
             attempt = RemoteAttempt.begin(paths.onboarding_report_path, "current_user_onboarding")
             for directory in (
@@ -1274,6 +1297,7 @@ def onboard_current_user(
                 paths,
                 profile_loader=profile_loader,
                 credential_loader=credential_loader,
+                prepared_credential=prepared_credential,
             )
             report["initial_state"] = state
             if state["status"] == "READY" and tls_ca_source:
@@ -1292,6 +1316,7 @@ def onboard_current_user(
                     paths,
                     profile_loader=profile_loader,
                     credential_loader=credential_loader,
+                    prepared_credential=prepared_credential,
                 )
             if state["status"] == "RECOVERY_REQUIRED":
                 if state.get("recovery_action") == ADMIN_RECOVERY_ACTION:
@@ -1310,6 +1335,7 @@ def onboard_current_user(
                     paths,
                     server_base_url=server_base_url,
                     environ=environ,
+                    tls_ca_bundle_source=tls_ca_source,
                 )
             else:
                 return_code = registration_runner(paths)
@@ -1327,6 +1353,7 @@ def onboard_current_user(
                 paths,
                 profile_loader=profile_loader,
                 credential_loader=credential_loader,
+                prepared_credential=prepared_credential,
             )
             if state["status"] != "READY":
                 raise ValueError(
@@ -1338,6 +1365,7 @@ def onboard_current_user(
         with writer_admission("current_user_onboarding"):
             current_state = inspect_current_user_state(
                 paths, profile_loader=profile_loader, credential_loader=credential_loader,
+                prepared_credential=prepared_credential,
             )
             if not attempt.is_current():
                 raise ValueError("a newer onboarding attempt superseded this response")
@@ -1553,15 +1581,27 @@ def restore_current_user_lifecycle_after_replacement(
             report_path=report_path,
             status="FAILED",
         )
-    from data_generation_guard import DataGenerationBlocked, record_before_owner_paths
+    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, record_before_owner_paths
     try:
+        from logistics_runtime_profile import assert_path_has_no_reparse_components
+        try:
+            receipt_path = assert_path_has_no_reparse_components(
+                replacement_receipt_path, label="replacement lifecycle receipt",
+            )
+        except (OSError, ValueError) as exc:
+            raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False}) from exc
+        probe_before_owner_paths(paths.data_root, file_paths=(
+            *_owner_artifact_paths(paths).values(), receipt_path, report_path,
+        ))
+        prepared_credential = None
+        if credential_loader is load_credentials_from_json and paths.credential_path.is_file():
+            prepared_credential = prepare_credential_config(paths.credential_path, data_root=paths.data_root)
         record_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values())
     except DataGenerationBlocked as exc:
         raise CurrentUserOnboardingError(
             exc.user_message, report_path=report_path, status="FAILED",
         ) from exc
     owner_paths = _owner_artifact_paths(paths)
-    receipt_path = _resolved(replacement_receipt_path)
     if report_path == receipt_path or report_path in {
         _resolved(path) for path in owner_paths.values()
     }:
@@ -1783,6 +1823,7 @@ def restore_current_user_lifecycle_after_replacement(
                 paths,
                 profile_loader=profile_loader,
                 credential_loader=credential_loader,
+                prepared_credential=prepared_credential,
             )
         )
         if state.get("status") != "READY":

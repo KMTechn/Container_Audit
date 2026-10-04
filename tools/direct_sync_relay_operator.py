@@ -26,7 +26,7 @@ from direct_sync_operator import (  # noqa: E402
     restore_relay_spool_from_server,
     retry_dead_relay_batch,
 )
-from direct_sync_runtime import load_credentials_from_json  # noqa: E402
+from direct_sync_runtime import load_credentials_from_json, prepare_credential_config  # noqa: E402
 
 
 @writer_sink("relay_operator_report")
@@ -172,6 +172,9 @@ def main(argv: list[str] | None = None) -> int:
                     path = resolve_owner_path(value)
                     setattr(args, name, str(path))
                     (directories if name.endswith('_root') else files).append(path)
+            prepared_credential = None
+            if args.command == "restore-spool" and Path(args.credential_path).is_file():
+                prepared_credential = prepare_credential_config(args.credential_path, data_root=storage.data_root)
             record_before_owner_paths(storage.data_root, file_paths=files, directory_paths=directories)
         if args.command == "status":
             return _emit(
@@ -245,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
                     db_path=args.db_path,
                     relay_id=args.relay_id,
                     spool_root=args.spool_root,
-                    credentials=load_credentials_from_json(args.credential_path),
+                    credentials=load_credentials_from_json(args.credential_path, prepared_config=prepared_credential),
                     operator_id=args.operator_id,
                     reason=args.reason,
                     audit_log_path=args.audit_log_path,

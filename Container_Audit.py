@@ -163,6 +163,7 @@ from protected_admin import (
     PROTECTED_ADMIN_DISPLAY_NAME,
     PROTECTED_ADMIN_OPERATOR_ID,
     display_operator_name,
+    default_protected_admin_profile_path,
     is_protected_admin_code,
     is_protected_admin_candidate,
     persistent_operator_name,
@@ -3284,7 +3285,12 @@ class ContainerAudit:
     def _resolve_worker_login_candidate(self, worker_name: str) -> Optional[str]:
         candidate = WorkerRegistry.normalize_name(worker_name)
         if is_protected_admin_candidate(candidate):
-            if not is_protected_admin_code(candidate):
+            selected_profile = getattr(self, '_protected_admin_profile_path', None)
+            authenticated = (
+                is_protected_admin_code(candidate, profile_path=selected_profile)
+                if selected_profile is not None else is_protected_admin_code(candidate)
+            )
+            if not authenticated:
                 self._authenticated_protected_admin = False
                 messagebox.showerror(
                     "인증 오류",
@@ -8239,6 +8245,12 @@ class ContainerAudit:
         injected = getattr(self, "_admin_pin_client", None)
         if injected is not None:
             return injected
+        if self.storage_paths.credential_path.is_file():
+            from direct_sync_runtime import prepare_credential_config
+            with writer_admission("gui_constructor"):
+                prepared = prepare_credential_config(self.storage_paths.credential_path,
+                                                     data_root=self.storage_paths.data_root)
+            return AdminPinClient(self.storage_paths.credential_path, prepared_config=prepared)
         return AdminPinClient(self.storage_paths.credential_path)
 
     def _admin_pin_audit(self, event: str, intent: Mapping[str, Any]) -> bool:
@@ -21537,7 +21549,23 @@ def _prepare_gui_startup(*, data_root=None):
             if profile_override:
                 profile_candidates.append(resolve_owner_path(profile_override))
             profile_candidates = [path for path in profile_candidates if path.is_file()]
-            probe_before_owner_paths(storage_paths.data_root, file_paths=profile_candidates)
+            protected_admin_profile = default_protected_admin_profile_path()
+            # Keep the original reparse policy before binding the admitted path.
+            from logistics_runtime_profile import assert_path_has_no_reparse_components
+            try:
+                protected_admin_profile = assert_path_has_no_reparse_components(
+                    protected_admin_profile, label="protected administrator profile",
+                )
+            except (OSError, ValueError) as exc:
+                raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False}) from exc
+            probe_before_owner_paths(storage_paths.data_root, file_paths=(
+                *profile_candidates, protected_admin_profile,
+            ))
+            if storage_paths.credential_path.is_file():
+                from direct_sync_runtime import prepare_credential_config
+                prepare_credential_config(
+                    storage_paths.credential_path, data_root=storage_paths.data_root,
+                )
             if storage_paths.custom_data_root:
                 validate_existing_data_root(storage_paths.data_root)
         except (OSError, ValueError) as exc:
@@ -21620,6 +21648,7 @@ def _prepare_gui_startup(*, data_root=None):
             with writer_admission("gui_startup"):
                 app = ContainerAudit()
             app._runtime_data_root = storage_paths.data_root
+            app._protected_admin_profile_path = protected_admin_profile
             if catalog_unconfirmed:
                 app.item_catalog_unconfirmed = True
             app._startup_item_catalog_context = catalog_context

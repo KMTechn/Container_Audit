@@ -718,18 +718,23 @@ def _registration_target_paths(args: argparse.Namespace, storage_paths) -> tuple
     return manifest_path, credential_path
 
 
-def _registration_owner_paths(args, storage_paths):
+def _registration_owner_paths(args, storage_paths, *, include_read_only_inputs=False):
     from data_generation_guard import resolve_owner_path
     from logistics_runtime_profile import resolve_logistics_profile_path
     paths = list(_registration_target_paths(args, storage_paths))
     paths.append(_default_producer_identity_path(args, storage_paths))
-    for name in ('producer_identity_path','admin_recovery_secret_file','report_path'):
+    for name in ('producer_identity_path','admin_recovery_secret_file','report_path','admin_recovery_journal_path'):
         value = str(getattr(args, name, '') or '').strip()
         if value:
             paths.append(resolve_owner_path(value))
     profile = resolve_logistics_profile_path(getattr(args, 'logistics_profile_path', None))
     args.resolved_logistics_profile_path = profile
     paths.append(profile)
+    if include_read_only_inputs:
+        for name in ('tls_ca_bundle_path','isolated_qualification_context'):
+            value = str(getattr(args, name, '') or '').strip()
+            if value:
+                paths.append(resolve_owner_path(value))
     return paths
 
 
@@ -857,7 +862,8 @@ def _require_explicit_existing_identity_migration(
     if compatible:
         try:
             manifest = load_json_no_duplicate_keys(manifest_path.read_bytes())
-            credential = load_json_no_duplicate_keys(credential_path.read_bytes())
+            prepared = getattr(args, "prepared_credential", None)
+            credential = dict(prepared.payload) if prepared is not None else load_json_no_duplicate_keys(credential_path.read_bytes())
             pc_identity = manifest.get("pc_identity") if isinstance(manifest, dict) else None
             compatible = bool(
                 isinstance(pc_identity, dict)
@@ -3180,18 +3186,32 @@ def main(argv: list[str] | None = None) -> int:
     # owner-data entrances even when no enrollment request is needed.
     from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, resolve_owner_path
     try:
-        for name in ('producer_identity_path','manifest_path','credential_path','admin_recovery_secret_file','report_path'):
+        for name in ('producer_identity_path','manifest_path','credential_path','admin_recovery_secret_file','report_path',
+                     'tls_ca_bundle_path','admin_recovery_journal_path','isolated_qualification_context'):
             value = str(getattr(args, name, '') or '').strip()
             if value:
-                setattr(args, name, str(resolve_owner_path(value)))
+                try:
+                    if name == 'tls_ca_bundle_path':
+                        from logistics_runtime_profile import assert_path_has_no_reparse_components
+                        path = assert_path_has_no_reparse_components(value, label="TLS CA bundle source")
+                    else:
+                        path = resolve_owner_path(value)
+                except (OSError, ValueError) as exc:
+                    raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False}) from exc
+                setattr(args, name, str(path))
         with writer_admission("worker_pc_registration"):
             storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
             if output_path_policy['status'] == 'PASS':
-                owner_paths = _registration_owner_paths(args, storage_paths)
+                owner_paths = _registration_owner_paths(args, storage_paths, include_read_only_inputs=True)
             else:
                 report_blocked = any(item['field']=='report_path' for item in output_path_policy['unsafe_paths'])
                 owner_paths = (args.report_path,) if args.report_path and not report_blocked else ()
             probe_before_owner_paths(storage_paths.data_root, file_paths=owner_paths)
+            if output_path_policy['status'] == 'PASS' and not args.verify_manifest_hash:
+                _, existing_credential = _registration_target_paths(args, storage_paths)
+                if existing_credential.is_file():
+                    from direct_sync_runtime import prepare_credential_config
+                    args.prepared_credential = prepare_credential_config(existing_credential, data_root=storage_paths.data_root)
     except DataGenerationBlocked as exc:
         print(exc.user_message)
         return 2

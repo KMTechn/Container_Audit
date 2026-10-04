@@ -514,6 +514,23 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         print("BLOCKED: unsupported command-line argument", file=sys.stderr)
         return 2
+    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths
+    from storage_policy import build_container_audit_storage_paths
+    from writer_session_fence import writer_admission
+    try:
+        args.profile_path = str(assert_path_has_no_reparse_components(
+            args.profile_path, label="protected administrator profile",
+        ))
+        with writer_admission("protected_admin_profile"):
+            storage = build_container_audit_storage_paths(application_path=str(REPO_ROOT))
+            probe_before_owner_paths(storage.data_root, file_paths=(args.profile_path,))
+    except (OSError, ValueError):
+        blocked = DataGenerationBlocked({"status": "UNKNOWN", "allowed": False})
+        print(blocked.user_message, file=sys.stderr)
+        return 2
+    except DataGenerationBlocked as exc:
+        print(exc.user_message, file=sys.stderr)
+        return 2
     if args.dry_run:
         try:
             report = install_protected_admin_profile(

@@ -930,9 +930,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from logistics_runtime_profile import resolve_logistics_profile_path
         args.profile_path = str(resolve_logistics_profile_path(args.profile_path))
+        if args.tls_ca_bundle_path:
+            args.tls_ca_bundle_path = str(assert_path_has_no_reparse_components(
+                args.tls_ca_bundle_path, label="TLS CA bundle source",
+            ))
+        owner_paths = (args.profile_path, args.tls_ca_bundle_path)
         with writer_admission("logistics_profile_install"):
             storage = build_container_audit_storage_paths(application_path=str(REPO_ROOT))
-            probe_before_owner_paths(storage.data_root, file_paths=(args.profile_path,))
+            probe_before_owner_paths(storage.data_root, file_paths=owner_paths)
+    except (OSError, ValueError) as exc:
+        blocked = DataGenerationBlocked({"status": "UNKNOWN", "allowed": False})
+        print(blocked.user_message, file=sys.stderr)
+        return 2
     except DataGenerationBlocked as exc:
         print(exc.user_message, file=sys.stderr)
         return 2
@@ -943,8 +952,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with writer_admission("logistics_profile_install"):
             if args.dry_run:
-                probe_before_owner_paths(storage.data_root, file_paths=(args.profile_path,))
+                probe_before_owner_paths(storage.data_root, file_paths=owner_paths)
             else:
+                probe_before_owner_paths(storage.data_root, file_paths=owner_paths)
                 record_before_owner_paths(storage.data_root, file_paths=(args.profile_path,))
         report = install_runtime_profile(
             profile_path=args.profile_path,

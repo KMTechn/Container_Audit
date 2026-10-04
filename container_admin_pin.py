@@ -80,8 +80,9 @@ def _valid_uuid(value: Any) -> bool:
 
 
 class AdminPinClient:
-    def __init__(self, credential_path: str | Path, *, transport: Any = None):
-        credentials = load_credentials_from_json(credential_path)
+    def __init__(self, credential_path: str | Path, *, transport: Any = None, prepared_config=None):
+        credentials = (load_credentials_from_json(credential_path, prepared_config=prepared_config)
+                       if prepared_config is not None else load_credentials_from_json(credential_path))
         endpoint = urlsplit(str(credentials.endpoint_url))
         if endpoint.scheme.lower() != "https" or not endpoint.netloc or endpoint.username or endpoint.password:
             raise AdminPinError("VERIFY_UNAVAILABLE")
