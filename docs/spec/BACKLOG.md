@@ -6,6 +6,11 @@ G 외부 입력 부류는 TLS CA·보호 관리자 profile·지원 receipt/passw
 [sub-263 보고서](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-263/REPORT.md)를 따른다.
 호스트 실설치·GUI·Run/task·live relay·자격 저장소·VM/서버는 이 교정에서 실행하지 않는다.
 
+Credential locator/nested의 두 단계 admission과 기존 malformed/duplicate BLOCKED 진단을
+구분한다. Canonical 최초 G의 세 격리 분기에는 변경·removal·Run·relay·fence 잔류가 없다.
+설치 변경 뒤 Python child의 nested 거절은 실제 child와 catch 상태 대역으로 확인하며,
+native 설치·복원과 이 순서의 최종 수용은 coordinator 독립 확인 범위로 남긴다.
+
 G 직접 입구/거절 부류: registrar 검증·2PC resume, support operator/profile,
 앱 active-work wrapper/report, lifecycle 복구·제거의 판독 전 보호와 온보딩/relay
 거절 시 기존 상태 보존을 교정한다. 별도 프로세스 RED/GREEN·선언 재생성·stock·

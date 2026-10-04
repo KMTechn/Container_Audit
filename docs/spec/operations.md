@@ -9,6 +9,14 @@ G와 reader가 공유하며 초기 검사는 report/placement ownership/INSTALLI
 기존 plan-only/dry-run probe와 공용 G/helper/신원 계약은 유지한다. 실제 검증 범위와 실패는
 [외부 입력 교정](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-263/REPORT.md)에 기록한다.
 
+기존 credential은 locator parent를 먼저 검사한 뒤 JSON을 한 번 읽고, 실제 secret owner,
+TLS CA와 qualification context를 같은 snapshot으로 검사한다. 정상 locator의 하위 경로를
+해석할 수 없으면 UNKNOWN으로 끝내며 report를 쓰지 않는다. 깨진 JSON·중복 키는 경로
+판정 실패로 바꾸지 않고, 승인된 report owner에 기존 BLOCKED 진단을 남긴다.
+Canonical의 첫 일반 G 거절은 fence·mutated 표시 앞에서 끝나므로 removal/Run/relay를
+호출하지 않는다. PS 설치 뒤 Python child에서 발견하는 credential nested 거절은 기존
+rollback과 fence 해제를 사용한다. 이 경계의 실제 native 복원은 아직 NOT TESTED다.
+
 직접 등록(검증·2PC 복구 포함), relay 운영 명령, 사용자 profile 설치/확인,
 앱의 active-work wrapper·review report, lifecycle 복구·제거도 기존 admission 아래
 최초 신원/자료 판독 전에 G를 검사한다. 온보딩은 G 뒤에 attempt와 디렉터리를 만든다.
