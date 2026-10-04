@@ -56,9 +56,11 @@ resident_status.write_text('{"status":"RUNNING","preserved":true}', encoding='ut
 onboard_report = storage.direct_sync_root/'status/current_user_onboarding.json'
 onboard_report.parent.mkdir(parents=True, exist_ok=True)
 onboard_report.write_text('{"status":"READY","preserved":true}', encoding='utf-8')
+raw_status = storage.direct_sync_root/'status/direct_sync_relay_status.json'
+raw_status.write_text('{"status":"PASS"}', encoding='utf-8')
 os.environ['CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH'] = str(profile)
 os.environ['KM_LOGISTICS_PROFILE_PATH'] = str(profile)
-watched = {str(p.resolve()).casefold() for p in (identity, credential, manifest, profile, queue)}
+watched = {str(p.resolve()).casefold() for p in (identity, credential, manifest, profile, queue, raw_status)}
 observed = {'data_reads': 0, 'network_calls': 0, 'relay_stops': 0, 'autostart_changes': 0, 'task_changes': 0}
 
 def snapshot():
@@ -113,6 +115,8 @@ def stop(*args, **kwargs):
     return {'status': 'ABSENT'}
 user_relay.request_user_relay_stop = stop
 def child(*args, **kwargs):
+    if generation_case in ('allow', 'missing'):
+        return {'status': 'PASS', 'returncode': 0}
     raise BoundaryReached('real relay launch forbidden')
 user_relay.run_session_direct_sync_once = child
 user_relay.start_user_relay_process = child

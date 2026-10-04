@@ -526,7 +526,6 @@ def main(argv: list[str] | None = None) -> int:
                 app_root=app_root,
                 direct_sync_root=direct_sync_root,
                 scan_source_dir=scan_source_dir,
-                data_root=storage.data_root,
             )
             direct_sync_root.mkdir(parents=True, exist_ok=True)
             scan_source_dir.mkdir(parents=True, exist_ok=True)
@@ -547,6 +546,7 @@ def main(argv: list[str] | None = None) -> int:
                 app_root=app_root,
                 direct_sync_root=direct_sync_root,
                 scan_source_dir=scan_source_dir,
+                data_root=storage.data_root,
             ),
             status_path=user_relay_status_path(direct_sync_root),
             interval_seconds=args.interval_seconds,

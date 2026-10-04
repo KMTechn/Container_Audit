@@ -41,9 +41,11 @@ def test_direct_entry_refuses_before_identity_and_preserves_state(tmp_path, scen
     assert observed['state_changes'] == [], observed
     assert observed['marker_changes'] == [], observed
 
-@pytest.mark.parametrize('scenario', ('register', 'register-hash', 'profile-check', 'operator-status'))
+@pytest.mark.parametrize('scenario', ('register', 'register-hash', 'profile-check', 'operator-status', 'supervisor'))
 @pytest.mark.parametrize('generation_case', ('allow', 'missing'))
 def test_allowed_entry_reaches_existing_owner_read(tmp_path, scenario, generation_case):
     observed = run_entry(tmp_path, scenario, generation_case)
     assert observed['data_reads'] > 0, observed
     assert not observed['korean_refusal'], observed
+    if scenario == 'supervisor':
+        assert observed['result'] == 0, observed
