@@ -72,7 +72,7 @@ marker_root = selected.parent
 if scenario.startswith('nested-'):
     import direct_sync_runtime as runtime
     runtime.current_user_data_home = lambda: Path(os.environ['LOCALAPPDATA'])
-    credential_locator = paths.credential_path
+    credential_locator = external / 'credential.json' if 'locator-high' in scenario else paths.credential_path
     credential_locator.parent.mkdir(parents=True, exist_ok=True)
     payload = dict(producer_id='isolated', key_id='isolated', endpoint_url=registration.DEFAULT_ENDPOINT_URL)
     if scenario.endswith('tls'):
