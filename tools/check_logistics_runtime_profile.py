@@ -21,6 +21,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--optional", action="store_true")
     args = parser.parse_args(argv)
     try:
+        from data_generation_guard import record_before_data_open
+        from storage_policy import build_container_audit_storage_paths
+        from writer_session_fence import writer_admission
+        with writer_admission("logistics_profile_install"):
+            storage = build_container_audit_storage_paths(application_path=str(REPO_ROOT))
+            record_before_data_open(storage.data_root)
         profile = load_logistics_runtime_profile(
             required=not args.optional,
             profile_path=args.profile_path,

@@ -924,11 +924,23 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    from data_generation_guard import DataGenerationBlocked, probe_before_data_open, record_before_data_open
+    from storage_policy import build_container_audit_storage_paths
+    from writer_session_fence import writer_admission
+    try:
+        with writer_admission("logistics_profile_install"):
+            storage = build_container_audit_storage_paths(application_path=str(REPO_ROOT))
+            probe_before_data_open(storage.data_root)
+    except DataGenerationBlocked as exc:
+        print(exc.user_message, file=sys.stderr)
+        return 2
     token = str(os.environ.get(args.token_env) or "").strip()
     if not token:
         print("BLOCKED: bearer token environment value is missing", file=sys.stderr)
         return 2
     try:
+        with writer_admission("logistics_profile_install"):
+            record_before_data_open(storage.data_root)
         report = install_runtime_profile(
             profile_path=args.profile_path,
             base_url=args.base_url,

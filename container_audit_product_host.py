@@ -91,8 +91,8 @@ def _record_hosted_relay_failure(arguments: Sequence[str], error: Exception) -> 
     }
     from data_generation_guard import DataGenerationBlocked
     if isinstance(error, DataGenerationBlocked):
-        diagnostic["error_code"] = error.decision["message_key"]
-        diagnostic["error_message"] = str(error)  # Fixed helper guidance, never arbitrary exception text.
+        print(error.user_message)
+        return
     status_path = _option_value(arguments, "--runtime-status-path")
     if not status_path and USER_RELAY_MODE in arguments:
         try:

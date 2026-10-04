@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from writer_session_fence import writer_sink  # noqa: E402
+from writer_session_fence import writer_admission, writer_sink  # noqa: E402
 
 from direct_sync_operator import (  # noqa: E402
     operator_status,
@@ -162,6 +162,13 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
+        from data_generation_guard import DataGenerationBlocked, probe_before_data_open, record_before_data_open
+        from storage_policy import build_container_audit_storage_paths
+        with writer_admission("relay_operator_report"):
+            storage = build_container_audit_storage_paths(application_path=str(ROOT))
+            probe_before_data_open(storage.data_root)
+            data_root = Path(args.db_path).absolute().parent if getattr(args, "db_path", "") else storage.data_root
+            record_before_data_open(data_root)
         if args.command == "status":
             return _emit(
                 operator_status(
@@ -241,6 +248,9 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 args.report_path,
             )
+    except DataGenerationBlocked as exc:
+        print(exc.user_message)
+        return 2
     except ValueError as exc:
         return _emit({"status": "FAIL", "operation": args.command, "error_code": "invalid_operator_input", "error_message": str(exc)}, getattr(args, "report_path", ""))
     return _emit({"status": "FAIL", "operation": args.command, "error_code": "unknown_command"}, getattr(args, "report_path", ""))

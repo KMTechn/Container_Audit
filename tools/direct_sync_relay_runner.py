@@ -773,8 +773,6 @@ def main(argv: list[str] | None = None) -> int:
         # control slot ensures installer probes also observe this process.
         record_before_data_open(Path(args.db_path).absolute().parent)
     except DataGenerationBlocked as exc:
-        from container_audit_product_host import _record_hosted_relay_failure
-        _record_hosted_relay_failure(list(argv or sys.argv[1:]), exc)
         print(str(exc))
         return 1
     if args.require_runtime_lease_before_scan:

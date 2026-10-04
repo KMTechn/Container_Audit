@@ -2894,6 +2894,8 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
     with writer_admission("worker_pc_registration"):
         hostname = args.hostname or socket.gethostname()
         storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
+        from data_generation_guard import record_before_data_open
+        record_before_data_open(storage_paths.data_root)
         ensure_container_audit_storage_dirs(storage_paths)
         identity = _resolve_producer_identity(
             args,
@@ -3156,6 +3158,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report-path", default="")
     args = parser.parse_args(argv)
 
+    # Includes verification and completed 2PC recovery: these are independent
+    # owner-data entrances even when no enrollment request is needed.
+    from data_generation_guard import DataGenerationBlocked, probe_before_data_open
+    try:
+        with writer_admission("worker_pc_registration"):
+            storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
+            probe_before_data_open(storage_paths.data_root)
+    except DataGenerationBlocked as exc:
+        print(exc.user_message)
+        return 2
+
     output_path_policy = _explicit_output_path_policy_report(args)
     if output_path_policy["status"] != "PASS":
         blocked_report = {
@@ -3176,6 +3189,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.verify_manifest_hash:
         try:
+            with writer_admission("worker_pc_registration"):
+                from data_generation_guard import record_before_data_open
+                record_before_data_open(storage_paths.data_root)
             manifest_path = Path(args.manifest_path).expanduser()
             if not args.manifest_path or not manifest_path.is_file():
                 raise DirectSyncPushError("producer manifest is absent")
@@ -3192,6 +3208,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if bool(getattr(args, "admin_recovery_two_phase", False)):
+        with writer_admission("worker_pc_registration"):
+            from data_generation_guard import record_before_data_open
+            record_before_data_open(storage_paths.data_root)
         resume_storage_paths = build_container_audit_storage_paths(
             application_path=args.app_root
         )
@@ -3236,6 +3255,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         manifest, credential, report = build_registration_payloads(args)
+    except DataGenerationBlocked as exc:
+        print(exc.user_message)
+        return 2
     except Exception as exc:
         fallback_path = Path(args.report_path).expanduser() if args.report_path else None
         blocked_report = {

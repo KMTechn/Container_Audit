@@ -1252,6 +1252,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--allow-interactive-task-for-local-test", action="store_true")
     parser.add_argument("--allow-noncanonical-layout-for-test", action="store_true")
     args = parser.parse_args(raw_argv)
+    from data_generation_guard import DataGenerationBlocked, probe_before_data_open
+    from writer_session_fence import writer_admission
+    try:
+        with writer_admission("direct_sync_install_pack"):
+            storage = build_container_audit_storage_paths(application_path=args.app_root)
+            probe_before_data_open(storage.data_root)
+    except DataGenerationBlocked as exc:
+        print(exc.user_message)
+        return 2
     args.python_exe_explicit = "--python-exe" in raw_argv
     report_path_policy = _legacy_path_block_report("report_path", args.report_path)
     if report_path_policy:

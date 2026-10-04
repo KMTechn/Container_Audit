@@ -213,7 +213,7 @@ from tk_serial_ui_lane import (
     TkSerialUiLane,
 )
 from writer_session_fence import WriterFencedError, writer_admission, writer_sink
-from data_generation_guard import DataGenerationBlocked, record_before_data_open
+from data_generation_guard import DataGenerationBlocked, probe_before_data_open, record_before_data_open
 from tray_state import (
     ACTIVATION_EVENT_STATE_KEY,
     ACTIVATION_EVENT_STATE_SCHEMA_VERSION,
@@ -21527,6 +21527,7 @@ def _prepare_gui_startup(*, data_root=None):
             storage_paths = build_container_audit_storage_paths(
                 application_path=application_path, data_root=data_root,
             )
+            probe_before_data_open(storage_paths.data_root)
             if storage_paths.custom_data_root:
                 validate_existing_data_root(storage_paths.data_root)
         except (OSError, ValueError) as exc:

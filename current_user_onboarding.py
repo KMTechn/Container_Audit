@@ -1229,19 +1229,7 @@ def onboard_current_user(
 ) -> dict[str, Any]:
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
     tls_ca_source = _configured_tls_ca_bundle_source(paths, environ)
-    attempt = RemoteAttempt.begin(paths.onboarding_report_path, "current_user_onboarding")
-    with writer_admission("current_user_onboarding"):
-        for directory in (
-            paths.data_root,
-            paths.events_dir,
-            paths.direct_sync_root,
-            paths.queue_dir,
-            paths.spool_dir,
-            paths.status_dir,
-            paths.logs_dir,
-            paths.logistics_profile_path.parent,
-        ):
-            directory.mkdir(parents=True, exist_ok=True)
+    attempt = None
     require_integrity = (
         bool(getattr(sys, "frozen", False))
         if require_bootstrap_integrity is None
@@ -1262,6 +1250,7 @@ def onboard_current_user(
         "server_registration_verified": False,
         "failure": "",
     }
+    from data_generation_guard import DataGenerationBlocked
     try:
         with writer_admission("current_user_onboarding"):
             bootstrap_integrity_detail = verify_bootstrap_integrity(
@@ -1274,6 +1263,13 @@ def onboard_current_user(
             report["bootstrap_integrity_detail"] = bootstrap_integrity_detail
             from data_generation_guard import record_before_data_open
             record_before_data_open(paths.data_root)
+            attempt = RemoteAttempt.begin(paths.onboarding_report_path, "current_user_onboarding")
+            for directory in (
+                paths.data_root, paths.events_dir, paths.direct_sync_root,
+                paths.queue_dir, paths.spool_dir, paths.status_dir, paths.logs_dir,
+                paths.logistics_profile_path.parent,
+            ):
+                directory.mkdir(parents=True, exist_ok=True)
             state = inspect_current_user_state(
                 paths,
                 profile_loader=profile_loader,
@@ -1393,24 +1389,31 @@ def onboard_current_user(
             )
             _write_json_atomic(paths.onboarding_report_path, report)
             return report
+    except DataGenerationBlocked as exc:
+        raise CurrentUserOnboardingError(
+            exc.user_message, report_path=paths.onboarding_report_path, status="FAILED",
+        ) from exc
     except CurrentUserOnboardingError as exc:
         report["status"] = exc.status
         report["failure"] = str(exc)
         report["error_type"] = exc.__class__.__name__
-        with attempt.apply() as current:
-            if current:
-                _write_json_atomic(paths.onboarding_report_path, report)
+        if attempt is None:
+            _write_json_atomic(paths.onboarding_report_path, report)
+        else:
+            with attempt.apply() as current:
+                if current:
+                    _write_json_atomic(paths.onboarding_report_path, report)
         raise
     except Exception as exc:
         report["status"] = "FAILED"
         report["failure"] = str(exc)[:500]
         report["error_type"] = exc.__class__.__name__
-        from data_generation_guard import DataGenerationBlocked
-        if isinstance(exc, DataGenerationBlocked):
-            report["error_code"] = exc.decision["message_key"]
-        with attempt.apply() as current:
-            if current:
-                _write_json_atomic(paths.onboarding_report_path, report)
+        if attempt is None:
+            _write_json_atomic(paths.onboarding_report_path, report)
+        else:
+            with attempt.apply() as current:
+                if current:
+                    _write_json_atomic(paths.onboarding_report_path, report)
         raise CurrentUserOnboardingError(
             f"Container_Audit first-run onboarding failed: {exc}",
             report_path=paths.onboarding_report_path,
@@ -1429,6 +1432,14 @@ def remove_current_user_setup(
 ) -> dict[str, Any]:
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
     status_dir: Path = paths.status_dir
+    from data_generation_guard import DataGenerationBlocked, probe_before_data_open
+    try:
+        with writer_admission("current_user_setup_removal"):
+            probe_before_data_open(paths.data_root)
+    except DataGenerationBlocked as exc:
+        raise CurrentUserOnboardingError(
+            exc.user_message, report_path=paths.removal_report_path, status="FAILED",
+        ) from exc
     with writer_admission("current_user_setup_removal"):
         status_dir.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = {
@@ -1542,6 +1553,13 @@ def restore_current_user_lifecycle_after_replacement(
             report_path=report_path,
             status="FAILED",
         )
+    from data_generation_guard import DataGenerationBlocked, record_before_data_open
+    try:
+        record_before_data_open(paths.data_root)
+    except DataGenerationBlocked as exc:
+        raise CurrentUserOnboardingError(
+            exc.user_message, report_path=report_path, status="FAILED",
+        ) from exc
     owner_paths = _owner_artifact_paths(paths)
     receipt_path = _resolved(replacement_receipt_path)
     if report_path == receipt_path or report_path in {
@@ -1971,6 +1989,7 @@ def onboarding_main(argv: list[str] | None = None) -> int:
         )
     except CurrentUserOnboardingError as exc:
         print(f"onboarding_status={exc.status}")
+        print(str(exc))
         print(f"onboarding_report={exc.report_path}")
         return ONBOARDING_EXIT_CODE
     print(f"onboarding_status={report['status']}")
@@ -1992,6 +2011,7 @@ def removal_main(argv: list[str] | None = None) -> int:
         report = remove_current_user_setup(args.app_root)
     except CurrentUserOnboardingError as exc:
         print("current_user_removal_status=FAILED")
+        print(str(exc))
         print(f"current_user_removal_report={exc.report_path}")
         return ONBOARDING_EXIT_CODE
     paths = resolve_current_user_onboarding_paths(args.app_root)

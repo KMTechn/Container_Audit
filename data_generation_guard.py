@@ -72,7 +72,7 @@ def marker_paths(data_root, subject_sid, *, environ=None):
 
 
 @writer_sink("data_generation_marker")
-def record_before_data_open(data_root):
+def record_before_data_open(data_root, *, probe_only=False):
     """Probe/record/readback under existing admission, before any DB or sidecar."""
     try:
         from tools.register_container_audit_worker_pc import _current_user_sid
@@ -86,6 +86,8 @@ def record_before_data_open(data_root):
                                               subject_sid=sid, target_build_id=release["build_id"])
         if not decision["allowed"]:
             raise DataGenerationBlocked(decision)
+        if probe_only:
+            return decision
         for path in paths:
             path.parent.mkdir(parents=True, exist_ok=True)
             generation.record_generation(path, app_id="container_audit", subject_sid=sid, **release)
@@ -95,3 +97,8 @@ def record_before_data_open(data_root):
     except Exception as exc:
         raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False,
             "message_key": "data_generation_unknown", "message": generation.UNKNOWN_MESSAGE}) from exc
+
+
+def probe_before_data_open(data_root):
+    """Existing admission must cover this check and the following control read."""
+    return record_before_data_open(data_root, probe_only=True)

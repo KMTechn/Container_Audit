@@ -1,5 +1,14 @@
 # 운영·환경·장애 복구
 
+직접 등록(검증·2PC 복구 포함), relay 운영 명령, 사용자 profile 설치/확인,
+앱의 active-work wrapper·review report, lifecycle 복구·제거도 기존 admission 아래
+최초 신원/자료 판독 전에 G를 검사한다. 온보딩은 G 뒤에 attempt와 디렉터리를 만든다.
+resident 시작과 scheduled-task install pack은 먼저 읽기 전용 G 판단을 하며,
+REFUSE/UNKNOWN은 한국어 안내만 내고 기존 report·relay·Run·예약 작업 상태를 보존한다.
+공용 독립 frozen active-work probe는 별도 도구 신원 계약으로 이 앱 판 검사 범위 밖이다.
+검증 버전·실제 subprocess 결과·제외와 한계는
+[G 직접 입구 교정](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-233/REPORT.md)에 기록한다.
+
 자료 세대 보호 helper `kmtech_shared/data_generation.py`와
 `kmtech_shared/powershell/data_generation.ps1`은 사용자 자료를 열었던 가장 새 판과
 서명 검증된 최소 호환 판을 기록한다. 기록 없음은 ALLOW, 손상·읽기 실패·판 비교
@@ -10,7 +19,7 @@ helper 근거다. **CA 실제 입구 관련52 PASS, native 자료 사용 뒤 복
 자료 root와 기존 control root/SID에 기록하며 launch 직전에 미리 기록하지 않는다.
 GUI는 singleton 확인/온보딩 코드 검증 뒤 catalog 자료 직전, onboarding은 코드
 무결성 검증 뒤 실제 상태 검사 직전, relay는 raw runner의 첫 queue/profile IO 직전에 기록한다.
-resident supervisor의 process launch/control 상태 조회는 기록하지 않고 child의 고정 거절 사유를 전달한다.
+resident supervisor는 자료 세대를 기록하지 않고 시작 전 읽기 전용 G 판단과 child의 고정 거절 안내를 사용한다.
 자료 root override가 기존 admission control root를 옮기지 않으며 중복 GUI·코드 검증
 실패·cycle에 도달하지 않은 relay는 새 기록을 남기지 않는다. portable Python entrypoint를
 기존 exact bootstrap inventory로 검증하고 frozen 기본 EXE 검증은 유지한다.

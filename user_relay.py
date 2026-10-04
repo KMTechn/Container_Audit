@@ -326,6 +326,9 @@ def run_persistent_relay_loop(
                 "error_type": exc.__class__.__name__,
             }
         last_cycle = cycle
+        if cycle.get("error_code") in {"data_generation_unknown", "data_generation_downgrade_refused"}:
+            print(str(cycle.get("error_message") or generation.UNKNOWN_MESSAGE))
+            return {"status": "runtime_error", "last_cycle": cycle}
         report = {
             "report_version": "container-audit-user-relay-v1",
             "status": "RUNNING",
@@ -481,6 +484,13 @@ def main(argv: list[str] | None = None) -> int:
         _notify_data_root_error()
         return 1
     custom_root = storage.custom_data_root
+    from data_generation_guard import DataGenerationBlocked, probe_before_data_open
+    try:
+        with writer_admission("persistent_relay_status"):
+            probe_before_data_open(storage.data_root)
+    except DataGenerationBlocked as exc:
+        print(exc.user_message)
+        return 1
     try:
         with writer_admission("persistent_relay_status"):
             if custom_root:

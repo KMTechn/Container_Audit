@@ -1,5 +1,12 @@
 # 남은 요구·검증·문서·추가 제안
 
+G 직접 입구/거절 부류: registrar 검증·2PC resume, support operator/profile,
+앱 active-work wrapper/report, lifecycle 복구·제거의 판독 전 보호와 온보딩/relay
+거절 시 기존 상태 보존을 교정한다. 별도 프로세스 RED/GREEN·선언 재생성·stock·
+집중/전체 실패 집합 근거는
+[sub-233 보고서](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-233/REPORT.md)를 따른다.
+실제 frozen GUI·운영 설치·서버/VM·현장 장비는 이번 host headless 범위에서 NOT TESTED다.
+
 자료 세대 내림 guard(sub-219)는 두 leaf·같은 판 새 build 하한 교집합의 격리 묶음31 PASS까지 PROVEN이다.
 CA의 자료-open 3곳과 restore/reinstall 7곳에 호출을 연결했으며 관련52 PASS와 native
 자료 사용 뒤 거절을 확인했다. 기존 d55cc94 집중 시험은308 PASS/2 FAIL; 두 옛 post-data
