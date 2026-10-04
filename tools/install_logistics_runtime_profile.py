@@ -942,7 +942,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         with writer_admission("logistics_profile_install"):
-            record_before_owner_paths(storage.data_root, file_paths=(args.profile_path,))
+            if args.dry_run:
+                probe_before_owner_paths(storage.data_root, file_paths=(args.profile_path,))
+            else:
+                record_before_owner_paths(storage.data_root, file_paths=(args.profile_path,))
         report = install_runtime_profile(
             profile_path=args.profile_path,
             base_url=args.base_url,
