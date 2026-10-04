@@ -1,5 +1,13 @@
 # 남은 요구·검증·문서·추가 제안
 
+자료 세대 내림 guard(sub-219)는 helper 두 면의 격리 회귀 18 PASS까지 PROVEN이다.
+CA restore/reinstall/startup 후보 입구 8종의 실제 호출 결속은 0이며, shared exact
+manifest/lock/consumer pin 확대·portable signed version/최소 호환 판 입력·두 marker의
+기계 보호/SID/custom-root 결속이 남아 있다. 최초 옛 v2.0.33 위 설치의 일관 백업·수동
+복구는 운영 문서/runbook 초안이며 H 10구간·실제 설치/GUI/relay·stock은 NOT TESTED다.
+[입구·남은 관문](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/ENTRY-POINTS.md),
+[함수 근거](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/HELPER-READY.md).
+
 명단 2단의 로컬 `worker_id`·`worker_name_snapshot`, UUID 복구 소유, 켜짐 신호에 따른 전송과 고정 재전송은 headless 회귀 대상이다. held-scan ACK 실패의 정상·거부 재생과 모든 신원 호출의 AST 분류·저장본 필수 전달은 [경계 회귀](../../tests/test_event_identity_boundaries.py)로 확인한다. 실제 명단 정정·중지 후 스캐너로 진행 중 완료와 다음 묶음 선택을 확인하는 현장 수용은 별도다. [계약](contracts.md), [회귀](../../tests/test_worker_record_identity.py).
 
 G10 relay 읽기 실패는 실제 마지막 counts/ACK를 유지하고 미확인 안내로 구별한다. 카드·운영 메뉴의 상세에서 최초 실패/미수신의 미확인, 마지막 확인값·확인 시각·읽기 실패, 정상 읽기 복구와 후속 스캔을 소스 회귀로 검증한다. 실제 장애 화면은 랩에 남는다.

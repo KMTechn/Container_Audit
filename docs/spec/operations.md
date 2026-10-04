@@ -1,5 +1,22 @@
 # 운영·환경·장애 복구
 
+자료 세대 보호 helper `kmtech_shared/data_generation.py`와
+`kmtech_shared/powershell/data_generation.ps1`은 사용자 자료를 열었던 가장 새 판과
+서명 검증된 최소 호환 판을 기록한다. 기록 없음은 ALLOW, 손상·읽기 실패·판 비교
+불가는 UNKNOWN 거절이다. Python 3.12.10·PS5.1·PS7 격리 함수 시험 18 PASS는
+helper 근거이며 **CA 설치기·GUI·relay 입구는 아직 미연결**이다. shared 선언 확대와
+portable 서명 version/floor binding은 coordinator 설계 답 대기다.
+[API·현재 한계](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/HELPER-READY.md).
+
+옛 v2.0.33 위 첫 현장 설치는 업무 종료 뒤에 진행한다. 옛 GUI·relay·writer의 정상
+정지/ABSENT를 확인한 뒤 exact 옛 코드, 전체 실제 data/DirectSync root와 외부 신원 상태,
+자동시작 및 세대 marker/control preimage를 같은 시점에 백업하고 바이트를 대조한다.
+백업 뒤 업무·중앙 요청/ACK 변화 0을 확인하기 전에는 되감기 복구를 선택하지 않는다.
+새 판 기동 뒤 실패는 기본 새 판 유지/수정판 복구이며, 관리자 수동 되감기는 옛 코드와
+백업 자료·등록·control preimage를 함께 복원한다. 이후 업무가 있거나 상태 UNKNOWN이면
+되감기하지 않는다. 구체 경로/지원 복구가 확정되지 않은 단계는 실행하지 않는다.
+[첫 설치 runbook 초안·미검증 범위](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/CA-FIRST-FIELD-INSTALL-RUNBOOK.md).
+
 시작·작업자 변경 화면에서 공용 명단의 ACTIVE 이름을 고른다. 이 PC에서 최근 성공적으로 시작한 사람이 먼저 보이며 직접 입력·신규 등록은 없다. 명단에 없는 사람은 관리자에게 웹 명단 등록을 요청한다. 정상 빈 명단이나 캐시 부재 때는 기존 로컬 이름에서 한시 선택하고 기억한 이름으로 시작할 수 있다. 행이 있지만 모두 중지되었거나 이름 규칙을 통과하는 ACTIVE 행이 없으면 등록 요청 안내만 보인다. 보호 관리자 로그인은 `관리자` 단추로 기존 코드를 확인한다. 설치 등록·장비 권한·관리자 개인 PIN은 기존 절차를 따른다.
 
 연결이 끊겨도 마지막 정상 명단을 사용한다. 명단·캐시가 없으면 `명단을 받지 못해 이 PC에 저장된 이름을 씁니다` 안내와 기존 이름 목록을 표시하며 그 목록도 없으면 등록 요청 안내만 보인다. 손상 캐시 원본은 사용자 config의 `.bad-*`에 보존하고 `roster.last-good.json`으로 복구한다. 조회는 시작·변경 때와 60초마다 배경에서 진행한다. 작업 중 중지를 확인해도 현재 현품표의 완료·보류·재전송·복구는 유지하고 다음 신규 현품표에서 다시 고른다.
