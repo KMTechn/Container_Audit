@@ -4,6 +4,8 @@
 CA의 자료-open 3곳과 restore/reinstall 7곳에 호출을 연결했으며 관련52 PASS와 native
 자료 사용 뒤 거절을 확인했다. 최종 집중+신규307건은305 PASS/2 FAIL; 두 옛 post-data
 복원 기대는 G 결정과 충돌하여 기존 exact 단언을 보존한 시험 범위 조정을 코디에게 물었다.
+같은 판의 다른 build가 이전 signed 호환 하한을 물려받던 helper 결함은 RED로 확인하고
+새 build/더 엄격한 하한과 신뢰 교집합을 기록하도록 두 leaf를 수정했다; 새 바이트 검증 중이다.
 shared 0.3.2/7파일 생성 manifest/lock/bootstrap pin을 채택했으며 새 guarded sink 하나를
 표준 재생성했다. 독립 review·최종 focused/stock과 frozen/실제 GUI 설치 수용은 남아 있다.
 builder version/최소 호환 판 입력과 기존 ES256 signed private manifest 소비는 관련

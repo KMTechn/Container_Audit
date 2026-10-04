@@ -300,3 +300,52 @@ Get-KmtechDataDowngradeDecision @('{literal}') 'v2.0.33' '{APP}' '{SID}' '{BUILD
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["status"] == "UNKNOWN"
     assert parent.read_bytes() == b"preserved"
+def test_equal_version_new_build_retains_stricter_compatibility(tmp_path):
+    identity = {"app_id": APP, "subject_sid": SID}
+    marker = tmp_path / "new-build.json"
+    generation.record_generation(marker, "v2.0.99", build_id="a" * 40,
+        data_compatible_min_version="v2.0.33", compatibility_verified=True, **identity)
+    assert generation.probe_downgrade([marker], "v2.0.99", target_build_id="b" * 40, **identity)["allowed"]
+    updated = generation.record_generation(marker, "v2.0.99", build_id="b" * 40, **identity)
+    assert updated["build_id"] == "b" * 40
+    assert updated["data_compatible_min_version"] == "v2.0.99" and updated["compatibility_verified"] is False
+    assert generation.probe_downgrade([marker], "v2.0.33", target_build_id="c" * 40, **identity)["status"] == "REFUSE"
+    before = marker.read_bytes()
+    generation.record_generation(marker, "v2.0.99", build_id="b" * 40,
+        data_compatible_min_version="v2.0.33", compatibility_verified=True, **identity)
+    assert marker.read_bytes() == before
+    signed = tmp_path / "two-signed-builds.json"
+    generation.record_generation(signed, "v2.0.99", build_id="a" * 40,
+        data_compatible_min_version="v2.0.50", compatibility_verified=True, **identity)
+    updated = generation.record_generation(signed, "v2.0.99", build_id="b" * 40,
+        data_compatible_min_version="v2.0.33", compatibility_verified=True, **identity)
+    assert updated["build_id"] == "b" * 40 and updated["data_compatible_min_version"] == "v2.0.50"
+    assert updated["compatibility_verified"] is True
+
+
+@pytest.mark.parametrize("engine", ["powershell.exe", "pwsh.exe"])
+def test_powershell_equal_version_build_does_not_inherit_floor(tmp_path, engine):
+    helper = str(ROOT / "kmtech_shared/powershell/data_generation.ps1").replace("'", "''")
+    marker = tmp_path / "new-build.json"
+    second = tmp_path / "two-signed-builds.json"
+    literal = lambda path: str(path).replace("'", "''")
+    script = tmp_path / "same-version.ps1"
+    script.write_text(f"""
+$ErrorActionPreference='Stop'
+. '{helper}'
+[void](Write-KmtechDataGeneration '{literal(marker)}' 'v2.0.99' '{APP}' '{SID}' -BuildId ('a'*40) -DataCompatibleMinVersion 'v2.0.33' -CompatibilityVerified $true)
+$updated=Write-KmtechDataGeneration '{literal(marker)}' 'v2.0.99' '{APP}' '{SID}' -BuildId ('b'*40)
+$denied=Get-KmtechDataDowngradeDecision @('{literal(marker)}') 'v2.0.33' '{APP}' '{SID}' ('c'*40)
+$before=[IO.File]::ReadAllText('{literal(marker)}')
+[void](Write-KmtechDataGeneration '{literal(marker)}' 'v2.0.99' '{APP}' '{SID}' -BuildId ('b'*40) -DataCompatibleMinVersion 'v2.0.33' -CompatibilityVerified $true)
+[void](Write-KmtechDataGeneration '{literal(second)}' 'v2.0.99' '{APP}' '{SID}' -BuildId ('a'*40) -DataCompatibleMinVersion 'v2.0.50' -CompatibilityVerified $true)
+$strict=Write-KmtechDataGeneration '{literal(second)}' 'v2.0.99' '{APP}' '{SID}' -BuildId ('b'*40) -DataCompatibleMinVersion 'v2.0.33' -CompatibilityVerified $true
+@{{updated=$updated;denied=$denied.status;same_preserved=($before -ceq [IO.File]::ReadAllText('{literal(marker)}'));strict=$strict}} | ConvertTo-Json -Depth 5 -Compress
+""", encoding="utf-8-sig")
+    result = run_powershell([engine, "-NoProfile", "-NonInteractive", "-File", str(script)])
+    assert result.returncode == 0, result.stderr
+    detail = json.loads(result.stdout)
+    assert detail["updated"]["build_id"] == "b" * 40
+    assert detail["updated"]["data_compatible_min_version"] == "v2.0.99" and detail["updated"]["compatibility_verified"] is False
+    assert detail["denied"] == "REFUSE" and detail["same_preserved"] is True
+    assert detail["strict"]["data_compatible_min_version"] == "v2.0.50" and detail["strict"]["compatibility_verified"] is True

@@ -21,6 +21,9 @@ resident supervisor의 process launch/control 상태 조회는 기록하지 않�
 최종 집중+신규307건은305 PASS/2 FAIL이다. 두 실패는 실제 온보딩으로 자료를 연 뒤
 다른 옛 build로 복원을 허용하던 기대이며 G 결정과 충돌하여 코디 판단을 기다린다.
 새 adapter는 stock builder의 고정 app 목록에도 포함하고 실제 복사 회귀로 검증한다.
+명시 호환으로 허용된 같은 판의 다른 build가 자료를 쓰면 marker에 새 build를 기록하고
+두 선언의 더 엄격한 하한/신뢰 교집합을 유지한다. 이전 build의 넓은 호환을 그대로
+물려주지 않는다. 같은 build와 더 높은 기존 판의 바이트 보존은 유지한다.
 [API·현재 한계](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/HELPER-READY.md).
 
 출시 때 stock builder는 실제 `CURRENT_VERSION`에서 portable manifest의 `version`을
