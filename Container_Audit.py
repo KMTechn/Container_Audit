@@ -1067,6 +1067,7 @@ class ContainerAudit:
     AUDIO_ENABLED_ENV = "CONTAINER_AUDIT_AUDIO_ENABLED"
     EVENT_LOG_CLOSE_JOIN_TIMEOUT_SECONDS = 1.0
     EVENT_LOG_CLOSE_MAX_JOIN_ATTEMPTS = 3
+    LOOP_CLEANUP_TIMEOUT_SECONDS = 5.0
     PREFLIGHT_OFFLINE_RETRY_MS = 30_000
     PREFLIGHT_OFFLINE_WAITING_LIMIT = 20
     # One limit for all central requests a completion waits on (the local
@@ -16155,8 +16156,11 @@ class ContainerAudit:
             )
             self._poll_event_log_notice()
             return
+        self._sound_cleanup_attempted = True
         stop_all_sounds()
+        self._application_destroy_attempted = True
         self.root.destroy()
+        self._application_close_complete = True
 
     def _event_log_outbox(self, log_file_path: str) -> EventLogOutbox:
         store = getattr(self, "_event_log_outbox_instance", None)
@@ -19896,7 +19900,88 @@ class ContainerAudit:
             )
 
     def run(self):
-        self.root.mainloop()
+        try:
+            self.root.mainloop()
+        finally:
+            loop_failed = sys.exc_info()[0] is not None
+            try:
+                self._cleanup_after_mainloop()
+            except BaseException as exc:
+                print(f"화면 종료 정리 오류: {exc.__class__.__name__}")
+                if not loop_failed:
+                    raise
+
+    def _cleanup_after_mainloop(self) -> None:
+        if getattr(self, "_loop_cleanup_attempted", False):
+            return
+        self._loop_cleanup_attempted = True
+        self._loop_cleanup_finished = False
+        errors = []
+        if not getattr(self, "_application_close_complete", False):
+            # Apply the existing Tk-owned result pumps even after mainloop has
+            # returned. No new scans or remote work may be admitted here.
+            deadline = time.monotonic() + self.LOOP_CLEANUP_TIMEOUT_SECONDS
+            self._ui_close_requested = True
+            lanes = [lane for lane in (
+                getattr(self, "_central_transport_lane", None),
+                getattr(self, "_ui_lane", None),
+                getattr(self, "_preflight_hold_writer_instance", None),
+            ) if lane is not None]
+            workers = [getattr(lane, "worker_thread", None) or getattr(lane, "thread", None)
+                       for lane in lanes]
+            for lane in lanes:
+                lane._shutdown_deadline = deadline
+                try:
+                    lane.close_idle()
+                except BaseException as exc:
+                    errors.append(exc)
+            while any(worker.is_alive() for worker in workers) and time.monotonic() < deadline:
+                for lane, worker in zip(lanes, workers):
+                    if not worker.is_alive():
+                        continue
+                    try:
+                        job = getattr(lane, "_pump_job", None)
+                        if job is not None:
+                            self.root.after_cancel(job)
+                        lane._pump()
+                    except BaseException as exc:
+                        if not errors:
+                            errors.append(exc)
+                time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
+            # Original audit/checkpoint/outbox files survive an exhausted
+            # deadline. Never delete them or claim a central ACK at shutdown.
+            log_thread = getattr(self, "log_thread", None)
+            if log_thread is not None and log_thread.is_alive():
+                if not getattr(self, "_event_log_close_requested", False):
+                    self.log_queue.put(None)
+                    self._event_log_close_requested = True
+                log_thread.join(timeout=max(0.0, deadline - time.monotonic()))
+            try:
+                self._cancel_all_jobs()
+            except BaseException as exc:
+                errors.append(exc)
+            if not getattr(self, "_application_close_complete", False):
+                if not getattr(self, "_sound_cleanup_attempted", False):
+                    self._sound_cleanup_attempted = True
+                    try:
+                        stop_all_sounds()
+                    except BaseException as exc:
+                        errors.append(exc)
+            if not getattr(self, "_application_destroy_attempted", False):
+                self._application_destroy_attempted = True
+                try:
+                    self.root.destroy()
+                    self._application_close_complete = True
+                except BaseException as exc:
+                    errors.append(exc)
+        # If any daemon still writes, retain the native handle until OS exit;
+        # releasing it now would permit another writer in the same data root.
+        self._loop_cleanup_finished = not any(
+            thread is not threading.current_thread() and thread.is_alive()
+            for thread in threading.enumerate()
+        )
+        if errors:
+            raise errors[0]
 
     # ===================================================================
     # 현품표 교체 (완료된 작업 대상) 관련 기능들
@@ -21360,7 +21445,8 @@ def main(argv: list[str] | None = None):
         app.run()
         return 0
     finally:
-        instance_lease.release()
+        if getattr(app, "_loop_cleanup_finished", True):
+            instance_lease.release()
 
 
 @writer_sink("gui_startup", probe_only=True)

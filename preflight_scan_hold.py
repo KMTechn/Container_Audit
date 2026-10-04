@@ -11,6 +11,7 @@ from pathlib import Path
 import queue
 import re
 import threading
+import time
 from typing import Any, Callable, Mapping
 
 from storage_utils import atomic_write_json
@@ -614,7 +615,9 @@ class PreflightScanHoldWriter:
         if self._closed:
             return True
         self.tasks.put_nowait(self._stop)
-        self.thread.join(timeout=2.0)
+        deadline = getattr(self, "_shutdown_deadline", None)
+        timeout = 2.0 if deadline is None else max(0.0, min(2.0, deadline - time.monotonic()))
+        self.thread.join(timeout=timeout)
         if self.thread.is_alive():
             return False
         self._closed = True
