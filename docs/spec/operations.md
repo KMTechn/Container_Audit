@@ -5,11 +5,12 @@
 서명 검증된 최소 호환 판을 기록한다. 기록 없음은 ALLOW, 손상·읽기 실패·판 비교
 불가·같은 판 다른 build(서명된 명시 호환 없음)는 UNKNOWN 거절이다. 원자 기록 뒤 readback을 확인하며 Python 3.12.10·PS5.1·PS7 격리 함수 시험 27 PASS는
 helper 근거다. **CA 실제 입구의 headless 회귀는 진행 중**이며 GUI/relay/onboarding
-4곳과 코드 restore/reinstall 7곳에 호출을 연결했다. shared 선언 확대는
+3곳과 코드 restore/reinstall 7곳에 호출을 연결했다. shared 선언 확대는
 허용되었다. G-DECISIONS대로 실제 자료를 처음 여는 경계의 기존 admission 아래에서
 자료 root와 기존 control root/SID에 기록하며 launch 직전에 미리 기록하지 않는다.
 GUI는 singleton 확인/온보딩 코드 검증 뒤 catalog 자료 직전, onboarding은 코드
-무결성 검증 뒤 실제 상태 검사 직전, resident relay는 실제 cycle 직전에 기록한다.
+무결성 검증 뒤 실제 상태 검사 직전, relay는 raw runner의 첫 queue/profile IO 직전에 기록한다.
+resident supervisor의 process launch/control 상태 조회는 기록하지 않고 child의 고정 거절 사유를 전달한다.
 자료 root override가 기존 admission control root를 옮기지 않으며 중복 GUI·코드 검증
 실패·cycle에 도달하지 않은 relay는 새 기록을 남기지 않는다. portable Python entrypoint를
 기존 exact bootstrap inventory로 검증하고 frozen 기본 EXE 검증은 유지한다.
@@ -37,7 +38,8 @@ floor나 CPython Authenticode만으로 호환을 허가하지 않으며 지원 p
 자동시작 및 세대 marker/control preimage를 같은 시점에 백업하고 바이트를 대조한다.
 백업 뒤 업무·중앙 요청/ACK 변화 0을 확인하기 전에는 되감기 복구를 선택하지 않는다.
 새 판 기동 뒤 실패는 기본 새 판 유지/수정판 복구이며, 관리자 수동 되감기는 옛 코드와
-백업 자료·등록·control preimage를 함께 복원한다. 이후 업무가 있거나 상태 UNKNOWN이면
+백업 자료·등록·marker preimage를 함께 복원하되 현재 유지보수 session/receipt 권한은 유지한다.
+기존 control 폴더 전체를 덮어써 현재 권한을 되감지 않는다. 이후 업무가 있거나 상태 UNKNOWN이면
 되감기하지 않는다. 구체 경로/지원 복구가 확정되지 않은 단계는 실행하지 않는다.
 [첫 설치 runbook 초안·미검증 범위](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/CA-FIRST-FIELD-INSTALL-RUNBOOK.md).
 

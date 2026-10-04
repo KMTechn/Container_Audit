@@ -25,7 +25,7 @@ from storage_policy import (
     validate_existing_data_root,
 )
 from writer_session_fence import WriterFenceError, writer_admission, writer_sink
-from data_generation_guard import DataGenerationBlocked, record_before_data_open
+from kmtech_shared import data_generation as generation
 
 
 USER_RELAY_MODE = "--container-audit-user-relay"
@@ -379,12 +379,9 @@ def _runtime_cycle(
     app_root: Path,
     direct_sync_root: Path,
     scan_source_dir: Path,
-    data_root: Path | None = None,
 ) -> dict[str, Any]:
-    try:
-        record_before_data_open(data_root if data_root is not None else direct_sync_root)
-    except DataGenerationBlocked as exc:
-        return {"status": "runtime_error", "error_code": exc.decision["message_key"], "error_message": str(exc)}
+    # Launch/control observation alone does not open user data. The raw runner
+    # records under its existing admission immediately before queue/profile IO.
     process_result = run_session_direct_sync_once(
         app_root=app_root,
         direct_sync_root=direct_sync_root,
@@ -399,6 +396,10 @@ def _runtime_cycle(
     relay_status = (
         str((runtime_status or {}).get("status") or "").strip() or "UNKNOWN"
     )
+    error_code = (runtime_status or {}).get("error_code")
+    if error_code in {"data_generation_unknown", "data_generation_downgrade_refused"}:
+        return {"status": "runtime_error", "error_code": error_code,
+                "error_message": generation.UNKNOWN_MESSAGE if error_code == "data_generation_unknown" else generation.REFUSAL_MESSAGE}
     return {
         "status": relay_status if process_status == "PASS" else process_status,
         "process_status": process_status,
@@ -519,7 +520,6 @@ def main(argv: list[str] | None = None) -> int:
                 app_root=app_root,
                 direct_sync_root=direct_sync_root,
                 scan_source_dir=scan_source_dir,
-                data_root=storage.data_root,
             ),
             status_path=user_relay_status_path(direct_sync_root),
             interval_seconds=args.interval_seconds,

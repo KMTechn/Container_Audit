@@ -767,6 +767,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.enqueue_source_file and args.scan_source_dir:
         parser.error("--enqueue-source-file and --scan-source-dir are mutually exclusive")
 
+    config = _build_config(args)
     try:
         # Explicit raw queue roots may differ from the GUI root; the shared SID
         # control slot ensures installer probes also observe this process.
@@ -776,7 +777,6 @@ def main(argv: list[str] | None = None) -> int:
         _record_hosted_relay_failure(list(argv or sys.argv[1:]), exc)
         print(str(exc))
         return 1
-    config = _build_config(args)
     if args.require_runtime_lease_before_scan:
         preflight_status = run_relay_once(config)
         preflight_lease = preflight_status.get("runtime_lease")

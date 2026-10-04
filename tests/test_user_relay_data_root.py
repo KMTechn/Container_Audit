@@ -28,8 +28,16 @@ def test_onboarding_preserves_custom_root_in_autostart_and_restart(tmp_path, mon
     launches = []
     monkeypatch.setattr(user_relay, "_registry_set", lambda value: stored.update(value=value))
     monkeypatch.setattr(user_relay, "_registry_get", lambda: stored.get("value", ""))
-    monkeypatch.setattr(user_relay.subprocess, "Popen", lambda command, **kwargs:
-                        launches.append(command) or SimpleNamespace(pid=123))
+    original_popen = subprocess.Popen
+
+    def launch(command, **kwargs):
+        # Source release identity uses read-only Git; isolate only OS relay launch.
+        if command[0] == "git":
+            return original_popen(command, **kwargs)
+        launches.append(command)
+        return SimpleNamespace(pid=123)
+
+    monkeypatch.setattr(user_relay.subprocess, "Popen", launch)
 
     def register(paths):
         _ready_state(paths)

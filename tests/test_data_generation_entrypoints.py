@@ -69,21 +69,45 @@ def test_onboarding_refusal_prevents_state_or_ledger_open(tmp_path, monkeypatch)
     assert report["error_code"] == "data_generation_unknown"
 
 
-def test_persistent_relay_refusal_keeps_runtime_unopened(tmp_path, monkeypatch):
+def test_persistent_relay_reports_child_refusal_without_launch_time_marker(tmp_path, monkeypatch):
     import user_relay as relay
-    from data_generation_guard import DataGenerationBlocked
     from kmtech_shared import data_generation as generation
 
     data = tmp_path / "data"
     data.mkdir()
     calls = []
-    monkeypatch.setattr(relay, "record_before_data_open", lambda *args: (_ for _ in ()).throw(DataGenerationBlocked(
-        {"status": "REFUSE", "allowed": False, "message_key": "data_generation_downgrade_refused", "message": generation.REFUSAL_MESSAGE})))
-    monkeypatch.setattr(relay, "run_session_direct_sync_once", lambda *args, **kwargs: calls.append(True))
+    def child(**kwargs):
+        calls.append(True)
+        status = kwargs["direct_sync_root"] / "status/direct_sync_relay_status.json"
+        status.parent.mkdir(parents=True, exist_ok=True)
+        status.write_text(json.dumps({"status": "runtime_error", "error_code": "data_generation_downgrade_refused"}))
+        return {"status": "FAIL", "returncode": 1}
+
+    monkeypatch.setattr(relay, "run_session_direct_sync_once", child)
     assert relay.main(["--data-root", str(data), "--once"]) == 1
-    assert not calls
+    assert calls == [True]
+    assert not (data / "data-generation.json").exists()
     report = json.loads((data / "direct_sync/status/container_audit_user_relay.json").read_bytes())
     assert "옛 판으로 되돌릴 수 없습니다" in report["last_cycle"]["error_message"]
+
+
+def test_raw_relay_refusal_prevents_queue_open(tmp_path, monkeypatch):
+    from tools import direct_sync_relay_runner as runner
+    from data_generation_guard import DataGenerationBlocked
+    from kmtech_shared import data_generation as generation
+
+    opened = []
+    monkeypatch.setattr(runner, "record_before_data_open", lambda *args: (_ for _ in ()).throw(DataGenerationBlocked(
+        {"status": "UNKNOWN", "allowed": False, "message_key": "data_generation_unknown", "message": generation.UNKNOWN_MESSAGE})))
+    monkeypatch.setattr(runner, "run_relay_once", lambda *args: opened.append(True))
+    arguments = []
+    for option, leaf in (("db-path", "queue.sqlite3"), ("spool-dir", "spool"),
+                         ("producer-manifest-path", "producer.json"), ("credential-path", "credential.bin"),
+                         ("upload-status-dir", "uploads"), ("runtime-status-path", "status.json"), ("log-path", "log.jsonl")):
+        arguments.extend(["--" + option, str(tmp_path / leaf)])
+    assert runner.main(arguments) == 1
+    assert not opened and not (tmp_path / "queue.sqlite3").exists()
+    assert json.loads((tmp_path / "status.json").read_bytes())["error_code"] == "data_generation_unknown"
 
 
 def test_gui_duplicate_lease_does_not_record_unused_generation(tmp_path, monkeypatch):
