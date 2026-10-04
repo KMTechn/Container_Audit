@@ -162,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
-        from data_generation_guard import DataGenerationBlocked, record_before_owner_paths, resolve_owner_path
+        from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, record_before_owner_paths, resolve_owner_path
         from storage_policy import build_container_audit_storage_paths
         with writer_admission("relay_operator_report"):
             storage = build_container_audit_storage_paths(application_path=str(ROOT))
@@ -172,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
                     path = resolve_owner_path(value)
                     setattr(args, name, str(path))
                     (directories if name.endswith('_root') else files).append(path)
+            probe_before_owner_paths(storage.data_root, file_paths=files, directory_paths=directories)
             prepared_credential = None
             if args.command == "restore-spool" and Path(args.credential_path).is_file():
                 prepared_credential = prepare_credential_config(args.credential_path, data_root=storage.data_root)

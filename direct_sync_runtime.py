@@ -910,7 +910,8 @@ def enqueue_completed_source_file(
         )
         return _append_runtime_event_with_status(config, "enqueue_blocked_disk_pressure", status)
     try:
-        creds = credentials or load_credentials_from_json(config.credential_path, prepared_config=config.prepared_credential)
+        creds = credentials or (load_credentials_from_json(config.credential_path, prepared_config=config.prepared_credential)
+                                if config.prepared_credential is not None else load_credentials_from_json(config.credential_path))
         row = enqueue_source_file_for_relay(
             db_path=config.db_path,
             spool_dir=config.spool_dir,
@@ -1142,7 +1143,8 @@ def run_relay_once(
     runtime_lease: dict[str, Any] = {}
     try:
         reset_count = reset_stale_relay_leases(db_path=config.db_path, now=cycle_now)
-        creds = credentials or load_credentials_from_json(config.credential_path, prepared_config=config.prepared_credential)
+        creds = credentials or (load_credentials_from_json(config.credential_path, prepared_config=config.prepared_credential)
+                                if config.prepared_credential is not None else load_credentials_from_json(config.credential_path))
         source_identity = _producer_manifest_identity(config)
         if source_identity.get("status") != "PASS":
             raise DirectSyncPushError(

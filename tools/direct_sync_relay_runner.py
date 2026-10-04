@@ -28,7 +28,7 @@ from direct_sync_runtime import (  # noqa: E402
     run_relay_once,
 )
 from writer_session_fence import writer_sink  # noqa: E402
-from data_generation_guard import DataGenerationBlocked, record_before_owner_paths  # noqa: E402
+from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, record_before_owner_paths  # noqa: E402
 
 
 ALLOWED_SOURCE_PREFIX = "이적작업이벤트로그_"
@@ -781,6 +781,7 @@ def main(argv: list[str] | None = None) -> int:
     if profile_path.is_file():
         files.append(profile_path)
     try:
+        probe_before_owner_paths(Path(args.db_path).parent, file_paths=files, directory_paths=directories)
         if Path(args.credential_path).is_file():
             args.prepared_credential = prepare_credential_config(args.credential_path, data_root=Path(args.db_path).parent)
         config = _build_config(args)
