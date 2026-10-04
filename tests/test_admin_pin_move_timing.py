@@ -23,6 +23,36 @@ ACTIONS = (
 )
 
 
+@pytest.mark.parametrize("blocker", ("owned_hold", "unknown", "other_intent"))
+def test_changed_tray_reapproval_preserves_independent_hold_guards(monkeypatch, tmp_path, blocker):
+    app, server, _audits, original, label, invoke = _business_case(
+        monkeypatch, tmp_path, "CA.TRAY_HOLD")
+    mutated = []
+    def transport(path, body, headers):
+        result = server(path, body, headers)
+        if path.endswith("/redemptions") and not mutated:
+            original.write_bytes(original.read_bytes() + b"\n")
+            mutated.append(True)
+        return result
+    monkeypatch.setattr(app._admin_pin_client, "transport", transport)
+    assert invoke() is False
+    preserved = file_sha256(original)
+    store = app._admin_pin_store()
+    intent = store.list_pending()[0]
+    assert intent["state"] == "TARGET_CHANGED"
+    if blocker == "owned_hold":
+        hold = app._preflight_hold_store(new_work=True)
+        hold.start(worker=app.worker_name, master_raw=label, scan_epoch=1)
+        hold.append("PRODUCT-A")
+    elif blocker == "unknown":
+        store.transition(intent, "UNKNOWN", reason="EFFECT_UNVERIFIED")
+    else:
+        store.write(dict(intent, operation_key=str(uuid.uuid4()), action="CA.PAIR_RETRY"))
+    assert invoke() is False
+    assert file_sha256(original) == preserved
+    assert len([path for path, _ in server.calls if path.endswith("/redemptions")]) == 1
+
+
 def _approval(app, action, original, target_id):
     return app._admin_pin_approval_for(
         action, target_id, lambda: {"source_sha256": file_sha256(original)},
@@ -180,6 +210,9 @@ def test_changed_bytes_need_new_pin_at_each_boundary(
     assert "ADMIN_PIN_APPLIED" not in audits
     assert len([path for path, _ in server.calls if path.endswith("/redemptions")]) == 1
     app._recheck_admin_pin_intents()
+    # Normal scanner mutations still wait for the changed target's new approval.
+    if action == "CA.TRAY_HOLD":
+        assert app._preflight_context_blocks_mutation()
     assert invoke() is True
     assert app._admin_pin_store().read(intent["operation_key"])["state"] == "SUPERSEDED"
     applied = [app._admin_pin_store().read(str(uuid.UUID(hex=path.stem[-32:])))

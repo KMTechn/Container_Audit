@@ -1838,14 +1838,16 @@ class ContainerAudit:
             / str(getattr(self, "CURRENT_TRAY_STATE_FILE", "") or "current.json"),
         )
 
-    def _paired_preflight_blocks_label(self, master: str, *, restoring_paths: Sequence[Path] = ()) -> bool:
+    def _paired_preflight_blocks_label(self, master: str, *, restoring_paths: Sequence[Path] = (),
+                                      retry_intent_paths: Sequence[Path] = ()) -> bool:
         try:
             return any(row.binds(master) for row in self._parked_store().enumerate_key_evidence(
                 pair_store=self._paired_preflight_store(),
             ) if row.kind in {"pair", "stale", "stale_marker", "stale_current", "atomic_temp", "audit", "pin_intent",
                                "precheck_pin", "preflight_quarantine", "directory_error"}
                 and not (row.kind in {"precheck_pin", "preflight_quarantine"}
-                         and row.path.resolve() in restoring_paths))
+                         and row.path.resolve() in restoring_paths)
+                and not (row.kind == "pin_intent" and row.path.resolve() in retry_intent_paths))
         except Exception:
             # A failure to enumerate the shared recovery directory cannot be
             # assigned to one pair; keep the guard closed until it is readable.
@@ -2320,7 +2322,8 @@ class ContainerAudit:
         except (AttributeError, tk.TclError):
             pass
 
-    def _preflight_label_is_held(self, master_label: str) -> bool:
+    def _preflight_label_is_held(self, master_label: str, *,
+                               retry_intent_paths: Sequence[Path] = ()) -> bool:
         """A hold belongs to the label/bundle, independently of its worker slot."""
         if not master_label:
             return False
@@ -2342,7 +2345,8 @@ class ContainerAudit:
                     # Different labels remain independent even when their
                     # inspection input anchor is shared.
                     break
-        return self._paired_preflight_blocks_label(master)
+        return (self._paired_preflight_blocks_label(master, retry_intent_paths=retry_intent_paths)
+                if retry_intent_paths else self._paired_preflight_blocks_label(master))
 
     def _transfer_transport_guard(self, master_label: str) -> Callable[[], bool]:
         actor = str(getattr(self, "worker_name", "") or "").strip()
@@ -2370,7 +2374,8 @@ class ContainerAudit:
                     return False
         return can_send
 
-    def _preflight_context_blocks_mutation(self, master_label: str = "") -> bool:
+    def _preflight_context_blocks_mutation(self, master_label: str = "", *,
+                                         retry_intent_paths: Sequence[Path] = ()) -> bool:
         snapshot = getattr(self, "_preflight_hold_snapshot", None)
         memory_gate = bool(
             getattr(self, "_master_preflight_pending", False)
@@ -2397,7 +2402,9 @@ class ContainerAudit:
             labels = (master_label, str(getattr(tray, "master_label_code", "") or ""),
                       str(getattr(tray, "canonical_input_tag_qr", "") or ""),
                       str(getattr(tray, "active_label_qr_payload", "") or ""))
-            if any(self._preflight_label_is_held(label) for label in labels if label):
+            if any((self._preflight_label_is_held(label, retry_intent_paths=retry_intent_paths)
+                    if retry_intent_paths else self._preflight_label_is_held(label))
+                   for label in labels if label):
                 return True
             paired = self._paired_preflight_store()
             return paired.unidentified_pending() or paired.unidentified_stale()
@@ -16323,9 +16330,24 @@ class ContainerAudit:
             exchange is not None
             and (exchange.status != "ACKED" or exchange.local_apply_status != "APPLIED")
         )
+        retry_intent_paths = ()
+        if master_label:
+            try:
+                target_id = hashlib.sha256(
+                    canonical_master_label_key(master_label).encode("utf-8")).hexdigest()
+                store = self._admin_pin_store()
+                retry_intent_paths = tuple(
+                    store.path(row["operation_key"]).resolve()
+                    for row in store.pending("CA.TRAY_HOLD", target_id)
+                    if row.get("state") == "TARGET_CHANGED")
+            except (OSError, ValueError, TypeError, KeyError):
+                pass  # The ordinary evidence guard stays closed on unreadable intents.
+        preflight_blocked = bool(master_label) and (
+            self._preflight_context_blocks_mutation(retry_intent_paths=retry_intent_paths)
+            if retry_intent_paths else self._preflight_context_blocks_mutation())
         if (
             not master_label
-            or self._preflight_context_blocks_mutation()
+            or preflight_blocked
             or (lane is not None and lane.is_busy())
             or not (self._active_blocking_completion_snapshot() or exchange_unsettled)
         ):

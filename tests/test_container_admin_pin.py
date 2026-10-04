@@ -999,7 +999,7 @@ def test_changed_unsettled_tray_retries_without_overwriting_active_bytes(monkeyp
     app._save_tray_state_snapshot = lambda saved: atomic_write_json(current, saved) or True
     app._active_blocking_completion_snapshot = lambda: {"blocked": True}
     app._current_transfer_member_exchange_attempt = lambda: None
-    app._preflight_context_blocks_mutation = lambda: False
+    app._preflight_context_blocks_mutation = lambda *, retry_intent_paths=(): False
     presenter = SimpleNamespace(state=SimpleNamespace(completion=None, is_blocking=True))
     presenter.clear_completion = lambda: None
     presenter.acknowledge = lambda: None
