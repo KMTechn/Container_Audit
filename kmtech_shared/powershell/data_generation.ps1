@@ -27,6 +27,9 @@ function Get-KmtechDataLiteralPath([string]$Path) {
             if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
                 throw 'Data generation path contains a reparse point.'
             }
+            if ($component -cne $full -and ($attributes -band [IO.FileAttributes]::Directory) -eq 0) {
+                throw 'Data generation ancestor is not a directory.'
+            }
         }
         catch [IO.FileNotFoundException] { }
         catch [IO.DirectoryNotFoundException] { }

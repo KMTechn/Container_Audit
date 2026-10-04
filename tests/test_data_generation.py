@@ -92,6 +92,13 @@ def test_read_error_is_unknown_and_original_is_not_modified(tmp_path, monkeypatc
     assert path.read_bytes() == before
 
 
+def test_file_ancestor_is_unknown_not_an_absent_marker(tmp_path):
+    parent = tmp_path / "file-parent"
+    parent.write_bytes(b"preserved")
+    assert probe([parent / "marker.json"])["status"] == "UNKNOWN"
+    assert parent.read_bytes() == b"preserved"
+
+
 def test_atomic_failure_preserves_old_marker_and_high_water_never_decreases(tmp_path, monkeypatch):
     path = tmp_path / "marker.json"
     record(path, "v2.0.98")
@@ -237,3 +244,21 @@ catch {{ $rejected=$_.Exception.Message -ceq 'Data generation durable readback d
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["rejected"] is True
     assert json.loads(marker.read_bytes())["version"] == "v2.0.99"
+
+
+@pytest.mark.parametrize("engine", ["powershell.exe", "pwsh.exe"])
+def test_powershell_file_ancestor_is_unknown_not_absent(tmp_path, engine):
+    parent = tmp_path / "file-parent"
+    parent.write_bytes(b"preserved")
+    helper = str(ROOT / "kmtech_shared/powershell/data_generation.ps1").replace("'", "''")
+    literal = str(parent / "marker.json").replace("'", "''")
+    driver = tmp_path / "ancestor.ps1"
+    driver.write_text(f"""
+$ErrorActionPreference='Stop'
+. '{helper}'
+Get-KmtechDataDowngradeDecision @('{literal}') 'v2.0.33' '{APP}' '{SID}' | ConvertTo-Json -Compress
+""", encoding="utf-8-sig")
+    result = run_powershell([engine, "-NoProfile", "-NonInteractive", "-File", str(driver)])
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["status"] == "UNKNOWN"
+    assert parent.read_bytes() == b"preserved"

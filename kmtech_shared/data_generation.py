@@ -56,6 +56,8 @@ def _literal_path(path: Path | str) -> Path:
             continue
         if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
             raise DataGenerationError("data generation path contains a reparse point")
+        if component != path and not stat.S_ISDIR(info.st_mode):
+            raise DataGenerationError("data generation ancestor is not a directory")
     return path
 
 
