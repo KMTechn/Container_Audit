@@ -1936,6 +1936,178 @@ function Read-BootstrapRollbackContinuationAuthority($Record,[string]$JournalPat
     return [pscustomobject]@{tuple=$link.authority;link_sha256=$sha;owner_process_id=[int]$link.owner_process_id;owner_started_at_utc=[string]$link.owner_started_at_utc}
 }
 
+function ConvertFrom-BootstrapLifecycleJsonNode([Xml.XmlElement]$Node) {
+    switch -CaseSensitive ($Node.GetAttribute('type')) {
+        'object' {
+            $value=[Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+            foreach($child in $Node.ChildNodes){
+                if($child -isnot [Xml.XmlElement]){throw 'lifecycle_json_invalid'}
+                $key=if($child.NamespaceURI -ceq 'item'){$child.GetAttribute('item')}else{$child.LocalName}
+                if($value.ContainsKey($key)){throw 'lifecycle_json_duplicate_key'}
+                $value.Add($key,(ConvertFrom-BootstrapLifecycleJsonNode $child))
+            }
+            return ,$value
+        }
+        'array' {
+            $value=[Collections.Generic.List[object]]::new()
+            foreach($child in $Node.ChildNodes){$value.Add((ConvertFrom-BootstrapLifecycleJsonNode $child))}
+            return ,$value.ToArray()
+        }
+        'string' { return [string]$Node.InnerText }
+        'boolean' { return $Node.InnerText -ceq 'true' }
+        'number' {
+            if($Node.InnerText -cmatch '^-?[0-9]+$'){return [Numerics.BigInteger]::Parse($Node.InnerText,[Globalization.CultureInfo]::InvariantCulture)}
+            return [double]::Parse($Node.InnerText,[Globalization.CultureInfo]::InvariantCulture)
+        }
+        'null' { return $null }
+        default { throw 'lifecycle_json_invalid' }
+    }
+}
+
+function Read-BootstrapLifecycleJson([string]$Path) {
+    Assert-BootstrapNoReparsePoint $Path 'lifecycle record' -PathOnly
+    if((Get-Item -LiteralPath $Path).Length -gt 1048576){throw 'lifecycle_json_oversized'}
+    $raw=[IO.File]::ReadAllBytes($Path)
+    if($raw.Length -gt 1048576){throw 'lifecycle_json_oversized'}
+    $reader=[System.Runtime.Serialization.Json.JsonReaderWriterFactory, System.Runtime.Serialization, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089]::CreateJsonReader($raw,[Xml.XmlDictionaryReaderQuotas]::Max)
+    try{
+        $document=[Xml.XmlDocument]::new();$document.Load($reader)
+        $value=ConvertFrom-BootstrapLifecycleJsonNode $document.DocumentElement
+        if($value -isnot [Collections.Generic.Dictionary[string,object]]){throw 'lifecycle_json_object_required'}
+        return ,$value
+    }finally{$reader.Dispose()}
+}
+
+function Test-BootstrapLifecycleJsonEqual($Left,$Right) {
+    if($null -eq $Left -or $null -eq $Right){return $null -eq $Left -and $null -eq $Right}
+    if($Left -is [Collections.Generic.Dictionary[string,object]]){
+        if($Right -isnot [Collections.Generic.Dictionary[string,object]] -or $Left.Count -ne $Right.Count){return $false}
+        foreach($key in $Left.Keys){if(-not $Right.ContainsKey($key) -or -not(Test-BootstrapLifecycleJsonEqual $Left[$key] $Right[$key])){return $false}}
+        return $true
+    }
+    if($Left -is [array]){
+        if($Right -isnot [array] -or $Left.Count -ne $Right.Count){return $false}
+        for($index=0;$index -lt $Left.Count;$index++){if(-not(Test-BootstrapLifecycleJsonEqual $Left[$index] $Right[$index])){return $false}}
+        return $true
+    }
+    if($Left -is [string]){return $Right -is [string] -and $Left -ceq $Right}
+    if($Right -is [string] -or $Right -is [array] -or $Right -is [Collections.Generic.Dictionary[string,object]]){return $false}
+    if($Left -is [Numerics.BigInteger] -and $Right -is [double]){
+        return -not [double]::IsInfinity($Right) -and -not [double]::IsNaN($Right) -and [Math]::Truncate($Right) -eq $Right -and $Left.Equals([Numerics.BigInteger]$Right)
+    }
+    if($Right -is [Numerics.BigInteger] -and $Left -is [double]){return Test-BootstrapLifecycleJsonEqual $Right $Left}
+    return $Left -eq $Right
+}
+
+function Get-BootstrapSupportedLifecycleContext([string]$Root,[string]$Operation='inspect',[string]$ExpectedFromCommit='') {
+    # Read-only counterpart of auto_update.resolve_lifecycle_context, called
+    # through the existing byte-pinned bootstrap library before PlanOnly.
+    if($Operation -cnotin @('inspect','install','register','uninstall','user_remove')){throw 'lifecycle_operation_invalid'}
+    $rootFull=[IO.Path]::GetFullPath($Root)
+    $fixed=Join-Path $rootFull 'current';$control=Join-Path $rootFull 'update-control'
+    if($Operation -cin @('uninstall','user_remove')){
+        return [pscustomobject]@{status='PASS';lifecycle_state='REMOVAL_READY';fixed_root=$fixed;owner_app_root=(Join-Path $fixed 'app');active_code_root=$null;active_app_root=$null;from_commit=$null}
+    }
+    try {
+        foreach($path in @($rootFull,$fixed,$control,(Join-Path $rootFull 'versions'))){
+            $existing=$path
+            while(-not(Test-Path -LiteralPath $existing)){
+                $parent=Split-Path -Parent $existing
+                if(-not $parent -or $parent -ceq $existing){throw 'lifecycle_namespace_parent_unavailable'}
+                $existing=$parent
+            }
+            Assert-BootstrapNoReparsePoint $existing 'lifecycle namespace' -PathOnly
+            if((Test-Path -LiteralPath $path) -and -not(Test-Path -LiteralPath $path -PathType Container)){throw 'lifecycle_owned_namespace_collision'}
+        }
+        if($env:CONTAINER_AUDIT_DATA_ROOT){
+            $data=[IO.Path]::GetFullPath($env:CONTAINER_AUDIT_DATA_ROOT).TrimEnd('\')
+            foreach($reserved in @($fixed,$control,(Join-Path $rootFull 'versions'),(Join-Path $rootFull 'removal-evidence'))){
+                if($data.Equals($reserved,[StringComparison]::OrdinalIgnoreCase) -or
+                    $data.StartsWith($reserved+'\',[StringComparison]::OrdinalIgnoreCase) -or
+                    $reserved.StartsWith($data+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'lifecycle_data_namespace_collision'}
+            }
+        }
+        $records=@('policy.json','active.json','transition.json'|ForEach-Object {Join-Path $control $_})
+        $present=@($records|ForEach-Object {Test-Path -LiteralPath $_})
+        $managed=$present -contains $true
+        if(-not(Test-Path -LiteralPath $fixed)){
+            if($managed){throw 'lifecycle_removed_control_remains'}
+            if($Operation -ceq 'register'){throw 'lifecycle_register_requires_installed_code'}
+            foreach($task in @(Get-ScheduledTask -ErrorAction Stop)){
+                if([string]$task.TaskName -cin @('direct-sync-relay-container-audit','container-audit-isolated-qualification-authority')){throw 'lifecycle_removed_tasks_remain_or_unknown'}
+                if([string]$task.TaskName -cmatch '^KMTech\.ContainerAudit\.StartupUpdate\.[0-9a-f]{24}$'){
+                    [xml]$taskXml=Export-ScheduledTask -TaskName ([string]$task.TaskName) -TaskPath ([string]$task.TaskPath) -ErrorAction Stop
+                    foreach($action in @($taskXml.Task.Actions.Exec)){
+                        if(([string]$action.Arguments).IndexOf($fixed,[StringComparison]::OrdinalIgnoreCase) -ge 0){throw 'lifecycle_removed_tasks_remain_or_unknown'}
+                    }
+                }
+            }
+            return [pscustomobject]@{status='PASS';lifecycle_state='REMOVED';fixed_root=$fixed;owner_app_root=(Join-Path $fixed 'app');active_code_root=$null;active_app_root=$null;from_commit=$null}
+        }
+        $identity=Get-BootstrapReplacementTreeIdentity $fixed $fixed
+        if([string]$identity.owner_sid -cne 'S-1-5-32-544' -or $identity.access_rules_protected -isnot [bool] -or -not $identity.access_rules_protected){throw 'lifecycle_stock_protection_invalid'}
+        if(-not(Test-Path -LiteralPath (Join-Path $fixed 'runtime\pythonw.exe') -PathType Leaf) -or
+            -not(Test-Path -LiteralPath (Join-Path $fixed 'app\main.py') -PathType Leaf) -or
+            (Test-Path -LiteralPath (Join-Path $fixed 'Container_Audit.exe') -PathType Leaf)){throw 'lifecycle_stock_layout_invalid'}
+        $owner=Read-BootstrapLifecycleJson (Join-Path $fixed 'portable-manifest.json')
+        if($owner['schema'] -cne 'container-audit-portable-tree-v1' -or
+            $owner['entrypoint'] -cne 'runtime/pythonw.exe app/main.py' -or
+            $owner['source_commit'] -isnot [string] -or $owner['source_commit'] -cnotmatch '^[0-9a-f]{40}$'){throw 'lifecycle_stock_manifest_invalid'}
+        $ownerSha=$owner['source_commit'];$activeSha=$ownerSha;$activeRoot=$fixed
+        if($managed){
+            if($present -contains $false){throw 'lifecycle_control_incomplete'}
+            $policy,$pointer,$state=@($records|ForEach-Object {Read-BootstrapLifecycleJson $_})
+            if($policy['schema'] -cne 'container-audit-startup-update-policy-v1' -or
+                $pointer['schema'] -cne 'container-audit-startup-update-v1' -or
+                $state['schema'] -cne 'container-audit-startup-update-v1' -or
+                $state['phase'] -cnotin @('CONFIRMED','DEFERRED','ROLLED_BACK')){throw 'lifecycle_transition_requires_recovery'}
+            $activeSha=$pointer['sha']
+            if($activeSha -isnot [string] -or $activeSha -cnotmatch '^[0-9a-f]{40}$'){throw 'lifecycle_active_manifest_mismatch'}
+            if(($state['phase'] -ceq 'CONFIRMED' -and $state['candidate_sha'] -cne $activeSha) -or
+                ($state['phase'] -ceq 'ROLLED_BACK' -and $state['previous_sha'] -cne $activeSha)){throw 'lifecycle_pointer_mismatch'}
+            $activeRoot=Join-Path (Join-Path $rootFull 'versions') $activeSha
+            $activeIdentity=Get-BootstrapReplacementTreeIdentity $activeRoot $activeRoot
+            if([string]$activeIdentity.owner_sid -cne 'S-1-5-32-544' -or $activeIdentity.access_rules_protected -isnot [bool] -or -not $activeIdentity.access_rules_protected){throw 'lifecycle_stock_protection_invalid'}
+            if(-not(Test-Path -LiteralPath (Join-Path $activeRoot 'runtime\pythonw.exe') -PathType Leaf) -or
+                -not(Test-Path -LiteralPath (Join-Path $activeRoot 'app\main.py') -PathType Leaf) -or
+                (Test-Path -LiteralPath (Join-Path $activeRoot 'Container_Audit.exe') -PathType Leaf)){throw 'lifecycle_stock_layout_invalid'}
+            $actual=Read-BootstrapLifecycleJson (Join-Path $activeRoot 'portable-manifest.json')
+            if($actual['schema'] -cne $owner['schema'] -or $actual['entrypoint'] -cne 'runtime/pythonw.exe app/main.py' -or
+                $actual['source_commit'] -cne $activeSha){throw 'lifecycle_active_manifest_mismatch'}
+            $fixedKey=Join-Path $fixed 'app\update-manifest-key-config.json';$activeKey=Join-Path $activeRoot 'app\update-manifest-key-config.json'
+            Assert-BootstrapNoReparsePoint $fixedKey 'lifecycle trust configuration';Assert-BootstrapNoReparsePoint $activeKey 'lifecycle trust configuration'
+            if((Get-FileSha256 $fixedKey) -cne (Get-FileSha256 $activeKey)){throw 'lifecycle_active_trust_key_mismatch'}
+            $sid=$policy['operator_sid']
+            if($sid -cnotmatch '^S-1-(?:[0-9]+-)+[0-9]+$' -or $fixed.IndexOfAny([char[]]@('"',"`r","`n")) -ge 0){throw 'lifecycle_task_absence_or_unknown'}
+            $taskName='KMTech.ContainerAudit.StartupUpdate.'+(Get-BootstrapStringSha256 ($fixed.ToLowerInvariant()+"`n"+$sid)).Substring(0,24)
+            [xml]$taskXml=Export-ScheduledTask -TaskName $taskName -TaskPath '\' -ErrorAction Stop
+            $names=[Xml.XmlNamespaceManager]::new($taskXml.NameTable);$names.AddNamespace('t','http://schemas.microsoft.com/windows/2004/02/mit/task')
+            if($taskXml.SelectNodes('/t:Task/t:Actions/t:Exec',$names).Count -ne 1 -or
+                $taskXml.SelectNodes('/t:Task/t:Triggers/t:LogonTrigger',$names).Count -ne 1 -or
+                $taskXml.SelectNodes('/t:Task/t:Principals/t:Principal',$names).Count -ne 1){throw 'lifecycle_task_absence_or_unknown'}
+            $arguments='-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -File "'+$fixed+'\tools\apply_prepared_update.ps1" -InstallRoot "'+$fixed+'"'
+            $wanted=@{
+                '/t:Task/t:Triggers/t:LogonTrigger/t:UserId'=$sid
+                '/t:Task/t:Principals/t:Principal/t:UserId'='S-1-5-18'
+                '/t:Task/t:Principals/t:Principal/t:RunLevel'='HighestAvailable'
+                '/t:Task/t:Actions/t:Exec/t:Command'=(Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe')
+                '/t:Task/t:Actions/t:Exec/t:Arguments'=$arguments
+                '/t:Task/t:Settings/t:AllowHardTerminate'='false'
+                '/t:Task/t:Settings/t:Hidden'='true'
+            }
+            foreach($field in $wanted.Keys){$node=$taskXml.SelectSingleNode($field,$names);if($null -eq $node -or $node.InnerText -cne $wanted[$field]){throw 'lifecycle_task_absence_or_unknown'}}
+            $after=@($records|ForEach-Object {Read-BootstrapLifecycleJson $_})
+            for($index=0;$index -lt 3;$index++){
+                if(-not(Test-BootstrapLifecycleJsonEqual $after[$index] @($policy,$pointer,$state)[$index])){throw 'lifecycle_state_changed_during_verification'}
+            }
+        }
+        if($PSBoundParameters.ContainsKey('ExpectedFromCommit') -and ($ExpectedFromCommit -cnotmatch '^[0-9a-f]{40}$' -or $ExpectedFromCommit -cne $activeSha)){throw 'lifecycle_from_commit_mismatch'}
+        return [pscustomobject]@{status='PASS';lifecycle_state='HEALTHY';fixed_root=$fixed;owner_app_root=(Join-Path $fixed 'app');active_code_root=$activeRoot;active_app_root=(Join-Path $activeRoot 'app');from_commit=$activeSha;bootstrap_commit=$ownerSha;managed=$managed}
+    }catch{
+        throw [InvalidOperationException]::new('자료와 등록 및 전송 대기를 보존하고 지원 제거를 먼저 실행한 뒤 다시 설치하세요.',$_.Exception)
+    }
+}
+
 function Get-BootstrapSupportedVersionRestoreState($Receipt,[string]$ReceiptPath,[string]$InstallRoot,[string]$ExpectedAppId,[string]$ExpectedTransactionId,[string]$ExpectedHelperSha256) {
     $fixed=Get-StrictFullPath $InstallRoot 'supported fixed owner'
     $parent=Split-Path -Parent $fixed

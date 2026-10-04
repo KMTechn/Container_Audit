@@ -531,6 +531,7 @@ def verify_lifecycle_stock(bundle: Path) -> dict[str, Any]:
     return identity
 
 
+@writer_sink("auto_update_control")
 def supported_tasks_absent(fixed: Path) -> bool:
     """Removal markers do not substitute for actual task absence."""
     import subprocess
@@ -547,6 +548,7 @@ def supported_tasks_absent(fixed: Path) -> bool:
     return result.returncode == 0
 
 
+@writer_sink("auto_update_control")
 def supported_task_present(fixed: Path, sid: str) -> bool:
     """Read the actual derived task without executing installed support code."""
     import subprocess

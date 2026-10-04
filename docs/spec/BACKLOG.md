@@ -651,3 +651,8 @@ separate evidence. Independent acceptance remains coordinator owned.
 - sub-189 형식 교정: 기존 17파일의 shipped UTF-8 BOM 회귀가 bootstrap helper의 누락을 발견; BOM 3바이트 복구(함수 본문 불변), PS5.1 한국어 오류 호환을 유지하며 실패/수정 회귀를 별도 보존.
 
 - sub-189 A==B 회귀: 실제 canonical AST 분기문을 PS5.1/PS7에서 실행해 healthy equal-owner는 기존 current placement, 실제 B가 다르면 C versions placement를 선택함을 확인. lifecycle 27·지원 receipt/NTFS 22·기존 canonical/bootstrap 14와 함께 해석하며 실제 정상 설치기/UAC/managed task의 통합 수용은 랩에 남음.
+
+
+## 설치 통합 sub-248 (2026-10-05, 독립 확인 전)
+
+w9next 567ff27 + autoupdate 7247634를 merge a63ae29로 통합했다. 양쪽 G와 설치/복구 소비 경계를 보존하고, fresh census가 발견한 기존 Python2/PS5 미보호 자리는 코디 승인 후 기존 admission/byte-pinned library로 교정한다. 사용되지 않는 startup-control 이동 함수는 실제 preimage save/restore 소비 경로로 안전 회귀 의미를 이관한다. 표준 선언 재생성, 세 판 집중 실패 대조, 후보 전체 및 lab-only stock packet 증거와 독립 review는 sub-248 REPORT/FOR-REVIEW에서 최종 판정한다. native VM 설치·출시 키·출시 수용으로 소급하지 않는다.

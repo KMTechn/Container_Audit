@@ -282,7 +282,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         path.as_posix() for path in module._discover_shipped_powershell_paths(ROOT)
     ]
     assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
-        "call_operator": 17,
+        "call_operator": 16,
         "com_wmi_process_create": 5,
         "dot_source": 22,
         "dotnet_process_start": 2,
@@ -292,18 +292,30 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         "scheduler_com": 5,
         "start_process": 2,
     }
-    # The normal-user launch adds one compiled boundary: declaration and call.
-    # Both sites must remain visible under canonical session authority.
+    # Preserve both canonical declarations and both consumed native calls.
     native_starts = [
         row for row in payload["powershell_execution_inventory"]["execution_sites"]
         if row["kind"] == "native_process_api"
     ]
-    assert len(native_starts) == 2
+    assert len(native_starts) == 4
+    declarations = [row for row in native_starts
+                    if row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1"
+                    and row["function"] == "Initialize-CanonicalUserProcessApi"]
+    assert len(declarations) == 2
     source_lines = (ROOT / "INSTALL_CANONICAL_PORTABLE.ps1").read_text(encoding="utf-8").splitlines()
     assert all(row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1" and row["guarded"]
                and row["guard_name"] == "Enter-ContainerWriterSessionAuthority"
                and "CreateProcessWithTokenW" in source_lines[row["line"] - 1]
-               for row in native_starts)
+               and row["command"] == "CreateProcessWithTokenW"
+               for row in declarations)
+    for owner, function, guard in (
+        ("INSTALL_CANONICAL_PORTABLE.ps1", "Start-CanonicalLimitedRelay", "Enter-ContainerWriterSessionAuthority"),
+        ("tools/bootstrap_integrity.ps1", "Start-BootstrapNormalProducerWrapper", "byte_pinned_installer_caller_closure"),
+    ):
+        calls = [row for row in native_starts if row["file"] == owner and row["function"] == function]
+        assert len(calls) == 1
+        assert calls[0]["guarded"] and calls[0]["guard_name"] == guard
+        assert calls[0]["command"] == "ContainerAuditCanonicalUserProcess.StartLimited"
     capture_proof = next(
         row for row in payload['powershell_execution_inventory']['function_guard_proofs']
         if row['file'] == 'tools/bootstrap_integrity.ps1'

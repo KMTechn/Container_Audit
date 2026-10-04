@@ -55,7 +55,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '01919751911b37dea315a412585c85ec397e479ca02df36554ca7309a27fa9ba'
+$ExpectedBootstrapIntegritySha256 = 'ad6bf3d0b967ca51d52b4b3fb2d0db516af8927b29bdae57a86232c9435293f4'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -2371,9 +2371,7 @@ $supportedContext=$null
 $supportedPlacement=$false
 $installedCodeRoot=$install
 if(-not $testMode -and -not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $rollbackContinuation) {
-    $contextText=& (Join-Path $source 'runtime\python.exe') (Join-Path $source 'app\auto_update.py') '--lifecycle-context' '--operation' 'install' '--install-root' $install
-    if($LASTEXITCODE -ne 0){throw '자료와 등록 및 전송 대기를 보존하고 지원 제거를 먼저 실행한 뒤 다시 설치하세요.'}
-    $supportedContext=$contextText|ConvertFrom-Json
+    $supportedContext = Get-BootstrapSupportedLifecycleContext -Root (Split-Path -Parent $install) -Operation 'install'
     if([string]$supportedContext.lifecycle_state -ceq 'HEALTHY' -and [bool]$supportedContext.managed -and
         [string]$supportedContext.bootstrap_commit -cne [string]$supportedContext.from_commit) {
         $supportedPlacement=$true

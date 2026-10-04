@@ -29,26 +29,45 @@ if((Get-FileSha256 $source) -cne (Get-FileSha256 $target)){throw 'TLS configurat
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 def test_uninstall_and_restore_keep_active_evidence_at_the_same_path(tmp_path, engine):
-    helper=SOURCE.with_name('INSTALL_THIS_PC.ps1')
-    result = run_functions(tmp_path, helper, ['Move-ContainerStartupUpdateControl'], r'''
-function Assert-InstallationEvidenceProtectedPath {param($Path) if(-not $Path.StartsWith($env:CA_CONTRACT_ROOT)){throw 'escaped owned input'}}
-function Assert-NoReparsePoint {param($Path,$Purpose) if((Get-Item -LiteralPath $Path).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'reparse'}}
-function Set-InstallationEvidenceAcl {}
-$OperatorSid='S-1-5-21-111-222-333-1001'
-$control=Join-Path $env:CA_CONTRACT_ROOT 'update-control';$saved=Join-Path $env:CA_CONTRACT_ROOT 'preimage\update-control'
+    helper = SOURCE.with_name("INSTALL_THIS_PC.ps1")
+    result = run_functions(tmp_path, helper, [
+        "Save-ContainerStartupUpdatePreimage", "Restore-ContainerStartupUpdatePreimage",
+        "Write-ContainerStartupUpdateRecord",
+    ], r'''
+function Assert-ContainerStartupUpdateTrust {param($Root) if(-not $Root.StartsWith($env:CA_CONTRACT_ROOT)){throw 'escaped owned input'}}
+function Get-StrictFullPath {param($Path,$Purpose) return [IO.Path]::GetFullPath($Path)}
+function Test-PathWithin {param($Child,$Parent) return $Child.StartsWith($Parent+'\',[StringComparison]::OrdinalIgnoreCase)}
+function Test-SamePath {param($Left,$Right) return $Left.Equals($Right,[StringComparison]::OrdinalIgnoreCase)}
+function Assert-NoReparsePoint {param($Path,$Purpose) if((Test-Path -LiteralPath $Path) -and ((Get-Item -LiteralPath $Path).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'reparse'}}
+function Set-HardenedCodeAcl {}
+function Get-FileSha256 {param($Path) return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()}
+function Get-ContainerStartupUpdateTaskPreimage {return [pscustomobject]@{name=('KMTech.ContainerAudit.StartupUpdate.'+('a'*24));exists=$false}}
+function Get-ScheduledTask {return $null}
+function Invoke-ContainerStartupUpdateTaskMutation {param($Action) & $Action}
+$OperatorSid=@('S','1','5','21','111','222','333','1001') -join '-'
+$WriterFenceAttemptId='a'*32
+$managed=Join-Path $env:CA_CONTRACT_ROOT 'managed';$root=Join-Path $managed 'current'
+$control=Join-Path $managed 'update-control'
+[void][IO.Directory]::CreateDirectory($root)
 [void][IO.Directory]::CreateDirectory((Join-Path $control 'installation-evidence\run'))
-[void][IO.Directory]::CreateDirectory((Split-Path -Parent $saved))
 $active=Join-Path $control 'installation-evidence\run\stages.jsonl'
 [IO.File]::WriteAllText($active,'unique active journal')
 $policy=Join-Path $control 'policy.json';[IO.File]::WriteAllText($policy,'unique policy')
-Move-ContainerStartupUpdateControl $control $saved
-if(-not(Test-Path -LiteralPath $active) -or (Test-Path -LiteralPath $policy) -or [IO.File]::ReadAllText((Join-Path $saved 'policy.json')) -cne 'unique policy'){throw 'removal moved evidence or lost updater preimage'}
+$saved=Save-ContainerStartupUpdatePreimage $root 'uninstall'
+if(-not(Test-Path -LiteralPath $active) -or [IO.File]::ReadAllText($policy) -cne 'unique policy' -or
+    [IO.File]::ReadAllText((Join-Path $saved.path 'policy.json')) -cne 'unique policy'){throw 'removal moved evidence or lost updater preimage'}
 [IO.File]::AppendAllText($active,' continues')
-Move-ContainerStartupUpdateControl $saved $control
-if([IO.File]::ReadAllText($policy) -cne 'unique policy' -or [IO.File]::ReadAllText($active) -cne 'unique active journal continues'){throw 'rollback changed evidence or updater bytes'}
-[IO.File]::WriteAllText((Join-Path $saved 'policy.json'),'collision')
-try{Move-ContainerStartupUpdateControl $saved $control;throw 'collision accepted'}catch{if($_.Exception.Message -cne 'STARTUP_UPDATE_UNINSTALL_RESTORE_TARGET_EXISTS'){throw}}
-if([IO.File]::ReadAllText($policy) -cne 'unique policy'){throw 'collision overwrote current state'}
+[IO.File]::WriteAllText($policy,'candidate policy')
+Restore-ContainerStartupUpdatePreimage $root $saved.path $saved.sha256
+if([IO.File]::ReadAllText($policy) -cne 'unique policy' -or
+    [IO.File]::ReadAllText($active) -cne 'unique active journal continues'){throw 'rollback changed evidence or updater bytes'}
+$displaced=@(Get-ChildItem -LiteralPath $saved.path -Filter 'failed-*-policy.json')
+if($displaced.Count -ne 1 -or [IO.File]::ReadAllText($displaced[0].FullName) -cne 'candidate policy'){throw 'rollback lost displaced updater bytes'}
+try{[void](Save-ContainerStartupUpdatePreimage $root 'uninstall');throw 'collision accepted'}catch{
+    if($_.Exception.Message -cne 'STARTUP_UPDATE_PREIMAGE_PATH_INVALID'){throw}
+}
+if([IO.File]::ReadAllText($policy) -cne 'unique policy' -or
+    [IO.File]::ReadAllText($active) -cne 'unique active journal continues'){throw 'collision overwrote current state'}
 'PASS'
 ''', engine=engine)
     assert result.returncode == 0, result.stdout + result.stderr

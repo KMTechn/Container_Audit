@@ -63,7 +63,10 @@ if (-not (Test-Path -LiteralPath $BootstrapIntegrityFunctions -PathType Leaf)) {
 $pinnedLibrary=Get-Variable -Name InstallationPinnedBootstrapLibrary -Scope Script -ValueOnly -ErrorAction SilentlyContinue
 if($pinnedLibrary){
     if(-not $pinnedLibrary.File.Equals($BootstrapIntegrityFunctions,[StringComparison]::OrdinalIgnoreCase)){throw 'Pinned bootstrap library identity differs.'}
-    . $pinnedLibrary
+    $bootstrapIntegrityPath = $BootstrapIntegrityFunctions
+    $BootstrapIntegrityFunctions = $pinnedLibrary
+    try { . $BootstrapIntegrityFunctions }
+    finally { $BootstrapIntegrityFunctions = $bootstrapIntegrityPath }
 }elseif(([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){
     # A direct administrator invocation also evaluates the bytes it checked.
     # The canonical elevation path supplies the already verified block above.
@@ -84,7 +87,10 @@ if($pinnedLibrary){
     $libraryTokens=$null;$libraryErrors=$null
     $libraryAst=[Management.Automation.Language.Parser]::ParseInput([Text.UTF8Encoding]::new($false,$true).GetString($libraryBytes).TrimStart([char]0xfeff),$BootstrapIntegrityFunctions,[ref]$libraryTokens,[ref]$libraryErrors)
     if($libraryErrors.Count){throw 'Bootstrap integrity producer parse failed.'}
-    . ($libraryAst.GetScriptBlock())
+    $bootstrapIntegrityPath = $BootstrapIntegrityFunctions
+    $BootstrapIntegrityFunctions = $libraryAst.GetScriptBlock()
+    try { . $BootstrapIntegrityFunctions }
+    finally { $BootstrapIntegrityFunctions = $bootstrapIntegrityPath }
 }else{. $BootstrapIntegrityFunctions}
 $IntegrityFileName = $BootstrapIntegrityFileName
 if($RepairAbandonedInstallationParent -or $RepairOwnedInstallationParent){
@@ -948,7 +954,8 @@ function Remove-OwnedLegacyTask([string]$Name, [string]$ExpectedRoot) {
     if (
         [string]$installedManifest.writer_fence_helper_sha256 -cnotmatch '^[0-9a-f]{64}$'
     ) { throw 'Legacy task removal writer-fence helper pin differs.' }
-    . (Get-InstallationVerifiedScript $writerFenceHelperPath ([string]$installedManifest.writer_fence_helper_sha256) 'Legacy task removal writer-fence helper pin differs.')
+    $writerFenceHelperFull = Get-InstallationVerifiedScript $writerFenceHelperPath ([string]$installedManifest.writer_fence_helper_sha256) 'Legacy task removal writer-fence helper pin differs.'
+    . $writerFenceHelperFull
     [void](Remove-ContainerScheduledTaskUnderWriterFence `
         -SessionId ([string]$env:CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID) `
         -AttemptId ([string]$env:CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID) `
@@ -1187,25 +1194,6 @@ function Restore-ContainerStartupUpdatePreimage([string]$Root, [string]$Director
             if ($null -ne (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue)) { throw 'STARTUP_UPDATE_RESTORE_TASK_REMOVAL_FAILED' }
         }
     } | Out-Null
-}
-
-function Move-ContainerStartupUpdateControl([string]$From,[string]$To) {
-    # Keep the active evidence run and the five retained runs at their admitted
-    # path. The updater state still moves to/from the existing recovery preimage.
-    Assert-InstallationEvidenceProtectedPath $From
-    Assert-InstallationEvidenceProtectedPath (Split-Path -Parent $To)
-    if(-not(Test-Path -LiteralPath $To)){
-        [void][IO.Directory]::CreateDirectory($To)
-        Set-InstallationEvidenceAcl $To $OperatorSid -Directory
-    }
-    Assert-InstallationEvidenceProtectedPath $To
-    foreach($item in @(Get-ChildItem -LiteralPath $From -Force | Where-Object {$_.Name -ine 'installation-evidence'})){
-        Assert-InstallationEvidenceProtectedPath $item.FullName
-        Assert-NoReparsePoint $item.FullName 'startup update control move'
-        $destination=Join-Path $To $item.Name
-        if(Test-Path -LiteralPath $destination){throw 'STARTUP_UPDATE_UNINSTALL_RESTORE_TARGET_EXISTS'}
-        Move-Item -LiteralPath $item.FullName -Destination $destination -ErrorAction Stop
-    }
 }
 
 function Initialize-ContainerStartupUpdate([string]$Root) {

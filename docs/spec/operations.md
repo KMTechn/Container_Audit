@@ -1112,3 +1112,8 @@ PS5.1/PS7 owned NTFS fixture에서 최초 미완 복구 뒤 controller를 두 �
 ### sub-189 P2-2 검증 범위
 
 fixture Python canonical_control_root는 PS의 L/c와 같다. ordinary persistent relay의 실제 status admission은 active fence에서 종료됨을 부정 사례로 확인한다. completion helper 지연과 구판 completion fence 게시 직후의 2초 scheduling cut로 기존 결함을 노출하고, 수정 판은 같은 ordinary relay PID가 완료 뒤 두 주기 이상 생존함을 확인한다. 최초 중단 뒤 추가 중단 2회→완료도 확인한다. PS5.1/PS7 owned NTFS·process는 실제, 보호 ACL/registry/COM/token 관측은 seam; native UAC/전원 단절은 NOT TESTED.
+
+
+## 설치 통합의 읽기 전용 수명주기 검사 (sub-248)
+
+canonical의 PlanOnly/설치 상태 분류보다 앞선 검사는 처음 검증한 bootstrap library 안에서 같은 프로세스로 실행한다. 설치 namespace/stock identity·control·trust 설정·실제 task XML의 read-only 관측을 확인하며 거절 시 원래 지원 제거 안내를 유지한다. JSON은 중복 key, 잘못된 key 대소문자, 비객체, 손상/1MiB 초과와 잘못된 판 식별자를 거절하고, 확인 뒤 control을 다시 읽어 의미상 동일함을 검사한다. 실제 query의 subprocess 경로는 기존 auto_update_control admission이 spawn 전에 거절한다. pinned library ScriptBlock은 이미 승인된 변수 기호에 결속하며 원 bytes/hash/AST 검증을 계속 적용한다. 설치/복원/G 및 host/native 증거의 범위는 sub-248 REPORT와 COVERAGE-FIX에 기록한다.
