@@ -1,10 +1,12 @@
 """Retirement completion preserves the old stop request across exact removal."""
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 import shutil
 import subprocess
+import zipfile
 
 import pytest
 
@@ -59,13 +61,29 @@ def _retired_fixture(tmp_path, fault='', *, historical=False):
         assert recorded.returncode == 0, recorded.stderr
         legacy_python = tmp_path / 'legacy-python'
         legacy_python.mkdir()
-        for relative in ('writer_session_fence.py', 'current_user_onboarding.py', 'user_relay.py', 'storage_policy.py'):
-            (legacy_python / relative).write_bytes(committed(relative))
+        # The historical producer and every runtime dependency must match its
+        # helper. Four old modules plus today's producer form no real release.
+        tracked = subprocess.run(['git', 'ls-tree', '-r', '--name-only', OLD_COMMIT],
+                                 cwd=ROOT, capture_output=True, text=True, check=True).stdout.splitlines()
+        runtime_paths = [path for path in tracked if '/' not in path and path.endswith('.py')]
+        runtime_paths += ['config', 'kmtech_shared', 'kmtech_factory_contracts',
+                          'vendor', 'tools', 'portable']
+        archive = subprocess.run(['git', 'archive', '--format=zip', OLD_COMMIT, *runtime_paths],
+                                 cwd=ROOT, capture_output=True, check=True).stdout
+        with zipfile.ZipFile(io.BytesIO(archive)) as runtime:
+            for member in runtime.infolist():
+                assert (legacy_python / member.filename).resolve().is_relative_to(legacy_python.resolve())
+            runtime.extractall(legacy_python)
         host = Path(env['CA_UNINSTALL_HOST'])
         host.write_text(host.read_text().replace(
             "sys.path.insert(0, os.environ['CA_UNINSTALL_REPO'])",
             "sys.path.insert(0, os.environ['CA_UNINSTALL_REPO'])\n"
-            + 'sys.path.insert(0, ' + repr(str(legacy_python)) + ')',
+            + 'sys.path.insert(0, ' + repr(str(legacy_python)) + ')\n'
+            + 'import importlib.util\n'
+            + "for name in ('writer_session_fence', 'current_user_onboarding', 'user_relay', "
+              "'storage_policy', 'container_audit_product_host'):\n"
+            + '    assert Path(importlib.util.find_spec(name).origin).parent == Path('
+            + repr(str(legacy_python)) + ')',
         ), encoding='utf-8')
     retire = tmp_path / 'retire.ps1'
     retire.write_text(
