@@ -512,6 +512,71 @@ function Invoke-CanonicalRollbackRuntimePreimage($Before,[switch]$RemovalAlready
     return ,$steps.ToArray()
 }
 
+function Read-CanonicalSupportedRemovalResume {
+    $active=Read-ContainerWriterFence -AllowAbsent
+    if ($null -eq $active) { return $null }
+    $directory=Join-Path (Join-Path (Get-InstallationEvidenceControlRoot) 'supported-removals') ([string]$active.replacement_transaction_id)
+    $path=Join-Path $directory 'removal-journal.json'
+    Assert-InstallationEvidenceProtectedPath $directory
+    Assert-InstallationEvidenceProtectedPath $path
+    $recordSha=Get-FileSha256 $path
+    [void](Read-BootstrapReplacementReceipt $path $recordSha)
+    $record=Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson
+    if ([string]$record.schema -cne 'container-audit-supported-removal-journal-v1' -or
+        [string]$active.status -cne 'INSTALLING' -or [string]$active.owner_kind -cne 'canonical_installer' -or
+        -not (Same ([string]$record.install_root) $install) -or [string]$record.operator_sid -cne $operatorSid -or
+        -not (Same ([string]$record.operator_local_appdata_root) $lad) -or
+        [string]$record.source_manifest_sha256 -cne $sourceManifestSha256 -or
+        [string]$record.orchestrator_sha256 -cne $sourceManifest.installer_sha256 -or
+        [string]$record.writer_contract_sha256 -cne $sourceManifest.writer_session_contract_sha256 -or
+        -not (Same ([string]$record.prepared_receipt_path) ([string]$active.prepared_receipt_path)) -or
+        [string]$record.authority_mutex_name -cne [string]$active.session_authority_mutex_name -or
+        $record.secret_values_recorded -isnot [bool] -or $record.secret_values_recorded) { throw 'REMOVAL_RESUME_PROTECTED_BINDING_DIFFERS' }
+    foreach ($name in @('session_id','attempt_id','replacement_transaction_id','session_started_at_utc',
+        'orchestrator_sha256','writer_contract_sha256','writer_inventory_sha256','prepared_receipt_sha256')) {
+        if ([string]$record.$name -cne [string]$active.$name) { throw 'REMOVAL_RESUME_FENCE_TUPLE_DIFFERS' }
+    }
+    $copy=Join-Path $directory 'original-audit.json'
+    if (-not (Same ([string]$record.audit_copy_path) $copy)) { throw 'REMOVAL_RESUME_AUDIT_PATH_DIFFERS' }
+    Assert-InstallationEvidenceProtectedPath $copy
+    [void](Read-BootstrapReplacementReceipt $copy ([string]$record.original_audit_sha256))
+    $origin=Get-Content -LiteralPath $copy -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson
+    if ([string]$origin.schema -cne 'container-audit-canonical-portable-install-v2' -or
+        [string]$origin.operation -cne 'UNINSTALL' -or [string]$origin.status -cne 'PREIMAGE_SAVED' -or
+        -not (Same ([string]$origin.install_root) $install) -or
+        [string]$origin.source_manifest_sha256 -cne $sourceManifestSha256 -or
+        [string]$origin.code_replacement.transaction_id -cne [string]$active.replacement_transaction_id -or
+        [IO.Path]::GetFileName([string]$origin.stage_evidence_root) -cnotmatch ('\.evidence\.'+[string]$record.owner_process_id+'$')) {
+        throw 'REMOVAL_RESUME_ORIGINAL_AUDIT_DIFFERS'
+    }
+    Assert-RetirementOwnerExited $record
+    if ((Get-FileSha256 $path) -cne $recordSha) { throw 'REMOVAL_RESUME_JOURNAL_CHANGED' }
+    return [pscustomobject]@{record=$record;record_sha256=$recordSha;active=$active;
+        active_sha256=Get-ContainerWriterFenceFileSha256 (Get-ContainerWriterFenceActivePath)}
+}
+
+function Resume-CanonicalSupportedRemovalFence($Prior) {
+    $admission=Enter-ContainerWriterAdmission
+    try {
+        $fresh=Read-CanonicalSupportedRemovalResume
+        if ($null -eq $fresh -or $fresh.record_sha256 -cne $Prior.record_sha256 -or
+            $fresh.active_sha256 -cne $Prior.active_sha256) { throw 'REMOVAL_RESUME_INPUT_CHANGED' }
+        Assert-ContainerWriterSessionAuthority $fresh.active $canonicalWriterFenceAuthority
+        # Retain the authenticated original tuple and prepared bytes. The
+        # create-only session authority rejects every live/reused claimant;
+        # another interruption can reclaim this same immutable journal.
+        $payload=New-ContainerWriterFencePayload -Status 'INSTALLING' -OwnerKind 'canonical_installer' `
+            -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId -SessionStartedAtUtc $canonicalWriterFenceStartedAtUtc `
+            -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 -WriterContractSha256 $canonicalWriterFenceContractSha256 `
+            -PreparedReceiptPath ([string]$canonicalWriterFencePreparedReceipt.path) -PreparedReceiptSha256 ([string]$canonicalWriterFencePreparedReceipt.sha256) `
+            -DelegationToken $Script:CanonicalWriterFenceDelegationToken -DelegatedSources $canonicalWriterFenceDelegatedSources `
+            -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(20).ToString('o'))
+        Assert-ContainerWriterSessionAuthority $payload $canonicalWriterFenceAuthority
+        [void](Write-ContainerWriterFenceAtomic '' $payload)
+    } finally { Exit-ContainerWriterAdmission $admission }
+}
+
 function Write-CanonicalInstallReentryRecord([string]$Phase) {
     if($null -eq $audit -or $audit.operation -cne 'INSTALL' -or -not $before.exists -or
         [bool]$writerBefore.present){return}
@@ -2285,6 +2350,7 @@ $sourceIntegrityHelperSha256 = Sha (Join-Path $source 'tools\bootstrap_integrity
 $wanted = Command $install
 $lad = Full $env:LOCALAPPDATA 'LOCALAPPDATA'
 $operatorSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$supportedRemovalResume=if ($Uninstall -and -not $CompleteRetiredRemoval) { Read-CanonicalSupportedRemovalResume } else { $null }
 $Script:CanonicalRollbackContinuationCreated=$null
 $rollbackContinuation=$null
 $continuationAuthorityBinding=$null
@@ -2340,7 +2406,7 @@ $BootstrapIntegrityFunctions = Join-Path $source 'tools\bootstrap_integrity.ps1'
 . $BootstrapIntegrityFunctions
 # Reject incompatible/damaged installed trees before creating a fence that can
 # stop a resident relay. Repeat the existing integrity readback under the fence.
-if (Test-Path -LiteralPath $install -PathType Container) {
+if (-not $supportedRemovalResume -and (Test-Path -LiteralPath $install -PathType Container)) {
     $preflightCandidate = InstalledManifest $install $SkipSignatureValidationForTest
     [void](Assert-BootstrapIntegrityRecord $install)
     $preflightInventory = Assert-WriterSinkInventory `
@@ -2441,6 +2507,13 @@ $Script:CanonicalWriterFenceTransactionId = $replacementTransactionId
 $canonicalWriterFenceStartedAtUtc = [DateTime]::UtcNow.ToString('o')
 $canonicalWriterFenceOrchestratorSha256 = Sha $PSCommandPath
 $canonicalWriterFenceContractSha256 = ([string]$lifecycleManifest.writer_session_contract_sha256).ToLowerInvariant()
+if ($supportedRemovalResume) {
+    $Script:CanonicalWriterFenceSessionId=[string]$supportedRemovalResume.active.session_id
+    $Script:CanonicalWriterFenceAttemptId=[string]$supportedRemovalResume.active.attempt_id
+    $Script:CanonicalWriterFenceTransactionId=[string]$supportedRemovalResume.active.replacement_transaction_id
+    $replacementTransactionId=$Script:CanonicalWriterFenceTransactionId
+    $canonicalWriterFenceStartedAtUtc=[string]$supportedRemovalResume.active.session_started_at_utc
+}
 $Script:CanonicalWriterFenceDelegationToken = [Guid]::NewGuid().ToString('N') + [Guid]::NewGuid().ToString('N')
 $canonicalWriterFenceEnvironmentNames = @(
     'CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN',
@@ -2608,7 +2681,9 @@ if($null -ne $abandonedPending){
     $runtimePreimageBinding=Assert-CanonicalRuntimePreimage -Before $before -Processes $old `
         -ExpectedCommand $installedCommand -ExpectedRoot $install -StopMarkerExists (Test-Path -LiteralPath $stop)
 }
-$canonicalWriterFencePreparedReceipt = New-CanonicalWriterFencePreparedReceipt `
+$canonicalWriterFencePreparedReceipt = if ($supportedRemovalResume) {
+    [pscustomobject]@{path=[string]$supportedRemovalResume.active.prepared_receipt_path;sha256=[string]$supportedRemovalResume.active.prepared_receipt_sha256}
+} else { New-CanonicalWriterFencePreparedReceipt `
     -Path $canonicalWriterFencePreparedPath `
     -SessionId $Script:CanonicalWriterFenceSessionId `
     -AttemptId $Script:CanonicalWriterFenceAttemptId `
@@ -2618,7 +2693,7 @@ $canonicalWriterFencePreparedReceipt = New-CanonicalWriterFencePreparedReceipt `
     -WriterContractSha256 $canonicalWriterFenceContractSha256 `
     -SourceManifestSha256 $sourceManifestSha256 `
     -OperatorSid $operatorSid `
-    -OperatorLocalAppDataRoot $lad
+    -OperatorLocalAppDataRoot $lad }
 if ($continuationPriorFence) {
     $continuationAdmission=Enter-ContainerWriterAdmission
     try {
@@ -2639,6 +2714,9 @@ if ($continuationPriorFence) {
         $resumedFence.prepared_receipt_sha256=[string]$continuationAuthorityBinding.sha256
         [void](Write-ContainerWriterFenceAtomic '' $resumedFence)
     } finally {Exit-ContainerWriterAdmission $continuationAdmission}
+}
+elseif ($supportedRemovalResume) {
+    Resume-CanonicalSupportedRemovalFence $supportedRemovalResume
 }
 elseif ($retirementResume) {
     $resumeAdmission = Enter-ContainerWriterAdmission
@@ -2957,6 +3035,7 @@ $enteredPlacementTry = $true
         $args=@('-NoLogo','-NoProfile','-NonInteractive','-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
             '-Uninstall','-SourceRoot',$source,'-InstallRoot',$install,'-OperatorLocalAppDataRoot',$lad,'-OperatorSid',$operatorSid,
             '-QuiesceReceiptPath',$removalPath,'-ExpectedQuiesceReceiptSha256',(Sha $removalPath),
+            '-UninstallAuditPath',$auditPath,'-UninstallAuditSha256',(Sha $auditPath),
             '-WriterFenceHelperPath',(Join-Path $source 'tools\container_writer_fence.ps1'),
             '-ExpectedWriterFenceHelperSha256',([string]$sourceManifest.writer_fence_helper_sha256),
             '-WriterFencePreparedReceiptPath',([string]$canonicalWriterFencePreparedReceipt.path),

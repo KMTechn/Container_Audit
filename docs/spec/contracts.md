@@ -190,6 +190,13 @@ READY는 초기화된 GUI의 nonce·판 SHA·PID·생성 시각과 현재 사용
 목록 불가용·내용 불일치·목록 밖 파일·reparse는 원 경로에 남긴다. 읽은 목록은 원 SHA를
 재대조하여 마지막에 옮긴다. SHA 관측 실패/잠금은 미완이며 REMOVED를 게시하지 않는다.
 제거 실패는 이미 제거한 코드·task·Run을 되살리지 않고 같은 제거 재실행으로 수렴한다.
+내용 이동 전에 권한 있는 하위 설치기가 `update-control/supported-removals/<transaction>/`에
+원 제거 감사의 불변 사본과 정확한 source manifest·fence tuple·prepared SHA·controller PID/시작 시각을
+보호 기록으로 남긴다. controller는 실제 검증된 외부 source 조상이어야 한다.
+재진입은 그 보호 기록·원 감사 사본·같은 source와 fence를 재검사하고 원 owner 종료 및
+같은 tuple의 배타적 session authority를 함께 확인한 뒤 위임만 새로 만든다.
+새 controller의 추가 중단에도 원 감사/tuple을 유지한다. 사용자 쓰기 가능 감사 하나,
+live/reused owner·살아 있는 session authority·기록 불일치로 잔류 fence를 채택하거나 삭제하지 않는다.
 등록/credential/업무 자료/전송 대기는 열거하거나 되감지 않는다. current에 남은 항목은
 후속 설치가 덮어쓰지 않는다. 파일 목록 자체의 마지막 이동과 SHA 없는 incoming signature
 보존은 검사에서 확정된 메타데이터 예외와 같다.

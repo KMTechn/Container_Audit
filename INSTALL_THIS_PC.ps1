@@ -21,6 +21,8 @@ param(
     [string]$ExpectedInstalledAggregateSha256 = "",
     [string]$QuiesceReceiptPath = "",
     [string]$ExpectedQuiesceReceiptSha256 = "",
+    [string]$UninstallAuditPath = "",
+    [string]$UninstallAuditSha256 = "",
     [string]$RestoreUninstallRecordPath = "",
     [string]$ExpectedUninstallRecordSha256 = "",
     [string]$WriterFenceHelperPath = "",
@@ -229,6 +231,73 @@ function Invoke-SelfElevated {
     Write-Output ('installation_evidence_status='+[string]$summary.status)
     Write-Output ('installation_evidence_summary_path='+[string]$summary.summary_path)
     exit $process.ExitCode
+}
+
+function Write-ContainerSupportedRemovalJournal([int[]]$ControllerProcessIds) {
+    # Called only by the already authenticated, delegated removal helper, before
+    # deleting tasks or moving owned content. A user-writable audit is input,
+    # never the authority used to reclaim an abandoned controller's fence.
+    if (-not (Test-InstallationEvidencePrivileged)) { throw 'REMOVAL_JOURNAL_PROTECTED_AUTHORITY_REQUIRED' }
+    Assert-NoReparsePoint $UninstallAuditPath 'supported removal audit'
+    if ($UninstallAuditSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        (Get-Item -LiteralPath $UninstallAuditPath).Length -gt 131072 -or
+        (Get-FileSha256 $UninstallAuditPath) -cne $UninstallAuditSha256) { throw 'REMOVAL_JOURNAL_AUDIT_CHANGED' }
+    $origin=Get-Content -LiteralPath $UninstallAuditPath -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson
+    $active=Read-ContainerWriterFence
+    if ([IO.Path]::GetFileName([string]$origin.stage_evidence_root) -cnotmatch '\.evidence\.([1-9][0-9]{0,9})$') { throw 'REMOVAL_JOURNAL_OWNER_INVALID' }
+    $ownerPid=[int]$Matches[1]
+    if ($ownerPid -notin $ControllerProcessIds) { throw 'REMOVAL_JOURNAL_OWNER_NOT_CONTROLLER_ANCESTOR' }
+    $ownerStarted=(Get-Process -Id $ownerPid -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')
+    $manifestSha=Get-FileSha256 (Join-Path $uninstallSource 'portable-manifest.json')
+    if ([string]$origin.schema -cne 'container-audit-canonical-portable-install-v2' -or
+        [string]$origin.operation -cne 'UNINSTALL' -or [string]$origin.status -cne 'PREIMAGE_SAVED' -or
+        -not (Test-SamePath ([string]$origin.install_root) $installRootFull) -or
+        [string]$origin.source_manifest_sha256 -cne $manifestSha -or
+        [string]$origin.code_replacement.transaction_id -cne [string]$active.replacement_transaction_id -or
+        [string]$active.status -cne 'INSTALLING' -or [string]$active.owner_kind -cne 'canonical_installer' -or
+        [string]$active.orchestrator_sha256 -cne (Get-FileSha256 (Join-Path $uninstallSource 'INSTALL_CANONICAL_PORTABLE.ps1')) -or
+        -not (Test-SamePath ([string]$active.prepared_receipt_path) $WriterFencePreparedReceiptPath) -or
+        [string]$active.prepared_receipt_sha256 -cne $WriterFencePreparedReceiptSha256) { throw 'REMOVAL_JOURNAL_ORIGIN_BINDING_DIFFERS' }
+    $store=Join-Path (Get-InstallationEvidenceControlRoot) 'supported-removals'
+    New-InstallationProtectedDirectory $store $OperatorSid
+    $directory=Join-Path $store ([string]$active.replacement_transaction_id)
+    New-InstallationProtectedDirectory $directory $OperatorSid
+    $path=Join-Path $directory 'removal-journal.json'
+    if (Test-Path -LiteralPath $path) {
+        Assert-InstallationEvidenceProtectedPath $path
+        [void](Read-BootstrapReplacementReceipt $path (Get-FileSha256 $path))
+        $existing=Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson
+        foreach ($name in @('session_id','attempt_id','replacement_transaction_id','session_started_at_utc',
+            'orchestrator_sha256','writer_contract_sha256','writer_inventory_sha256','prepared_receipt_sha256')) {
+            if ([string]$existing.$name -cne [string]$active.$name) { throw 'REMOVAL_JOURNAL_EXISTING_TUPLE_DIFFERS' }
+        }
+        if ([string]$existing.schema -cne 'container-audit-supported-removal-journal-v1' -or
+            [string]$existing.source_manifest_sha256 -cne $manifestSha -or
+            [string]$existing.operator_sid -cne $OperatorSid -or
+            -not (Test-SamePath ([string]$existing.install_root) $installRootFull) -or
+            -not (Test-SamePath ([string]$existing.audit_copy_path) (Join-Path $directory 'original-audit.json')) -or
+            (Get-FileSha256 ([string]$existing.audit_copy_path)) -cne [string]$existing.original_audit_sha256) { throw 'REMOVAL_JOURNAL_EXISTING_ORIGIN_DIFFERS' }
+        return
+    }
+    $copy=Join-Path $directory 'original-audit.json'
+    Assert-BootstrapNoReparsePoint $directory 'removal audit copy parent' -PathOnly
+    if (Test-Path -LiteralPath $copy) { Assert-BootstrapNoReparsePoint $copy 'removal audit copy' -PathOnly }
+    $bytes=[IO.File]::ReadAllBytes($UninstallAuditPath)
+    $stream=[IO.FileStream]::new($copy,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough)
+    try { $stream.Write($bytes,0,$bytes.Length);$stream.Flush($true) } finally { $stream.Dispose() }
+    Set-InstallationEvidenceAcl $copy $OperatorSid
+    if ((Get-FileSha256 $copy) -cne $UninstallAuditSha256) { throw 'REMOVAL_JOURNAL_COPY_CHANGED' }
+    $record=[ordered]@{schema='container-audit-supported-removal-journal-v1';install_root=$installRootFull;
+        operator_sid=$OperatorSid;operator_local_appdata_root=$OperatorLocalAppDataRoot;
+        owner_process_id=$ownerPid;owner_started_at_utc=$ownerStarted;authority_mutex_name=$active.session_authority_mutex_name;
+        original_audit_path=$UninstallAuditPath;original_audit_sha256=$UninstallAuditSha256;audit_copy_path=$copy;
+        source_manifest_sha256=$manifestSha;prepared_receipt_path=$active.prepared_receipt_path;secret_values_recorded=$false}
+    foreach ($name in @('session_id','attempt_id','replacement_transaction_id','session_started_at_utc',
+        'orchestrator_sha256','writer_contract_sha256','writer_inventory_sha256','prepared_receipt_sha256')) { $record[$name]=[string]$active.$name }
+    Write-ContainerStartupUpdateRecord $path $record
+    Set-InstallationEvidenceAcl $path $OperatorSid
+    Assert-InstallationEvidenceProtectedPath $path
+    Write-InstallationEvidenceEvent ([ordered]@{event='SUPPORTED_REMOVAL_JOURNAL';path=$path;sha256=Get-FileSha256 $path;secret_values_recorded=$false})
 }
 
 function Write-ContainerRollbackContinuation([string]$AuditPath,[string]$AuditSha256) {
@@ -1834,6 +1903,7 @@ if ($Uninstall.IsPresent) {
     try {
         try { $gateHeld=$gate.WaitOne(5000) } catch [Threading.AbandonedMutexException] { $gateHeld=$true; throw 'REMOVAL_UPDATE_GATE_ABANDONED' }
         if (-not $gateHeld) { throw 'REMOVAL_UPDATE_GATE_BUSY' }
+        if ($UninstallAuditPath) { Write-ContainerSupportedRemovalJournal $excluded }
         $removed = Invoke-ContainerConvergentRemoval -InstallRoot $installRootFull -TaskFolder $folder -ExcludeProcessIds $excluded
         'uninstall_status=PASS_KNOWN_FILES_REMOVED_STATE_PRESERVED'
         'lifecycle_state=REMOVED'

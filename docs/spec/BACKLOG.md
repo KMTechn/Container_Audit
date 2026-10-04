@@ -434,6 +434,13 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g19"></a>
 ## CA-G19 로그온 자동 갱신 실기 수용
 
+- **sub-217 지원 제거 controller 재진입:** 보호 원 감사·source/fence/owner 결속과 같은 session의
+  배타적 재획득을 추가했다. 실제 public fence/지원 제거/하위 내용 caller AST를 실행한 PS5.1/7
+  회귀 14 PASS(기준 실제 `ALREADY_ACTIVE` RED 2)다. 내용 이동 뒤 즉시 controller 종료와 추가
+  metadata 이동 중단·live owner·보호 감사 변조/tuple/source/사용자 경로 위조를 확인했다.
+  NTFS/hash/원 기록/이동/프로세스 종료/배타적 mutex는 실제이고 ACL/CIM/task/Run/UAC/해제 인증은
+  주입 경계다. 실제 설치기 전체·승격 조상 관측/보호 ACL·등록·relay·랩 수용은 NOT TESTED다.
+
 - **sub-217 canonical feed 준비:** 검증된 ZIP 접두로 stock 원문을 읽고, bundled runtime은
   stock `runtime_files`의 정확한 경로·SHA256으로만 denylist 예외를 적용한다.
   실제 ES256 서명·packet SHA·정확한 쌍·공개 준비/압축 해제의 11개 격리 회귀를 추가했다.
