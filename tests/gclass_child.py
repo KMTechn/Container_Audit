@@ -76,7 +76,10 @@ def audit(event, args):
         observed['network_calls'] += 1
         raise BoundaryReached('all child network is forbidden')
     if event == 'subprocess.Popen':
-        executable = Path(str(args[0])).name.casefold()
+        command = args[0]
+        if not command:
+            command = args[1][0] if isinstance(args[1], (tuple, list)) else str(args[1]).split(' ', 1)[0]
+        executable = Path(str(command).strip('"')).name.casefold()
         if executable not in ('git', 'git.exe'):
             if 'schtasks' in executable:
                 observed['task_changes'] += 1
@@ -211,5 +214,6 @@ after = snapshot()
 changed = sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
 print(json.dumps({**observed, 'result': result if isinstance(result, int) else None,
     'korean_refusal': generation.REFUSAL_MESSAGE in output or generation.UNKNOWN_MESSAGE in output,
+    'g_status': 'REFUSE' if generation.REFUSAL_MESSAGE in output else 'UNKNOWN' if generation.UNKNOWN_MESSAGE in output else 'NONE',
     'state_changes': [name for name in changed if 'data-generation' not in name],
     'marker_changes': [name for name in changed if 'data-generation' in name]}, ensure_ascii=True))

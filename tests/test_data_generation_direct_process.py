@@ -37,6 +37,7 @@ def test_direct_entry_refuses_before_identity_and_preserves_state(tmp_path, scen
     assert observed['network_calls'] == 0, observed
     assert observed['relay_stops'] == observed['autostart_changes'] == observed['task_changes'] == 0, observed
     assert observed['korean_refusal'], observed
+    assert observed['g_status'] == ('REFUSE' if generation_case == 'newer' else 'UNKNOWN'), observed
     assert observed['state_changes'] == [], observed
     assert observed['marker_changes'] == [], observed
 
