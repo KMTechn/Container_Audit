@@ -1953,6 +1953,7 @@ def replacement_lifecycle_restore_main(argv: list[str] | None = None) -> int:
         )
     except CurrentUserOnboardingError as exc:
         print(f"replacement_lifecycle_restore_status={exc.status}")
+        print(str(exc))
         print(f"replacement_lifecycle_restore_report={exc.report_path}")
         return ONBOARDING_EXIT_CODE
     except Exception:

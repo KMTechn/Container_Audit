@@ -21436,6 +21436,8 @@ def _first_run_onboarding_enabled() -> bool:
 def _show_first_run_onboarding_error(failure: CurrentUserOnboardingError) -> None:
     report_path = str(failure.report_path)
     operator_message = f"{FIRST_RUN_ONBOARDING_ERROR_MESSAGE}\n보고서: {report_path}"
+    if isinstance(failure.__cause__, DataGenerationBlocked):
+        operator_message = failure.__cause__.user_message
     try:
         messagebox.showerror(
             FIRST_RUN_ONBOARDING_ERROR_TITLE,
@@ -21527,6 +21529,8 @@ def _prepare_gui_startup(*, data_root=None):
             storage_paths = build_container_audit_storage_paths(
                 application_path=application_path, data_root=data_root,
             )
+            if storage_paths.custom_data_root and not storage_paths.data_root.is_dir():
+                raise DataRootUnavailableError("GUI data root is unavailable")
             probe_before_data_open(storage_paths.data_root)
             if storage_paths.custom_data_root:
                 validate_existing_data_root(storage_paths.data_root)

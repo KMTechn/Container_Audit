@@ -382,9 +382,17 @@ def _runtime_cycle(
     app_root: Path,
     direct_sync_root: Path,
     scan_source_dir: Path,
+    data_root: Path | None = None,
 ) -> dict[str, Any]:
     # Launch/control observation alone does not open user data. The raw runner
     # records under its existing admission immediately before queue/profile IO.
+    from data_generation_guard import DataGenerationBlocked, probe_before_data_open
+    try:
+        with writer_admission("persistent_relay_status"):
+            storage = build_container_audit_storage_paths(application_path=str(app_root), data_root=data_root)
+            probe_before_data_open(storage.data_root)
+    except DataGenerationBlocked as exc:
+        return {"status": "runtime_error", "error_code": exc.decision["message_key"], "error_message": exc.user_message}
     process_result = run_session_direct_sync_once(
         app_root=app_root,
         direct_sync_root=direct_sync_root,
@@ -392,9 +400,14 @@ def _runtime_cycle(
         reason="PERSISTENT_USER_RELAY",
         timeout_seconds=45,
     )
-    runtime_status = _read_json(
-        direct_sync_root / "status" / "direct_sync_relay_status.json"
-    )
+    try:
+        with writer_admission("persistent_relay_status"):
+            probe_before_data_open(storage.data_root)
+            runtime_status = _read_json(
+                direct_sync_root / "status" / "direct_sync_relay_status.json"
+            )
+    except DataGenerationBlocked as exc:
+        return {"status": "runtime_error", "error_code": exc.decision["message_key"], "error_message": exc.user_message}
     process_status = str(process_result.get("status") or "").strip() or "UNKNOWN"
     relay_status = (
         str((runtime_status or {}).get("status") or "").strip() or "UNKNOWN"
@@ -484,6 +497,9 @@ def main(argv: list[str] | None = None) -> int:
         _notify_data_root_error()
         return 1
     custom_root = storage.custom_data_root
+    if custom_root and not storage.data_root.is_dir():
+        _notify_data_root_error()
+        return 1
     from data_generation_guard import DataGenerationBlocked, probe_before_data_open
     try:
         with writer_admission("persistent_relay_status"):
@@ -510,6 +526,7 @@ def main(argv: list[str] | None = None) -> int:
                 app_root=app_root,
                 direct_sync_root=direct_sync_root,
                 scan_source_dir=scan_source_dir,
+                data_root=storage.data_root,
             )
             direct_sync_root.mkdir(parents=True, exist_ok=True)
             scan_source_dir.mkdir(parents=True, exist_ok=True)

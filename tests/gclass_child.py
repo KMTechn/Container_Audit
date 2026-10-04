@@ -37,7 +37,8 @@ for path in paths:
 
 identity = storage.direct_sync_root / registration.PRODUCER_IDENTITY_FILENAME
 identity.parent.mkdir(parents=True, exist_ok=True)
-identity.write_text('{}', encoding='utf-8')
+identity.write_text(json.dumps({'schema_version': registration.PRODUCER_IDENTITY_SCHEMA_VERSION,
+    **{name: 'synthetic-' + name.replace('_', '-') for name in registration.PRODUCER_IDENTITY_REQUIRED_FIELDS}}), encoding='utf-8')
 credential = storage.credential_path
 credential.parent.mkdir(parents=True, exist_ok=True)
 credential.write_text('{}', encoding='utf-8')
@@ -49,6 +50,9 @@ profile.write_text('{}', encoding='utf-8')
 queue = storage.direct_sync_root/'queue/relay.sqlite3'
 queue.parent.mkdir(parents=True, exist_ok=True)
 queue.write_bytes(b'synthetic owner queue')
+resident_status = storage.direct_sync_root/'status/resident-existing.json'
+resident_status.parent.mkdir(parents=True, exist_ok=True)
+resident_status.write_text('{"status":"RUNNING","preserved":true}', encoding='utf-8')
 onboard_report = storage.direct_sync_root/'status/current_user_onboarding.json'
 onboard_report.parent.mkdir(parents=True, exist_ok=True)
 onboard_report.write_text('{"status":"READY","preserved":true}', encoding='utf-8')
@@ -66,14 +70,28 @@ class BoundaryReached(Exception):
     pass
 
 def audit(event, args):
-    if event == 'sqlite3.connect' and str(Path(args[0]).resolve()).casefold() in watched:
-        observed['data_reads'] += 1
-        raise BoundaryReached('synthetic owner queue open reached')
+    if event == 'ctypes.dlsym' and str(args[1]).startswith('NCrypt'):
+        raise BoundaryReached('host CNG is forbidden')
+    if event == 'socket.connect':
+        observed['network_calls'] += 1
+        raise BoundaryReached('all child network is forbidden')
+    if event == 'subprocess.Popen':
+        executable = Path(str(args[0])).name.casefold()
+        if executable not in ('git', 'git.exe'):
+            if 'schtasks' in executable:
+                observed['task_changes'] += 1
+            raise BoundaryReached('native command replaced by isolated boundary')
+    if event == 'sqlite3.connect':
+        from urllib.parse import unquote
+        selected = str(args[0])
+        if selected.startswith('file:'):
+            selected = unquote(selected[5:].split('?', 1)[0])
+        if str(Path(selected).resolve()).casefold() in watched:
+            observed['data_reads'] += 1
     if event == 'open' and isinstance(args[0], (str, bytes, os.PathLike)):
         path = str(Path(os.fsdecode(args[0])).resolve()).casefold()
         if path in watched and ('r' in str(args[1]) or args[1] is None):
             observed['data_reads'] += 1
-            raise BoundaryReached('synthetic user-data read reached')
 sys.addaudithook(audit)
 
 import requests
@@ -109,6 +127,13 @@ def execute():
         return onboarding_main(['--app-root', source])
     if scenario == 'supervisor':
         return user_relay.main(['--app-root', source, '--data-root', str(data), '--once'])
+    if scenario == 'resident-cycle':
+        result = user_relay.run_persistent_relay_loop(
+            lambda: user_relay._runtime_cycle(app_root=Path(source), direct_sync_root=storage.direct_sync_root,
+                                             scan_source_dir=storage.events_dir),
+            status_path=storage.direct_sync_root/'status/resident-existing.json', max_cycles=1)
+        print(result.get('last_cycle', {}).get('error_message', ''))
+        return 1
     if scenario == 'raw-relay':
         from tools.direct_sync_relay_runner import main
         return main(['--db-path', str(queue), '--spool-dir', str(root/'spool'),
@@ -121,6 +146,12 @@ def execute():
             args = [mode, '--db-path', str(queue)]
         elif mode in ('pause', 'resume'):
             args = [mode, '--operator-pause-path', str(root/'pause.json'), '--operator-id', 'test', '--reason', 'synthetic']
+        elif mode == 'resolve-review':
+            args = [mode, '--db-path', str(queue), '--relay-id', 'synthetic', '--operator-id', 'test', '--reason', 'synthetic',
+                '--resolution', 'historical_local_only', '--evidence-path', str(root/'evidence.json'), '--evidence-sha256', 'a'*64,
+                '--expected-request-id', 'synthetic', '--expected-server-source-file-id', 'synthetic', '--expected-relative-path', 'synthetic',
+                '--expected-byte-length', '1', '--expected-inserted-count', '0', '--expected-replayed-count', '0',
+                '--expected-error-count', '0', '--expected-quarantined-count', '0', '--expected-content-sha256', 'a'*64, '--audit-log-path', str(root/'audit.jsonl')]
         elif mode == 'retry-dead':
             args = [mode, '--db-path', str(queue), '--relay-id', 'synthetic', '--operator-id', 'test', '--reason', 'synthetic', '--expected-error-code', 'synthetic']
         else:
