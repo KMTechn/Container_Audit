@@ -1049,6 +1049,8 @@ def inspect_current_user_state(
     try:
         identity = _read_json(paths.identity_path, "producer identity")
         manifest = _read_json(paths.producer_manifest_path, "producer manifest")
+        if prepared_credential is not None and prepared_credential.credential_error is not None:
+            raise prepared_credential.credential_error
         credential = (dict(prepared_credential.payload) if prepared_credential is not None
                       else _read_json(paths.credential_path, "producer credential"))
         registration = _read_json(paths.registration_report_path, "registration report")

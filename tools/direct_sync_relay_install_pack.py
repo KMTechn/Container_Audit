@@ -820,6 +820,16 @@ def _credential_report(path: str | os.PathLike[str], *, forbid_raw_secret: bool 
         report, payload = _load_json_object_report(path, label="credential")
     else:
         report = {"status": "PASS", "blocked_reason": "", "path": str(prepared_config.credential_path)}
+        if prepared_config.credential_error is not None:
+            cause = prepared_config.credential_error.__cause__
+            report.update(status="FAIL", blocked_reason="credential file is not valid JSON")
+            if isinstance(cause, DirectSyncPushError):
+                report.update(error_type="DuplicateJSONKey", error_message=str(cause))
+            elif cause is not None:
+                report["error_type"] = type(cause).__name__
+            else:
+                report["blocked_reason"] = "credential file must be a JSON object"
+            return report
         payload = prepared_config.payload
     if payload is None:
         return report

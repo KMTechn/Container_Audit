@@ -59,7 +59,7 @@ def test_external_input_spelling_uses_the_admitted_reader_path(tmp_path, scenari
     assert value['observed'] == dict(input_reads=0, network_calls=0, native_calls=0), value
     assert value['changed_file_count'] == 0, value
 
-NESTED = tuple('nested-' + entry + '-' + value for entry in ('raw','onboard','operator','pack','registrar')
+NESTED = tuple('nested-' + entry + '-' + value for entry in ('raw','onboard','operator','pack','registrar','gui','resident')
                for value in ('secret-explicit','secret-default','tls'))
 
 @pytest.mark.parametrize('scenario', NESTED)
@@ -74,7 +74,9 @@ def test_nested_credential_admission_precedes_every_mutation(tmp_path, scenario,
         assert value['changed_file_count'] == 0, value
     else:
         assert value['status'] == 'NONE', value
-        if not scenario.startswith('nested-operator') or not scenario.endswith('tls'):
+        if scenario.startswith(('nested-gui','nested-resident')):
+            assert value['observed']['input_reads'] == 0, value
+        elif not scenario.startswith('nested-operator') or not scenario.endswith('tls'):
             assert value['observed']['input_reads'] == 1, value
     assert value['external_marker_preserved'], value
 
@@ -84,8 +86,15 @@ def test_credential_locator_is_admitted_before_its_first_read(tmp_path):
     assert value['locator_reads'] == value['observed']['input_reads'] == 0, value
     assert value['changed_file_count'] == 0, value
 
-def test_credential_locator_parse_failure_is_unknown_before_mutation(tmp_path):
-    value = run_input(tmp_path, 'nested-raw-malformed-explicit', 'missing')
+def test_valid_locator_unresolvable_nested_path_is_unknown_before_mutation(tmp_path):
+    value = run_input(tmp_path, 'nested-raw-unresolvable-explicit', 'missing')
     assert value['status'] == 'UNKNOWN', value
     assert value['locator_reads'] == 1 and value['observed']['input_reads'] == 0, value
     assert value['changed_file_count'] == 0, value
+
+def test_malformed_locator_retains_admitted_install_pack_diagnostic(tmp_path):
+    value = run_input(tmp_path, 'nested-pack-malformed-explicit', 'missing')
+    assert value['status'] == 'NONE' and value['result'] == 2, value
+    assert value['locator_reads'] == 1 and value['observed']['input_reads'] == 0, value
+    assert value['report_change_count'] == 1, value
+    assert value['observed']['network_calls'] == value['observed']['native_calls'] == 0, value

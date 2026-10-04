@@ -101,6 +101,7 @@ class PreparedCredentialConfig:
     credential_path: Path
     payload: Mapping[str, Any] = field(repr=False)
     protected_secret_path: Path | None = field(default=None, repr=False)
+    credential_error: DirectSyncPushError | None = field(default=None, repr=False)
 
 
 def prepare_credential_config(path, *, data_root) -> PreparedCredentialConfig:
@@ -114,7 +115,15 @@ def prepare_credential_config(path, *, data_root) -> PreparedCredentialConfig:
     try:
         credential_path = resolve_owner_path(path)
         probe_before_owner_paths(data_root, file_paths=(credential_path,))
-        payload = _read_credential_payload(credential_path)
+        try:
+            payload = _read_credential_payload(credential_path)
+        except DirectSyncPushError as exc:
+            if isinstance(exc.__cause__, OSError):
+                raise
+            # Invalid JSON is the existing credential validation failure, not
+            # evidence of an unknown external owner. Keep the single read and
+            # let the admitted caller retain its existing diagnostic contract.
+            return PreparedCredentialConfig(credential_path, MappingProxyType({}), credential_error=exc)
         payload = dict(payload)
         files, directories = [], []
         protected_path = None
@@ -473,6 +482,8 @@ def _read_credential_payload(credential_path: Path) -> dict:
 def load_credentials_from_json(path: str | os.PathLike[str], *,
                                prepared_config: PreparedCredentialConfig | None = None) -> ProducerCredentials:
     credential_path = prepared_config.credential_path if prepared_config is not None else Path(path)
+    if prepared_config is not None and prepared_config.credential_error is not None:
+        raise prepared_config.credential_error
     payload = prepared_config.payload if prepared_config is not None else _read_credential_payload(credential_path)
     producer_id = str(payload.get("producer_id") or "").strip()
     key_id = str(payload.get("key_id") or "").strip()

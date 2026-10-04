@@ -96,6 +96,9 @@ if scenario.startswith('nested-'):
         marker_root = credential_locator.parent
     if 'malformed' in scenario:
         credential_locator.write_text('{', encoding='utf-8')
+    if 'unresolvable' in scenario:
+        payload['tls_ca_bundle_path'] = str(external / ('invalid' + chr(0) + '.pem'))
+        credential_locator.write_text(json.dumps(payload), encoding='utf-8')
 
 receipt_hash = hashlib.sha256(selected.read_bytes()).hexdigest()
 if scenario == 'lifecycle-receipt':
@@ -188,11 +191,33 @@ def execute():
                 '--operator-id','isolated','--reason','isolated'])
         if scenario.startswith('nested-pack'):
             from tools import direct_sync_relay_install_pack as pack
-            pack.build_install_plan = lambda args: load(getattr(args,'prepared_credential',None))
+            if 'malformed' in scenario:
+                def plan(args):
+                    detail = pack._credential_report(args.credential_path, prepared_config=getattr(args,'prepared_credential',None))
+                    return dict(status='BLOCKED', credential=detail,
+                        task_name_validation=dict(status='FAIL',blocked_reason='isolated credential validation'))
+                pack.build_install_plan = plan
+            else:
+                pack.build_install_plan = lambda args: load(getattr(args,'prepared_credential',None))
             return pack.main(['--app-root',str(source),'--credential-path',str(credential_locator),'--report-path',str(data/'report.json')])
         if scenario.startswith('nested-registrar'):
             registration.build_registration_payloads = lambda args: load(getattr(args,'prepared_credential',None))
             return registration.main(['--app-root',str(source),'--credential-path',str(credential_locator)])
+        if scenario.startswith('nested-gui'):
+            import Container_Audit as app
+            app.verify_factory_contract_startup = lambda: None
+            app.acquire_runtime_instance = lambda *a: SimpleNamespace(release=lambda: None)
+            app.clear_shutdown_stall = lambda *a: None
+            app._first_run_onboarding_enabled = lambda: False
+            app.prepare_startup_item_catalog = lambda: None
+            app.ContainerAudit = lambda: SimpleNamespace(root=SimpleNamespace(after=lambda *a: None))
+            return app._prepare_gui_startup()
+        if scenario.startswith('nested-resident'):
+            import user_relay
+            user_relay.acquire_runtime_instance = lambda *a: SimpleNamespace(release=lambda: None)
+            user_relay.run_persistent_relay_loop = lambda *a, **k: (_ for _ in ()).throw(BoundaryStop())
+            return user_relay.main(['--app-root',str(source),'--data-root',str(data),'--direct-sync-root',str(credential_locator.parent),
+                '--scan-source-dir',str(paths.events_dir),'--once'])
         from tools import direct_sync_relay_runner as runner
         runner.run_relay_once = lambda config: load(getattr(config,'prepared_credential',None))
         return runner.main(['--db-path',str(data/'q.db'),'--spool-dir',str(data/'spool'),
