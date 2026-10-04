@@ -1,7 +1,9 @@
 # 남은 요구·검증·문서·추가 제안
 
 자료 세대 내림 guard(sub-219)는 helper 두 면의 원자 기록/readback·build 결속 격리 회귀 27 PASS까지 PROVEN이다.
-CA의 자료-open 3곳과 restore/reinstall 7곳에 호출을 연결했고 입구 회귀는 진행 중이다.
+CA의 자료-open 3곳과 restore/reinstall 7곳에 호출을 연결했으며 관련52 PASS와 native
+자료 사용 뒤 거절을 확인했다. 최종 집중+신규307건은305 PASS/2 FAIL; 두 옛 post-data
+복원 기대는 G 결정과 충돌하여 기존 exact 단언을 보존한 시험 범위 조정을 코디에게 물었다.
 shared 0.3.2/7파일 생성 manifest/lock/bootstrap pin을 채택했으며 새 guarded sink 하나를
 표준 재생성했다. 독립 review·최종 focused/stock과 frozen/실제 GUI 설치 수용은 남아 있다.
 builder version/최소 호환 판 입력과 기존 ES256 signed private manifest 소비는 관련

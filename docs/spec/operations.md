@@ -4,7 +4,7 @@
 `kmtech_shared/powershell/data_generation.ps1`은 사용자 자료를 열었던 가장 새 판과
 서명 검증된 최소 호환 판을 기록한다. 기록 없음은 ALLOW, 손상·읽기 실패·판 비교
 불가·같은 판 다른 build(서명된 명시 호환 없음)는 UNKNOWN 거절이다. 원자 기록 뒤 readback을 확인하며 Python 3.12.10·PS5.1·PS7 격리 함수 시험 27 PASS는
-helper 근거다. **CA 실제 입구의 headless 회귀는 진행 중**이며 GUI/relay/onboarding
+helper 근거다. **CA 실제 입구 관련52 PASS, native 자료 사용 뒤 복원 거절 PASS**이며 GUI/relay/onboarding
 3곳과 코드 restore/reinstall 7곳에 호출을 연결했다. shared 선언 확대는
 허용되었다. G-DECISIONS대로 실제 자료를 처음 여는 경계의 기존 admission 아래에서
 자료 root와 기존 control root/SID에 기록하며 launch 직전에 미리 기록하지 않는다.
@@ -18,6 +18,9 @@ resident supervisor의 process launch/control 상태 조회는 기록하지 않�
 반영했다. raw relay의 명시 queue root가 GUI와 달라도 기존 SID control marker를 함께
 써 설치기 probe가 관측한다. source는 clean commit, portable은 기존 bootstrap 코드
 검증+version/commit 결속, frozen은 기존 factory package verifier로 build를 확인한다.
+최종 집중+신규307건은305 PASS/2 FAIL이다. 두 실패는 실제 온보딩으로 자료를 연 뒤
+다른 옛 build로 복원을 허용하던 기대이며 G 결정과 충돌하여 코디 판단을 기다린다.
+새 adapter는 stock builder의 고정 app 목록에도 포함하고 실제 복사 회귀로 검증한다.
 [API·현재 한계](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/HELPER-READY.md).
 
 출시 때 stock builder는 실제 `CURRENT_VERSION`에서 portable manifest의 `version`을

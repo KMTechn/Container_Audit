@@ -52,6 +52,7 @@ APP_ROOT_FILES = (
     "container_audit_product_host.py",
     "container_audit_test_harness.py",
     "current_user_onboarding.py",
+    "data_generation_guard.py",
     "direct_sync_auto_bootstrap.py",
     "direct_sync_health.py",
     "direct_sync_operator.py",
