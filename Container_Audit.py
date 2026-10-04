@@ -21470,8 +21470,9 @@ def main(argv: list[str] | None = None):
     options, _ = parser.parse_known_args(arguments)
     try:
         startup = _prepare_gui_startup(data_root=options.data_root)
-    except DataGenerationBlocked as exc:
-        messagebox.showerror("자료 판 확인", str(exc))
+    except DataGenerationBlocked as blocked:
+        notice = blocked.user_message
+        messagebox.showerror("자료 판 확인", notice)
         return 1
     except DataRootUnavailableError:
         # Display the recovery action after releasing writer admission.

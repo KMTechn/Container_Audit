@@ -15,7 +15,9 @@ from writer_session_fence import canonical_control_root, writer_sink
 class DataGenerationBlocked(RuntimeError):
     def __init__(self, decision):
         self.decision = decision
-        super().__init__(decision["message"] or generation.UNKNOWN_MESSAGE)
+        self.user_message = (generation.REFUSAL_MESSAGE if decision.get("status") == "REFUSE"
+                             else generation.UNKNOWN_MESSAGE)
+        super().__init__(self.user_message)
 
 
 def _runtime_release():

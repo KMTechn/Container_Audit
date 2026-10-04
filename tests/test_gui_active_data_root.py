@@ -127,7 +127,15 @@ def test_successful_onboarding_persists_root_for_a_later_plain_gui(
     app.mkdir()
     (app / "Container_Audit.exe").touch()
     monkeypatch.setattr(user_relay, "_registry_set", lambda value: saved.update(command=value))
-    monkeypatch.setattr(user_relay.subprocess, "Popen", lambda *args, **kw: SimpleNamespace(pid=123))
+    original_popen = subprocess.Popen
+
+    def launch(command, **kwargs):
+        # The relay seam must preserve read-only release-identity Git calls.
+        if command[0] == "git":
+            return original_popen(command, **kwargs)
+        return SimpleNamespace(pid=123)
+
+    monkeypatch.setattr(user_relay.subprocess, "Popen", launch)
     def register(paths):
         _ready_state(paths)
         return 0

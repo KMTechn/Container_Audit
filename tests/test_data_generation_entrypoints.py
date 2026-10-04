@@ -179,3 +179,14 @@ try {{ Assert-ContainerDataGenerationTarget @args }} catch {{ $blocked=$true; $m
     assert denied.returncode == 0, denied.stdout + denied.stderr
     assert json.loads(denied.stdout)["blocked"] is True
     assert (corrupt / "data-generation.json").read_bytes() == b"{"
+
+
+@pytest.mark.parametrize("status", ["REFUSE", "UNKNOWN"])
+def test_generation_failure_exposes_only_fixed_worker_recovery(status):
+    from data_generation_guard import DataGenerationBlocked
+    from kmtech_shared import data_generation as generation
+
+    blocked = DataGenerationBlocked({"status": status, "message": "internal diagnostic"})
+    expected = generation.REFUSAL_MESSAGE if status == "REFUSE" else generation.UNKNOWN_MESSAGE
+    assert blocked.user_message == str(blocked) == expected
+    assert "internal diagnostic" not in str(blocked)
