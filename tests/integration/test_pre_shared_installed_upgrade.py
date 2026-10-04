@@ -64,6 +64,7 @@ def test_pre_shared_installed_tree_passes_current_preflight_and_verified_replace
         "Full", "Same", "Sha", "Test-JsonTrue", "Test-JsonInteger",
         "Get-WriterContractSessionMutexName", "Assert-WriterSessionPublicContract",
         "Assert-WriterSinkInventory", "Manifest", "InstalledManifest", "Get-WriterInventorySemantics",
+        'Get-ContainerTransitionCodeFiles', 'Test-ContainerDataGenerationForwardTransition',
     ], r'''
 [Threading.Thread]::CurrentThread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo($env:CA_UPGRADE_CULTURE)
 [Threading.Thread]::CurrentThread.CurrentUICulture = [Threading.Thread]::CurrentThread.CurrentCulture
