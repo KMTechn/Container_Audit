@@ -8,6 +8,11 @@ helper 근거다. **CA 실제 입구의 headless 회귀는 진행 중**이며 GU
 4곳과 코드 restore/reinstall 7곳에 호출을 연결했다. shared 선언 확대는
 허용되었다. G-DECISIONS대로 실제 자료를 처음 여는 경계의 기존 admission 아래에서
 자료 root와 기존 control root/SID에 기록하며 launch 직전에 미리 기록하지 않는다.
+GUI는 singleton 확인/온보딩 코드 검증 뒤 catalog 자료 직전, onboarding은 코드
+무결성 검증 뒤 실제 상태 검사 직전, resident relay는 실제 cycle 직전에 기록한다.
+자료 root override가 기존 admission control root를 옮기지 않으며 중복 GUI·코드 검증
+실패·cycle에 도달하지 않은 relay는 새 기록을 남기지 않는다. portable Python entrypoint를
+기존 exact bootstrap inventory로 검증하고 frozen 기본 EXE 검증은 유지한다.
 새 `data_generation_marker` sink 하나와 shared leaf의 exact caller 선언을 표준 생성기에
 반영했다. raw relay의 명시 queue root가 GUI와 달라도 기존 SID control marker를 함께
 써 설치기 probe가 관측한다. source는 clean commit, portable은 기존 bootstrap 코드

@@ -379,7 +379,12 @@ def _runtime_cycle(
     app_root: Path,
     direct_sync_root: Path,
     scan_source_dir: Path,
+    data_root: Path | None = None,
 ) -> dict[str, Any]:
+    try:
+        record_before_data_open(data_root if data_root is not None else direct_sync_root)
+    except DataGenerationBlocked as exc:
+        return {"status": "runtime_error", "error_code": exc.decision["message_key"], "error_message": str(exc)}
     process_result = run_session_direct_sync_once(
         app_root=app_root,
         direct_sync_root=direct_sync_root,
@@ -479,7 +484,6 @@ def main(argv: list[str] | None = None) -> int:
         with writer_admission("persistent_relay_status"):
             if custom_root:
                 validate_existing_data_root(storage.data_root)
-            record_before_data_open(storage.data_root)
             ensure_container_audit_storage_dirs(storage)
             direct_sync_root = (
                 Path(args.direct_sync_root).expanduser().resolve()
@@ -498,11 +502,6 @@ def main(argv: list[str] | None = None) -> int:
             )
             direct_sync_root.mkdir(parents=True, exist_ok=True)
             scan_source_dir.mkdir(parents=True, exist_ok=True)
-    except DataGenerationBlocked as exc:
-        _write_json_atomic(user_relay_status_path(storage.direct_sync_root), {
-            "status": "runtime_error", "error_code": exc.decision["message_key"],
-            "error_message": str(exc), "updated_at": _now()})
-        return 1
     except (OSError, ValueError):
         if not custom_root:
             raise
@@ -520,6 +519,7 @@ def main(argv: list[str] | None = None) -> int:
                 app_root=app_root,
                 direct_sync_root=direct_sync_root,
                 scan_source_dir=scan_source_dir,
+                data_root=storage.data_root,
             ),
             status_path=user_relay_status_path(direct_sync_root),
             interval_seconds=args.interval_seconds,

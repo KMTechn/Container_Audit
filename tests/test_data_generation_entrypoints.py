@@ -79,11 +79,33 @@ def test_persistent_relay_refusal_keeps_runtime_unopened(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(relay, "record_before_data_open", lambda *args: (_ for _ in ()).throw(DataGenerationBlocked(
         {"status": "REFUSE", "allowed": False, "message_key": "data_generation_downgrade_refused", "message": generation.REFUSAL_MESSAGE})))
-    monkeypatch.setattr(relay, "run_persistent_relay_loop", lambda *args, **kwargs: calls.append(True))
+    monkeypatch.setattr(relay, "run_session_direct_sync_once", lambda *args, **kwargs: calls.append(True))
     assert relay.main(["--data-root", str(data), "--once"]) == 1
     assert not calls
     report = json.loads((data / "direct_sync/status/container_audit_user_relay.json").read_bytes())
-    assert "옛 판으로 되돌릴 수 없습니다" in report["error_message"]
+    assert "옛 판으로 되돌릴 수 없습니다" in report["last_cycle"]["error_message"]
+
+
+def test_gui_duplicate_lease_does_not_record_unused_generation(tmp_path, monkeypatch):
+    import Container_Audit as app
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setattr(app, "verify_factory_contract_startup", lambda: None)
+    monkeypatch.setattr(app, "acquire_runtime_instance", lambda *args: None)
+    monkeypatch.setattr(app.messagebox, "showwarning", lambda *args: None)
+    assert app.main(["--data-root", str(data)]) is None
+    assert not (data / "data-generation.json").exists()
+
+
+def test_onboarding_code_failure_does_not_record_before_data_open(tmp_path, monkeypatch):
+    import current_user_onboarding as onboarding
+    data = tmp_path / "data"
+    def invalid(*args, **kwargs):
+        raise ValueError("synthetic code-integrity failure")
+    monkeypatch.setattr(onboarding, "verify_bootstrap_integrity", invalid)
+    with pytest.raises(onboarding.CurrentUserOnboardingError):
+        onboarding.onboard_current_user(tmp_path / "code", environ={"CONTAINER_AUDIT_DATA_ROOT": str(data)})
+    assert not (data / "data-generation.json").exists()
 
 
 @pytest.mark.parametrize("engine", ["powershell.exe", "pwsh.exe"])

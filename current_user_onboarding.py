@@ -345,6 +345,7 @@ def verify_bootstrap_integrity(
     paths: CurrentUserOnboardingPaths,
     *,
     required: bool,
+    expected_entrypoint: str = "Container_Audit.exe",
 ) -> dict[str, Any]:
     if not required:
         return {"status": "NOT_TESTED", "reason": "source-mode onboarding"}
@@ -433,20 +434,22 @@ def verify_bootstrap_integrity(
     aggregate = hashlib.sha256(aggregate_payload).hexdigest()
     if aggregate != str(record.get("aggregate_sha256") or "").strip().lower():
         raise ValueError("bootstrap integrity aggregate is invalid")
+    if expected_entrypoint not in {"Container_Audit.exe", "app/Container_Audit.py", "Container_Audit.py"}:
+        raise ValueError("bootstrap code entrypoint is not approved")
     main_entries = [
         item
         for item in files
         if isinstance(item, Mapping)
         and str(item.get("path") or "").replace("\\", "/").casefold()
-        == "container_audit.exe".casefold()
+        == expected_entrypoint.casefold()
     ]
     if len(main_entries) != 1:
         raise ValueError(
-            "bootstrap integrity record does not identify Container_Audit.exe"
+            f"bootstrap integrity record does not identify {expected_entrypoint}"
         )
-    executable = paths.app_root / "Container_Audit.exe"
+    executable = paths.app_root / expected_entrypoint
     if not executable.is_file():
-        raise ValueError("hardened Container_Audit executable is absent")
+        raise ValueError("verified Container_Audit code entrypoint is absent")
     return {
         "status": "PASS",
         "record_path": str(paths.bootstrap_integrity_path),
@@ -1225,15 +1228,6 @@ def onboard_current_user(
     relay_launcher: Callable[..., Mapping[str, Any]] = start_user_relay_process,
 ) -> dict[str, Any]:
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
-    from data_generation_guard import DataGenerationBlocked, record_before_data_open
-
-    try:
-        record_before_data_open(paths.data_root, environ=environ)
-    except DataGenerationBlocked as exc:
-        _write_json_atomic(paths.onboarding_report_path, {
-            "status": "FAILED", "failure": str(exc), "error_code": exc.decision["message_key"],
-            "captured_at": _now(), "state_scope": "current_user"})
-        raise CurrentUserOnboardingError(str(exc), report_path=paths.onboarding_report_path) from exc
     tls_ca_source = _configured_tls_ca_bundle_source(paths, environ)
     attempt = RemoteAttempt.begin(paths.onboarding_report_path, "current_user_onboarding")
     with writer_admission("current_user_onboarding"):
@@ -1278,6 +1272,8 @@ def onboard_current_user(
                 bootstrap_integrity_detail.get("status") or "UNKNOWN"
             ).lower()
             report["bootstrap_integrity_detail"] = bootstrap_integrity_detail
+            from data_generation_guard import record_before_data_open
+            record_before_data_open(paths.data_root)
             state = inspect_current_user_state(
                 paths,
                 profile_loader=profile_loader,
@@ -1409,6 +1405,9 @@ def onboard_current_user(
         report["status"] = "FAILED"
         report["failure"] = str(exc)[:500]
         report["error_type"] = exc.__class__.__name__
+        from data_generation_guard import DataGenerationBlocked
+        if isinstance(exc, DataGenerationBlocked):
+            report["error_code"] = exc.decision["message_key"]
         with attempt.apply() as current:
             if current:
                 _write_json_atomic(paths.onboarding_report_path, report)

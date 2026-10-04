@@ -40,7 +40,8 @@ def _runtime_release():
         from types import SimpleNamespace
 
         detail = verify_bootstrap_integrity(SimpleNamespace(
-            app_root=packet_root, bootstrap_integrity_path=packet_root / "bootstrap-integrity.json"), required=True)
+            app_root=packet_root, bootstrap_integrity_path=packet_root / "bootstrap-integrity.json"), required=True,
+            expected_entrypoint=(app_root / "Container_Audit.py").relative_to(packet_root).as_posix())
         if detail.get("status") != "PASS":
             raise ValueError("release code integrity is not proven")
         if manifest_path.stat().st_size > 65536:
@@ -69,14 +70,16 @@ def marker_paths(data_root, subject_sid, *, environ=None):
 
 
 @writer_sink("data_generation_marker")
-def record_before_data_open(data_root, *, environ=None):
+def record_before_data_open(data_root):
     """Probe/record/readback under existing admission, before any DB or sidecar."""
     try:
         from tools.register_container_audit_worker_pc import _current_user_sid
 
         sid = _current_user_sid()
         release = _runtime_release()
-        paths = marker_paths(data_root, sid, environ=environ)
+        # Bind to the same ambient current-user control root as writer_sink's
+        # admission. An onboarding data-root override does not relocate admission.
+        paths = marker_paths(data_root, sid)
         decision = generation.probe_downgrade(paths, release["version"], app_id="container_audit",
                                               subject_sid=sid, target_build_id=release["build_id"])
         if not decision["allowed"]:

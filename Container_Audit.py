@@ -21511,7 +21511,6 @@ def _prepare_gui_startup(*, data_root=None):
         if storage_paths.custom_data_root:
             # Keep onboarding, GUI constructors and subprocesses on this selection.
             os.environ[DATA_ROOT_ENV] = str(storage_paths.data_root)
-        record_before_data_open(storage_paths.data_root)
         try:
             instance_lease = acquire_runtime_instance(storage_paths.data_root)
         except OSError:
@@ -21554,6 +21553,7 @@ def _prepare_gui_startup(*, data_root=None):
                         application_path
                     ).onboarding_report_path
                 )
+        record_before_data_open(storage_paths.data_root)
         try:
             catalog_unconfirmed = False
             catalog_context = {}
