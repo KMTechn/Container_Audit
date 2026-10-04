@@ -14,6 +14,7 @@ from tests.test_container_p0_contracts import _health_card
 from tests.test_item_catalog_sync import CATALOG, FakeResponse, _profile
 from tests.test_scanonly_review_regressions import public_scan, real_notice
 from tests.test_w9scanonly_workflow import flow, windows, fixed_operation_lease_clock, COMPACT_QR, ITEM
+from writer_session_fence import WriterFencedError
 
 pytestmark = pytest.mark.usefixtures("fixed_operation_lease_clock", "owned_tk_workers")
 
@@ -68,6 +69,36 @@ def _offline_catalog(monkeypatch, tmp_path, *, tamper=False):
     monkeypatch.setattr(ca, "refresh_item_catalog", lambda *_args, **kwargs:
                         sync.refresh_item_catalog(bundled, cache_path=cache,
                                                   get=offline, **kwargs))
+
+
+@pytest.mark.parametrize("failure", [OSError("synthetic delete failure"),
+    WriterFencedError("SYNTHETIC_FENCE", "synthetic denial")])
+def test_shutdown_marker_delete_failure_does_not_block_owned_start(startup, monkeypatch, tmp_path, failure):
+    app, released = startup
+    _offline_catalog(monkeypatch, tmp_path)
+    def refuse_delete(_root):
+        raise failure
+    monkeypatch.setattr(ca, "clear_shutdown_stall", refuse_delete)
+    result = ca._prepare_gui_startup()
+    assert isinstance(result, tuple) and result[0] is app
+    assert released == []
+    result[1].release()
+    assert released == [True]
+
+
+@pytest.mark.parametrize("stalled", [True, False])
+def test_duplicate_launch_uses_live_shutdown_notice_without_starting_app(startup, monkeypatch, tmp_path, stalled):
+    import runtime_instance
+    if stalled:
+        runtime_instance.write_shutdown_stall(tmp_path / "data")
+    monkeypatch.setattr(ca, "acquire_runtime_instance", lambda _root: None)
+    notices = []
+    monkeypatch.setattr(ca.messagebox, "showwarning", lambda title, body: notices.append((title, body)))
+    monkeypatch.setattr(ca, "ContainerAudit", lambda: pytest.fail("duplicate launch constructed app"))
+    assert ca._prepare_gui_startup() is None
+    assert len(notices) == 1
+    assert ("PC를 재시작" in notices[0][1]) is stalled
+    assert ("열려 있는 창" in notices[0][1]) is (not stalled)
 
 
 def test_verified_offline_start_has_no_window_and_scans_then_updates_connection(

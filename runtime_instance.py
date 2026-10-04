@@ -2,13 +2,77 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import json
 import os
+import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
+
+from writer_session_fence import writer_sink
 
 
 ERROR_ALREADY_EXISTS = 183
 SYNCHRONIZE = 0x00100000
+
+
+@writer_sink("runtime_shutdown_diagnostic")
+def write_shutdown_stall(data_root: str | os.PathLike[str]) -> None:
+    """Record a diagnostic only; accepted business work remains in its stores."""
+    path = Path(data_root) / "shutdown-stalled.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "pid": os.getpid(), "executable": sys.executable,
+        "threads": [t.name[:96] for t in threading.enumerate()
+                    if t is not threading.current_thread()][:16],
+    }), encoding="utf-8")
+
+
+@writer_sink("runtime_shutdown_diagnostic")
+def clear_shutdown_stall(data_root: str | os.PathLike[str]) -> None:
+    (Path(data_root) / "shutdown-stalled.json").unlink(missing_ok=True)
+
+
+def shutdown_stall_is_live(data_root: str | os.PathLike[str]) -> bool:
+    """A stale or unreadable diagnostic never establishes process ownership."""
+    try:
+        path = Path(data_root) / "shutdown-stalled.json"
+        if path.stat().st_size > 4096:
+            return False
+        with path.open("rb") as stream:
+            payload = stream.read(4097)
+        if len(payload) > 4096:
+            return False
+        record = json.loads(payload)
+        pid = record["pid"]
+        executable = record["executable"]
+        if type(pid) is not int or not 0 < pid <= 0xFFFFFFFF or not isinstance(executable, str):
+            return False
+        if os.name != "nt":
+            return False
+        api = ctypes.WinDLL("kernel32", use_last_error=True)
+        api.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+        api.OpenProcess.restype = ctypes.c_void_p
+        api.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        api.WaitForSingleObject.restype = ctypes.c_ulong
+        api.QueryFullProcessImageNameW.argtypes = [ctypes.c_void_p, ctypes.c_ulong,
+                                                  ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_ulong)]
+        api.QueryFullProcessImageNameW.restype = ctypes.c_int
+        api.CloseHandle.argtypes = [ctypes.c_void_p]
+        api.CloseHandle.restype = ctypes.c_int
+        handle = api.OpenProcess(SYNCHRONIZE | 0x1000, False, pid)
+        if not handle:
+            return False
+        try:
+            image = ctypes.create_unicode_buffer(32768)
+            size = ctypes.c_ulong(len(image))
+            return bool(api.WaitForSingleObject(handle, 0) == 258
+                        and api.QueryFullProcessImageNameW(handle, 0, image, ctypes.byref(size))
+                        and os.path.normcase(image.value) == os.path.normcase(executable))
+        finally:
+            api.CloseHandle(handle)
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
 
 
 def runtime_mutex_name(data_root: str | os.PathLike[str]) -> str:

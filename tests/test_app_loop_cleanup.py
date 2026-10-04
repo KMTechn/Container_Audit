@@ -47,6 +47,9 @@ def _child(directory, mode):
         restored_scans = list(app.current_tray.scanned_barcodes)
     original_release = lease.release
     blocked_release = threading.Event()
+    finite = mode.startswith("finite-") or mode == "destroyed"
+    if finite:
+        app.LOOP_CLEANUP_TIMEOUT_SECONDS = 0.2
 
     def release():
         events.append("release")
@@ -77,12 +80,18 @@ def _child(directory, mode):
     module.stop_all_sounds = lambda: events.append("sounds")
 
     class Root(FakeTkRoot):
+        def after(self, *args):
+            if self.destroyed:
+                raise tkinter.TclError("application destroyed")
+            return super().after(*args)
+
         def destroy(self):
             super().destroy()
+            self.jobs.clear()
             events.append("destroy")
 
         def mainloop(self):
-            if mode == "normal":
+            if mode == "normal" or mode.endswith("-normal"):
                 app.on_closing(_confirmed=True)
                 self.run_until(lambda: self.destroyed, timeout=8)
             elif mode == "refused":
@@ -97,12 +106,15 @@ def _child(directory, mode):
                 self.run_until(lambda: self.destroyed, timeout=8)
             elif mode == "early":
                 app.on_closing(_confirmed=True)
-            elif mode == "raise":
+            elif mode == "raise" or mode.endswith("-raise"):
                 raise RuntimeError("loop probe")
             elif mode == "interrupt":
                 raise KeyboardInterrupt
             elif mode == "exit":
                 raise SystemExit(17)
+            elif mode == "destroyed":
+                self.destroy()
+                app._application_destroy_attempted = True
 
     app.root = Root()
     app.log_thread = threading.Thread(target=app._event_log_writer, daemon=True,
@@ -113,14 +125,36 @@ def _child(directory, mode):
     app._preflight_hold_writer_instance = PreflightScanHoldWriter(app.root, queue_capacity=2)
     workers = [app._ui_lane.worker_thread, app._central_transport_lane.worker_thread,
                app._preflight_hold_writer_instance.thread, app.log_thread]
-    admitted = app._ui_lane.submit(LaneTask(
+    lane = app._central_transport_lane if "central" in mode else app._ui_lane
+    def work():
+        if mode == "blocked":
+            return blocked_release.wait()
+        if finite:
+            time.sleep(6)
+        if mode == "destroyed":
+            # The durable checkpoint is made before a late GUI projection.
+            app.current_tray.scanned_barcodes.append("BC-3")
+            app.current_tray.scan_times.append(app.current_tray.scan_times[-1])
+            assert app._save_current_tray_state()
+            events.append("durable")
+            return True
+        return lane.call_ui_sync(lambda: events.append("checkpoint") or True)
+    def finish(result):
+        if mode == "destroyed":
+            app.root.after(0, lambda: events.append("invalid-late-ui"))
+        events.append("finish")
+    admitted = lane.submit(LaneTask(
         "shutdown-checkpoint", 0,
-        (lambda: blocked_release.wait()) if mode == "blocked" else
-        (lambda: app._ui_lane.call_ui_sync(lambda: events.append("checkpoint") or True)),
-        lambda result: events.append("finish"),
+        work, finish,
         lambda exc: events.append("failure"),
     ))
     assert admitted.accepted
+    if mode == "blocked":
+        def unblock():
+            while not (directory / "rescue").exists():
+                time.sleep(0.02)
+            blocked_release.set()
+        threading.Thread(target=unblock, daemon=True).start()
     module._prepare_gui_startup = lambda **kwargs: (app, lease)
     error = None
     code = 0
@@ -171,6 +205,26 @@ def test_loop_exit_drains_workers_and_allows_same_root_restart(tmp_path, mode):
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     try:
+        if mode == "blocked":
+            deadline = time.monotonic() + 4
+            while not (tmp_path / "shutdown-stalled.json").exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            stayed_alive = process.poll() is None
+            marked = (tmp_path / "shutdown-stalled.json").exists()
+            from runtime_instance import acquire_runtime_instance
+            import runtime_instance
+            original_name = runtime_instance.runtime_mutex_name
+            runtime_instance.runtime_mutex_name = lambda root: (
+                "Local\\KMTech.Test.CA.Loop." + hashlib.sha256(str(tmp_path).encode()).hexdigest()[:20]
+            )
+            try:
+                second = acquire_runtime_instance(tmp_path)
+                retained = second is None
+                if second is not None:
+                    second.release()
+            finally:
+                runtime_instance.runtime_mutex_name = original_name
+            (tmp_path / "rescue").touch()
         try:
             output, error_output = process.communicate(timeout=12)
             natural_exit = True
@@ -183,10 +237,11 @@ def test_loop_exit_drains_workers_and_allows_same_root_restart(tmp_path, mode):
         assert natural_exit, observation
         assert process.returncode == (17 if mode == "exit" else 0), error_output[-1000:]
         if mode == "blocked":
-            assert any(worker["alive"] for worker in observation["workers"]), observation
-            assert all(worker["daemon"] for worker in observation["workers"] if worker["alive"])
-            assert observation["mutex_retained"] and observation["pending_audits"] == 1
-            assert "release" not in observation["events"]
+            assert stayed_alive and marked and retained
+            assert observation["pending_audits"] == 1
+            assert not (tmp_path / "shutdown-stalled.json").exists()
+            assert all(not worker["alive"] for worker in observation["workers"]), observation
+            assert observation["events"].count("release") == 1
         else:
             assert all(not worker["alive"] for worker in observation["workers"]), observation
             assert observation["events"].count("release") == 1
@@ -205,6 +260,36 @@ def test_loop_exit_drains_workers_and_allows_same_root_restart(tmp_path, mode):
             assert sum(row["event"] == "SHUTDOWN_PROBE" for row in csv.DictReader(stream)) == 2
     finally:
         assert process.poll() is not None, "owned child remains alive; preserve its evidence"
+
+
+@pytest.mark.parametrize("mode", ["finite-ui-normal", "finite-central-normal", "finite-ui-raise", "finite-central-raise", "destroyed"])
+def test_finite_work_survives_the_notice_deadline_and_destroyed_root(tmp_path, mode):
+    command = [sys.executable, "-B", "-c",
+               "from tests.test_app_loop_cleanup import _child; import sys; _child(sys.argv[1],sys.argv[2])",
+               str(tmp_path), mode]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    started = time.monotonic()
+    output, error_output = process.communicate(timeout=12)
+    observation = json.loads((tmp_path / "observation.json").read_text(encoding="utf-8"))
+    assert process.returncode == 0, error_output[-1000:]
+    assert time.monotonic() - started >= 6
+    assert all(not worker["alive"] for worker in observation["workers"]), observation
+    assert observation["events"].count("release") == 1
+    assert not (tmp_path / "shutdown-stalled.json").exists()
+    if mode == "destroyed":
+        assert "durable" in observation["events"] and "invalid-late-ui" not in observation["events"]
+        assert observation["error"] == "TclError"
+        (tmp_path / "observation-first.json").write_bytes((tmp_path / "observation.json").read_bytes())
+        restart = subprocess.run(command[:-1] + ["normal"], capture_output=True, timeout=12,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        assert restart.returncode == 0, restart.stderr[-1000:]
+        recovered = json.loads((tmp_path / "observation.json").read_text(encoding="utf-8"))
+        assert recovered["restored_scans"] == ["BC-1", "BC-2", "BC-3"]
+    else:
+        assert observation["events"].count("checkpoint") == observation["events"].count("finish") == 1
+        assert observation["events"].index("finish") < observation["events"].index("release")
+        assert observation["error"] == ("RuntimeError" if mode.endswith("-raise") else None)
 
 
 @pytest.mark.parametrize("original", [RuntimeError("loop probe"), KeyboardInterrupt(), SystemExit(17)])

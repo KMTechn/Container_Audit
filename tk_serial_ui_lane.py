@@ -9,7 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import queue
 import threading
-import time
 from typing import Any, Callable, Optional
 
 
@@ -133,7 +132,7 @@ _STOP = object()
 
 
 class TkSerialUiLane:
-    """Run blocking work on one drained daemon thread and apply results on Tk."""
+    """Run blocking work on one drained worker thread and apply results on Tk."""
 
     def __init__(
         self,
@@ -168,9 +167,7 @@ class TkSerialUiLane:
         self.worker_thread = threading.Thread(
             target=self._worker_main,
             name="container-audit-tk-ui-lane",
-            # The GUI drains accepted work before releasing its instance lease.
-            # A permanently stalled sink must not keep a vanished GUI alive.
-            daemon=True,
+            daemon=False,
         )
         self.worker_thread.start()
         if not self._worker_started.wait(timeout=2.0):
@@ -454,9 +451,7 @@ class TkSerialUiLane:
             if not self._stop_sent:
                 self._stop_sent = True
                 self._task_queue.put_nowait(_STOP)
-        deadline = getattr(self, "_shutdown_deadline", None)
-        timeout = 2.0 if deadline is None else max(0.0, min(2.0, deadline - time.monotonic()))
-        self.worker_thread.join(timeout=timeout)
+        self.worker_thread.join(timeout=2.0)
         if self.worker_thread.is_alive():
             self._break_lane(RuntimeError("Tk UI lane worker did not stop"))
             return

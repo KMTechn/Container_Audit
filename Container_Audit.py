@@ -188,7 +188,9 @@ from responsive_layout import (
     select_layout_profile,
     worker_login_layout_metrics as calculate_worker_login_layout_metrics,
 )
-from runtime_instance import acquire_runtime_instance
+from runtime_instance import (
+    acquire_runtime_instance, clear_shutdown_stall, shutdown_stall_is_live, write_shutdown_stall,
+)
 from session_history import completed_label_round, load_session_history, transition_summary_text
 from style_tokens import StyleProfile, build_style_tokens
 from storage_policy import (
@@ -19917,10 +19919,26 @@ class ContainerAudit:
         self._loop_cleanup_attempted = True
         self._loop_cleanup_finished = False
         errors = []
+        deadline = time.monotonic() + self.LOOP_CLEANUP_TIMEOUT_SECONDS
+        marked = False
+        # Match the startup marker's selected data root, including custom roots.
+        data_root = getattr(self, "_runtime_data_root", getattr(self, "save_folder", None))
+
+        def wait_tick():
+            nonlocal marked
+            if not marked and time.monotonic() >= deadline:
+                marked = True
+                print("화면 종료 정리가 지연되어 계속 기다립니다.")
+                if data_root is not None:
+                    try:
+                        write_shutdown_stall(data_root)
+                    except Exception as exc:
+                        print(f"종료 지연 표시 오류: {exc.__class__.__name__}")
+            time.sleep(0.01)
+
         if not getattr(self, "_application_close_complete", False):
             # Apply the existing Tk-owned result pumps even after mainloop has
             # returned. No new scans or remote work may be admitted here.
-            deadline = time.monotonic() + self.LOOP_CLEANUP_TIMEOUT_SECONDS
             self._ui_close_requested = True
             lanes = [lane for lane in (
                 getattr(self, "_central_transport_lane", None),
@@ -19930,32 +19948,44 @@ class ContainerAudit:
             workers = [getattr(lane, "worker_thread", None) or getattr(lane, "thread", None)
                        for lane in lanes]
             for lane in lanes:
-                lane._shutdown_deadline = deadline
                 try:
                     lane.close_idle()
                 except BaseException as exc:
                     errors.append(exc)
-            while any(worker.is_alive() for worker in workers) and time.monotonic() < deadline:
+            while any(worker.is_alive() for worker in workers):
                 for lane, worker in zip(lanes, workers):
                     if not worker.is_alive():
                         continue
                     try:
                         job = getattr(lane, "_pump_job", None)
                         if job is not None:
-                            self.root.after_cancel(job)
+                            try:
+                                self.root.after_cancel(job)
+                            except tk.TclError:
+                                pass
                         lane._pump()
                     except BaseException as exc:
                         if not errors:
                             errors.append(exc)
-                time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
-            # Original audit/checkpoint/outbox files survive an exhausted
-            # deadline. Never delete them or claim a central ACK at shutdown.
+                    # A destroyed Tk can reject a late projection. Once the
+                    # existing result handler has recorded that fault, still
+                    # send STOP to the idle worker; durable receipts survive.
+                    try:
+                        lane.close_idle()
+                    except BaseException as exc:
+                        if not errors:
+                            errors.append(exc)
+                wait_tick()
+            # The deadline triggers the diagnostic, never abandonment of
+            # accepted work. Original outboxes remain available on restart.
             log_thread = getattr(self, "log_thread", None)
             if log_thread is not None and log_thread.is_alive():
                 if not getattr(self, "_event_log_close_requested", False):
                     self.log_queue.put(None)
                     self._event_log_close_requested = True
-                log_thread.join(timeout=max(0.0, deadline - time.monotonic()))
+                while log_thread.is_alive():
+                    log_thread.join(timeout=0.01)
+                    wait_tick()
             try:
                 self._cancel_all_jobs()
             except BaseException as exc:
@@ -19974,12 +20004,19 @@ class ContainerAudit:
                     self._application_close_complete = True
                 except BaseException as exc:
                     errors.append(exc)
-        # If any daemon still writes, retain the native handle until OS exit;
-        # releasing it now would permit another writer in the same data root.
-        self._loop_cleanup_finished = not any(
+        # Keep the handle while any process worker can still mutate this root.
+        # Finite delays finish naturally; an infinite stall remains visible.
+        while any(
             thread is not threading.current_thread() and thread.is_alive()
             for thread in threading.enumerate()
-        )
+        ):
+            wait_tick()
+        self._loop_cleanup_finished = True
+        if marked and data_root is not None:
+            try:
+                clear_shutdown_stall(data_root)
+            except Exception as exc:
+                print(f"종료 지연 표시 정리 오류: {exc.__class__.__name__}")
         if errors:
             raise errors[0]
 
@@ -21480,14 +21517,23 @@ def _prepare_gui_startup(*, data_root=None):
             )
             return
         if instance_lease is None:
+            stalled = shutdown_stall_is_live(storage_paths.data_root)
             messagebox.showwarning(
                 "프로그램이 이미 실행 중입니다",
-                "같은 PC에서 이적 검사 프로그램을 두 번 실행할 수 없습니다. "
-                "열려 있는 창을 사용해 주세요.",
+                ("이전 프로그램의 종료 정리가 아직 끝나지 않았습니다. "
+                 "잠시 기다린 뒤 다시 실행하세요. 앱이 닫히고 다시 안 켜지면 PC를 재시작하세요.")
+                if stalled else
+                ("같은 PC에서 이적 검사 프로그램을 두 번 실행할 수 없습니다. "
+                 "열려 있는 창을 사용해 주세요."),
             )
             return
     startup_complete = False
     try:
+        try:
+            clear_shutdown_stall(storage_paths.data_root)
+        except Exception as exc:
+            # A diagnostic cannot prevent a launch that owns the instance lease.
+            print(f"이전 종료 지연 표시 정리 오류: {exc.__class__.__name__}")
         if _first_run_onboarding_enabled():
             try:
                 onboarding_report = onboard_current_user(
@@ -21534,6 +21580,7 @@ def _prepare_gui_startup(*, data_root=None):
                     pass
             with writer_admission("gui_startup"):
                 app = ContainerAudit()
+            app._runtime_data_root = storage_paths.data_root
             if catalog_unconfirmed:
                 app.item_catalog_unconfirmed = True
             app._startup_item_catalog_context = catalog_context

@@ -457,9 +457,9 @@ guest 실물 설치와 ACL 접근은 **NOT TESTED**다. 기존 HKCU·DPAPI·업�
 <a id="ca-o07"></a>
 ## CA-O07 2026-09-08 FULL 실패의 환경·fixture 경계
 
-- `tk_serial_ui_lane`/PHS2 preflight headless fixture는 assertion 실패에도 `finally`에서 소유 lane·hold writer를 drain/close하고 잔존 thread를 검사한다. `TaskHandle.join(timeout)`의 bool은 작업 완료만 뜻하므로 테스트는 별도로 UI 적용(hold 파일과 최신 snapshot 일치 포함)을 기다린다. 제품 lane은 daemon이며 정상 창닫기의 기존 drain 순서를 유지한다.
+- `tk_serial_ui_lane`/PHS2 preflight headless fixture는 assertion 실패에도 `finally`에서 소유 lane·hold writer를 drain/close하고 잔존 thread를 검사한다. `TaskHandle.join(timeout)`의 bool은 작업 완료만 뜻하므로 테스트는 별도로 UI 적용(hold 파일과 최신 snapshot 일치 포함)을 기다린다. 제품 lane은 non-daemon이며 정상 창닫기의 기존 drain 순서를 유지한다.
 
-화면 `mainloop`의 예외·직접 반환·종료 접수 후 조기 반환도 새 접수를 닫고 기존 Tk 소유 결과 pump로 lane·보류 writer를 정리한 뒤 감사 writer를 기다린다. 전체 대기 예산은 5초이며 원 예외와 `SystemExit` 코드는 정리 오류로 덮어쓰지 않는다. 이미 정상 종료한 자원을 다시 닫지 않는다. 대기 예산이 끝나면 내구 checkpoint·감사 outbox·중앙 전송 intent를 보존하고 daemon을 OS 종료로 정리한다. 배경 thread가 남아 있으면 실행 mutex handle도 OS 종료까지 보유하여 같은 데이터 루트의 조기 재실행을 막는다. 재시작은 기존 내구 복구 경로를 사용하며 정리 완료를 중앙 ACK로 해석하지 않는다. 이 예산은 동기 파일 I/O 자체의 실행 시간 상한을 보장하지 않는다.
+화면 `mainloop`의 예외·직접 반환·종료 접수 후 조기 반환도 새 접수를 닫고 기존 Tk 소유 결과 pump로 lane·보류 writer를 정리한 뒤 감사 writer를 기다린다. 5초는 종료 지연 표시를 남기는 시점이며 유한 작업은 결과 적용과 worker 종료까지 계속 기다린다. 원 예외와 `SystemExit` 코드는 정리 오류로 덮어쓰지 않으며 이미 정상 종료한 자원을 다시 닫지 않는다. Tk가 이미 파괴되어 늦은 표시를 적용하지 못해도 기존 checkpoint·감사 outbox·중앙 전송 intent를 삭제하지 않는다. 배경 thread가 끝나기 전에는 실행 mutex handle을 유지한다. 영구 정지는 데이터 루트의 `shutdown-stalled.json`으로 표시하며 같은 PID/실행 파일이 살아 있을 때 재실행 안내를 바꾼다. 창이 닫히고 앱이 다시 안 켜지면 PC를 재시작한다. 표시 생성·삭제는 일반 writer sink이며 정상 시작에서 삭제 실패는 시작을 막지 않는다. 재시작은 기존 내구 복구 경로를 사용하며 정리 완료를 중앙 ACK로 해석하지 않는다. 동기 파일 I/O 자체의 실행 시간 상한은 보장하지 않는다.
 
 [실패 분석 보고](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-failure-triage/REPORT.md)와 [102개 testcase 색인](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-failure-triage/failure-inventory.tsv)은 원래 VM01 FULL의 회수 원본을 사용한다. 102 FAIL/2,526 PASS/31 SKIP, pytest 자연 종료 1, FULL·일반 export FAILED를 유지한다. forensic 25파일 회수 성공은 정상 export나 qualification PASS가 아니다.
 
