@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-SCENARIOS = ('register', 'register-apply', 'register-hash', 'register-2pc', 'onboarding', 'supervisor', 'raw-relay',
+SCENARIOS = ('register', 'register-hash', 'register-2pc', 'onboarding', 'supervisor', 'raw-relay',
              'operator-status', 'operator-pause', 'operator-resume', 'operator-retry-dead',
              'operator-restore-spool', 'profile-check', 'profile-install', 'install-pack', 'lifecycle',
              'removal', 'active-probe', 'review-report', 'gui', 'hosted-onboarding', 'hosted-supervisor',

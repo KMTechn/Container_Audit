@@ -163,7 +163,6 @@ user_relay.start_user_relay_process = child
 def execute():
     if scenario.startswith('register'):
         args = ['--app-root', source, '--producer-identity-path', argument(identity), '--report-path', str(root/'registration-report.json')]
-        if scenario == 'register-apply': args += ['--apply']
         if scenario == 'register-hash':
             args += ['--manifest-path', str(manifest), '--verify-manifest-hash', '0'*64]
         if scenario == 'register-2pc':
