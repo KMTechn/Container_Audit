@@ -71,6 +71,11 @@ def test_pre_shared_installed_tree_passes_current_preflight_and_verified_replace
 $source=$env:CA_UPGRADE_SOURCE
 $install=$env:CA_UPGRADE_INSTALLED
 $SkipSignatureValidationForTest=$true
+# Bind the canonical entrypoint's default operation switches in this extracted
+# preflight fixture, which runs under StrictMode without the script param block.
+$Uninstall=$false
+$RestoreVerifiedReplacement=$false
+$CompleteRetiredRemoval=$false
 $sourceManifest=Manifest $source $true
 $sourceWriterInventory=Assert-WriterSinkInventory `
     (Join-Path $source 'tools/container_writer_sink_inventory.json') `
