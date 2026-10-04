@@ -444,7 +444,7 @@ function Test-ContainerDataGenerationForwardTransition {
         $declaration = Get-Content -LiteralPath $declarationPath -Raw | ConvertFrom-Json
         if ([string]$declaration.schema_version -cne 'container-audit-g-forward-transition-v1' -or
             [string]$declaration.direction -cne 'forward' -or
-            [string]$declaration.before_source_commit -cne '0af642291d29b888eeeaaca58bb206d3ea14bf88' -or
+            [string]$declaration.before_source_commit -cne 'ea566d131f37db3ee74468e1645c6b57ac45b6fa' -or
             [string]$declaration.before_inventory_sha256 -cne [string]$BeforeInventory.inventory_sha256 -or
             [string]$declaration.after_inventory_sha256 -cne [string]$AfterInventory.inventory_sha256 -or
             [string]$BeforeInventory.inventory_sha256 -ceq [string]$AfterInventory.inventory_sha256) { return $false }

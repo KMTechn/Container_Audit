@@ -22,8 +22,8 @@ def test_forward_generation_exception_is_exact_and_closed(tmp_path, mutation):
         (tree/'helper.py').write_bytes(b'# unchanged helper\n')
     (before/'main.py').write_bytes(b'# baseline entry\n')
     (after/'main.py').write_bytes(b'# guarded entry\n')
-    (before/'portable-manifest.json').write_text(json.dumps({'source_commit':'0af642291d29b888eeeaaca58bb206d3ea14bf88'}))
-    old = json.loads(subprocess.check_output(['git','show','0af642291:tools/container_writer_sink_inventory.json'],cwd=ROOT))
+    (before/'portable-manifest.json').write_text(json.dumps({'source_commit':'ea566d131f37db3ee74468e1645c6b57ac45b6fa'}))
+    old = json.loads(subprocess.check_output(['git','show','ea566d1:tools/container_writer_sink_inventory.json'],cwd=ROOT))
     new = json.loads((ROOT/'tools/container_writer_sink_inventory.json').read_text())
     replacements = []
     for route_id in ('persistent_relay','raw_runner'):
@@ -32,7 +32,7 @@ def test_forward_generation_exception_is_exact_and_closed(tmp_path, mutation):
         fields = ('reachable_sources','reachable_direct_mutation_functions')
         replacements.append({'route_id':route_id,'before':{f:old_route[f] for f in fields},'after':{f:new_route[f] for f in fields}})
     declaration = {'schema_version':'container-audit-g-forward-transition-v1','direction':'forward',
-        'before_source_commit':'0af642291d29b888eeeaaca58bb206d3ea14bf88',
+        'before_source_commit':'ea566d131f37db3ee74468e1645c6b57ac45b6fa',
         'before_inventory_sha256':old['inventory_sha256'],'after_inventory_sha256':new['inventory_sha256'],
         'route_replacements':replacements, 'files':[
             {'path':name,'before':hashlib.sha256((before/name).read_bytes()).hexdigest(),

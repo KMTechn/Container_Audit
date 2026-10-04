@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 
@@ -73,7 +74,33 @@ def marker_paths(data_root, subject_sid, *, environ=None):
 
 def resolve_owner_path(value):
     """Use one expansion and filesystem resolution for the guard and reader."""
-    return Path(value).expanduser().resolve(strict=False)
+    path = Path(value).expanduser().absolute()
+    # Preserve uncertainty when resolving an alias would hide a reparse
+    # ancestor of a structurally impossible input path.
+    _owner_root_cannot_exist(path.parent)
+    return path.resolve(strict=False)
+
+
+def _owner_root_cannot_exist(root):
+    """Only a plain file ancestor proves there can be no data or marker."""
+    saw_reparse = False
+    for path in (*reversed(root.parents), root):
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False}) from exc
+        reparse = bool(getattr(metadata, "st_file_attributes", 0) &
+                       getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)) or stat.S_ISLNK(metadata.st_mode)
+        if reparse and not path.is_dir():
+            raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False})
+        saw_reparse |= reparse
+        if stat.S_ISREG(metadata.st_mode):
+            if saw_reparse:
+                raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False})
+            return True
+    return False
 
 
 def owner_roots(data_root, *, file_paths=(), directory_paths=()):
@@ -82,12 +109,14 @@ def owner_roots(data_root, *, file_paths=(), directory_paths=()):
     for value in file_paths:
         if value:
             path = resolve_owner_path(value)
-            if not path.is_relative_to(root):
+            if not path.is_relative_to(root) and not _owner_root_cannot_exist(path.parent):
                 roots.add(path.parent)
     for value in directory_paths:
         if value:
+            original = Path(value).expanduser().absolute()
+            _owner_root_cannot_exist(original)
             path = resolve_owner_path(value)
-            if not path.is_relative_to(root):
+            if not path.is_relative_to(root) and not _owner_root_cannot_exist(path):
                 roots.add(path)
     return sorted(roots, key=lambda path: os.path.normcase(str(path)))
 
