@@ -2,16 +2,20 @@
 
 자료 세대 내림 guard(sub-219)는 두 leaf·같은 판 새 build 하한 교집합의 격리 묶음31 PASS까지 PROVEN이다.
 CA의 자료-open 3곳과 restore/reinstall 7곳에 호출을 연결했으며 관련52 PASS와 native
-자료 사용 뒤 거절을 확인했다. 최종 집중+신규307건은305 PASS/2 FAIL; 두 옛 post-data
+자료 사용 뒤 거절을 확인했다. 기존 d55cc94 집중 시험은308 PASS/2 FAIL; 두 옛 post-data
 복원 기대는 G 결정과 충돌하여 기존 exact 단언을 보존한 시험 범위 조정을 코디에게 물었다.
 같은 판의 다른 build가 이전 signed 호환 하한을 물려받던 helper 결함은 RED로 확인하고
-새 build/더 엄격한 하한과 신뢰 교집합을 기록하도록 두 leaf를 수정했다; 새 바이트 검증 중이다.
+새 build/더 엄격한 하한과 신뢰 교집합을 기록하도록 두 leaf를 수정했고31 PASS다.
 shared 0.3.3/7파일 생성 manifest/lock/bootstrap pin을 채택했으며 새 guarded sink 하나를
-표준 재생성했다. 독립 review·최종 focused/stock과 frozen/실제 GUI 설치 수용은 남아 있다.
+표준 재생성했다. d55cc94 stock/native bundled-Python 직접 main·거절은 PASS이고
+동일 기준 FULL 비교의 신규 실패0/기존 실패 해결1이다. 새 기준82ce91c 자체의 표준
+`--check` PASS 뒤 그 위에 변경을 옮겨 선언/pin3곳/최종 `--check`를 재생성했다.
+새 기준 집중 비교는 작업 보고서에 기록한다. 독립 review·H10 정책 결정과
+frozen/실제 GUI 설치 수용은 남아 있다.
 builder version/최소 호환 판 입력과 기존 ES256 signed private manifest 소비는 관련
-3파일 101 PASS이나 실제 marker adapter·최종 stock·출시 발행은 미완료다. 최초 옛
+3파일 101 PASS이나 실제 private 출시 발행은 미완료다. 최초 옛
 v2.0.33 위 설치의 일관 백업·수동
-복구는 운영 문서/runbook 초안이며 H 10구간·실제 설치/GUI/relay·stock은 NOT TESTED다.
+복구는 운영 문서/runbook이며 H10 랩·실제 현장 설치/GUI/relay는 NOT TESTED다.
 [입구·남은 관문](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/ENTRY-POINTS.md),
 [함수 근거](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/HELPER-READY.md).
 

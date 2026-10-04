@@ -19,11 +19,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 5022,
+      "line": 5023,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 5026,
+          "line": 5027,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -158,7 +158,9 @@
       "covered_entrypoints": [
         "Container_Audit.__file_entry__",
         "Container_Audit.main",
-        "portable.main.__file_entry__"
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
       ],
       "decorated_source": "hosted_relay_json",
       "direct_callers": [
@@ -197,7 +199,9 @@
       "reachable_entrypoints": [
         "Container_Audit.__file_entry__",
         "Container_Audit.main",
-        "portable.main.__file_entry__"
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
       ],
       "reachable_from_product_entrypoint": true,
       "trust_reason": "",
@@ -211,7 +215,9 @@
       "covered_entrypoints": [
         "Container_Audit.__file_entry__",
         "Container_Audit.main",
-        "portable.main.__file_entry__"
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
       ],
       "decorated_source": "hosted_relay_jsonl",
       "direct_callers": [
@@ -238,7 +244,9 @@
       "reachable_entrypoints": [
         "Container_Audit.__file_entry__",
         "Container_Audit.main",
-        "portable.main.__file_entry__"
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
       ],
       "reachable_from_product_entrypoint": true,
       "trust_reason": "",
@@ -361,12 +369,12 @@
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 492,
+      "line": 495,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 538,
+          "line": 541,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -387,12 +395,12 @@
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 806,
+      "line": 809,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 816,
+          "line": 819,
           "operation": "subprocess.Popen",
           "writer_admission_sources": []
         }
@@ -413,17 +421,17 @@
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 934,
+      "line": 937,
       "mutation_sites": [
         {
           "category": "registry",
-          "line": 942,
+          "line": 945,
           "operation": "winreg.CreateKeyEx",
           "writer_admission_sources": []
         },
         {
           "category": "registry",
-          "line": 948,
+          "line": 951,
           "operation": "winreg.SetValueEx",
           "writer_admission_sources": []
         }
@@ -450,11 +458,11 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 1413,
+      "line": 1421,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 1425,
+          "line": 1433,
           "operation": "status_dir.mkdir",
           "writer_admission_sources": [
             "current_user_setup_removal"
@@ -466,6 +474,55 @@
         "Container_Audit.__file_entry__",
         "Container_Audit.main",
         "portable.main.__file_entry__"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "release-identity git reads run only inside the exact guarded data-open adapter",
+      "caller_guard_sources": [
+        "data_generation_marker"
+      ],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
+      ],
+      "decorated_source": "",
+      "direct_callers": [
+        "data_generation_guard.record_before_data_open"
+      ],
+      "file": "data_generation_guard.py",
+      "kind": "function",
+      "line": 23,
+      "mutation_sites": [
+        {
+          "category": "external_process",
+          "external_control_commands": [],
+          "line": 56,
+          "operation": "subprocess.check_output",
+          "writer_admission_sources": []
+        },
+        {
+          "category": "external_process",
+          "external_control_commands": [],
+          "line": 58,
+          "operation": "subprocess.check_output",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "data_generation_guard._runtime_release",
+      "reachable_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
       ],
       "reachable_from_product_entrypoint": true,
       "trust_reason": "",
@@ -2062,6 +2119,47 @@
       "node": "kmtech_factory_contracts.package.write_json",
       "reachable_entrypoints": [
         "kmtech_factory_contracts.build_cli.__file_entry__"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "byte-pinned atomic marker writes run only inside the exact guarded CA adapter",
+      "caller_guard_sources": [
+        "data_generation_marker"
+      ],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
+      ],
+      "decorated_source": "",
+      "direct_callers": [
+        "data_generation_guard.record_before_data_open"
+      ],
+      "file": "kmtech_shared/data_generation.py",
+      "kind": "function",
+      "line": 135,
+      "mutation_sites": [
+        {
+          "category": "filesystem",
+          "line": 177,
+          "operation": "os.replace",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "kmtech_shared.data_generation.record_generation",
+      "reachable_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
       ],
       "reachable_from_product_entrypoint": true,
       "trust_reason": "",
@@ -4095,35 +4193,35 @@
       ],
       "file": "tools/direct_sync_relay_runner.py",
       "kind": "function",
-      "line": 103,
+      "line": 104,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 105,
+          "line": 106,
           "operation": "target.parent.mkdir",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 108,
+          "line": 109,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 123,
+          "line": 124,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 125,
+          "line": 126,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 127,
+          "line": 128,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4160,11 +4258,11 @@
       ],
       "file": "tools/direct_sync_relay_runner.py",
       "kind": "function",
-      "line": 384,
+      "line": 385,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 390,
+          "line": 391,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4199,11 +4297,11 @@
       ],
       "file": "tools/direct_sync_relay_runner.py",
       "kind": "function",
-      "line": 559,
+      "line": 560,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 562,
+          "line": 563,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4238,17 +4336,17 @@
       ],
       "file": "tools/direct_sync_relay_runner.py",
       "kind": "function",
-      "line": 573,
+      "line": 574,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 645,
+          "line": 646,
           "operation": "delta_source.parent.mkdir",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 646,
+          "line": 647,
           "operation": "delta_source.write_bytes",
           "writer_admission_sources": []
         }
@@ -5713,11 +5811,11 @@
       "direct_callers": [],
       "file": "update_service.py",
       "kind": "function",
-      "line": 763,
+      "line": 794,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 773,
+          "line": 804,
           "operation": "destination_path.mkdir",
           "writer_admission_sources": []
         }
@@ -5747,29 +5845,29 @@
       ],
       "file": "user_relay.py",
       "kind": "function",
-      "line": 48,
+      "line": 49,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 49,
+          "line": 50,
           "operation": "path.parent.mkdir",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 52,
+          "line": 53,
           "operation": "temporary.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 57,
+          "line": 58,
           "operation": "os.replace",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 59,
+          "line": 60,
           "operation": "temporary.unlink",
           "writer_admission_sources": []
         }
@@ -5796,17 +5894,17 @@
       "direct_callers": [],
       "file": "user_relay.py",
       "kind": "function",
-      "line": 121,
+      "line": 122,
       "mutation_sites": [
         {
           "category": "registry",
-          "line": 126,
+          "line": 127,
           "operation": "winreg.CreateKeyEx",
           "writer_admission_sources": []
         },
         {
           "category": "registry",
-          "line": 132,
+          "line": 133,
           "operation": "winreg.SetValueEx",
           "writer_admission_sources": []
         }
@@ -5827,11 +5925,11 @@
       "direct_callers": [],
       "file": "user_relay.py",
       "kind": "function",
-      "line": 156,
+      "line": 157,
       "mutation_sites": [
         {
           "category": "registry",
-          "line": 168,
+          "line": 169,
           "operation": "winreg.DeleteValue",
           "writer_admission_sources": []
         }
@@ -5852,12 +5950,12 @@
       "direct_callers": [],
       "file": "user_relay.py",
       "kind": "function",
-      "line": 215,
+      "line": 216,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 232,
+          "line": 233,
           "operation": "subprocess.Popen",
           "writer_admission_sources": []
         }
@@ -5939,6 +6037,7 @@
     "container_audit_product_host.py",
     "container_audit_test_harness.py",
     "current_user_onboarding.py",
+    "data_generation_guard.py",
     "direct_sync_auto_bootstrap.py",
     "direct_sync_health.py",
     "direct_sync_operator.py",
@@ -5975,6 +6074,7 @@
     "kmtech_factory_contracts/strict_server.py",
     "kmtech_shared/__init__.py",
     "kmtech_shared/catalog.py",
+    "kmtech_shared/data_generation.py",
     "kmtech_shared/raster.py",
     "kmtech_shared/runtime.py",
     "label_qr.py",
@@ -6009,6 +6109,7 @@
     "tk_serial_ui_lane.py",
     "tools/active_work_probe.py",
     "tools/check_logistics_runtime_profile.py",
+    "tools/check_release_version.py",
     "tools/direct_sync_relay_install_pack.py",
     "tools/direct_sync_relay_operator.py",
     "tools/direct_sync_relay_runner.py",
@@ -6040,23 +6141,23 @@
   ],
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
-    "closure_direct_mutation_function_count": 145,
-    "closure_module_count": 104,
-    "external_process_mutation_site_count": 9,
+    "closure_direct_mutation_function_count": 147,
+    "closure_module_count": 107,
+    "external_process_mutation_site_count": 11,
     "powershell_direct_mutation_site_count": 66,
-    "powershell_execution_site_count": 36,
+    "powershell_execution_site_count": 37,
     "powershell_execution_site_counts_by_kind": {
       "call_operator": 22,
       "com_wmi_process_create": 1,
-      "dot_source": 10,
+      "dot_source": 11,
       "start_process": 3
     },
     "powershell_mutation_scope_count": 32,
     "powershell_sink_count": 1,
     "python_external_control_literal_site_count": 4,
     "scheduled_task_mutation_site_count": 7,
-    "sink_function_count": 215,
-    "total_cross_language_sink_count": 216,
+    "sink_function_count": 216,
+    "total_cross_language_sink_count": 217,
     "trusted_control_plane_mutation_count": 0,
     "uncovered_mutation_function_count": 0
   },
@@ -6080,6 +6181,7 @@
     "container_audit_product_host.py",
     "container_audit_test_harness.py",
     "current_user_onboarding.py",
+    "data_generation_guard.py",
     "direct_sync_auto_bootstrap.py",
     "direct_sync_health.py",
     "direct_sync_operator.py",
@@ -6116,6 +6218,7 @@
     "kmtech_factory_contracts/strict_server.py",
     "kmtech_shared/__init__.py",
     "kmtech_shared/catalog.py",
+    "kmtech_shared/data_generation.py",
     "kmtech_shared/raster.py",
     "kmtech_shared/runtime.py",
     "label_qr.py",
@@ -6186,6 +6289,7 @@
       "container_audit_product_host",
       "container_audit_test_harness",
       "current_user_onboarding",
+      "data_generation_guard",
       "direct_sync_auto_bootstrap",
       "direct_sync_health",
       "event_contracts",
@@ -6246,6 +6350,7 @@
     ],
     "container_audit_product_host": [
       "current_user_onboarding",
+      "data_generation_guard",
       "storage_policy",
       "tools.direct_sync_relay_runner",
       "user_relay",
@@ -6253,6 +6358,7 @@
     ],
     "container_audit_test_harness": [],
     "current_user_onboarding": [
+      "data_generation_guard",
       "direct_sync_push",
       "direct_sync_runtime",
       "logistics_runtime_profile",
@@ -6263,6 +6369,15 @@
       "transfer_seal",
       "user_relay",
       "vendor.kmtech_zero_pe",
+      "writer_session_fence"
+    ],
+    "data_generation_guard": [
+      "current_user_onboarding",
+      "kmtech_factory_contracts.package",
+      "kmtech_shared",
+      "kmtech_shared.data_generation",
+      "tools.check_release_version",
+      "tools.register_container_audit_worker_pc",
       "writer_session_fence"
     ],
     "direct_sync_auto_bootstrap": [
@@ -6393,6 +6508,7 @@
     ],
     "kmtech_shared": [],
     "kmtech_shared.catalog": [],
+    "kmtech_shared.data_generation": [],
     "kmtech_shared.raster": [],
     "kmtech_shared.runtime": [],
     "label_qr": [],
@@ -6512,6 +6628,9 @@
     "tools.check_logistics_runtime_profile": [
       "logistics_runtime_profile"
     ],
+    "tools.check_release_version": [
+      "update_service"
+    ],
     "tools.direct_sync_relay_install_pack": [
       "direct_sync_push",
       "direct_sync_runtime",
@@ -6526,6 +6645,8 @@
       "writer_session_fence"
     ],
     "tools.direct_sync_relay_runner": [
+      "container_audit_product_host",
+      "data_generation_guard",
       "direct_sync_push",
       "direct_sync_runtime",
       "event_log_store",
@@ -6602,11 +6723,14 @@
       "writer_session_fence"
     ],
     "update_service": [
+      "kmtech_shared.data_generation",
       "vendor.kmtech_zero_pe.release_signature",
       "writer_session_fence"
     ],
     "user_relay": [
       "direct_sync_auto_bootstrap",
+      "kmtech_shared",
+      "kmtech_shared.data_generation",
       "runtime_instance",
       "storage_policy",
       "writer_session_fence"
@@ -6642,7 +6766,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "9148ba9735af8b8bcbf7b47fcaed2aeed08d0ad1459f3e46bedfc58bee78ac0b",
+  "inventory_sha256": "3d80b61890392b9b089c143caea3f715c99650a3ad5ba5c72eb684ef323848ac",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -6661,6 +6785,7 @@
         "current_user_onboarding",
         "current_user_onboarding_storage",
         "current_user_setup_removal",
+        "data_generation_marker",
         "direct_sync_enqueue",
         "direct_sync_install_pack",
         "direct_sync_relay_cycle",
@@ -6790,6 +6915,7 @@
         "current_user_onboarding._write_json_atomic",
         "current_user_onboarding._write_json_atomic_create_new",
         "current_user_onboarding.remove_current_user_setup",
+        "data_generation_guard._runtime_release",
         "direct_sync_auto_bootstrap._run_command",
         "direct_sync_auto_bootstrap._write_json",
         "direct_sync_push._connect_relay_db",
@@ -6812,6 +6938,7 @@
         "event_log_store._append_event_log_entry_unlocked",
         "event_log_store._interprocess_file_lock",
         "item_catalog_sync._atomic_write",
+        "kmtech_shared.data_generation.record_generation",
         "kmtech_shared.runtime._create_state",
         "kmtech_shared.runtime._replace_expired_identity",
         "kmtech_shared.runtime.apply_runtime_receipt_in_transaction",
@@ -6859,6 +6986,7 @@
         "current_user_onboarding",
         "current_user_onboarding_storage",
         "current_user_setup_removal",
+        "data_generation_marker",
         "direct_sync_enqueue",
         "direct_sync_relay_cycle",
         "direct_sync_scan_drain",
@@ -6935,6 +7063,9 @@
       "kind": "python",
       "pass": true,
       "reachable_direct_mutation_functions": [
+        "container_audit_product_host._append_jsonl",
+        "container_audit_product_host._write_json_atomic",
+        "data_generation_guard._runtime_release",
         "direct_sync_push._connect_relay_db",
         "direct_sync_push._copy_file_atomic",
         "direct_sync_push._ensure_relay_queue_columns",
@@ -6952,6 +7083,7 @@
         "direct_sync_runtime._append_jsonl",
         "direct_sync_runtime._disk_pressure_report",
         "direct_sync_runtime._write_json_atomic",
+        "kmtech_shared.data_generation.record_generation",
         "kmtech_shared.runtime._create_state",
         "kmtech_shared.runtime._replace_expired_identity",
         "kmtech_shared.runtime.apply_runtime_receipt_in_transaction",
@@ -6969,11 +7101,15 @@
         "tools.direct_sync_relay_runner._write_source_scan_state"
       ],
       "reachable_sources": [
+        "data_generation_marker",
         "direct_sync_enqueue",
         "direct_sync_relay_cycle",
         "direct_sync_scan_drain",
         "direct_sync_scan_result",
         "direct_sync_scan_status",
+        "hosted_relay_failure",
+        "hosted_relay_json",
+        "hosted_relay_jsonl",
         "producer_runtime_storage",
         "raw_relay_runner",
         "raw_relay_storage",
@@ -7137,7 +7273,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
-        "line": 2039,
+        "line": 2043,
         "target": "$winps",
         "target_static": false
       },
@@ -7149,7 +7285,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
-        "line": 2116,
+        "line": 2123,
         "target": "$winps",
         "target_static": false
       },
@@ -7161,7 +7297,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2134,
+        "line": 2141,
         "target": "",
         "target_static": true
       },
@@ -7173,7 +7309,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2178,
+        "line": 2185,
         "target": "",
         "target_static": true
       },
@@ -7185,7 +7321,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
-        "line": 2242,
+        "line": 2249,
         "target": "$winps",
         "target_static": false
       },
@@ -7197,7 +7333,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2253,
+        "line": 2260,
         "target": "",
         "target_static": true
       },
@@ -7209,7 +7345,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
-        "line": 2338,
+        "line": 2346,
         "target": "$winps",
         "target_static": false
       },
@@ -7221,7 +7357,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
-        "line": 2414,
+        "line": 2422,
         "target": "$winps",
         "target_static": false
       },
@@ -7233,7 +7369,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2556,
+        "line": 2564,
         "target": "",
         "target_static": true
       },
@@ -7245,7 +7381,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
-        "line": 2624,
+        "line": 2632,
         "target": "$winps",
         "target_static": false
       },
@@ -7257,7 +7393,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2649,
+        "line": 2657,
         "target": "",
         "target_static": true
       },
@@ -7269,7 +7405,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
-        "line": 2728,
+        "line": 2741,
         "target": "$winps",
         "target_static": false
       },
@@ -7281,7 +7417,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2763,
+        "line": 2776,
         "target": "",
         "target_static": true
       },
@@ -7289,11 +7425,11 @@
         "command": ".",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 43,
+        "guard_line": 44,
         "guard_name": "byte_pinned_function_library",
         "guarded": true,
         "kind": "dot_source",
-        "line": 43,
+        "line": 44,
         "target": "$BootstrapIntegrityFunctions",
         "target_static": false
       },
@@ -7301,11 +7437,11 @@
         "command": "New-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Install-CurrentUserTlsCaBootstrap",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 77,
+        "line": 78,
         "target": "",
         "target_static": true
       },
@@ -7313,11 +7449,11 @@
         "command": "Copy-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Install-CurrentUserTlsCaBootstrap",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 79,
+        "line": 80,
         "target": "",
         "target_static": true
       },
@@ -7325,11 +7461,11 @@
         "command": "Start-Process",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Invoke-SelfElevated",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "start_process",
-        "line": 126,
+        "line": 127,
         "target": "$powershell",
         "target_static": false
       },
@@ -7337,11 +7473,11 @@
         "command": ".",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Enter-ContainerPlacementWriterFence",
-        "guard_line": 186,
+        "guard_line": 187,
         "guard_name": "byte_pinned_function_library",
         "guarded": true,
         "kind": "dot_source",
-        "line": 186,
+        "line": 187,
         "target": "$writerFenceHelperFull",
         "target_static": false
       },
@@ -7349,11 +7485,11 @@
         "command": "New-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Write-ElevationLog",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 369,
+        "line": 370,
         "target": "",
         "target_static": true
       },
@@ -7361,11 +7497,11 @@
         "command": ".NET File mutation",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Write-ElevationLog",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 377,
+        "line": 378,
         "target": "",
         "target_static": true
       },
@@ -7373,11 +7509,11 @@
         "command": "&",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Set-HardenedCodeAcl",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "call_operator",
-        "line": 468,
+        "line": 469,
         "target": "$icacls",
         "target_static": false
       },
@@ -7385,11 +7521,11 @@
         "command": "icacls.exe",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Set-HardenedCodeAcl",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 468,
+        "line": 469,
         "target": "",
         "target_static": true
       },
@@ -7397,11 +7533,11 @@
         "command": "&",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Set-HardenedCodeAcl",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "call_operator",
-        "line": 470,
+        "line": 471,
         "target": "$icacls",
         "target_static": false
       },
@@ -7409,11 +7545,11 @@
         "command": "icacls.exe",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Set-HardenedCodeAcl",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 470,
+        "line": 471,
         "target": "",
         "target_static": true
       },
@@ -7421,11 +7557,11 @@
         "command": "&",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Set-HardenedCodeAcl",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "call_operator",
-        "line": 472,
+        "line": 473,
         "target": "$icacls",
         "target_static": false
       },
@@ -7433,11 +7569,11 @@
         "command": "icacls.exe",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Set-HardenedCodeAcl",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 472,
+        "line": 473,
         "target": "",
         "target_static": true
       },
@@ -7445,11 +7581,11 @@
         "command": ".",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Remove-OwnedLegacyTask",
-        "guard_line": 536,
+        "guard_line": 537,
         "guard_name": "byte_pinned_function_library",
         "guarded": true,
         "kind": "dot_source",
-        "line": 536,
+        "line": 537,
         "target": "$writerFenceHelperPath",
         "target_static": false
       },
@@ -7457,11 +7593,11 @@
         "command": ".",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "dot_source",
-        "line": 669,
+        "line": 678,
         "target": "$WriterFenceHelperPath",
         "target_static": false
       },
@@ -7469,11 +7605,11 @@
         "command": "Copy-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 831,
+        "line": 843,
         "target": "",
         "target_static": true
       },
@@ -7481,11 +7617,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 839,
+        "line": 851,
         "target": "",
         "target_static": true
       },
@@ -7493,11 +7629,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 842,
+        "line": 854,
         "target": "",
         "target_static": true
       },
@@ -7505,11 +7641,11 @@
         "command": "New-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 856,
+        "line": 868,
         "target": "",
         "target_static": true
       },
@@ -7517,11 +7653,11 @@
         "command": "New-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 858,
+        "line": 870,
         "target": "",
         "target_static": true
       },
@@ -7529,11 +7665,11 @@
         "command": "Copy-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 860,
+        "line": 872,
         "target": "",
         "target_static": true
       },
@@ -7541,43 +7677,7 @@
         "command": "New-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
-        "guard_name": "Enter-ContainerPlacementWriterFence",
-        "guarded": true,
-        "kind": "filesystem_mutation",
-        "line": 935,
-        "target": "",
-        "target_static": true
-      },
-      {
-        "command": "New-Item",
-        "file": "INSTALL_THIS_PC.ps1",
-        "function": "",
-        "guard_line": 668,
-        "guard_name": "Enter-ContainerPlacementWriterFence",
-        "guarded": true,
-        "kind": "filesystem_mutation",
-        "line": 939,
-        "target": "",
-        "target_static": true
-      },
-      {
-        "command": "New-Item",
-        "file": "INSTALL_THIS_PC.ps1",
-        "function": "",
-        "guard_line": 668,
-        "guard_name": "Enter-ContainerPlacementWriterFence",
-        "guarded": true,
-        "kind": "filesystem_mutation",
-        "line": 943,
-        "target": "",
-        "target_static": true
-      },
-      {
-        "command": "New-Item",
-        "file": "INSTALL_THIS_PC.ps1",
-        "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -7586,14 +7686,38 @@
         "target_static": true
       },
       {
-        "command": "Copy-Item",
+        "command": "New-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 950,
+        "line": 953,
+        "target": "",
+        "target_static": true
+      },
+      {
+        "command": "New-Item",
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "",
+        "guard_line": 677,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "kind": "filesystem_mutation",
+        "line": 957,
+        "target": "",
+        "target_static": true
+      },
+      {
+        "command": "New-Item",
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "",
+        "guard_line": 677,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "kind": "filesystem_mutation",
+        "line": 963,
         "target": "",
         "target_static": true
       },
@@ -7601,11 +7725,23 @@
         "command": "Copy-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 961,
+        "line": 964,
+        "target": "",
+        "target_static": true
+      },
+      {
+        "command": "Copy-Item",
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "",
+        "guard_line": 677,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "kind": "filesystem_mutation",
+        "line": 975,
         "target": "",
         "target_static": true
       },
@@ -7613,11 +7749,11 @@
         "command": "Move-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1022,
+        "line": 1036,
         "target": "",
         "target_static": true
       },
@@ -7625,11 +7761,11 @@
         "command": "Move-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1024,
+        "line": 1038,
         "target": "",
         "target_static": true
       },
@@ -7637,11 +7773,11 @@
         "command": "Move-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1033,
+        "line": 1049,
         "target": "",
         "target_static": true
       },
@@ -7649,11 +7785,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1039,
+        "line": 1055,
         "target": "",
         "target_static": true
       },
@@ -7661,11 +7797,11 @@
         "command": "Move-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1044,
+        "line": 1060,
         "target": "",
         "target_static": true
       },
@@ -7673,11 +7809,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1143,
+        "line": 1159,
         "target": "",
         "target_static": true
       },
@@ -7685,11 +7821,11 @@
         "command": "Move-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1151,
+        "line": 1169,
         "target": "",
         "target_static": true
       },
@@ -7697,11 +7833,11 @@
         "command": "Move-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1156,
+        "line": 1174,
         "target": "",
         "target_static": true
       },
@@ -7709,13 +7845,25 @@
         "command": "Remove-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1162,
+        "line": 1180,
         "target": "",
         "target_static": true
+      },
+      {
+        "command": ".",
+        "file": "tools/bootstrap_integrity.ps1",
+        "function": "Assert-ContainerDataGenerationTarget",
+        "guard_line": 100,
+        "guard_name": "byte_pinned_function_library",
+        "guarded": true,
+        "kind": "dot_source",
+        "line": 100,
+        "target": "$dataGenerationLeaf",
+        "target_static": false
       },
       {
         "command": ".NET File mutation",
@@ -7725,7 +7873,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 107,
+        "line": 156,
         "target": "",
         "target_static": true
       },
@@ -7737,7 +7885,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 108,
+        "line": 157,
         "target": "",
         "target_static": true
       },
@@ -7749,7 +7897,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 401,
+        "line": 450,
         "target": "",
         "target_static": true
       },
@@ -7761,7 +7909,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 537,
+        "line": 586,
         "target": "",
         "target_static": true
       },
@@ -7773,7 +7921,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 539,
+        "line": 588,
         "target": "",
         "target_static": true
       },
@@ -7785,7 +7933,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 563,
+        "line": 612,
         "target": "",
         "target_static": true
       },
@@ -7797,7 +7945,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 569,
+        "line": 618,
         "target": "",
         "target_static": true
       },
@@ -8289,7 +8437,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2134,
+        "line": 2141,
         "target": "",
         "target_static": true
       },
@@ -8301,7 +8449,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2178,
+        "line": 2185,
         "target": "",
         "target_static": true
       },
@@ -8313,7 +8461,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2253,
+        "line": 2260,
         "target": "",
         "target_static": true
       },
@@ -8325,7 +8473,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2556,
+        "line": 2564,
         "target": "",
         "target_static": true
       },
@@ -8337,7 +8485,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2649,
+        "line": 2657,
         "target": "",
         "target_static": true
       },
@@ -8349,7 +8497,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2763,
+        "line": 2776,
         "target": "",
         "target_static": true
       },
@@ -8357,11 +8505,11 @@
         "command": "New-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Install-CurrentUserTlsCaBootstrap",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 77,
+        "line": 78,
         "target": "",
         "target_static": true
       },
@@ -8369,11 +8517,11 @@
         "command": "Copy-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Install-CurrentUserTlsCaBootstrap",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 79,
+        "line": 80,
         "target": "",
         "target_static": true
       },
@@ -8381,11 +8529,11 @@
         "command": "New-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Write-ElevationLog",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 369,
+        "line": 370,
         "target": "",
         "target_static": true
       },
@@ -8393,11 +8541,11 @@
         "command": ".NET File mutation",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Write-ElevationLog",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 377,
+        "line": 378,
         "target": "",
         "target_static": true
       },
@@ -8405,11 +8553,11 @@
         "command": "icacls.exe",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Set-HardenedCodeAcl",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 468,
+        "line": 469,
         "target": "",
         "target_static": true
       },
@@ -8417,11 +8565,11 @@
         "command": "icacls.exe",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Set-HardenedCodeAcl",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 470,
+        "line": 471,
         "target": "",
         "target_static": true
       },
@@ -8429,11 +8577,11 @@
         "command": "icacls.exe",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Set-HardenedCodeAcl",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 472,
+        "line": 473,
         "target": "",
         "target_static": true
       },
@@ -8441,11 +8589,11 @@
         "command": "Copy-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 831,
+        "line": 843,
         "target": "",
         "target_static": true
       },
@@ -8453,11 +8601,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 839,
+        "line": 851,
         "target": "",
         "target_static": true
       },
@@ -8465,11 +8613,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 842,
+        "line": 854,
         "target": "",
         "target_static": true
       },
@@ -8477,11 +8625,11 @@
         "command": "New-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 856,
+        "line": 868,
         "target": "",
         "target_static": true
       },
@@ -8489,11 +8637,11 @@
         "command": "New-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 858,
+        "line": 870,
         "target": "",
         "target_static": true
       },
@@ -8501,11 +8649,11 @@
         "command": "Copy-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 860,
+        "line": 872,
         "target": "",
         "target_static": true
       },
@@ -8513,43 +8661,7 @@
         "command": "New-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
-        "guard_name": "Enter-ContainerPlacementWriterFence",
-        "guarded": true,
-        "kind": "filesystem_mutation",
-        "line": 935,
-        "target": "",
-        "target_static": true
-      },
-      {
-        "command": "New-Item",
-        "file": "INSTALL_THIS_PC.ps1",
-        "function": "",
-        "guard_line": 668,
-        "guard_name": "Enter-ContainerPlacementWriterFence",
-        "guarded": true,
-        "kind": "filesystem_mutation",
-        "line": 939,
-        "target": "",
-        "target_static": true
-      },
-      {
-        "command": "New-Item",
-        "file": "INSTALL_THIS_PC.ps1",
-        "function": "",
-        "guard_line": 668,
-        "guard_name": "Enter-ContainerPlacementWriterFence",
-        "guarded": true,
-        "kind": "filesystem_mutation",
-        "line": 943,
-        "target": "",
-        "target_static": true
-      },
-      {
-        "command": "New-Item",
-        "file": "INSTALL_THIS_PC.ps1",
-        "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -8558,14 +8670,38 @@
         "target_static": true
       },
       {
-        "command": "Copy-Item",
+        "command": "New-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 950,
+        "line": 953,
+        "target": "",
+        "target_static": true
+      },
+      {
+        "command": "New-Item",
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "",
+        "guard_line": 677,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "kind": "filesystem_mutation",
+        "line": 957,
+        "target": "",
+        "target_static": true
+      },
+      {
+        "command": "New-Item",
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "",
+        "guard_line": 677,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "kind": "filesystem_mutation",
+        "line": 963,
         "target": "",
         "target_static": true
       },
@@ -8573,11 +8709,23 @@
         "command": "Copy-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 961,
+        "line": 964,
+        "target": "",
+        "target_static": true
+      },
+      {
+        "command": "Copy-Item",
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "",
+        "guard_line": 677,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "kind": "filesystem_mutation",
+        "line": 975,
         "target": "",
         "target_static": true
       },
@@ -8585,11 +8733,11 @@
         "command": "Move-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1022,
+        "line": 1036,
         "target": "",
         "target_static": true
       },
@@ -8597,11 +8745,11 @@
         "command": "Move-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1024,
+        "line": 1038,
         "target": "",
         "target_static": true
       },
@@ -8609,11 +8757,11 @@
         "command": "Move-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1033,
+        "line": 1049,
         "target": "",
         "target_static": true
       },
@@ -8621,11 +8769,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1039,
+        "line": 1055,
         "target": "",
         "target_static": true
       },
@@ -8633,11 +8781,11 @@
         "command": "Move-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1044,
+        "line": 1060,
         "target": "",
         "target_static": true
       },
@@ -8645,11 +8793,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1143,
+        "line": 1159,
         "target": "",
         "target_static": true
       },
@@ -8657,11 +8805,11 @@
         "command": "Move-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1151,
+        "line": 1169,
         "target": "",
         "target_static": true
       },
@@ -8669,11 +8817,11 @@
         "command": "Move-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1156,
+        "line": 1174,
         "target": "",
         "target_static": true
       },
@@ -8681,11 +8829,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1162,
+        "line": 1180,
         "target": "",
         "target_static": true
       },
@@ -8697,7 +8845,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 107,
+        "line": 156,
         "target": "",
         "target_static": true
       },
@@ -8709,7 +8857,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 108,
+        "line": 157,
         "target": "",
         "target_static": true
       },
@@ -8721,7 +8869,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 401,
+        "line": 450,
         "target": "",
         "target_static": true
       },
@@ -8733,7 +8881,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 537,
+        "line": 586,
         "target": "",
         "target_static": true
       },
@@ -8745,7 +8893,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 539,
+        "line": 588,
         "target": "",
         "target_static": true
       },
@@ -8757,7 +8905,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 563,
+        "line": 612,
         "target": "",
         "target_static": true
       },
@@ -8769,7 +8917,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 569,
+        "line": 618,
         "target": "",
         "target_static": true
       },
@@ -9119,7 +9267,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
-        "line": 2039,
+        "line": 2043,
         "target": "$winps",
         "target_static": false
       },
@@ -9131,7 +9279,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
-        "line": 2116,
+        "line": 2123,
         "target": "$winps",
         "target_static": false
       },
@@ -9143,7 +9291,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
-        "line": 2242,
+        "line": 2249,
         "target": "$winps",
         "target_static": false
       },
@@ -9155,7 +9303,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
-        "line": 2338,
+        "line": 2346,
         "target": "$winps",
         "target_static": false
       },
@@ -9167,7 +9315,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
-        "line": 2414,
+        "line": 2422,
         "target": "$winps",
         "target_static": false
       },
@@ -9179,7 +9327,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
-        "line": 2624,
+        "line": 2632,
         "target": "$winps",
         "target_static": false
       },
@@ -9191,7 +9339,7 @@
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
-        "line": 2728,
+        "line": 2741,
         "target": "$winps",
         "target_static": false
       },
@@ -9199,11 +9347,11 @@
         "command": ".",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 43,
+        "guard_line": 44,
         "guard_name": "byte_pinned_function_library",
         "guarded": true,
         "kind": "dot_source",
-        "line": 43,
+        "line": 44,
         "target": "$BootstrapIntegrityFunctions",
         "target_static": false
       },
@@ -9211,11 +9359,11 @@
         "command": "Start-Process",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Invoke-SelfElevated",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "start_process",
-        "line": 126,
+        "line": 127,
         "target": "$powershell",
         "target_static": false
       },
@@ -9223,11 +9371,11 @@
         "command": ".",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Enter-ContainerPlacementWriterFence",
-        "guard_line": 186,
+        "guard_line": 187,
         "guard_name": "byte_pinned_function_library",
         "guarded": true,
         "kind": "dot_source",
-        "line": 186,
+        "line": 187,
         "target": "$writerFenceHelperFull",
         "target_static": false
       },
@@ -9235,11 +9383,11 @@
         "command": "&",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Set-HardenedCodeAcl",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "call_operator",
-        "line": 468,
+        "line": 469,
         "target": "$icacls",
         "target_static": false
       },
@@ -9247,11 +9395,11 @@
         "command": "&",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Set-HardenedCodeAcl",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "call_operator",
-        "line": 470,
+        "line": 471,
         "target": "$icacls",
         "target_static": false
       },
@@ -9259,11 +9407,11 @@
         "command": "&",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Set-HardenedCodeAcl",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "call_operator",
-        "line": 472,
+        "line": 473,
         "target": "$icacls",
         "target_static": false
       },
@@ -9271,11 +9419,11 @@
         "command": ".",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Remove-OwnedLegacyTask",
-        "guard_line": 536,
+        "guard_line": 537,
         "guard_name": "byte_pinned_function_library",
         "guarded": true,
         "kind": "dot_source",
-        "line": 536,
+        "line": 537,
         "target": "$writerFenceHelperPath",
         "target_static": false
       },
@@ -9283,12 +9431,24 @@
         "command": ".",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "dot_source",
-        "line": 669,
+        "line": 678,
         "target": "$WriterFenceHelperPath",
+        "target_static": false
+      },
+      {
+        "command": ".",
+        "file": "tools/bootstrap_integrity.ps1",
+        "function": "Assert-ContainerDataGenerationTarget",
+        "guard_line": 100,
+        "guard_name": "byte_pinned_function_library",
+        "guarded": true,
+        "kind": "dot_source",
+        "line": 100,
+        "target": "$dataGenerationLeaf",
         "target_static": false
       },
       {
@@ -9466,8 +9626,8 @@
           "guard_kind": "session_authority",
           "guard_line": 1880,
           "guard_name": "Enter-ContainerWriterSessionAuthority",
-          "lifetime_end_line": 2905,
-          "release_line": 2905,
+          "lifetime_end_line": 2918,
+          "release_line": 2918,
           "release_name": "Exit-ContainerWriterSessionAuthority",
           "required": true,
           "valid": true,
@@ -9615,7 +9775,7 @@
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "call_operator",
-            "line": 2039,
+            "line": 2043,
             "target": "$winps",
             "target_static": false
           },
@@ -9627,7 +9787,7 @@
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "call_operator",
-            "line": 2116,
+            "line": 2123,
             "target": "$winps",
             "target_static": false
           },
@@ -9639,7 +9799,7 @@
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2134,
+            "line": 2141,
             "target": "",
             "target_static": true
           },
@@ -9651,7 +9811,7 @@
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2178,
+            "line": 2185,
             "target": "",
             "target_static": true
           },
@@ -9663,7 +9823,7 @@
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "call_operator",
-            "line": 2242,
+            "line": 2249,
             "target": "$winps",
             "target_static": false
           },
@@ -9675,7 +9835,7 @@
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2253,
+            "line": 2260,
             "target": "",
             "target_static": true
           },
@@ -9687,7 +9847,7 @@
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "call_operator",
-            "line": 2338,
+            "line": 2346,
             "target": "$winps",
             "target_static": false
           },
@@ -9699,7 +9859,7 @@
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "call_operator",
-            "line": 2414,
+            "line": 2422,
             "target": "$winps",
             "target_static": false
           },
@@ -9711,7 +9871,7 @@
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2556,
+            "line": 2564,
             "target": "",
             "target_static": true
           },
@@ -9723,7 +9883,7 @@
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "call_operator",
-            "line": 2624,
+            "line": 2632,
             "target": "$winps",
             "target_static": false
           },
@@ -9735,7 +9895,7 @@
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2649,
+            "line": 2657,
             "target": "",
             "target_static": true
           },
@@ -9747,7 +9907,7 @@
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "call_operator",
-            "line": 2728,
+            "line": 2741,
             "target": "$winps",
             "target_static": false
           },
@@ -9759,7 +9919,7 @@
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2763,
+            "line": 2776,
             "target": "",
             "target_static": true
           }
@@ -9768,10 +9928,10 @@
       {
         "entry_guard": {
           "guard_kind": "delegated_operation",
-          "guard_line": 668,
+          "guard_line": 677,
           "guard_name": "Enter-ContainerPlacementWriterFence",
-          "lifetime_end_line": 1171,
-          "release_line": 1171,
+          "lifetime_end_line": 1189,
+          "release_line": 1189,
           "release_name": "Exit-ContainerWriterAdmission",
           "required": true,
           "valid": true,
@@ -9783,11 +9943,11 @@
             "command": ".",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 43,
+            "guard_line": 44,
             "guard_name": "byte_pinned_function_library",
             "guarded": true,
             "kind": "dot_source",
-            "line": 43,
+            "line": 44,
             "target": "$BootstrapIntegrityFunctions",
             "target_static": false
           },
@@ -9795,11 +9955,11 @@
             "command": "New-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "Install-CurrentUserTlsCaBootstrap",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 77,
+            "line": 78,
             "target": "",
             "target_static": true
           },
@@ -9807,11 +9967,11 @@
             "command": "Copy-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "Install-CurrentUserTlsCaBootstrap",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 79,
+            "line": 80,
             "target": "",
             "target_static": true
           },
@@ -9819,11 +9979,11 @@
             "command": "Start-Process",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "Invoke-SelfElevated",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "start_process",
-            "line": 126,
+            "line": 127,
             "target": "$powershell",
             "target_static": false
           },
@@ -9831,11 +9991,11 @@
             "command": ".",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "Enter-ContainerPlacementWriterFence",
-            "guard_line": 186,
+            "guard_line": 187,
             "guard_name": "byte_pinned_function_library",
             "guarded": true,
             "kind": "dot_source",
-            "line": 186,
+            "line": 187,
             "target": "$writerFenceHelperFull",
             "target_static": false
           },
@@ -9843,11 +10003,11 @@
             "command": "New-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "Write-ElevationLog",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 369,
+            "line": 370,
             "target": "",
             "target_static": true
           },
@@ -9855,11 +10015,11 @@
             "command": ".NET File mutation",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "Write-ElevationLog",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 377,
+            "line": 378,
             "target": "",
             "target_static": true
           },
@@ -9867,11 +10027,11 @@
             "command": "&",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "Set-HardenedCodeAcl",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "call_operator",
-            "line": 468,
+            "line": 469,
             "target": "$icacls",
             "target_static": false
           },
@@ -9879,11 +10039,11 @@
             "command": "icacls.exe",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "Set-HardenedCodeAcl",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 468,
+            "line": 469,
             "target": "",
             "target_static": true
           },
@@ -9891,11 +10051,11 @@
             "command": "&",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "Set-HardenedCodeAcl",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "call_operator",
-            "line": 470,
+            "line": 471,
             "target": "$icacls",
             "target_static": false
           },
@@ -9903,11 +10063,11 @@
             "command": "icacls.exe",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "Set-HardenedCodeAcl",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 470,
+            "line": 471,
             "target": "",
             "target_static": true
           },
@@ -9915,11 +10075,11 @@
             "command": "&",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "Set-HardenedCodeAcl",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "call_operator",
-            "line": 472,
+            "line": 473,
             "target": "$icacls",
             "target_static": false
           },
@@ -9927,11 +10087,11 @@
             "command": "icacls.exe",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "Set-HardenedCodeAcl",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 472,
+            "line": 473,
             "target": "",
             "target_static": true
           },
@@ -9939,11 +10099,11 @@
             "command": ".",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "Remove-OwnedLegacyTask",
-            "guard_line": 536,
+            "guard_line": 537,
             "guard_name": "byte_pinned_function_library",
             "guarded": true,
             "kind": "dot_source",
-            "line": 536,
+            "line": 537,
             "target": "$writerFenceHelperPath",
             "target_static": false
           },
@@ -9951,11 +10111,11 @@
             "command": ".",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "dot_source",
-            "line": 669,
+            "line": 678,
             "target": "$WriterFenceHelperPath",
             "target_static": false
           },
@@ -9963,11 +10123,11 @@
             "command": "Copy-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 831,
+            "line": 843,
             "target": "",
             "target_static": true
           },
@@ -9975,11 +10135,11 @@
             "command": "Remove-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 839,
+            "line": 851,
             "target": "",
             "target_static": true
           },
@@ -9987,11 +10147,11 @@
             "command": "Remove-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 842,
+            "line": 854,
             "target": "",
             "target_static": true
           },
@@ -9999,11 +10159,11 @@
             "command": "New-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 856,
+            "line": 868,
             "target": "",
             "target_static": true
           },
@@ -10011,11 +10171,11 @@
             "command": "New-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 858,
+            "line": 870,
             "target": "",
             "target_static": true
           },
@@ -10023,11 +10183,11 @@
             "command": "Copy-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 860,
+            "line": 872,
             "target": "",
             "target_static": true
           },
@@ -10035,43 +10195,7 @@
             "command": "New-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
-            "guard_name": "Enter-ContainerPlacementWriterFence",
-            "guarded": true,
-            "kind": "filesystem_mutation",
-            "line": 935,
-            "target": "",
-            "target_static": true
-          },
-          {
-            "command": "New-Item",
-            "file": "INSTALL_THIS_PC.ps1",
-            "function": "",
-            "guard_line": 668,
-            "guard_name": "Enter-ContainerPlacementWriterFence",
-            "guarded": true,
-            "kind": "filesystem_mutation",
-            "line": 939,
-            "target": "",
-            "target_static": true
-          },
-          {
-            "command": "New-Item",
-            "file": "INSTALL_THIS_PC.ps1",
-            "function": "",
-            "guard_line": 668,
-            "guard_name": "Enter-ContainerPlacementWriterFence",
-            "guarded": true,
-            "kind": "filesystem_mutation",
-            "line": 943,
-            "target": "",
-            "target_static": true
-          },
-          {
-            "command": "New-Item",
-            "file": "INSTALL_THIS_PC.ps1",
-            "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
@@ -10080,14 +10204,38 @@
             "target_static": true
           },
           {
-            "command": "Copy-Item",
+            "command": "New-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 950,
+            "line": 953,
+            "target": "",
+            "target_static": true
+          },
+          {
+            "command": "New-Item",
+            "file": "INSTALL_THIS_PC.ps1",
+            "function": "",
+            "guard_line": 677,
+            "guard_name": "Enter-ContainerPlacementWriterFence",
+            "guarded": true,
+            "kind": "filesystem_mutation",
+            "line": 957,
+            "target": "",
+            "target_static": true
+          },
+          {
+            "command": "New-Item",
+            "file": "INSTALL_THIS_PC.ps1",
+            "function": "",
+            "guard_line": 677,
+            "guard_name": "Enter-ContainerPlacementWriterFence",
+            "guarded": true,
+            "kind": "filesystem_mutation",
+            "line": 963,
             "target": "",
             "target_static": true
           },
@@ -10095,11 +10243,23 @@
             "command": "Copy-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 961,
+            "line": 964,
+            "target": "",
+            "target_static": true
+          },
+          {
+            "command": "Copy-Item",
+            "file": "INSTALL_THIS_PC.ps1",
+            "function": "",
+            "guard_line": 677,
+            "guard_name": "Enter-ContainerPlacementWriterFence",
+            "guarded": true,
+            "kind": "filesystem_mutation",
+            "line": 975,
             "target": "",
             "target_static": true
           },
@@ -10107,11 +10267,11 @@
             "command": "Move-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 1022,
+            "line": 1036,
             "target": "",
             "target_static": true
           },
@@ -10119,11 +10279,11 @@
             "command": "Move-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 1024,
+            "line": 1038,
             "target": "",
             "target_static": true
           },
@@ -10131,11 +10291,11 @@
             "command": "Move-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 1033,
+            "line": 1049,
             "target": "",
             "target_static": true
           },
@@ -10143,11 +10303,11 @@
             "command": "Remove-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 1039,
+            "line": 1055,
             "target": "",
             "target_static": true
           },
@@ -10155,11 +10315,11 @@
             "command": "Move-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 1044,
+            "line": 1060,
             "target": "",
             "target_static": true
           },
@@ -10167,11 +10327,11 @@
             "command": "Remove-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 1143,
+            "line": 1159,
             "target": "",
             "target_static": true
           },
@@ -10179,11 +10339,11 @@
             "command": "Move-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 1151,
+            "line": 1169,
             "target": "",
             "target_static": true
           },
@@ -10191,11 +10351,11 @@
             "command": "Move-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 1156,
+            "line": 1174,
             "target": "",
             "target_static": true
           },
@@ -10203,11 +10363,11 @@
             "command": "Remove-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
-            "guard_line": 668,
+            "guard_line": 677,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 1162,
+            "line": 1180,
             "target": "",
             "target_static": true
           }
@@ -10243,6 +10403,18 @@
         "file": "tools/bootstrap_integrity.ps1",
         "sites": [
           {
+            "command": ".",
+            "file": "tools/bootstrap_integrity.ps1",
+            "function": "Assert-ContainerDataGenerationTarget",
+            "guard_line": 100,
+            "guard_name": "byte_pinned_function_library",
+            "guarded": true,
+            "kind": "dot_source",
+            "line": 100,
+            "target": "$dataGenerationLeaf",
+            "target_static": false
+          },
+          {
             "command": ".NET File mutation",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Write-Utf8Json",
@@ -10250,7 +10422,7 @@
             "guard_name": "",
             "guarded": false,
             "kind": "filesystem_mutation",
-            "line": 107,
+            "line": 156,
             "target": "",
             "target_static": true
           },
@@ -10262,7 +10434,7 @@
             "guard_name": "",
             "guarded": false,
             "kind": "filesystem_mutation",
-            "line": 108,
+            "line": 157,
             "target": "",
             "target_static": true
           },
@@ -10274,7 +10446,7 @@
             "guard_name": "",
             "guarded": false,
             "kind": "filesystem_mutation",
-            "line": 401,
+            "line": 450,
             "target": "",
             "target_static": true
           },
@@ -10286,7 +10458,7 @@
             "guard_name": "",
             "guarded": false,
             "kind": "filesystem_mutation",
-            "line": 537,
+            "line": 586,
             "target": "",
             "target_static": true
           },
@@ -10298,7 +10470,7 @@
             "guard_name": "",
             "guarded": false,
             "kind": "filesystem_mutation",
-            "line": 539,
+            "line": 588,
             "target": "",
             "target_static": true
           },
@@ -10310,7 +10482,7 @@
             "guard_name": "",
             "guarded": false,
             "kind": "filesystem_mutation",
-            "line": 563,
+            "line": 612,
             "target": "",
             "target_static": true
           },
@@ -10322,7 +10494,7 @@
             "guard_name": "",
             "guarded": false,
             "kind": "filesystem_mutation",
-            "line": 569,
+            "line": 618,
             "target": "",
             "target_static": true
           }
@@ -10839,43 +11011,43 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2087,
+            "line": 2093,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2187,
+            "line": 2194,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2294,
+            "line": 2301,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2424,
+            "line": 2432,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2429,
+            "line": 2437,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2702,
+            "line": 2714,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2760,
+            "line": 2773,
             "non_production_mode": ""
           }
         ],
@@ -10913,133 +11085,121 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2067,
+            "line": 2071,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2068,
+            "line": 2072,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2095,
+            "line": 2101,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2096,
+            "line": 2102,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2143,
+            "line": 2150,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2160,
+            "line": 2167,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2161,
+            "line": 2168,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2203,
+            "line": 2210,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2204,
+            "line": 2211,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2258,
+            "line": 2265,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2269,
+            "line": 2276,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2270,
+            "line": 2277,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2282,
+            "line": 2289,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2283,
+            "line": 2290,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2286,
+            "line": 2293,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2287,
+            "line": 2294,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2304,
+            "line": 2311,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2305,
+            "line": 2312,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2420,
+            "line": 2428,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2421,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "__script__",
-            "guarded_top_level": true,
-            "line": 2464,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "__script__",
-            "guarded_top_level": true,
-            "line": 2465,
+            "line": 2429,
             "non_production_mode": ""
           },
           {
@@ -11057,91 +11217,91 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2494,
+            "line": 2480,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2495,
+            "line": 2481,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2671,
+            "line": 2502,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2692,
+            "line": 2503,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2693,
+            "line": 2679,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2743,
+            "line": 2700,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2744,
+            "line": 2701,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2751,
+            "line": 2756,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2752,
+            "line": 2757,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2778,
+            "line": 2764,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2779,
+            "line": 2765,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2786,
+            "line": 2791,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2787,
+            "line": 2792,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2833,
+            "line": 2799,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2834,
+            "line": 2800,
             "non_production_mode": ""
           },
           {
@@ -11159,13 +11319,13 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2879,
+            "line": 2859,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2880,
+            "line": 2860,
             "non_production_mode": ""
           },
           {
@@ -11178,6 +11338,18 @@
             "caller": "__script__",
             "guarded_top_level": true,
             "line": 2893,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 2905,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 2906,
             "non_production_mode": ""
           }
         ],
@@ -11203,25 +11375,25 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2152,
+            "line": 2159,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2563,
+            "line": 2571,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2663,
+            "line": 2671,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2865,
+            "line": 2878,
             "non_production_mode": ""
           }
         ],
@@ -11241,13 +11413,13 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 668,
+            "line": 677,
             "non_production_mode": ""
           }
         ],
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Enter-ContainerPlacementWriterFence",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "non_production_only": false,
@@ -11261,13 +11433,13 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 1100,
+            "line": 1116,
             "non_production_mode": ""
           }
         ],
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Install-CurrentUserTlsCaBootstrap",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "non_production_only": false,
@@ -11281,13 +11453,13 @@
           {
             "caller": "Enter-ContainerPlacementWriterFence",
             "guarded_top_level": false,
-            "line": 223,
+            "line": 224,
             "non_production_mode": ""
           }
         ],
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Invoke-SelfElevated",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "non_production_only": false,
@@ -11314,37 +11486,37 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 832,
+            "line": 844,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 864,
+            "line": 876,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 937,
+            "line": 951,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 967,
+            "line": 981,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 1048,
+            "line": 1064,
             "non_production_mode": ""
           }
         ],
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Set-HardenedCodeAcl",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "non_production_only": false,
@@ -11358,67 +11530,80 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 678,
+            "line": 687,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 703,
+            "line": 712,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 743,
+            "line": 755,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 761,
+            "line": 773,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 768,
+            "line": 780,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 844,
+            "line": 856,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 1116,
+            "line": 1132,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 1127,
+            "line": 1143,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 1135,
+            "line": 1151,
             "non_production_mode": ""
           }
         ],
         "file": "INSTALL_THIS_PC.ps1",
         "function": "Write-ElevationLog",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "non_production_only": false,
         "non_production_reachable": false,
         "production_reachable": true,
         "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/bootstrap_integrity.ps1",
+        "function": "Assert-ContainerDataGenerationTarget",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
         "unsafe_reachable": false
       },
       {
@@ -11452,13 +11637,13 @@
           {
             "caller": "Write-BootstrapIntegrityRecord",
             "guarded_top_level": false,
-            "line": 135,
+            "line": 184,
             "non_production_mode": ""
           },
           {
             "caller": "Write-BootstrapReplacementReceipt",
             "guarded_top_level": false,
-            "line": 406,
+            "line": 455,
             "non_production_mode": ""
           }
         ],
@@ -12437,7 +12622,7 @@
         "guard_line": 1880,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
-        "release_line": 2905,
+        "release_line": 2918,
         "release_name": "Exit-ContainerWriterSessionAuthority",
         "writer_site_count": 20,
         "writer_site_kinds": [
@@ -12451,10 +12636,10 @@
       {
         "file": "INSTALL_THIS_PC.ps1",
         "guard_kind": "delegated_operation",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
-        "release_line": 1171,
+        "release_line": 1189,
         "release_name": "Exit-ContainerWriterAdmission",
         "writer_site_count": 32,
         "writer_site_kinds": [
@@ -12484,7 +12669,7 @@
     "site_counts_by_kind": {
       "call_operator": 22,
       "com_wmi_process_create": 1,
-      "dot_source": 10,
+      "dot_source": 11,
       "filesystem_mutation": 59,
       "scheduled_task_cmdlet": 7,
       "start_process": 3
@@ -12492,10 +12677,10 @@
     "writer_sinks": [
       {
         "file": "INSTALL_THIS_PC.ps1",
-        "guard_line": 668,
+        "guard_line": 677,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
-        "release_line": 1171,
+        "release_line": 1189,
         "release_name": "Exit-ContainerWriterAdmission",
         "source": "canonical_code_placement",
         "writer_site_count": 32,
@@ -12511,10 +12696,10 @@
   "powershell_writer_sinks": [
     {
       "file": "INSTALL_THIS_PC.ps1",
-      "guard_line": 668,
+      "guard_line": 677,
       "guard_name": "Enter-ContainerPlacementWriterFence",
       "guarded": true,
-      "release_line": 1171,
+      "release_line": 1189,
       "release_name": "Exit-ContainerWriterAdmission",
       "source": "canonical_code_placement",
       "writer_site_count": 32,
@@ -12534,6 +12719,7 @@
     "container_audit_product_host.__file_entry__",
     "container_audit_test_harness.__file_entry__",
     "current_user_onboarding.__file_entry__",
+    "data_generation_guard.__file_entry__",
     "direct_sync_auto_bootstrap.__file_entry__",
     "direct_sync_health.__file_entry__",
     "direct_sync_operator.__file_entry__",
@@ -12570,6 +12756,7 @@
     "kmtech_factory_contracts.strict_server.__file_entry__",
     "kmtech_shared.__file_entry__",
     "kmtech_shared.catalog.__file_entry__",
+    "kmtech_shared.data_generation.__file_entry__",
     "kmtech_shared.raster.__file_entry__",
     "kmtech_shared.runtime.__file_entry__",
     "label_qr.__file_entry__",
@@ -12604,6 +12791,7 @@
     "tk_serial_ui_lane.__file_entry__",
     "tools.active_work_probe.__file_entry__",
     "tools.check_logistics_runtime_profile.__file_entry__",
+    "tools.check_release_version.__file_entry__",
     "tools.direct_sync_relay_install_pack.__file_entry__",
     "tools.direct_sync_relay_operator.__file_entry__",
     "tools.direct_sync_relay_runner.__file_entry__",
@@ -12690,6 +12878,7 @@
     "current_user_onboarding",
     "current_user_onboarding_storage",
     "current_user_setup_removal",
+    "data_generation_marker",
     "direct_sync_enqueue",
     "direct_sync_install_pack",
     "direct_sync_relay_cycle",
@@ -12885,7 +13074,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._start_replacement_user_relay_process",
-      "line": 806,
+      "line": 809,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -12893,7 +13082,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.restore_current_user_lifecycle_after_replacement",
-      "line": 1488,
+      "line": 1496,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -12901,7 +13090,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._windows_acl_identity",
-      "line": 492,
+      "line": 495,
       "marker_kind": "decorator",
       "source": "current_user_onboarding"
     },
@@ -12909,7 +13098,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.onboard_current_user",
-      "line": 1214,
+      "line": 1217,
       "marker_kind": "decorator",
       "source": "current_user_onboarding"
     },
@@ -12917,7 +13106,7 @@
       "direct_mutation_site_count": 2,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._install_replacement_user_relay_autostart",
-      "line": 934,
+      "line": 937,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -12941,9 +13130,17 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.remove_current_user_setup",
-      "line": 1413,
+      "line": 1421,
       "marker_kind": "writer_admission",
       "source": "current_user_setup_removal"
+    },
+    {
+      "direct_mutation_site_count": 0,
+      "file": "data_generation_guard.py",
+      "function": "data_generation_guard.record_before_data_open",
+      "line": 75,
+      "marker_kind": "decorator",
+      "source": "data_generation_marker"
     },
     {
       "direct_mutation_site_count": 0,
@@ -13109,7 +13306,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1492,
+      "line": 1493,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -13117,7 +13314,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 21490,
+      "line": 21495,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -13125,7 +13322,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 5022,
+      "line": 5023,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -13133,7 +13330,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._clear_projected_checkpoint_audits",
-      "line": 3678,
+      "line": 3679,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -13141,7 +13338,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._recover_checkpoint_audit_events",
-      "line": 3646,
+      "line": 3647,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -13149,7 +13346,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot",
-      "line": 3577,
+      "line": 3578,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -13157,7 +13354,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 4107,
+      "line": 4108,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },
@@ -13421,7 +13618,7 @@
       "direct_mutation_site_count": 1,
       "file": "user_relay.py",
       "function": "user_relay.start_user_relay_process",
-      "line": 215,
+      "line": 216,
       "marker_kind": "decorator",
       "source": "persistent_relay_process_start"
     },
@@ -13429,7 +13626,7 @@
       "direct_mutation_site_count": 1,
       "file": "user_relay.py",
       "function": "user_relay._registry_delete",
-      "line": 156,
+      "line": 157,
       "marker_kind": "decorator",
       "source": "persistent_relay_registry"
     },
@@ -13437,7 +13634,7 @@
       "direct_mutation_site_count": 2,
       "file": "user_relay.py",
       "function": "user_relay._registry_set",
-      "line": 121,
+      "line": 122,
       "marker_kind": "decorator",
       "source": "persistent_relay_registry"
     },
@@ -13453,7 +13650,7 @@
       "direct_mutation_site_count": 4,
       "file": "user_relay.py",
       "function": "user_relay._write_json_atomic",
-      "line": 48,
+      "line": 49,
       "marker_kind": "decorator",
       "source": "persistent_relay_status"
     },
@@ -13461,7 +13658,7 @@
       "direct_mutation_site_count": 0,
       "file": "user_relay.py",
       "function": "user_relay.main",
-      "line": 459,
+      "line": 466,
       "marker_kind": "decorator",
       "source": "persistent_relay_status"
     },
@@ -13661,7 +13858,7 @@
       "direct_mutation_site_count": 0,
       "file": "tools/direct_sync_relay_runner.py",
       "function": "tools.direct_sync_relay_runner.main",
-      "line": 741,
+      "line": 742,
       "marker_kind": "decorator",
       "source": "raw_relay_runner"
     },
@@ -13669,7 +13866,7 @@
       "direct_mutation_site_count": 2,
       "file": "tools/direct_sync_relay_runner.py",
       "function": "tools.direct_sync_relay_runner._build_delta_source_file",
-      "line": 573,
+      "line": 574,
       "marker_kind": "decorator",
       "source": "raw_relay_storage"
     },
@@ -13677,7 +13874,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/direct_sync_relay_runner.py",
       "function": "tools.direct_sync_relay_runner._record_source_prefix_verification",
-      "line": 559,
+      "line": 560,
       "marker_kind": "decorator",
       "source": "raw_relay_storage"
     },
@@ -13685,7 +13882,7 @@
       "direct_mutation_site_count": 5,
       "file": "tools/direct_sync_relay_runner.py",
       "function": "tools.direct_sync_relay_runner._scan_state_connect",
-      "line": 103,
+      "line": 104,
       "marker_kind": "decorator",
       "source": "raw_relay_storage"
     },
@@ -13693,7 +13890,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/direct_sync_relay_runner.py",
       "function": "tools.direct_sync_relay_runner._write_source_scan_state",
-      "line": 384,
+      "line": 385,
       "marker_kind": "decorator",
       "source": "raw_relay_storage"
     },
@@ -14397,7 +14594,7 @@
       "direct_mutation_site_count": 1,
       "file": "update_service.py",
       "function": "update_service.safe_extract_update_zip",
-      "line": 763,
+      "line": 794,
       "marker_kind": "decorator",
       "source": "update_zip_extract"
     },
@@ -14405,7 +14602,7 @@
       "direct_mutation_site_count": 0,
       "file": "user_relay.py",
       "function": "user_relay.install_user_relay_autostart",
-      "line": 174,
+      "line": 175,
       "marker_kind": "decorator",
       "source": "user_relay_autostart_install"
     },
@@ -14413,7 +14610,7 @@
       "direct_mutation_site_count": 0,
       "file": "user_relay.py",
       "function": "user_relay.remove_user_relay_autostart",
-      "line": 197,
+      "line": 198,
       "marker_kind": "decorator",
       "source": "user_relay_autostart_remove"
     },

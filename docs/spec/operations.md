@@ -18,8 +18,12 @@ resident supervisor의 process launch/control 상태 조회는 기록하지 않�
 반영했다. raw relay의 명시 queue root가 GUI와 달라도 기존 SID control marker를 함께
 써 설치기 probe가 관측한다. source는 clean commit, portable은 기존 bootstrap 코드
 검증+version/commit 결속, frozen은 기존 factory package verifier로 build를 확인한다.
-최종 집중+신규307건은305 PASS/2 FAIL이다. 두 실패는 실제 온보딩으로 자료를 연 뒤
+기존 d55cc94 집중 시험은308 PASS/2 FAIL이다. 두 실패는 실제 온보딩으로 자료를 연 뒤
 다른 옛 build로 복원을 허용하던 기대이며 G 결정과 충돌하여 코디 판단을 기다린다.
+새 기준82ce91c 자체의 표준 `--check`는 변경 전 깨끗한 독립 사본에서 PASS였다.
+G 변경을 그 기준 위로 옮긴 뒤 표준 `--write`→기존 consumer pin3곳 결속→`--check`가
+PASS이며 Python sink216/cross-language217, uncovered/caller 실패/신뢰 예외0이다.
+종료 정리 변경을 포함한 새 기준의 집중 비교 근거는 아래 작업 보고서에 기록한다.
 새 adapter는 stock builder의 고정 app 목록에도 포함하고 실제 복사 회귀로 검증한다.
 builder는 새 metadata helper 사용 전에 기존 공용 pin 검사를 끝낸다. 독립 checker
 시험 사본에는 기존 conftest의 lock guard dependency도 함께 복사하여 guard를 유지한다.
@@ -27,6 +31,7 @@ builder는 새 metadata helper 사용 전에 기존 공용 pin 검사를 끝낸�
 두 선언의 더 엄격한 하한/신뢰 교집합을 유지한다. 이전 build의 넓은 호환을 그대로
 물려주지 않는다. 같은 build와 더 높은 기존 판의 바이트 보존은 유지한다.
 [API·현재 한계](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/HELPER-READY.md).
+[새 기준 검증](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/REPORT.md).
 
 출시 때 stock builder는 실제 `CURRENT_VERSION`에서 portable manifest의 `version`을
 만들고 `--data-compatible-min-version` 입력을 받는다(누락은 자기 판). 출시 담당자는
