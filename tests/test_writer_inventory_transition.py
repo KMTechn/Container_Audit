@@ -21,6 +21,14 @@ def _exercise_transition(tmp_path, old_root):
     child = tmp_path/'child.py'
     child.write_text(r'''
 import os, sys
+import types
+# Removal does not use HTTP; fail any accidental transport and provide the
+# import dependency needed by the registrar's operator-SID helper under -I.
+requests = types.ModuleType('requests')
+def forbidden_network(*args, **kwargs):
+    raise AssertionError('removal must not perform HTTP')
+requests.Session = requests.get = requests.post = requests.request = forbidden_network
+sys.modules['requests'] = requests
 from pathlib import Path
 sys.path[:0] = [sys.argv[1], os.environ['CA_TEST_SOURCE']]
 import writer_session_fence as fence
@@ -168,6 +176,14 @@ def test_admitted_removal_probe_preserves_metadata_and_refusal_state(tmp_path, m
     child = tmp_path/'readonly_removal.py'
     child.write_text(r'''
 import json, os, sys
+import types
+# Removal does not use HTTP; fail any accidental transport and provide the
+# import dependency needed by the registrar's operator-SID helper under -I.
+requests = types.ModuleType('requests')
+def forbidden_network(*args, **kwargs):
+    raise AssertionError('removal must not perform HTTP')
+requests.Session = requests.get = requests.post = requests.request = forbidden_network
+sys.modules['requests'] = requests
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 import data_generation_guard as guard
