@@ -54,7 +54,22 @@ def test_real_onboarding_defers_relay_under_valid_installation_delegation(monkey
     _ready_state(paths)
     monkeypatch.setattr(auto_update, "ordinary_user_context", lambda *args: False)
     launches = []
+    # Relay interception must not replace the G adapter's exact read-only
+    # source-identity probes with a relay-shaped fake process.
+    original_popen = user_relay.subprocess.Popen
+    for name in (
+        "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    metadata_commands = (
+        ["git", "--no-optional-locks", "-C", str(ROOT), "status", "--porcelain"],
+        ["git", "--no-optional-locks", "-C", str(ROOT), "rev-parse", "HEAD^{commit}"],
+    )
+
     def launch(command, **kwargs):
+        if list(command) in metadata_commands:
+            return original_popen(command, **kwargs)
         launches.append(list(command))
         # Exercise the child's real admission rather than claiming Popen PID
         # means a resident relay. No native child is started.
