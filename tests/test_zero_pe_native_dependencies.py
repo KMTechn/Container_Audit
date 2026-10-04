@@ -393,6 +393,7 @@ def test_portable_builder_requires_empty_native_closure_and_curated_tools():
     assert portable_builder.EXTERNAL_TOOL_MODULES == ("tools.direct_sync_relay_operator",)
     tool_sources = portable_builder._discover_portable_tool_sources(ROOT)
     assert {path.relative_to(ROOT).as_posix() for path in tool_sources} == {
+        "tools/check_release_version.py",
         "tools/direct_sync_relay_operator.py",
         "tools/direct_sync_relay_runner.py",
         "tools/install_logistics_runtime_profile.py",
@@ -431,6 +432,7 @@ def test_portable_manifest_preserves_existing_application_file_set(tmp_path):
         "contract.lock.json", "kmtech_shared.manifest.json", "kmtech_shared.lock.json",
         "config/container_audit_settings.json",
         "config/validator_settings.json", "tools/direct_sync_relay_runner.py",
+        "tools/check_release_version.py",
         "tools/direct_sync_relay_operator.py",
         "tools/install_logistics_runtime_profile.py",
         "tools/register_container_audit_worker_pc.py",
