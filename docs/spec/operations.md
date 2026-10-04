@@ -121,6 +121,10 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 같은/낮은 판·unsigned 정책 목록·Unicode 호스트·redirect/응답 URL 불일치는 거절한다.
 국제 도메인은 ASCII punycode로 설정한다. 판 번호가 없는 옛 stock은 지원 재설치를 안내하며,
 feed가 꺼진 기존 실행/relay의 SHA 식별 경로에는 판 번호를 새 전제로 넣지 않는다.
+canonical feed ZIP은 `Container_Audit/` 아래 원문으로 준비한다. bundled runtime은
+빌더의 stock `runtime_files`에 기록한 정확한 경로·해시와 실제 ZIP이 일치해야 한다.
+추가 runtime 파일·해시 불일치·목록 부재나 민감 상태 파일은 `prepared.json` 게시 전에 거절한다.
+이 목록도 담는 packet SHA는 기존 설치 키로 서명한 feed manifest에서 인증한다.
 
 관리자 설치기는 기존 보호 코드 배치와 같은 writer delegation 아래서
 `versions/<source SHA>`·`update-control`을 보호하고, 지정 작업자 SID의 로그온으로

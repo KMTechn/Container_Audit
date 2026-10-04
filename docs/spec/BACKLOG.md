@@ -434,6 +434,11 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g19"></a>
 ## CA-G19 로그온 자동 갱신 실기 수용
 
+- **sub-217 canonical feed 준비:** 검증된 ZIP 접두로 stock 원문을 읽고, bundled runtime은
+  stock `runtime_files`의 정확한 경로·SHA256으로만 denylist 예외를 적용한다.
+  실제 ES256 서명·packet SHA·정확한 쌍·공개 준비/압축 해제의 11개 격리 회귀를 추가했다.
+  stock 빌더가 목록을 기록한다. 정식 선언/pin 재생성·실제 feed/packet 수용은 아직 별도다.
+
 - **sub-189 내용 소유 제거:** 실제 NTFS에서 PS5.1/7의 개별 이동·중단 재개·None/Read 잠금·
   다른 내용/목록 밖 자료·목록 부재/손상/디렉터리·외부 정션 30 PASS다. scheduler/CIM/보호 JSON
   ACL은 주입 경계이며 실제 외부 지원 caller/승격·task·ACL 제거와 재설치는 NOT TESTED다.

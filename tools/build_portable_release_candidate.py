@@ -648,6 +648,10 @@ def build(
         "python_version": ".".join(str(value) for value in EXPECTED_PYTHON),
         "python_home": str(python_home),
         "runtime_pythonw_sha256": _sha256(output / "runtime" / "pythonw.exe"),
+        "runtime_files": [
+            {"path": path.relative_to(output).as_posix(), "sha256": _sha256(path)}
+            for path in sorted((output / "runtime").rglob("*")) if path.is_file()
+        ],
         "entrypoint": "runtime/pythonw.exe app/main.py",
         "launcher": "launch-container-audit.cmd",
         "launcher_sha256": _sha256(output / "launch-container-audit.cmd"),

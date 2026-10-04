@@ -1268,7 +1268,7 @@ def prepare_feed_packet(app_root: Path) -> dict[str, Any]:
     import requests
     from update_service import (verify_update_manifest_signature, update_candidate_from_private_manifest,
                                 file_sha256, assert_https_update_url, is_github_hosted_update_url,
-                                validate_update_archive_layout, _is_zip_symlink, _validate_windows_archive_path)
+                                validate_update_archive, _is_zip_symlink, _validate_windows_archive_path)
     from current_user_onboarding import resolve_current_user_onboarding_paths, _default_profile_loader
 
     control = control_root(app_root)
@@ -1349,13 +1349,14 @@ def prepare_feed_packet(app_root: Path) -> dict[str, Any]:
         import zipfile
         with zipfile.ZipFile(attempt / "packet.zip") as archive:
             entries = archive.infolist()
-            validate_update_archive_layout([entry.filename for entry in entries], candidate["archive_policy"])
+            validate_update_archive(archive, candidate["archive_policy"])
+            prefix = entries[0].filename.split("/", 1)[0] + "/"
             for entry in entries:
                 _validate_windows_archive_path(entry.filename)
                 if _is_zip_symlink(entry):
                     raise ValueError("update ZIP contains a redirected entry")
             def read_candidate_bytes(name):
-                entry = archive.getinfo(name)
+                entry = archive.getinfo(prefix + name)
                 if entry.file_size > 16 * 1024 * 1024:
                     raise ValueError("update identity input is oversized")
                 return archive.read(entry)

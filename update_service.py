@@ -693,13 +693,18 @@ def _validate_archive_path_collisions(file_names: list[str]) -> None:
             raise ValueError("업데이트 ZIP에 파일/폴더 경로 충돌이 포함되어 있습니다.")
 
 
-def _runtime_local_archive_member_issue(member_name: str) -> str:
+def _runtime_local_archive_member_issue(member_name: str, runtime_files: frozenset[str] = frozenset()) -> str:
     normalized = str(member_name or "").replace("\\", "/").rstrip("/")
     if not normalized:
         return ""
     parts = [part for part in normalized.split("/") if part]
     lowered_parts = [part.casefold() for part in parts]
-    for segment in lowered_parts[1:]:
+    runtime_bound = normalized in runtime_files or (
+        member_name.endswith("/") and any(name.startswith(normalized + "/") for name in runtime_files)
+    )
+    for index, segment in enumerate(lowered_parts[1:], 1):
+        if index == 1 and segment == "runtime" and runtime_bound:
+            continue
         if segment in DENIED_UPDATE_ARCHIVE_PATH_SEGMENTS:
             return f"runtime-local path segment is not allowed: {segment}"
     basename = lowered_parts[-1] if lowered_parts else ""
@@ -713,22 +718,23 @@ def _runtime_local_archive_member_issue(member_name: str) -> str:
     return ""
 
 
-def _validate_update_archive_runtime_local_denylist(file_names: list[str]) -> None:
+def _validate_update_archive_runtime_local_denylist(file_names: list[str], runtime_files: frozenset[str] = frozenset()) -> None:
     denied = []
     for name in file_names:
-        issue = _runtime_local_archive_member_issue(name)
+        issue = _runtime_local_archive_member_issue(name, runtime_files)
         if issue:
             denied.append(f"{name} ({issue})")
     if denied:
         raise ValueError("업데이트 ZIP에 현장 런타임/민감 상태 파일이 포함되어 있습니다: " + ", ".join(denied[:5]))
 
 
-def validate_update_archive_layout(members: list[str], archive_policy: Mapping[str, Any] | None = None) -> None:
+def validate_update_archive_layout(members: list[str], archive_policy: Mapping[str, Any] | None = None,
+                                   *, runtime_files: frozenset[str] = frozenset()) -> None:
     file_names = [str(member or "").replace("\\", "/") for member in members if str(member or "").strip()]
     if not file_names:
         raise ValueError("업데이트 ZIP이 비어 있습니다.")
     _validate_archive_path_collisions(file_names)
-    _validate_update_archive_runtime_local_denylist(file_names)
+    _validate_update_archive_runtime_local_denylist(file_names, runtime_files)
     top_level = {name.split("/", 1)[0] for name in file_names}
     if top_level != {"Container_Audit"}:
         raise ValueError("업데이트 ZIP은 최상위 Container_Audit 폴더 하나만 포함해야 합니다.")
@@ -771,6 +777,65 @@ def validate_update_archive_layout(members: list[str], archive_policy: Mapping[s
             raise ValueError("업데이트 ZIP에 manifest 필수 파일이 없습니다: " + ", ".join(policy_missing))
 
 
+def validate_update_archive(zip_ref: zipfile.ZipFile, archive_policy: Mapping[str, Any] | None = None) -> None:
+    """Canonical runtime exceptions require exact stock paths and actual hashes.
+
+    Feed callers authenticate the containing packet SHA before this boundary.
+    Neither a runtime prefix nor a declared path without matching bytes is an
+    exception to the runtime-local denylist; all other deny rules still apply.
+    """
+    members = zip_ref.infolist()
+    names = [entry.filename for entry in members]
+    runtime_files = frozenset()
+    if archive_policy and archive_policy.get("layout") == "canonical_portable":
+        _validate_archive_path_collisions(names)
+        for entry in members:
+            _validate_windows_archive_path(entry.filename)
+            if _is_zip_symlink(entry):
+                raise ValueError("update ZIP contains a redirected entry")
+        stock_entry = zip_ref.getinfo("Container_Audit/portable-manifest.json")
+        if stock_entry.file_size > 1024 * 1024:
+            raise ValueError("canonical stock manifest is oversized")
+        def unique_object(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError("duplicate canonical stock manifest field")
+                value[key] = item
+            return value
+        stock = json.loads(zip_ref.read(stock_entry).decode("utf-8-sig"), object_pairs_hook=unique_object)
+        rows = stock.get("runtime_files") if isinstance(stock, dict) else None
+        if not isinstance(rows, list) or not rows or stock.get("schema") != "container-audit-portable-tree-v1":
+            raise ValueError("canonical stock runtime inventory is missing")
+        expected = {}
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != {"path", "sha256"}:
+                raise ValueError("canonical stock runtime inventory is invalid")
+            path, digest = row["path"], row["sha256"]
+            if not isinstance(path, str) or not path.startswith("runtime/") or "\\" in path or path.endswith("/"):
+                raise ValueError("canonical stock runtime path is invalid")
+            _validate_windows_archive_path(path)
+            if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None or path.casefold() in expected:
+                raise ValueError("canonical stock runtime digest/path is invalid")
+            expected[path.casefold()] = ("Container_Audit/" + path, digest)
+        declared = {name for name, _digest in expected.values()}
+        actual = {entry.filename for entry in members if not entry.is_dir() and entry.filename.startswith("Container_Audit/runtime/")}
+        if actual != declared:
+            raise ValueError("canonical stock runtime membership differs")
+        for name, digest in expected.values():
+            entry = zip_ref.getinfo(name)
+            if entry.file_size > DEFAULT_MAX_UPDATE_ARCHIVE_MEMBER_BYTES:
+                raise ValueError("canonical stock runtime member is oversized")
+            actual_digest = hashlib.sha256()
+            with zip_ref.open(entry) as source:
+                for chunk in iter(lambda: source.read(65536), b""):
+                    actual_digest.update(chunk)
+            if actual_digest.hexdigest() != digest:
+                raise ValueError("canonical stock runtime hash differs")
+        runtime_files = frozenset(declared)
+    validate_update_archive_layout(names, archive_policy, runtime_files=runtime_files)
+
+
 def _is_zip_symlink(member: zipfile.ZipInfo) -> bool:
     mode = (member.external_attr >> 16) & 0xFFFF
     return stat.S_ISLNK(mode)
@@ -803,7 +868,6 @@ def safe_extract_update_zip(
     destination_path = Path(destination).resolve()
     destination_path.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "r") as zip_ref:
-        member_names: list[str] = []
         members = zip_ref.infolist()
         if len(members) > max_entries:
             raise ValueError("업데이트 ZIP에 너무 많은 항목이 포함되어 있습니다.")
@@ -823,7 +887,6 @@ def safe_extract_update_zip(
             target_path = (destination_path / member_name).resolve()
             if not target_path.is_relative_to(destination_path):
                 raise ValueError("업데이트 ZIP에 안전하지 않은 경로가 포함되어 있습니다.")
-            member_names.append(member_name)
-        validate_update_archive_layout(member_names, archive_policy=archive_policy)
+        validate_update_archive(zip_ref, archive_policy)
         zip_ref.extractall(destination_path)
     return destination_path
