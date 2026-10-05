@@ -41,6 +41,7 @@ def test_canonical_rollback_attempts_remaining_recovery_with_actual_g(tmp_path,s
     if case=='normal':
         assert counts['code_restore']==1
         assert counts['fence_release']==1
+        assert counts['generation_readback']=='PASS'
         assert result['fence_active_after'] is False
         assert counts['relay_start']==1
         assert result['state_restored'] is True
@@ -50,6 +51,9 @@ def test_canonical_rollback_attempts_remaining_recovery_with_actual_g(tmp_path,s
             assert result['rollback_steps']['code_quiescence']['status']=='FAILED'
     else:
         assert counts['fence_release']==0
+        assert counts['generation_readback']=='FAILED'
+        assert counts['operator_notice_saved'] is True
+        assert counts['support_procedure']=='docs/spec/operations.md#canonical-rollback-support-recovery'
         assert result['fence_active_after'] is True
         assert counts['relay_start']==0
         assert result['rollback_steps']['relay_restart']['status']=='UNPROVEN_FENCE_RETAINED'

@@ -1260,6 +1260,8 @@ def _prepare_onboarding_inputs(paths, tls_ca_source, environ, credential_loader)
     binding = hashlib.sha256(json.dumps({
         "owner_paths": {name: str(path) for name, path in owner_paths.items()},
         "tls_ca_source": tls_ca_source,
+        "tls_ca_sha256": (_file_sha256(Path(tls_ca_source))
+                          if tls_ca_source and Path(tls_ca_source).is_file() else None),
         "admin_profile": str(admin_profile),
         "credential": dict(prepared_credential.payload) if prepared_credential is not None else None,
         "protected_secret_path": str(prepared_credential.protected_secret_path) if prepared_credential is not None else None,

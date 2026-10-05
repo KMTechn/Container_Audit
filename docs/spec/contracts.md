@@ -16,6 +16,9 @@ Canonical 설치는 fence·placement·Run/task·relay 변경 전에 기존 onboa
 Python의 기존 해석 결과 digest를 `--expected-input-binding`으로 onboarding에 전달하고,
 child는 같은 resolved 경로·payload인지 기록 전에 대조한다. 거절은 기존 오류 코드·안내로
 끝나며 설치 상태 변경은 없다. rollback의 old-target G는 그대로 유지한다.
+bootstrap CA는 app tree 밖의 사용자/자료 bootstrap 폴더에서 선택한다. source/app과
+install/app은 같은 절대 CA 경로와 파일 SHA256으로 결속하며, child 시작 전 한 바이트
+변경도 BLOCKED로 거절한다. 명시 외부 CA 선택과 그 owner G는 그대로 적용한다.
 검증 복원은 같은 읽기 전용 호출의 `--target-release-root`로 정확 old packet을 기존
 product reader로 검증하고, locator/nested owner를 그 old version/build로 판정한다.
 binding은 quiescence 직전과 복원된 old relay 시작 직전에 다시 비교한다.

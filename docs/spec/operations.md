@@ -19,6 +19,8 @@ locator와 nested owner를 기존 Python reader로 검사한다. 보안 입력�
 않으며, 결과 digest를 실제 onboarding의 `--expected-input-binding`으로 넘겨 같은 입력인지
 최초 기록 전에 비교한다. 깨진 locator·중복 키는 기존 credential BLOCKED 오류 코드로
 종료한다. old-target rollback G는 유지하며 실제 native 설치·복원은 아직 NOT TESTED다.
+기본 bootstrap CA는 사용자/자료 bootstrap 폴더의 파일이다. source와 install의 app root가
+달라도 같은 절대 경로·SHA256을 비교하며, CA 변경은 최초 onboarding 기록 전에 거절한다.
 `RestoreVerifiedReplacement`는 fence 전에 old rollback tree(이미 복원됐으면 설치 tree)를
 `--target-release-root`로 정확 검증하고 locator와 nested owner에 old version/build G를
 적용한다. 같은 digest를 quiescence 직전과 old relay 재시작 직전에 대조한다. 이 경로는
@@ -812,3 +814,15 @@ G 시작 거절 대화상자는 REFUSE/UNKNOWN에 맞는 고정 한국어 원인
 The removal entrypoint checks the resolved owner markers inside its existing `current_user_setup_removal` admission. This single caller passes `admission_source` to the G probe; its fixed `probe_only=True` invocation of the original body returns before directory creation or marker publication, and does not request the unrelated marker-writer capability. Marker recording and every other probe retain their original writer decorator. A static regression fixes the sole caller inside that admission, and separate child-process regressions compare data/control file lists, sizes and mtimes and exercise missing, equal, newer and UNKNOWN markers. This narrow exception was conditionally approved in `msg_eb3b375df3eb`; shared helpers, syntax guards and sink identities remain unchanged.
 
 Registration retains string profile-path arguments after shared resolution. Invalid storage configuration reads no owner payload and retains the BLOCKED report contract; an optional report write first probes its actual parent root and the ambient control marker under registration admission.
+
+
+<a id="canonical-rollback-support-recovery"></a>
+## Canonical rollback 중단과 관리자 지원 복구
+
+설치·검증된 코드 교체의 rollback은 removal 실패를 기록한 뒤에도 코드 복원, Run 복원, 중지 표시 복원, 예약 writer 복원을 각각 시도한다. 옛 코드의 정확한 복원 근거, 실제 G의 허용 결과, Run·중지 표시·남은 relay의 일치가 모두 확인된 경우에만 해당 설치 시도의 fence 해제와 옛 relay 재시작을 반드시 시도한다. 단계별 성공·실패는 `rollback.steps`에 남으며 앞선 오류 코드와 실패 기록을 지우지 않는다. G가 거절한 코드 복원은 실행하지 않는다.
+
+확인에 실패한 관리자 설치 화면과 설치 감사 로그의 `rollback.operator_message`에는 다음 문구를 표시한다: “이 PC의 코드, 자료 호환 여부 또는 실행 상태를 확인하지 못해 작업을 안전하게 멈췄습니다. 자료와 설치 기록을 보존하고 관리자 지원 복구를 요청하세요. 확인 없이 중지 표시를 지우거나 앱을 다시 실행하지 마세요.” 이때 fence와 relay 정지를 유지한다. 로그의 `rollback.support_recovery_procedure`는 이 절을 가리킨다.
+
+지원 담당자는 기존 설치 감사 기록, replacement receipt·restore evidence, code integrity record와 자료를 먼저 보존한다. `rollback.steps`에서 실패한 단계와 실제 G의 REFUSE/UNKNOWN을 구분하고, 검증된 code·receipt의 원래 경로/해시 및 runtime preimage를 대조한다. 자료 호환 확인 실패에는 기록을 수정하거나 낮은 판으로 강행하지 않고 호환되는 검증 코드와 기존 지원 복원 진입점을 사용한다. 공개 코드 복원 진입점은 `INSTALL_CANONICAL_PORTABLE.ps1 -RestoreVerifiedReplacement`이며 기존 receipt·정확한 old code·사용자/경로·live session authority 검사를 그대로 적용한다. 다른 설치 시도의 active fence를 이 명령이 임의로 회수하지 않는다.
+
+원 설치 시도의 authority가 사라진 채 fence가 남은 경우에는 현장에서 fence 파일을 지우거나 delegation/receipt를 만들어 진행하지 않는다. coordinator에게 보존한 기록과 실패 단계만 전달하고 지원 authority 회수 및 검증된 복구 실행을 요청한다. 종료 조건은 코드 신원·G·runtime 일치, 권한이 확인된 fence 해제, 옛 relay readback 및 업무 수량·소속 보존이다. 이 retained-fence 지원 절차의 실제 랩 1회 PROVEN은 1차 coordinator의 예행 범위이며 이 가지의 headless 격리 시험으로 대체하지 않는다; 아직 실제 랩 수용은 UNPROVEN이다.

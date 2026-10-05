@@ -173,6 +173,37 @@ if($released){{'preflight_authority_released=true'}}else{{'preflight_authority_r
 def snapshot():
     return {p.relative_to(root).as_posix():hashlib.sha256(p.read_bytes()).hexdigest()
             for p in root.rglob('*') if p.is_file()}
+if case in {"bootstrap-same", "bootstrap-changed"}:
+    paths.bootstrap_tls_ca_bundle_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.bootstrap_tls_ca_bundle_path.write_bytes(b"isolated public CA bytes")
+    installed_app = root / "installed-app"
+    installed_app.mkdir()
+    original_binding = onboarding.preflight_current_user_onboarding(repo)
+    installed_binding = onboarding.preflight_current_user_onboarding(installed_app)
+    if case == "bootstrap-changed":
+        paths.bootstrap_tls_ca_bundle_path.write_bytes(b"isolated public CA bytez")
+    before = snapshot()
+    reached = []
+    class BindingAcceptedBeforeWriter(BaseException):
+        pass
+    def writer_cutoff(*args, **kwargs):
+        reached.append(True)
+        raise BindingAcceptedBeforeWriter
+    onboarding.writer_admission = writer_cutoff
+    try:
+        onboarding.onboard_current_user(installed_app, expected_input_binding=original_binding)
+        raise AssertionError("writer cutoff missing")
+    except BindingAcceptedBeforeWriter:
+        code, status = 0, "ALLOWED_BEFORE_WRITER"
+    except onboarding.CurrentUserOnboardingError as exc:
+        code, status = 4, exc.status
+    after = snapshot()
+    print(json.dumps({"code": code, "status": status,
+        "same_input_binding": original_binding == installed_binding,
+        "changed_file_count": len([p for p in before.keys() | after.keys() if before.get(p) != after.get(p)]),
+        "admission_cutoff_reached": bool(reached)}))
+    raise SystemExit(0)
+
 before=snapshot()
 status='FAILED'
 code=None
