@@ -153,7 +153,11 @@ $canonicalWriterFenceContractSha256='e'*64
 $earlyCatch=@($mainTry.CatchClauses[0].Body.Statements|Where-Object {{$_.Extent.Text -match '^if \(-not \$enteredPlacementTry\)'}})[0].Extent.Text
 try{{
  try{{Invoke-Expression $prefix;'preflight_status=PASS'}}
- catch{{Invoke-Expression $earlyCatch}}
+ catch{{
+  $original=$_
+  $failure=@{{type=$_.Exception.GetType().Name;message=(ConvertTo-CanonicalSafeDiagnostic ([string]$_.Exception.Message))}}
+  [System.IO.File]::WriteAllText({quote(root/'powershell.preflight.exception.json')},($failure|ConvertTo-Json))
+  Invoke-Expression $earlyCatch}}
  finally{{Invoke-Expression (($mainTry.Finally.Statements|ForEach-Object {{$_.Extent.Text}})-join "`n")}}
 }}
 catch{{
