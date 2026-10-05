@@ -33,7 +33,7 @@ foreach($file in @(Get-ChildItem -LiteralPath $root -File)){
 def test_official_helper_keeps_registered_task_and_shared_state_accepts_writer_shape(tmp_path, engine):
     canonical=ROOT/'INSTALL_CANONICAL_PORTABLE.ps1'
     result=run_functions(tmp_path,canonical,['Get-CanonicalOfficialLegacyRelayExpectedSet','Get-CanonicalOfficialLegacyRelayState'],XML_SETUP+r'''
-$writer=[pscustomobject]@{mechanism='scheduled_task';task_path='\';task_name=$name;xml=$xml}
+$writer=[pscustomobject]@{mechanism='scheduled_task';task_path='\';task_name=$name;xml=$xml;observed_enabled=$true}
 $state=Get-CanonicalOfficialLegacyRelayState $writer (Get-CanonicalOfficialLegacyRelayExpectedSet) ''
 if(-not $state.recognized -or -not $state.enabled -or $state.transition_record -ne $null){throw 'Specified writer shape was not accepted.'}
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path -Parent $env:CA_CONTRACT_SOURCE) 'INSTALL_THIS_PC.ps1'),[ref]$null,[ref]$null)
