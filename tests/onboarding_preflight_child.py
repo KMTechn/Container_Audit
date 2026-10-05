@@ -104,6 +104,7 @@ if engine:
     # in a new interpreter; no generation or admission function is replaced.
     wrapper="""import sys
 sys.path.insert(0, REPO)
+sys.path.extend(DEPENDENCIES)
 import storage_policy
 storage_policy._persisted_data_root=lambda: None
 from tools import register_container_audit_worker_pc as registration
@@ -116,7 +117,7 @@ import winreg
 winreg.OpenKey=forbidden
 from current_user_onboarding import onboarding_main
 raise SystemExit(onboarding_main(sys.argv[2:]))
-""".replace('REPO',repr(str(repo))).replace('{{','{').replace('}}','}')
+""".replace('REPO',repr(str(repo))).replace('DEPENDENCIES',repr([p for p in sys.path if 'site-packages' in Path(p).parts and Path(p).is_dir()])).replace('{{','{').replace('}}','}')
     (packet/'app/main.py').write_text(wrapper,encoding='utf-8')
     def quote(value): return "'"+str(value).replace("'","''")+"'"
     script=f"""$ErrorActionPreference='Stop'

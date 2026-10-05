@@ -1408,7 +1408,7 @@ def test_portable_preflight_failure_removes_prepared_writer_session(tmp_path):
     wrapper_expression = next(n.value for n in ast.walk(child_tree)
         if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "wrapper" for t in n.targets))
     wrapper = eval(compile(ast.Expression(wrapper_expression), "<readonly-packet-fixture>", "eval"),
-                   {"repo": Path(__file__).resolve().parents[1], "repr": repr, "str": str})
+                   {"repo": Path(__file__).resolve().parents[1], "repr": repr, "str": str, "sys": sys, "Path": Path})
     (source / "app" / "main.py").write_text(wrapper, encoding="utf-8")
     python_exe = str(Path(sys.executable)).replace("'", "''")
     interpreter_adapter = (
@@ -1417,7 +1417,8 @@ def test_portable_preflight_failure_removes_prepared_writer_session(tmp_path):
         " if($ChildPath -ceq 'runtime\\python.exe'){return $Script:ReadonlyFixturePythonExe}\n"
         " return Microsoft.PowerShell.Management\\Join-Path $Path $ChildPath\n}\n"
     )
-    installer = installer.replace("function Product {", interpreter_adapter + "function Product {", 1)
+    assert installer.count("function Product(") == 1
+    installer = installer.replace("function Product(", interpreter_adapter + "function Product(", 1)
     # The preimage is now captured before activating the fence. Model a fresh
     # target explicitly instead of reading this test runner's real HKCU state.
     installer = installer.replace(
