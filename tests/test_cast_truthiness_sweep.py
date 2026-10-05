@@ -36,6 +36,26 @@ def _run_powershell(
     )
 
 
+
+def _helper_failure_message(completed, expected_line):
+    # Product 3115733 publishes the helper failure on stdout, not stderr.
+    prefix = "installation_failure_summary="
+    summaries = [line[len(prefix):] for line in completed.stdout.splitlines() if line.startswith(prefix)]
+    assert len(summaries) == 1
+    diagnostic = json.loads(summaries[0])
+    assert diagnostic["schema"] == "container-audit-installation-fallback-v1"
+    assert type(diagnostic["exit_code"]) is int
+    assert diagnostic["exit_code"] == completed.returncode
+    failure = diagnostic["failure"]
+    assert Path(failure["script_file"]).name == "INSTALL_THIS_PC.ps1"
+    assert type(failure["script_line"]) is int
+    assert failure["script_line"] == expected_line
+    chain = failure["exception_chain"]
+    assert isinstance(chain, list) and chain
+    assert isinstance(chain[0]["message"], str)
+    return chain[0]["message"]
+
+
 def test_bootstrap_integrity_rejects_numeric_string_record_fields(tmp_path):
     release = tmp_path / "frozen-release"
     release.mkdir()
@@ -218,7 +238,7 @@ def test_install_helper_rejects_inexact_restore_result_before_pass_evidence(
         transaction, evidence,
     )
     assert result.returncode != 0
-    assert "Replacement restore result Boolean evidence is invalid" in result.stderr
+    assert "Replacement restore result Boolean evidence is invalid" in _helper_failure_message(result, 1496)
     assert json.loads(evidence.read_text(encoding="utf-8"))["status"] == "ROLLBACK_FAILED"
     assert (install / "app" / "main.py").read_text(encoding="utf-8") == "# old\n"
     failed = install.parent / f".current.failed.{transaction}"
@@ -237,5 +257,5 @@ def test_installer_rejects_numeric_string_manifest_before_placement(tmp_path, fi
     install = tmp_path / "apps" / "current"
     result = _run_installer(release, install)
     assert result.returncode != 0
-    assert "manifest" in result.stderr.lower()
+    assert "manifest" in _helper_failure_message(result, 732).lower()
     assert not install.exists()
