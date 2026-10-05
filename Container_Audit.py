@@ -16272,15 +16272,23 @@ class ContainerAudit:
             self.root.after(200, self._poll_event_log_notice)
 
     def _event_log_writer(self):
-        self._flush_pending_event_logs()
+        sync_pending = False
+        def flush():
+            nonlocal sync_pending
+            if self._flush_pending_event_logs() and sync_pending:
+                self._trigger_session_direct_sync("PRODUCT_EXCHANGE_COMPLETED")
+                sync_pending = False
+        flush()
         while True:
             try:
                 queued_item = self.log_queue.get(timeout=1.0)
             except queue.Empty:
-                self._flush_pending_event_logs()
+                flush()
                 continue
             try:
-                self._flush_pending_event_logs()
+                if queued_item and queued_item.get("direct_sync_event") == "PRODUCT_EXCHANGE_COMPLETED":
+                    sync_pending = True
+                flush()
                 if queued_item is None:
                     break
             finally:
@@ -16655,7 +16663,10 @@ class ContainerAudit:
                 self._event_log_notice = "감사 CSV 저장 재시도 중 · 저장된 작업은 계속할 수 있습니다."
                 self._last_log_event_was_replay = False
                 return True
-        self.log_queue.put({'log_file_path': target_log_file_path, 'log_entry': log_entry})
+        queued = {'log_file_path': target_log_file_path, 'log_entry': log_entry}
+        if not payload['local_only'] and log_entry['event'] == 'PRODUCT_EXCHANGE_COMPLETED':
+            queued['direct_sync_event'] = 'PRODUCT_EXCHANGE_COMPLETED'
+        self.log_queue.put(queued)
         return True
 
     def _schedule_direct_sync_health_refresh(self, *, delay_ms: int = 5000) -> None:
@@ -17900,27 +17911,46 @@ class ContainerAudit:
                 known = getattr(self, "_scanonly_known_members", None)
                 if known is None:
                     known = self._scanonly_known_members = {}
-                known[canonical_master_label_key(lookup[0])] = list(preflight.normalized_barcodes)
-                tray = self.current_tray
-                if (tray.master_label_code == lookup[0] and tray.start_time == lookup[2]
-                    and not tray.exchange_idempotency_keys and not tray.scan_completion_context):
+                retry_job = None
+                def apply_preflight():
+                    nonlocal retry_job
+                    if getattr(self, "_scanonly_target_retry_job", None) == retry_job:
+                        self._scanonly_target_retry_job = None
+                    tray = self.current_tray
+                    if (getattr(self, "_ui_close_requested", False)
+                        or tray.master_label_code != lookup[0] or tray.start_time != lookup[2]
+                        or tray.exchange_idempotency_keys or tray.scan_completion_context):
+                        # An exchange makes this frozen snapshot obsolete, even
+                        # when the issuance RPC started before the exchange.
+                        if tray.master_label_code == lookup[0] and tray.exchange_idempotency_keys:
+                            known.pop(canonical_master_label_key(lookup[0]), None)
+                        self._request_operation_lease_release(artifact["lease_id"], schedule=False)
+                        result["releases"] = int(result.get("releases", 0)) + 1
+                        self.root.after(0, self._schedule_scanonly_transport)
+                        return
+                    if self._ui_task_lane().is_busy():
+                        retry_job = self._scanonly_target_retry_job = self.root.after(10, apply_preflight)
+                        return
+                    known[canonical_master_label_key(lookup[0])] = list(preflight.normalized_barcodes)
                     prior = (tray.operation_lease_id, tray.tray_size, tray.known_member_barcodes)
                     tray.operation_lease_id = artifact["lease_id"]
                     tray.known_member_barcodes = list(preflight.normalized_barcodes)
                     tray.tray_size = preflight.member_count
                     if not self._save_current_tray_state():
                         tray.operation_lease_id, tray.tray_size, tray.known_member_barcodes = prior
+                        # Retry this authenticated result locally after I/O
+                        # recovers; no extra scan or new remote request is needed.
+                        retry_job = self._scanonly_target_retry_job = self.root.after(100, apply_preflight)
+                        return
                     self._update_current_item_label()
                     self._update_center_display()
                     if len(tray.scanned_barcodes) >= tray.tray_size:
                         self.root.after(0, self.request_complete_tray)
+                apply_preflight()
             elif lookup is not None and self.current_tray.master_label_code == lookup[0]:
                 jobs.append(lookup)
             self._pending_seal_intent_count = int(result.get("pending", 0))
             self._scanonly_review_count = int(result.get("reviews", 0))
-            if self._scanonly_review_count:
-                self.show_status_message(f"중앙 확인 필요 {self._scanonly_review_count}건 · 다음 현품표를 계속 스캔하세요.",
-                    self.COLOR_PRIMARY)
             if result.get("pending") or result.get("exchange_pending") or result.get("releases") or jobs:
                 self._scanonly_transport_retry_job = self.root.after(
                     self.BACKGROUND_SEAL_RETRY_MS, self._schedule_scanonly_transport)
@@ -17932,9 +17962,14 @@ class ContainerAudit:
                 self.BACKGROUND_SEAL_RETRY_MS, self._schedule_scanonly_transport)
         admission = lane.submit(LaneTask(name="central-scan-transport", generation=0,
             work=work, finish=finish, fail=fail,
-            on_idle=lambda: self._schedule_scanonly_transport()
+            on_idle=lambda: self.root.after(0, self._schedule_scanonly_transport)
                 if jobs and jobs[0] != lookup else None,
             shutdown_policy=DRAIN_TO_TERMINAL))
+        if not admission.accepted:
+            if lookup is not None and lookup not in jobs:
+                jobs.insert(0, lookup)
+            if getattr(lane, "state", None) == "IDLE":
+                self._scanonly_transport_retry_job = self.root.after(0, self._schedule_scanonly_transport)
         return admission.accepted
 
     def _prepare_and_attempt_transfer_seal_snapshot(
@@ -20576,7 +20611,9 @@ class ContainerAudit:
                 "defective_barcodes": [old], "good_barcodes": [barcode], "item_code": tray.item_code,
                 "exchange_intent_id": row["intent_id"], "exchange_idempotency_key": key,
                 "exchanged_at": timestamp, "device_id": str(getattr(self, "computer_id", ""))},
-                synchronous=True, idempotency_key="scan-exchange:" + row["intent_id"], deduplicate=True,
+                # The original audit row is fsynced to the existing outbox
+                # before acceptance; its CSV projection runs on the log worker.
+                synchronous=False, idempotency_key="scan-exchange:" + row["intent_id"], deduplicate=True,
                 event_timestamp=timestamp, worker_name_override=row["operator"],
                 log_file_path_override=str(projection_log_path),
                 stored_worker_record=(coordinator.store.scan_exchange_context(row['intent_id']) or {}).get('worker_record', {}))):
