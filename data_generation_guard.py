@@ -55,9 +55,11 @@ def _runtime_release():
         build = manifest.get("source_commit")
     else:
         build = subprocess.check_output(
-            ["git", "--no-optional-locks", "-C", str(app_root), "rev-parse", "HEAD^{commit}"], stderr=subprocess.DEVNULL, text=True).strip()
+            ["git", "--no-optional-locks", "-C", str(app_root), "rev-parse", "HEAD^{commit}"], stderr=subprocess.DEVNULL, text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).strip()
         changed = subprocess.check_output(["git", "--no-optional-locks", "-C", str(app_root), "status", "--porcelain"],
-                                          stderr=subprocess.DEVNULL, text=True)
+                                          stderr=subprocess.DEVNULL, text=True,
+                                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if changed.strip():
             raise ValueError("running source is not the release commit")
     if not isinstance(build, str) or not re.fullmatch(r"[0-9a-f]{40}", build):
