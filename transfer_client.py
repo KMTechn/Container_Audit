@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import os
+from pathlib import Path
 import threading
 import time
 from dataclasses import dataclass, field
@@ -41,6 +42,7 @@ class LogisticsTransferClient:
         authoritative_required: bool = False,
         isolated_qualification_authority_id: str = "",
         tls_ca_bundle_path: str = "",
+        security_input_guard: Callable[[], None] | None = None,
     ) -> None:
         self.base_url = str(base_url or "").rstrip("/")
         self.token = str(token or "").strip()
@@ -58,6 +60,7 @@ class LogisticsTransferClient:
             isolated_qualification_authority_id or ""
         ).strip()
         self.tls_ca_bundle_path = str(tls_ca_bundle_path or "").strip()
+        self.security_input_guard = security_input_guard
         if not self.base_url or not self.token or not self.source_host_id:
             raise ValueError("base_url, token, and source_host_id are required")
         parsed = urlsplit(self.base_url)
@@ -203,6 +206,12 @@ class LogisticsTransferClient:
         idempotency_key: str = "",
         allow_not_found: bool = False,
     ) -> dict[str, Any] | None:
+        if self.security_input_guard is not None:
+            self.security_input_guard()
+        elif self.tls_ca_bundle_path:
+            from data_generation_guard import probe_before_owner_paths
+            ca_path = Path(self.tls_ca_bundle_path)
+            probe_before_owner_paths(ca_path.parent, file_paths=(ca_path,))
         with self._connection_observation_lock:
             self._connection_request_sequence += 1
             request_sequence = self._connection_request_sequence
@@ -889,6 +898,7 @@ def logistics_transfer_client_from_env(
                 profile.isolated_qualification_authority_id
             ),
             tls_ca_bundle_path=profile.tls_ca_bundle_path,
+            security_input_guard=getattr(profile, "admit_security_inputs", None),
         )
     else:
         legacy_fields = {

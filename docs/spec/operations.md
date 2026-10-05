@@ -11,6 +11,60 @@ G 요청부터 첫 기록된 READY까지 275.561초라는 관측 상한에 84.43
 끝의 한국어 한 줄은 코드·Run·시작 작업과 미확인 relay를 구별하며 종료 코드는 0이 아니다.
 PS5.1/7 실행 회귀 RED4→GREEN4; 새 native 설치·재진입 수용과 구별한다.
 
+명시·기본 TLS CA, 보호 관리자 profile, replacement/retirement receipt, task 암호 파일,
+등록 2PC journal과 qualification context도 실제 선택한 입력 경로의 parent를 최초 G에 포함한다.
+TLS/관리자 등 읽기 전용 보안 입력은 probe만 하며 그 폴더에 새 세대 기록을 만들지 않는다.
+onboarding은 선택 CA를 등록 runner에도 전달하고 GUI는 승인한 관리자 profile을 인증 reader에
+전달한다. PowerShell의 외부 입력은 FileSystem 현재 위치에서 한 번 Full로 해석한 값을
+G와 reader가 공유하며 초기 검사는 report/placement ownership/INSTALLING보다 앞에 둔다.
+기존 plan-only/dry-run probe와 공용 G/helper/신원 계약은 유지한다. 실제 검증 범위와 실패는
+[외부 입력 교정](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-263/REPORT.md)에 기록한다.
+
+기존 credential은 locator parent를 먼저 검사한 뒤 JSON을 한 번 읽고, 실제 secret owner,
+TLS CA와 qualification context를 같은 snapshot으로 검사한다. 정상 locator의 하위 경로를
+해석할 수 없으면 UNKNOWN으로 끝내며 report를 쓰지 않는다. 깨진 JSON·중복 키는 경로
+판정 실패로 바꾸지 않고, 승인된 report owner에 기존 BLOCKED 진단을 남긴다.
+Canonical의 첫 일반 G 거절은 fence·mutated 표시 앞에서 끝나므로 removal/Run/relay를
+호출하지 않는다. Canonical 설치는 변경 전에 `--onboard-current-user --preflight-only`로
+locator와 nested owner를 기존 Python reader로 검사한다. 보안 입력이나 설치 상태를 쓰지
+않으며, 결과 digest를 실제 onboarding의 `--expected-input-binding`으로 넘겨 같은 입력인지
+최초 기록 전에 비교한다. 깨진 locator·중복 키는 기존 credential BLOCKED 오류 코드로
+종료한다. old-target rollback G는 유지하며 실제 native 설치·복원은 아직 NOT TESTED다.
+기본 bootstrap CA는 사용자/자료 bootstrap 폴더의 파일이다. source와 install의 app root가
+달라도 같은 절대 경로·SHA256을 비교하며, CA 변경은 최초 onboarding 기록 전에 거절한다.
+`RestoreVerifiedReplacement`는 fence 전에 old rollback tree(이미 복원됐으면 설치 tree)를
+`--target-release-root`로 정확 검증하고 locator와 nested owner에 old version/build G를
+적용한다. 같은 digest를 quiescence 직전과 old relay 재시작 직전에 대조한다. 이 경로는
+첫 현장 설치 경로와 별도인 지원 복원이며, 사전 거절의 transient authority mutex는
+기존 finally에서 놓는다.
+preflight는 기존 exact reader의 코드/manifest 검증만 사용한다(ACL 필드를 만들지 않음).
+같은 digest의 코드 부분을 실제 ACL 검증 복원 결과와 초기·quiescence 직전·relay 시작
+직전에 대조한다. 일반 reader API의 `acl_identity_reader=None`은 거절한다.
+
+일반 rollback의 한 removal 실패는 나머지 code/Run/task 복원 시도를 막지 않는다.
+G·quiescence를 다시 확인하고 기존 exact 복원 evidence로 code를 증명한다. 정확 code와
+relay preimage가 증명되면 finally fence 해제·relay 재시작을 시도하고 각 실패를 보존한다.
+불일치면 fence를 유지하며 자료·확인 기록 보존과 관리자 지원 복구를 안내한다.
+별도 uninstall/retirement 및 refence 이전 실패 경로는 기존 안전 계약을 유지한다.
+
+직접 등록(검증·2PC 복구 포함), relay 운영 명령, 사용자 profile 설치/확인,
+앱의 active-work wrapper·review report, lifecycle 복구·제거도 기존 admission 아래
+최초 신원/자료 판독 전에 G를 검사한다. 온보딩은 G 뒤에 attempt와 디렉터리를 만든다.
+G와 실제 판독은 동일한 빈 값/env/default 및 expanduser·상대 경로·대소문자·링크 해석을
+사용한다. 외부 owner 경로도 모두 먼저 probe하고 허용 뒤에만 marker를 기록한다.
+profile dry-run은 probe만 수행하여 외부 폴더·marker를 만들지 않는다. owner root의
+일반 파일 조상 때문에 자료·marker가 존재할 수 없을 때만 그 외부 root를 기록 없음으로
+처리하고 기존 loader의 오류 안내를 유지한다. 다른 parent marker를 대신 읽지 않으며
+reparse 조상으로 존재 불가를 확정할 수 없는 경로는 UNKNOWN으로 거절한다.
+resident 시작과 scheduled-task install pack은 먼저 읽기 전용 G 판단을 하며,
+REFUSE/UNKNOWN은 한국어 안내만 내고 기존 report·relay·Run·예약 작업 상태를 보존한다.
+공용 독립 frozen active-work probe는 별도 도구 신원 계약으로 이 앱 판 검사 범위 밖이다.
+ea566d1에서 이 교정 후보로의 설치 전진은 앱 전용 G 전환 선언의 정확한 코드 파일
+before/after hash와 resident/raw 두 route의 지정 G 변화로만 허용한다. 기존 writer
+의미 비교는 유지하며 다른 sink/guard/route, 파일 변경·추가, 역전환은 예외가 아니다.
+검증 버전·실제 subprocess 결과·제외와 한계는
+[G 직접 입구 교정](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-233/REPORT.md)에 기록한다.
+
 자료 세대 보호 helper `kmtech_shared/data_generation.py`와
 `kmtech_shared/powershell/data_generation.ps1`은 사용자 자료를 열었던 가장 새 판과
 서명 검증된 최소 호환 판을 기록한다. 기록 없음은 ALLOW, 손상·읽기 실패·판 비교
@@ -21,7 +75,7 @@ helper 근거다. **CA 실제 입구 관련52 PASS, native 자료 사용 뒤 복
 자료 root와 기존 control root/SID에 기록하며 launch 직전에 미리 기록하지 않는다.
 GUI는 singleton 확인/온보딩 코드 검증 뒤 catalog 자료 직전, onboarding은 코드
 무결성 검증 뒤 실제 상태 검사 직전, relay는 raw runner의 첫 queue/profile IO 직전에 기록한다.
-resident supervisor의 process launch/control 상태 조회는 기록하지 않고 child의 고정 거절 사유를 전달한다.
+resident supervisor는 자료 세대를 기록하지 않고 시작 전 읽기 전용 G 판단과 child의 고정 거절 안내를 사용한다.
 자료 root override가 기존 admission control root를 옮기지 않으며 중복 GUI·코드 검증
 실패·cycle에 도달하지 않은 relay는 새 기록을 남기지 않는다. portable Python entrypoint를
 기존 exact bootstrap inventory로 검증하고 frozen 기본 EXE 검증은 유지한다.
@@ -1182,3 +1236,39 @@ onboarding·제거·복원 보고서와 DirectSync 보고서도 임시 파일 �
 The sub-276 guest export is retained separately as `tests/fixtures/official_legacy_relay_guest_v2_0_33.xml` with SHA-256 and proof limits in its `.provenance.json`. Both PowerShell engines compare all 13 normalized identity fields through the full fingerprint, and compare omitted SYSTEM LogonType/RunLevel against explicit ServiceAccount/LeastPrivilege. This export proves scheduler XML normalization; failed official registration and absent wrapper/launcher leave full installation and business relay execution unproven. Author and non-well-known SID fields use the approved fixture placeholders.
 
 Guest XML also omits Settings.Enabled. The shared writer adapter passes `observed_enabled` from the scheduler object; State uses an actual bool when XML omits the element, rejects missing/non-bool observations and contradictions, and refreshes the observation after transitions. No enabled default is guessed. The guest regression provides isolated bool observations separately from the measured XML.
+
+
+
+### G read-only removal admission (sub-233, 2026-10-05)
+
+The removal entrypoint checks the resolved owner markers inside its existing `current_user_setup_removal` admission. This single caller passes `admission_source` to the G probe; its fixed `probe_only=True` invocation of the original body returns before directory creation or marker publication, and does not request the unrelated marker-writer capability. Marker recording and every other probe retain their original writer decorator. A static regression fixes the sole caller inside that admission, and separate child-process regressions compare data/control file lists, sizes and mtimes and exercise missing, equal, newer and UNKNOWN markers. This narrow exception was conditionally approved in `msg_eb3b375df3eb`; shared helpers, syntax guards and sink identities remain unchanged.
+
+Registration retains string profile-path arguments after shared resolution. Invalid storage configuration reads no owner payload and retains the BLOCKED report contract; an optional report write first probes its actual parent root and the ambient control marker under registration admission.
+
+
+<a id="canonical-rollback-support-recovery"></a>
+## Canonical rollback 중단과 관리자 지원 복구
+
+설치·검증된 코드 교체의 rollback은 removal 실패를 기록한 뒤에도 코드 복원, Run 복원, 중지 표시 복원, 예약 writer 복원을 각각 시도한다. 옛 코드의 정확한 복원 근거, 실제 G의 허용 결과, Run·중지 표시·남은 relay의 일치가 모두 확인된 경우에만 해당 설치 시도의 fence 해제와 옛 relay 재시작을 반드시 시도한다. 최종 G는 기존 PS old-target 검사와 기존 product의 읽기 전용 `--target-release-root` 판정을 함께 사용하여 옛 relay가 처음 읽는 locator·nested owner까지 확인한다. 초기 검사 뒤 설치 중 marker가 바뀐 경우에도 이 확인 없이 실행을 재개하지 않는다. 단계별 성공·실패는 `rollback.steps`에 남으며 앞선 오류 코드와 실패 기록을 지우지 않는다. G가 거절한 코드 복원은 실행하지 않는다.
+
+확인에 실패한 관리자 설치 화면과 설치 감사 로그의 `rollback.operator_message`에는 다음 문구를 표시한다: “이 PC의 코드, 자료 호환 여부 또는 실행 상태를 확인하지 못해 작업을 안전하게 멈췄습니다. 자료와 설치 기록을 보존하고 관리자 지원 복구를 요청하세요. 확인 없이 중지 표시를 지우거나 앱을 다시 실행하지 마세요.” 이때 fence와 relay 정지를 유지한다. 로그의 `rollback.support_recovery_procedure`는 이 절을 가리킨다.
+
+지원 담당자는 기존 설치 감사 기록, replacement receipt·restore evidence, code integrity record와 자료를 먼저 보존한다. `rollback.steps`에서 실패한 단계와 실제 G의 REFUSE/UNKNOWN을 구분하고, 검증된 code·receipt의 원래 경로/해시 및 runtime preimage를 대조한다. 자료 호환 확인 실패에는 기록을 수정하거나 낮은 판으로 강행하지 않고 호환되는 검증 코드와 기존 지원 복원 진입점을 사용한다. 공개 코드 복원 진입점은 `INSTALL_CANONICAL_PORTABLE.ps1 -RestoreVerifiedReplacement`이며 기존 receipt·정확한 old code·사용자/경로·live session authority 검사를 그대로 적용한다. 다른 설치 시도의 active fence를 이 명령이 임의로 회수하지 않는다.
+
+원 설치 시도의 authority가 사라진 채 fence가 남은 경우에는 현장에서 fence 파일을 지우거나 delegation/receipt를 만들어 진행하지 않는다. coordinator에게 보존한 기록과 실패 단계만 전달하고 지원 authority 회수 및 검증된 복구 실행을 요청한다. 종료 조건은 코드 신원·G·runtime 일치, 권한이 확인된 fence 해제, 옛 relay readback 및 업무 수량·소속 보존이다. 이 retained-fence 지원 절차의 실제 랩 1회 PROVEN은 1차 coordinator의 예행 범위이며 이 가지의 headless 격리 시험으로 대체하지 않는다; 아직 실제 랩 수용은 UNPROVEN이다.
+
+실패 안내와 감사에는 writer delegation token·설치 bearer 환경 값의 원문을 남기지 않는다. canonical 오류 안내와 audit/evidence의 JSON 저장, relay 설치기의 child stdout/stderr 및 감사 저장은 알려진 비밀 환경 값을 `[REDACTED]`로 치환한다. profile 설치기의 예외 안내는 예외 종류만 표시한다. 제어 프로토콜의 정상 delegation·receipt 값과 권한 검증은 그대로이며, 비밀 값이 없어도 원 실패 코드와 단계 결과는 유지한다. 실제 값이나 child 출력 전문을 운영 문서에 복사하지 않는다.
+
+### 실행 후 관리자 인증 또는 TLS 자료 판 거절
+
+실행 후에도 관리자 PIN, 품목 새로 고침, relay 재시작과 업데이트 확인은
+자격 자료를 실제로 읽는 시점의 자료 판을 확인한다. 다른 판의 앱이 owner
+기록을 높이면 기존 창이 열려 있어도 판독·복호·TLS 전송을 진행하지 않는다.
+“이 PC의 자료 판을 확인할 수 없습니다” 또는 호환 판 거절 안내가 나오면
+자료와 설치 기록을 보존하고 관리자에게 호환 앱 확인을 요청한다. marker나
+중지 표시를 지워서 우회하지 않는다. 기존 준비 입력도 첫 판독 전에 재확인한다.
+
+복구 중 audit 저장이 실패해도 원 오류를 유지하고 다른 복원 단계를 계속
+시도한다. 별도 evidence에 저장 실패 단계·대상·예외 종류 기록을 시도하고,
+둘 다 저장할 수 없으면 UNAVAILABLE 상태를 남긴다. 봉인된 퇴역 audit는
+다시 쓰지 않는다. 코드·G·runtime 정합이 증명되어야 fence와 relay를 복귀한다.

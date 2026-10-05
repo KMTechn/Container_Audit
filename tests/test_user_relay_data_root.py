@@ -109,6 +109,7 @@ def test_logon_root_argument_wins_over_environment_without_fallback(tmp_path, mo
 
     assert cycles[0]["direct_sync_root"] == active / "direct_sync"
     assert cycles[0]["scan_source_dir"] == active / "events"
+    assert cycles[0]["data_root"] == active
     assert not unused.exists()
     assert (active / "direct_sync/status/container_audit_user_relay.json").is_file()
     assert not list(active.glob(".relay-access-*"))

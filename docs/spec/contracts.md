@@ -8,6 +8,32 @@
 
 유지보수 active fence가 있으면 중앙 봉인·임대·PIN·등록·relay 전송은 첫 HTTP 전에 거절한다. 원 명령과 멱등 키, pending 임대 요청, UNKNOWN 및 복구 원본은 보존하며 해제 뒤 같은 내구 요청을 재시도한다. 원격 전송은 admission 확인 뒤 쓰기 mutex를 반환한다.
 
+G의 REFUSE/UNKNOWN은 직접 등록·지원 명령과 앱 하위 모드에서도 최초 기존 신원·자료
+판독 전에 거절한다. 거절은 기존 온보딩/relay 상태 파일, retry attempt, Run 등록,
+예약 작업, 실행 중 relay를 변경하지 않고 고정 한국어 원인과 복구 안내를 출력한다.
+정상 허용은 기존 자료-open admission·등록·quantity/membership·ACK 순서를 유지한다.
+
+Canonical 설치는 fence·placement·Run/task·relay 변경 전에 기존 onboarding의
+`--preflight-only` 호출로 credential locator와 nested owner의 G를 모두 끝낸다.
+Python의 기존 해석 결과 digest를 `--expected-input-binding`으로 onboarding에 전달하고,
+child는 같은 resolved 경로·payload인지 기록 전에 대조한다. 거절은 기존 오류 코드·안내로
+끝나며 설치 상태 변경은 없다. rollback의 old-target G는 그대로 유지한다.
+bootstrap CA는 app tree 밖의 사용자/자료 bootstrap 폴더에서 선택한다. source/app과
+install/app은 같은 절대 CA 경로와 파일 SHA256으로 결속하며, child 시작 전 한 바이트
+변경도 BLOCKED로 거절한다. 명시 외부 CA 선택과 그 owner G는 그대로 적용한다.
+검증 복원은 같은 읽기 전용 호출의 `--target-release-root`로 정확 old packet을 기존
+product reader로 검증하고, locator/nested owner를 그 old version/build로 판정한다.
+binding은 quiescence 직전과 복원된 old relay 시작 직전에 다시 비교한다.
+이 읽기 전용 판정의 코드/manifest digest는 ACL까지 검증한 복원 receipt의 old identity와
+함께 대조한다. 기존 복원 reader의 기본 ACL 검증은 유지하며 ACL 없는 code identity는
+target-generation preflight 전용 호출에서만 사용할 수 있다.
+
+일반 설치/검증 교체 rollback은 removal 실패를 보존하고 G와 실제 quiescence를 다시
+검사한 뒤 code 복원을 독립 시도한다. Run과 task 복원도 앞 실패 때문에 생략하지 않는다.
+각 단계 결과를 기록하며 정확 code와 relay preimage 검증이 성공하면 finally에서 fence를
+해제하고 옛 relay를 다시 시작한다. 불일치/미확인은 fence를 유지하고 한국어 지원 복구를
+안내한다. G가 거절한 code 복원은 실행하지 않으며 기존 rollback 오류 코드를 보존한다.
+
 작업자 선택은 `worker-roster.v1`의 ACTIVE 공용 명단만 사용하며 직접 입력·PC 이름 등록은 없다. 기존 생산자 HMAC으로 `POST /api/worker-roster/v1/query`에 현장 ID와 `known_version`을 보내고 명단 응답만 262,144B까지 받는다. 시작·변경·60초 배경 조회는 writer admission 밖에서 수행하며 현재 조회 시도·로그인 epoch가 같은 응답만 적용한다. 조회 지연·실패는 스캔 내구 저장을 기다리게 하지 않는다.
 
 사용자 config의 `roster.json`은 contract_version·authority_scope_id·version·workers·source_row_count·fetched_at·sha256을 원자 저장한다. 동일 판 응답은 정상 캐시가 있어야 적용하며 실패는 빈 명단으로 바꾸지 않는다. 형식·현장·번호 중복·digest 손상은 원본을 `.bad-*`로 보존하고 `roster.last-good.json`을 사용한다. 정상본도 없거나 정상 응답 원본 행이 0개면 기존 PC 이름 목록에서 한시 선택한다. 원본 행 수는 잘못된 이름을 제외한 뒤에도 보존하여, 행은 있는데 ACTIVE가 0인 명단에서는 로컬 선택을 허용하지 않는다. 새 작업 세션·현재 트레이·hold·보류·완료 intent·교환·감사 outbox에는 optional worker_id(UUID 또는 null)와 worker_name_snapshot(묶음 시작 이름)을 함께 저장한다. 번호 있는 기록의 복구 소유는 UUID로 비교하며 번호 없는 옛 기록은 기존 이름 절차를 유지한다. 명단 없는 한시 선택은 번호를 만들거나 과거 설정에서 추정하지 않는다. 서버는 이름을 trim·NFC 정규화하고 Zs를 일반 공백으로 바꾸며 연속 공백을 합친다. 앱은 받은 이름을 trim하고 빈 이름·65자 이상(code point)·경로 문자 `\ / : * ? " < > |`·첫 글자 `= + - @`·Cc/Cf/Cs/Zl/Zp가 섞인 이름의 행만 버린다. 최소 길이·언어 제한은 없다. 파일 이름과 CSV 형식은 기준 판 그대로이며 이름을 해시로 바꾸지 않는다. 기존 PC의 무번호 로컬 이름은 기준 등록 규칙으로 한시 선택하므로 기존 65자 이상 이름과 기준에서 허용했던 숨은 문자도 유지한다.
@@ -562,3 +588,18 @@ relay READY 뒤 복구 완료 기록은 새 INSTALLING fence를 열지 않는다
 
 
 **제거 제어자 결속 (sub-248):** 현재 INSTALL_THIS_PC의 수렴 제거는 delegated lease 및 살아 있는 canonical session authority, active/prepared의 session·attempt·transaction·orchestrator·writer 계약과 prepared 파일 SHA를 검증한다. canonical은 RemovalControllerProcessId/RemovalControllerStartedAtUtc/RemovalControllerCanonicalPath를 함께 전달한다. helper는 준비된 source manifest 및 canonical 바이트 해시, 실제 WinPS 조상 PID와 시작 시각을 확인한 단일 controller만 process quiescence 제외에 넣는다. 같은 경로 문자열을 가진 다른 PID, PID 재사용/시각 불일치, 부분 입력, manifest/canonical 변조 및 authority 부재는 거절한다. OldSourceRoot와 관리 SourceRoot가 달라도 동일한 결속을 적용하며 일반 uninstall도 이 계약을 사용한다. historical helper는 세 매개변수가 모두 있을 때만 전달하고 부분 인터페이스는 거절한다. 역사 packet은 수정하지 않는다.
+
+
+### 시작 뒤 security input의 첫 판독 G (sub-272 추가 교정)
+
+시작 때 허용된 credential snapshot은 나중의 파일 판독 허가가 아니다. 첫
+secret/DPAPI 판독 전에 locator owner와 준비된 nested owner를 기존 2단 G로
+다시 확인한다. GUI PIN은 startup의 준비 경로를 보존하고 재확인한 뒤 현재
+locator를 준비하므로, owner가 높은 판으로 바뀌면 locator 재판독도 하지 않는다.
+미준비 API 소비자는 현재 경로에서 같은 prepare를 호출하며, runtime profile과
+보호 관리자 profile은 각 실제 판독 전에 owner를 확인한다. 지연된 TLS 파일
+판독은 PIN·relay lease·source upload/restore·transfer·catalog·update discovery의
+네트워크 호출 직전에 다시 확인한다. 거절을 일반 신뢰 설정의 재시도로 바꾸지 않는다.
+공용 G 두 파일과 인증·수량·소속 계약은 변경하지 않는다.
+회귀: `tests/test_security_input_first_read.py`; 구현 증거는 sub-272 REPORT의
+최종 커밋·환경과 연결하며 검증 전 상태는 UNPROVEN이다.

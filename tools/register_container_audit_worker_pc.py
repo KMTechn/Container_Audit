@@ -718,6 +718,26 @@ def _registration_target_paths(args: argparse.Namespace, storage_paths) -> tuple
     return manifest_path, credential_path
 
 
+def _registration_owner_paths(args, storage_paths, *, include_read_only_inputs=False):
+    from data_generation_guard import resolve_owner_path
+    from logistics_runtime_profile import resolve_logistics_profile_path
+    paths = list(_registration_target_paths(args, storage_paths))
+    paths.append(_default_producer_identity_path(args, storage_paths))
+    for name in ('producer_identity_path','admin_recovery_secret_file','report_path','admin_recovery_journal_path'):
+        value = str(getattr(args, name, '') or '').strip()
+        if value:
+            paths.append(resolve_owner_path(value))
+    profile = resolve_logistics_profile_path(getattr(args, 'logistics_profile_path', None))
+    args.resolved_logistics_profile_path = profile
+    paths.append(profile)
+    if include_read_only_inputs:
+        for name in ('tls_ca_bundle_path','isolated_qualification_context'):
+            value = str(getattr(args, name, '') or '').strip()
+            if value:
+                paths.append(resolve_owner_path(value))
+    return paths
+
+
 def _resolve_producer_identity(
     args: argparse.Namespace,
     storage_paths,
@@ -842,7 +862,8 @@ def _require_explicit_existing_identity_migration(
     if compatible:
         try:
             manifest = load_json_no_duplicate_keys(manifest_path.read_bytes())
-            credential = load_json_no_duplicate_keys(credential_path.read_bytes())
+            prepared = getattr(args, "prepared_credential", None)
+            credential = dict(prepared.payload) if prepared is not None else load_json_no_duplicate_keys(credential_path.read_bytes())
             pc_identity = manifest.get("pc_identity") if isinstance(manifest, dict) else None
             compatible = bool(
                 isinstance(pc_identity, dict)
@@ -1150,6 +1171,9 @@ def _registration_artifact_versions(args):
 
 
 def _check_registration_artifacts(args):
+    prepared = getattr(args, "prepared_credential", None)
+    if prepared is not None:
+        prepared.admit_security_inputs()
     attempt = getattr(args, "_registration_attempt", None)
     if attempt is not None and not attempt.is_current():
         raise EnrollmentAdminRecoveryRequired("a newer registration attempt superseded this response", error_code="registration_attempt_superseded")
@@ -1305,6 +1329,10 @@ def _post_enrollment_request(
     verify: str | bool,
     attempt: RemoteAttempt | None = None,
 ):
+    if isinstance(verify, str) and verify:
+        from data_generation_guard import probe_before_owner_paths
+        ca_path = Path(verify)
+        probe_before_owner_paths(ca_path.parent, file_paths=(ca_path,))
     with requests.Session() as session:
         # Enrollment trust is an explicit application input.  Environment CA
         # overrides must not silently replace the configured/private CA.
@@ -1697,7 +1725,8 @@ def _finalize_server_registration(
             expected_source_host_id=str(identity["source_host_id"]),
             expected_device_id=str(identity["pc_id"]),
             profile_path=(
-                str(getattr(args, "logistics_profile_path", "") or "").strip()
+                str(getattr(args, "resolved_logistics_profile_path", None) or "")
+                or str(getattr(args, "logistics_profile_path", "") or "").strip()
                 or None
             ),
             tls_ca_bundle_path=(
@@ -1723,7 +1752,7 @@ def _finalize_server_registration(
         )
     if configured_ca_bundle_path:
         if machine_profile is not None:
-            selected_profile_path = (
+            selected_profile_path = getattr(args, "resolved_logistics_profile_path", None) or (
                 Path(
                     str(getattr(args, "logistics_profile_path", "") or "")
                 ).expanduser()
@@ -2894,6 +2923,8 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
     with writer_admission("worker_pc_registration"):
         hostname = args.hostname or socket.gethostname()
         storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
+        from data_generation_guard import record_before_owner_paths
+        record_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
         ensure_container_audit_storage_dirs(storage_paths)
         identity = _resolve_producer_identity(
             args,
@@ -3010,7 +3041,7 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
         ),
     }
     with writer_admission("worker_pc_registration"):
-        profile_path = Path(str(getattr(args, "logistics_profile_path", "") or default_profile_path())).expanduser()
+        profile_path = getattr(args, "resolved_logistics_profile_path", None) or Path(str(getattr(args, "logistics_profile_path", "") or default_profile_path())).expanduser()
         args._registration_artifact_paths = (
             Path(identity["identity_persist_path"]).expanduser(),
             *_registration_target_paths(args, storage_paths),
@@ -3156,7 +3187,66 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report-path", default="")
     args = parser.parse_args(argv)
 
+    # Keep the existing policy decision on the operator's original spelling.
     output_path_policy = _explicit_output_path_policy_report(args)
+    # Includes verification and completed 2PC recovery: these are independent
+    # owner-data entrances even when no enrollment request is needed.
+    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, resolve_owner_path
+    try:
+        for name in ('producer_identity_path','manifest_path','credential_path','admin_recovery_secret_file','report_path',
+                     'tls_ca_bundle_path','admin_recovery_journal_path','isolated_qualification_context'):
+            value = str(getattr(args, name, '') or '').strip()
+            if value:
+                try:
+                    if name == 'tls_ca_bundle_path':
+                        from logistics_runtime_profile import assert_path_has_no_reparse_components
+                        path = assert_path_has_no_reparse_components(value, label="TLS CA bundle source")
+                    else:
+                        path = resolve_owner_path(value)
+                except (OSError, ValueError) as exc:
+                    raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False}) from exc
+                setattr(args, name, str(path))
+        with writer_admission("worker_pc_registration"):
+            storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
+            if output_path_policy['status'] == 'PASS':
+                owner_paths = _registration_owner_paths(args, storage_paths, include_read_only_inputs=True)
+            else:
+                report_blocked = any(item['field']=='report_path' for item in output_path_policy['unsafe_paths'])
+                owner_paths = (args.report_path,) if args.report_path and not report_blocked else ()
+            probe_before_owner_paths(storage_paths.data_root, file_paths=owner_paths)
+            if output_path_policy['status'] == 'PASS' and not args.verify_manifest_hash:
+                _, existing_credential = _registration_target_paths(args, storage_paths)
+                if existing_credential.is_file():
+                    from direct_sync_runtime import prepare_credential_config
+                    args.prepared_credential = prepare_credential_config(existing_credential, data_root=storage_paths.data_root)
+    except DataGenerationBlocked as exc:
+        print(exc.user_message)
+        return 2
+    except ValueError as exc:
+        # Invalid storage policy is a pure configuration failure. No owner
+        # payload can be read; retain the existing BLOCKED diagnostic after
+        # checking the actual optional report root and ambient control marker.
+        blocked_report = {
+            "report_version": "container-audit-worker-pc-registration-v1",
+            "status": "BLOCKED",
+            "blocked_reason": str(exc),
+            "raw_secret_written": False,
+        }
+        report_blocked = any(item["field"] == "report_path" for item in output_path_policy["unsafe_paths"])
+        if args.report_path and not report_blocked:
+            fallback_path = Path(args.report_path)
+            try:
+                with writer_admission("worker_pc_registration"):
+                    probe_before_owner_paths(fallback_path.parent, file_paths=(fallback_path,))
+                    _write_registration_json(str(fallback_path), blocked_report, indent=2)
+            except DataGenerationBlocked as blocked:
+                print(blocked.user_message)
+                return 2
+            print(f"registration_report={fallback_path}")
+        else:
+            print(json.dumps(blocked_report, ensure_ascii=False, sort_keys=True))
+        return 2
+
     if output_path_policy["status"] != "PASS":
         blocked_report = {
             "report_version": "container-audit-worker-pc-registration-v1",
@@ -3176,6 +3266,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.verify_manifest_hash:
         try:
+            with writer_admission("worker_pc_registration"):
+                from data_generation_guard import record_before_owner_paths
+                record_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
             manifest_path = Path(args.manifest_path).expanduser()
             if not args.manifest_path or not manifest_path.is_file():
                 raise DirectSyncPushError("producer manifest is absent")
@@ -3192,6 +3285,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if bool(getattr(args, "admin_recovery_two_phase", False)):
+        with writer_admission("worker_pc_registration"):
+            from data_generation_guard import record_before_owner_paths
+            record_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
         resume_storage_paths = build_container_audit_storage_paths(
             application_path=args.app_root
         )
@@ -3236,6 +3332,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         manifest, credential, report = build_registration_payloads(args)
+    except DataGenerationBlocked as exc:
+        print(exc.user_message)
+        return 2
     except Exception as exc:
         fallback_path = Path(args.report_path).expanduser() if args.report_path else None
         blocked_report = {

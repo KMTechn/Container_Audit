@@ -19,7 +19,7 @@ from typing import Any, Callable, Mapping, MutableMapping
 import uuid
 
 from direct_sync_push import load_json_no_duplicate_keys, manifest_hash
-from direct_sync_runtime import load_credentials_from_json
+from direct_sync_runtime import load_credentials_from_json, prepare_credential_config, PreparedCredentialConfig
 from logistics_runtime_profile import (
     PROFILE_PATH_ENV,
     REQUIRED_ENV,
@@ -70,6 +70,7 @@ ONBOARDING_EXIT_CODE = 4
 SELF_ENROLLMENT_CONTRACT_VERSION = "producer-self-enrollment-v2"
 REPLACEMENT_RECEIPT_VERSION = "container-audit-verified-replacement-v1"
 PORTABLE_MANIFEST_VERSION = "container-audit-portable-tree-v1"
+_TARGET_PREFLIGHT_CODE_IDENTITY_ONLY = object()
 
 _REPLACEMENT_IDENTITY_FIELDS = frozenset(
     {
@@ -707,9 +708,13 @@ def _read_replacement_tree_identity(
     tree_root: Path,
     declared_code_root: Path,
     *,
-    acl_identity_reader: Callable[[Path], Mapping[str, Any]] = _windows_acl_identity,
+    acl_identity_reader: Callable[[Path], Mapping[str, Any]] | None = _windows_acl_identity,
+    _preflight_code_identity: object | None = None,
 ) -> dict[str, Any]:
     """Read an exact portable tree identity without executing code from that tree."""
+
+    if acl_identity_reader is None and _preflight_code_identity is not _TARGET_PREFLIGHT_CODE_IDENTITY_ONLY:
+        raise ValueError("code-only identity is restricted to target-generation preflight")
 
     selected_root = _resolved(tree_root)
     expected_code_root = _resolved(declared_code_root)
@@ -819,6 +824,14 @@ def _read_replacement_tree_identity(
         or not re.fullmatch(r"[0-9a-f]{40}", source_tree)
     ):
         raise ValueError("replacement portable manifest identity is invalid")
+    if acl_identity_reader is None:
+        return {
+            "file_count": len(files), "aggregate_sha256": aggregate,
+            "integrity_sha256": _file_sha256(record_path),
+            "manifest_sha256": _file_sha256(manifest_path),
+            "source_commit": source_commit, "source_tree": source_tree,
+            "reparse_count": 0,
+        }
     acl = dict(acl_identity_reader(selected_root))
     if set(acl) not in ({
         "owner_sid",
@@ -1119,6 +1132,7 @@ def inspect_current_user_state(
     *,
     profile_loader: Callable[[Path], Any] = _default_profile_loader,
     credential_loader: Callable[[Path], Any] = load_credentials_from_json,
+    prepared_credential: PreparedCredentialConfig | None = None,
 ) -> dict[str, Any]:
     state_paths = {
         "identity": paths.identity_path,
@@ -1156,7 +1170,10 @@ def inspect_current_user_state(
     try:
         identity = _read_json(paths.identity_path, "producer identity")
         manifest = _read_json(paths.producer_manifest_path, "producer manifest")
-        credential = _read_json(paths.credential_path, "producer credential")
+        if prepared_credential is not None and prepared_credential.credential_error is not None:
+            raise prepared_credential.credential_error
+        credential = (dict(prepared_credential.payload) if prepared_credential is not None
+                      else _read_json(paths.credential_path, "producer credential"))
         registration = _read_json(paths.registration_report_path, "registration report")
         profile_payload = _read_json(paths.logistics_profile_path, "logistics profile")
         required_identity = {
@@ -1225,7 +1242,8 @@ def inspect_current_user_state(
             raise ValueError("producer credential is not current-user scoped")
         if str(profile_payload.get("credential_scope") or "") != "current_user":
             raise ValueError("logistics profile is not current-user scoped")
-        resolved_credential = credential_loader(paths.credential_path)
+        resolved_credential = (credential_loader(paths.credential_path, prepared_config=prepared_credential)
+                               if prepared_credential is not None else credential_loader(paths.credential_path))
         resolved_profile = profile_loader(paths.logistics_profile_path)
         possession_key = _possession_key_readback(identity)
         if resolved_credential is None or resolved_profile is None:
@@ -1277,11 +1295,15 @@ def _registration_runner(
     *,
     server_base_url: str,
     environ: Mapping[str, str] | None = None,
+    tls_ca_bundle_source: str | None = None,
 ) -> int:
     from tools import register_container_audit_worker_pc
 
     endpoint_url = f"{server_base_url.rstrip('/')}{DEFAULT_ENDPOINT_PATH}"
-    tls_ca_source = _configured_tls_ca_bundle_source(paths, environ)
+    tls_ca_source = (
+        _configured_tls_ca_bundle_source(paths, environ)
+        if tls_ca_bundle_source is None else tls_ca_bundle_source
+    )
     arguments = [
         "--app-root",
         str(paths.app_root),
@@ -1321,6 +1343,122 @@ def apply_current_user_runtime_environment(
     values[REQUIRED_ENV] = "1"
 
 
+def _prepare_onboarding_inputs(paths, tls_ca_source, environ, credential_loader):
+    """Read-only admission shared by canonical preflight and onboarding."""
+    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, resolve_owner_path
+    from protected_admin import default_protected_admin_profile_path
+    from logistics_runtime_profile import assert_path_has_no_reparse_components
+
+    try:
+        if tls_ca_source:
+            tls_ca_source = str(assert_path_has_no_reparse_components(
+                tls_ca_source, label="TLS CA bundle source",
+            ))
+        admin_profile = resolve_owner_path(default_protected_admin_profile_path(environ=environ))
+    except (OSError, ValueError) as exc:
+        raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False}) from exc
+    owner_paths = _owner_artifact_paths(paths)
+    probe_before_owner_paths(paths.data_root, file_paths=(
+        *owner_paths.values(), tls_ca_source, admin_profile,
+    ))
+    prepared_credential = None
+    if credential_loader is load_credentials_from_json and paths.credential_path.is_file():
+        prepared_credential = prepare_credential_config(paths.credential_path, data_root=paths.data_root)
+    # Only the digest crosses the process boundary; credentials are never emitted.
+    binding = hashlib.sha256(json.dumps({
+        "owner_paths": {name: str(path) for name, path in owner_paths.items()},
+        "tls_ca_source": tls_ca_source,
+        "tls_ca_sha256": (_file_sha256(Path(tls_ca_source))
+                          if tls_ca_source and Path(tls_ca_source).is_file() else None),
+        "admin_profile": str(admin_profile),
+        "credential": dict(prepared_credential.payload) if prepared_credential is not None else None,
+        "protected_secret_path": str(prepared_credential.protected_secret_path) if prepared_credential is not None else None,
+    }, sort_keys=True, ensure_ascii=True).encode("utf-8")).hexdigest()
+    return tls_ca_source, prepared_credential, binding
+
+
+def _verified_onboarding_target_release(target_root):
+    """Use the existing exact portable reader for the archived/restored target."""
+    from tools.check_release_version import read_current_version
+
+    root = _resolved(target_root)
+    record = _read_json(root / "bootstrap-integrity.json", "target bootstrap integrity record")
+    declared_root = root if record.get("code_root") == "." else _resolved(record.get("code_root") or "")
+    identity = _read_replacement_tree_identity(
+        root, declared_root, acl_identity_reader=None,
+        _preflight_code_identity=_TARGET_PREFLIGHT_CODE_IDENTITY_ONLY,
+    )
+    manifest = _read_json(root / "portable-manifest.json", "target portable manifest")
+    version = read_current_version(root / "app" / "Container_Audit.py")
+    if manifest.get("version") != version:
+        raise ValueError("target release version binding differs")
+    return {"version": version, "build_id": identity["source_commit"],
+            "aggregate_sha256": identity["aggregate_sha256"],
+            "manifest_sha256": identity["manifest_sha256"]}
+
+
+def _probe_onboarding_target_owners(release, paths, *, file_paths=(), directory_paths=()):
+    from data_generation_guard import DataGenerationBlocked, marker_paths, owner_roots
+    from kmtech_shared import data_generation as generation
+    from tools.register_container_audit_worker_pc import _current_user_sid
+
+    sid = _current_user_sid()
+    for root in owner_roots(paths.data_root, file_paths=file_paths, directory_paths=directory_paths):
+        decision = generation.probe_downgrade(
+            marker_paths(root, sid), release["version"], app_id="container_audit",
+            subject_sid=sid, target_build_id=release["build_id"],
+        )
+        if not decision["allowed"]:
+            raise DataGenerationBlocked(decision)
+
+
+def preflight_current_user_onboarding(app_root, *, environ=None, target_release_root=""):
+    """Admit locator and nested owners without changing installation or user state."""
+    from data_generation_guard import DataGenerationBlocked
+
+    paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
+    try:
+        tls_ca_source = _configured_tls_ca_bundle_source(paths, environ)
+        release = None
+        if target_release_root:
+            release = _verified_onboarding_target_release(target_release_root)
+            from protected_admin import default_protected_admin_profile_path
+            _probe_onboarding_target_owners(release, paths, file_paths=(
+                *_owner_artifact_paths(paths).values(), tls_ca_source,
+                default_protected_admin_profile_path(environ=environ),
+            ))
+        inputs = _prepare_onboarding_inputs(
+            paths, tls_ca_source, environ,
+            load_credentials_from_json,
+        )
+        if release is not None and inputs[1] is not None:
+            prepared = inputs[1]
+            _probe_onboarding_target_owners(release, paths, file_paths=(
+                prepared.protected_secret_path, prepared.payload.get("tls_ca_bundle_path"),
+                prepared.payload.get("isolated_qualification_context_path"),
+            ), directory_paths=((prepared.payload.get("secret_data_dir"),)
+                if prepared.protected_secret_path is not None else ()))
+    except DataGenerationBlocked as exc:
+        raise CurrentUserOnboardingError(
+            exc.user_message, report_path=paths.onboarding_report_path, status="FAILED",
+        ) from exc
+    except Exception as exc:
+        from kmtech_shared import data_generation as generation
+        raise CurrentUserOnboardingError(
+            generation.UNKNOWN_MESSAGE, report_path=paths.onboarding_report_path, status="FAILED",
+        ) from exc
+    if inputs[1] is not None and inputs[1].credential_error is not None:
+        raise CurrentUserOnboardingError(
+            str(inputs[1].credential_error), report_path=paths.onboarding_report_path, status="BLOCKED",
+        ) from inputs[1].credential_error
+    if release is None:
+        return inputs[2]
+    input_binding = hashlib.sha256((inputs[2] + json.dumps(release, sort_keys=True)).encode("utf-8")).hexdigest()
+    code_binding = hashlib.sha256((release["build_id"] + "|" + release["aggregate_sha256"]
+        + "|" + release["manifest_sha256"]).encode("utf-8")).hexdigest()
+    return input_binding + ":" + code_binding
+
+
 @writer_sink("current_user_onboarding", probe_only=True)
 def onboard_current_user(
     app_root: str | os.PathLike[str],
@@ -1334,6 +1472,7 @@ def onboard_current_user(
     ledger_factory: Callable[[Path], None] = _create_ledger,
     autostart_installer: Callable[..., Mapping[str, Any]] = install_user_relay_autostart,
     relay_launcher: Callable[..., Mapping[str, Any]] = start_user_relay_process,
+    expected_input_binding: str = "",
 ) -> dict[str, Any]:
     from auto_update import installation_root, resolve_lifecycle_context
     managed = installation_root(Path(app_root))
@@ -1351,19 +1490,21 @@ def onboard_current_user(
             raise CurrentUserOnboardingError('자료 경로가 코드·제어·제거 증거 경로와 겹칩니다. 자료를 보존하고 별도 경로를 선택하세요.',
                                              report_path=paths.registration_report_path, status='FAILED')
     tls_ca_source = _configured_tls_ca_bundle_source(paths, environ)
-    attempt = RemoteAttempt.begin(paths.onboarding_report_path, "current_user_onboarding")
-    with writer_admission("current_user_onboarding"):
-        for directory in (
-            paths.data_root,
-            paths.events_dir,
-            paths.direct_sync_root,
-            paths.queue_dir,
-            paths.spool_dir,
-            paths.status_dir,
-            paths.logs_dir,
-            paths.logistics_profile_path.parent,
-        ):
-            directory.mkdir(parents=True, exist_ok=True)
+    prepared_inputs = None
+    if expected_input_binding:
+        from data_generation_guard import DataGenerationBlocked
+        try:
+            prepared_inputs = _prepare_onboarding_inputs(paths, tls_ca_source, environ, credential_loader)
+        except DataGenerationBlocked as exc:
+            raise CurrentUserOnboardingError(
+                exc.user_message, report_path=paths.onboarding_report_path, status="FAILED",
+            ) from exc
+        if prepared_inputs[2] != expected_input_binding:
+            raise CurrentUserOnboardingError(
+                "설치 전 확인한 자격 설정 경로가 바뀌었습니다. 자료를 보존하고 설치를 다시 확인하세요.",
+                report_path=paths.onboarding_report_path, status="BLOCKED",
+            )
+    attempt = None
     require_integrity = (
         bool(getattr(sys, "frozen", False))
         if require_bootstrap_integrity is None
@@ -1384,6 +1525,7 @@ def onboard_current_user(
         "server_registration_verified": False,
         "failure": "",
     }
+    from data_generation_guard import DataGenerationBlocked
     try:
         with writer_admission("current_user_onboarding"):
             bootstrap_integrity_detail = verify_bootstrap_integrity(
@@ -1394,12 +1536,22 @@ def onboard_current_user(
                 bootstrap_integrity_detail.get("status") or "UNKNOWN"
             ).lower()
             report["bootstrap_integrity_detail"] = bootstrap_integrity_detail
-            from data_generation_guard import record_before_data_open
-            record_before_data_open(paths.data_root)
+            from data_generation_guard import record_before_owner_paths
+            tls_ca_source, prepared_credential, _ = (prepared_inputs if prepared_inputs is not None
+                else _prepare_onboarding_inputs(paths, tls_ca_source, environ, credential_loader))
+            record_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values())
+            attempt = RemoteAttempt.begin(paths.onboarding_report_path, "current_user_onboarding")
+            for directory in (
+                paths.data_root, paths.events_dir, paths.direct_sync_root,
+                paths.queue_dir, paths.spool_dir, paths.status_dir, paths.logs_dir,
+                paths.logistics_profile_path.parent,
+            ):
+                directory.mkdir(parents=True, exist_ok=True)
             state = inspect_current_user_state(
                 paths,
                 profile_loader=profile_loader,
                 credential_loader=credential_loader,
+                prepared_credential=prepared_credential,
             )
             report["initial_state"] = state
             if state["status"] == "READY" and tls_ca_source:
@@ -1418,6 +1570,7 @@ def onboard_current_user(
                     paths,
                     profile_loader=profile_loader,
                     credential_loader=credential_loader,
+                    prepared_credential=prepared_credential,
                 )
             if state["status"] == "RECOVERY_REQUIRED":
                 if state.get("recovery_action") == ADMIN_RECOVERY_ACTION:
@@ -1436,6 +1589,7 @@ def onboard_current_user(
                     paths,
                     server_base_url=server_base_url,
                     environ=environ,
+                    tls_ca_bundle_source=tls_ca_source,
                 )
             else:
                 return_code = registration_runner(paths)
@@ -1453,6 +1607,7 @@ def onboard_current_user(
                 paths,
                 profile_loader=profile_loader,
                 credential_loader=credential_loader,
+                prepared_credential=prepared_credential,
             )
             if state["status"] != "READY":
                 raise ValueError(
@@ -1464,6 +1619,7 @@ def onboard_current_user(
         with writer_admission("current_user_onboarding"):
             current_state = inspect_current_user_state(
                 paths, profile_loader=profile_loader, credential_loader=credential_loader,
+                prepared_credential=prepared_credential,
             )
             if not attempt.is_current():
                 raise ValueError("a newer onboarding attempt superseded this response")
@@ -1519,12 +1675,19 @@ def onboard_current_user(
             )
             _write_json_atomic(paths.onboarding_report_path, report)
             return report
+    except DataGenerationBlocked as exc:
+        raise CurrentUserOnboardingError(
+            exc.user_message, report_path=paths.onboarding_report_path, status="FAILED",
+        ) from exc
     except CurrentUserOnboardingError as exc:
         report["status"] = exc.status
         report["error_type"] = exc.__class__.__name__
-        with attempt.apply() as current:
-            if current:
-                _persist_failure_report(paths.onboarding_report_path, report, exc)
+        if attempt is None:
+            _persist_failure_report(paths.onboarding_report_path, report, exc)
+        else:
+            with attempt.apply() as current:
+                if current:
+                    _persist_failure_report(paths.onboarding_report_path, report, exc)
         raise
     except Exception as exc:
         report["status"] = "FAILED"
@@ -1532,9 +1695,12 @@ def onboard_current_user(
         from data_generation_guard import DataGenerationBlocked
         if isinstance(exc, DataGenerationBlocked):
             report["error_code"] = exc.decision["message_key"]
-        with attempt.apply() as current:
-            if current:
-                _persist_failure_report(paths.onboarding_report_path, report, exc)
+        if attempt is None:
+            _persist_failure_report(paths.onboarding_report_path, report, exc)
+        else:
+            with attempt.apply() as current:
+                if current:
+                    _persist_failure_report(paths.onboarding_report_path, report, exc)
         raise CurrentUserOnboardingError(
             f"Container_Audit first-run onboarding failed: {exc}",
             report_path=paths.onboarding_report_path,
@@ -1553,6 +1719,14 @@ def remove_current_user_setup(
 ) -> dict[str, Any]:
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
     status_dir: Path = paths.status_dir
+    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths
+    try:
+        with writer_admission("current_user_setup_removal"):
+            probe_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values(), admission_source="current_user_setup_removal")
+    except DataGenerationBlocked as exc:
+        raise CurrentUserOnboardingError(
+            exc.user_message, report_path=paths.removal_report_path, status="FAILED",
+        ) from exc
     with writer_admission("current_user_setup_removal"):
         status_dir.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = {
@@ -1664,8 +1838,27 @@ def restore_current_user_lifecycle_after_replacement(
             report_path=report_path,
             status="FAILED",
         )
+    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, record_before_owner_paths
+    try:
+        from logistics_runtime_profile import assert_path_has_no_reparse_components
+        try:
+            receipt_path = assert_path_has_no_reparse_components(
+                replacement_receipt_path, label="replacement lifecycle receipt",
+            )
+        except (OSError, ValueError) as exc:
+            raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False}) from exc
+        probe_before_owner_paths(paths.data_root, file_paths=(
+            *_owner_artifact_paths(paths).values(), receipt_path, report_path,
+        ))
+        prepared_credential = None
+        if credential_loader is load_credentials_from_json and paths.credential_path.is_file():
+            prepared_credential = prepare_credential_config(paths.credential_path, data_root=paths.data_root)
+        record_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values())
+    except DataGenerationBlocked as exc:
+        raise CurrentUserOnboardingError(
+            exc.user_message, report_path=report_path, status="FAILED",
+        ) from exc
     owner_paths = _owner_artifact_paths(paths)
-    receipt_path = _resolved(replacement_receipt_path)
     if report_path == receipt_path or report_path in {
         _resolved(path) for path in owner_paths.values()
     }:
@@ -1892,6 +2085,7 @@ def restore_current_user_lifecycle_after_replacement(
                 paths,
                 profile_loader=profile_loader,
                 credential_loader=credential_loader,
+                prepared_credential=prepared_credential,
             )
         )
         if state.get("status") != "READY":
@@ -2062,6 +2256,7 @@ def replacement_lifecycle_restore_main(argv: list[str] | None = None) -> int:
         )
     except CurrentUserOnboardingError as exc:
         print(f"replacement_lifecycle_restore_status={exc.status}")
+        print(str(exc))
         print(f"replacement_lifecycle_restore_report={exc.report_path}")
         return ONBOARDING_EXIT_CODE
     except Exception:
@@ -2089,15 +2284,28 @@ def onboarding_main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--app-root", default=str(_default_app_root()))
     parser.add_argument("--server-base-url", default=DEFAULT_SERVER_BASE_URL)
+    parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument("--expected-input-binding", default="")
+    parser.add_argument("--target-release-root", default="")
     args = parser.parse_args(argv)
     try:
+        if args.preflight_only:
+            binding = preflight_current_user_onboarding(args.app_root, target_release_root=args.target_release_root)
+            print(f"onboarding_input_binding={binding}")
+            return 0
         report = onboard_current_user(
             args.app_root,
             server_base_url=args.server_base_url,
             require_bootstrap_integrity=bool(getattr(sys, "frozen", False)),
+            expected_input_binding=args.expected_input_binding,
         )
     except CurrentUserOnboardingError as exc:
+        if args.preflight_only:
+            # Native PS5.1 and PS7 transports must not depend on a console code page.
+            print("onboarding_preflight_error=" + json.dumps(str(exc), ensure_ascii=True))
+            return ONBOARDING_EXIT_CODE
         print(f"onboarding_status={exc.status}")
+        print(str(exc))
         print(f"onboarding_report={exc.report_path}")
         return ONBOARDING_EXIT_CODE
     print(f"onboarding_status={report['status']}")
@@ -2119,6 +2327,7 @@ def removal_main(argv: list[str] | None = None) -> int:
         report = remove_current_user_setup(args.app_root)
     except CurrentUserOnboardingError as exc:
         print("current_user_removal_status=FAILED")
+        print(str(exc))
         print(f"current_user_removal_report={exc.report_path}")
         return ONBOARDING_EXIT_CODE
     paths = resolve_current_user_onboarding_paths(args.app_root)

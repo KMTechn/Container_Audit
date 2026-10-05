@@ -292,6 +292,21 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         "scheduler_com": 5,
         "start_process": 2,
     }
+    preflight_calls = [
+        row for row in payload["powershell_execution_inventory"]["execution_sites"]
+        if row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1"
+        and row["function"] == "Get-CanonicalOnboardingInputBinding"
+        and row["kind"] == "call_operator"
+    ]
+    assert len(preflight_calls) == 1
+    preflight_source = (ROOT / "INSTALL_CANONICAL_PORTABLE.ps1").read_text(
+        encoding="utf-8-sig"
+    ).splitlines()
+    assert preflight_source[preflight_calls[0]["line"] - 1].strip() == (
+        "$output=@(& (Join-Path $Root 'runtime\\python.exe') @preflightArguments 2>&1)"
+    )
+    assert preflight_calls[0]["guarded"] is True
+    assert preflight_calls[0]["guard_name"] == "Enter-ContainerWriterSessionAuthority"
     # Preserve both canonical declarations and both consumed native calls.
     native_starts = [
         row for row in payload["powershell_execution_inventory"]["execution_sites"]

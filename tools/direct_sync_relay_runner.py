@@ -20,6 +20,7 @@ from event_log_store import LOCK_STALE_SECONDS as EVENT_LOG_LOCK_STALE_SECONDS  
 from direct_sync_push import reset_stale_relay_leases  # noqa: E402
 from direct_sync_runtime import (  # noqa: E402
     DirectSyncRuntimeConfig,
+    prepare_credential_config,
     enqueue_completed_source_file,
     record_scan_drain_status,
     record_scan_result_status,
@@ -27,7 +28,7 @@ from direct_sync_runtime import (  # noqa: E402
     run_relay_once,
 )
 from writer_session_fence import writer_sink  # noqa: E402
-from data_generation_guard import DataGenerationBlocked, record_before_data_open  # noqa: E402
+from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, record_before_owner_paths  # noqa: E402
 
 
 ALLOWED_SOURCE_PREFIX = "이적작업이벤트로그_"
@@ -735,6 +736,7 @@ def _build_config(args: argparse.Namespace) -> DirectSyncRuntimeConfig:
         operator_pause_path=args.operator_pause_path,
         max_active_queue_count=args.max_active_queue_count,
         max_active_queue_age_seconds=args.max_active_queue_age_seconds,
+        prepared_credential=getattr(args, "prepared_credential", None),
     )
 
 
@@ -767,14 +769,26 @@ def main(argv: list[str] | None = None) -> int:
     if args.enqueue_source_file and args.scan_source_dir:
         parser.error("--enqueue-source-file and --scan-source-dir are mutually exclusive")
 
-    config = _build_config(args)
+    from data_generation_guard import resolve_owner_path
+    from logistics_runtime_profile import resolve_logistics_profile_path
+    files, directories = [], []
+    for name, value in vars(args).copy().items():
+        if value and name.endswith(('_path', '_file', '_dir')):
+            path = resolve_owner_path(value)
+            setattr(args, name, str(path))
+            (directories if name.endswith('_dir') else files).append(path)
+    profile_path = resolve_logistics_profile_path()
+    if profile_path.is_file():
+        files.append(profile_path)
     try:
+        probe_before_owner_paths(Path(args.db_path).parent, file_paths=files, directory_paths=directories)
+        if Path(args.credential_path).is_file():
+            args.prepared_credential = prepare_credential_config(args.credential_path, data_root=Path(args.db_path).parent)
+        config = _build_config(args)
         # Explicit raw queue roots may differ from the GUI root; the shared SID
         # control slot ensures installer probes also observe this process.
-        record_before_data_open(Path(args.db_path).absolute().parent)
+        record_before_owner_paths(Path(args.db_path).parent, file_paths=files, directory_paths=directories)
     except DataGenerationBlocked as exc:
-        from container_audit_product_host import _record_hosted_relay_failure
-        _record_hosted_relay_failure(list(argv or sys.argv[1:]), exc)
         print(str(exc))
         return 1
     if args.require_runtime_lease_before_scan:

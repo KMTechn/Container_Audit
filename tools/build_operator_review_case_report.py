@@ -345,6 +345,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-md", required=True)
     args = parser.parse_args(argv)
 
+    root = Path(__file__).resolve().parents[1]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from data_generation_guard import DataGenerationBlocked, record_before_owner_paths, resolve_owner_path
+    from storage_policy import build_container_audit_storage_paths
+    from writer_session_fence import writer_admission
+    try:
+        with writer_admission("relay_operator_report"):
+            storage = build_container_audit_storage_paths(application_path=str(root))
+            args.case = [str(resolve_owner_path(path)) for path in args.case]
+            args.quarantine_detail = str(resolve_owner_path(args.quarantine_detail))
+            args.relay_status = str(resolve_owner_path(args.relay_status)) if args.relay_status else ''
+            record_before_owner_paths(storage.data_root, file_paths=(*args.case, args.quarantine_detail, args.relay_status))
+    except DataGenerationBlocked as exc:
+        print(exc.user_message)
+        return 2
     report = build_report(args.case, args.quarantine_detail, args.relay_status or None)
     _write_json_atomic(args.out_json, report)
     _write_text_atomic(args.out_md, render_markdown(report))

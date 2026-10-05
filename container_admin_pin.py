@@ -80,8 +80,9 @@ def _valid_uuid(value: Any) -> bool:
 
 
 class AdminPinClient:
-    def __init__(self, credential_path: str | Path, *, transport: Any = None):
-        credentials = load_credentials_from_json(credential_path)
+    def __init__(self, credential_path: str | Path, *, transport: Any = None, prepared_config=None, data_root=None):
+        credentials = (load_credentials_from_json(credential_path, prepared_config=prepared_config)
+                       if prepared_config is not None else load_credentials_from_json(credential_path, data_root=data_root))
         endpoint = urlsplit(str(credentials.endpoint_url))
         if endpoint.scheme.lower() != "https" or not endpoint.netloc or endpoint.username or endpoint.password:
             raise AdminPinError("VERIFY_UNAVAILABLE")
@@ -110,6 +111,8 @@ class AdminPinClient:
     @writer_sink("admin_pin_network", probe_only=True)
     def _post_signed(self, path: str, payload: Mapping[str, Any], *,
                      response_limit: int, expected_status: int) -> dict[str, Any]:
+        from direct_sync_push import admit_credential_security_inputs
+        admit_credential_security_inputs(self.credentials)
         body = canonical_json(payload).encode("utf-8")
         if len(body) > 8192:
             raise AdminPinError("REQUEST_TOO_LARGE")

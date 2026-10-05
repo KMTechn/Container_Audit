@@ -60,13 +60,23 @@ def test_pre_shared_installed_tree_passes_current_preflight_and_verified_replace
     assert json.loads((installed / "app/kmtech_shared.lock.json").read_bytes())["version"] == "0.2.0"
     assert (source / leaf).is_file()
 
-    result = run_functions(tmp_path, fixtures.PORTABLE_INSTALLER, ['Full', 'Same', 'Sha', 'Test-JsonTrue', 'Test-JsonInteger', 'Get-WriterContractSessionMutexName', 'Assert-WriterSessionPublicContract', 'Assert-WriterSinkInventory', 'Manifest', 'InstalledManifest', 'Get-WriterInventorySemantics', 'Test-ExactApprovedWriterTransition', 'Test-ExactPropertySet'], r'''
+    result = run_functions(tmp_path, fixtures.PORTABLE_INSTALLER, [
+        "Full", "Same", "Sha", "Test-JsonTrue", "Test-JsonInteger",
+        "Get-WriterContractSessionMutexName", "Assert-WriterSessionPublicContract",
+        "Assert-WriterSinkInventory", "Manifest", "InstalledManifest", "Get-WriterInventorySemantics",
+        'Test-ExactApprovedWriterTransition', 'Test-ExactPropertySet', 'Get-ContainerTransitionCodeFiles', 'Test-ContainerDataGenerationForwardTransition',
+    ], r'''
 [Threading.Thread]::CurrentThread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo($env:CA_UPGRADE_CULTURE)
 [Threading.Thread]::CurrentThread.CurrentUICulture = [Threading.Thread]::CurrentThread.CurrentCulture
 $source=$env:CA_UPGRADE_SOURCE
 $install=$env:CA_UPGRADE_INSTALLED
 $supportedRemovalResume=$null
 $SkipSignatureValidationForTest=$true
+# Bind the canonical entrypoint's default operation switches in this extracted
+# preflight fixture, which runs under StrictMode without the script param block.
+$Uninstall=$false
+$RestoreVerifiedReplacement=$false
+$CompleteRetiredRemoval=$false
 $sourceManifest=Manifest $source $true
 $sourceWriterInventory=Assert-WriterSinkInventory `
     (Join-Path $source 'tools/container_writer_sink_inventory.json') `

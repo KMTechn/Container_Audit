@@ -1366,6 +1366,24 @@ if (
         "before removing hardened code."
     )
 }
+# External input admission precedes placement ownership and elevation logs.
+$containerExternalInputs = @('ReplacementReceiptPath', 'RestoreUninstallRecordPath')
+if (-not $DryRun.IsPresent) { $containerExternalInputs += 'TlsCaBundlePath' }
+foreach ($inputName in $containerExternalInputs) {
+    $inputValue = [string](Get-Variable -Name $inputName -ValueOnly)
+    if ([string]::IsNullOrWhiteSpace($inputValue)) { continue }
+    try {
+        $inputFull = Get-StrictFullPath `
+            ($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($inputValue)) $inputName
+    } catch {
+        throw '이 PC의 자료 판을 확인할 수 없어 옛 판으로 되돌릴 수 없습니다. 자료와 확인 기록을 보존하고 관리자 지원 복구를 요청하세요.'
+    }
+    Set-Variable -Name $inputName -Value $inputFull
+    $BootstrapBoundParameters[$inputName] = $inputFull
+    Assert-ContainerDataGenerationTarget -CandidateRoot $PSScriptRoot -TargetSid $OperatorSid `
+        -LocalAppDataRoot $OperatorLocalAppDataRoot -DataRoot (Split-Path -Parent $inputFull) -HelperRoot $PSScriptRoot
+}
+# End external input admission.
 $helperInstallationEvidenceRoot=''
 if (-not $DryRun.IsPresent -and ($ElevationLogPath -or (Test-InstallationEvidencePrivileged))) {
     if(-not $ElevationLogPath){$ElevationLogPath='helper-audit'}

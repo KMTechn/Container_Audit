@@ -103,15 +103,16 @@ def _same_profile_snapshot(left: os.stat_result, right: os.stat_result) -> bool:
     )
 
 
-def default_protected_admin_profile_path() -> str:
-    override = os.environ.get(PROTECTED_ADMIN_PROFILE_ENV, "").strip()
+def default_protected_admin_profile_path(*, environ=None) -> str:
+    values = os.environ if environ is None else environ
+    override = values.get(PROTECTED_ADMIN_PROFILE_ENV, "").strip()
     if override:
         return override
     program_data = next(
         (
-            os.environ.get(name, "").strip()
+            values.get(name, "").strip()
             for name in PROGRAM_DATA_ENV_NAMES
-            if os.environ.get(name, "").strip()
+            if values.get(name, "").strip()
         ),
         r"C:\ProgramData",
     )
@@ -256,6 +257,8 @@ def load_protected_admin_profile(
         profile_path or default_protected_admin_profile_path(),
         label="protected administrator profile",
     )
+    from data_generation_guard import probe_before_owner_paths
+    probe_before_owner_paths(target.parent, file_paths=(target,))
     try:
         metadata = os.lstat(target)
         if (

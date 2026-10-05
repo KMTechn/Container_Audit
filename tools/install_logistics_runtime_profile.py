@@ -170,6 +170,8 @@ def _resolve_tls_ca_bundle(
     source = assert_path_has_no_reparse_components(
         source_text, label="TLS CA bundle source"
     )
+    from data_generation_guard import probe_before_owner_paths
+    probe_before_owner_paths(Path(profile_path).parent, file_paths=(source,))
     if not source.is_file():
         raise LogisticsRuntimeConfigurationError("TLS CA bundle source is unavailable")
     try:
@@ -924,11 +926,38 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, record_before_owner_paths
+    from storage_policy import build_container_audit_storage_paths
+    from writer_session_fence import writer_admission
+    try:
+        from logistics_runtime_profile import resolve_logistics_profile_path
+        args.profile_path = str(resolve_logistics_profile_path(args.profile_path))
+        if args.tls_ca_bundle_path:
+            args.tls_ca_bundle_path = str(assert_path_has_no_reparse_components(
+                args.tls_ca_bundle_path, label="TLS CA bundle source",
+            ))
+        owner_paths = (args.profile_path, args.tls_ca_bundle_path)
+        with writer_admission("logistics_profile_install"):
+            storage = build_container_audit_storage_paths(application_path=str(REPO_ROOT))
+            probe_before_owner_paths(storage.data_root, file_paths=owner_paths)
+    except (OSError, ValueError) as exc:
+        blocked = DataGenerationBlocked({"status": "UNKNOWN", "allowed": False})
+        print(blocked.user_message, file=sys.stderr)
+        return 2
+    except DataGenerationBlocked as exc:
+        print(exc.user_message, file=sys.stderr)
+        return 2
     token = str(os.environ.get(args.token_env) or "").strip()
     if not token:
         print("BLOCKED: bearer token environment value is missing", file=sys.stderr)
         return 2
     try:
+        with writer_admission("logistics_profile_install"):
+            if args.dry_run:
+                probe_before_owner_paths(storage.data_root, file_paths=owner_paths)
+            else:
+                probe_before_owner_paths(storage.data_root, file_paths=owner_paths)
+                record_before_owner_paths(storage.data_root, file_paths=(args.profile_path,))
         report = install_runtime_profile(
             profile_path=args.profile_path,
             base_url=args.base_url,
@@ -948,7 +977,7 @@ def main(argv: list[str] | None = None) -> int:
             credential_scope=args.credential_scope,
         )
     except Exception as exc:
-        print(f"BLOCKED: {exc.__class__.__name__}: {exc}", file=sys.stderr)
+        print(f"BLOCKED: {exc.__class__.__name__}", file=sys.stderr)
         return 2
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
     return 0

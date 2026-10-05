@@ -7,6 +7,21 @@ from types import SimpleNamespace
 import pytest
 
 
+def test_registration_preserves_original_path_policy_before_resolving_owner_alias(tmp_path, monkeypatch):
+    from tools import register_container_audit_worker_pc as registration
+    import data_generation_guard as guard
+    captured = []
+    def policy(args):
+        captured.append(args.producer_identity_path)
+        return {'status':'BLOCKED','blocked_reason':'legacy_owner_alias','unsafe_paths':[]}
+    monkeypatch.setattr(registration, '_explicit_output_path_policy_report', policy)
+    monkeypatch.setattr(guard, 'probe_before_owner_paths', lambda *args, **kwargs: None)
+    monkeypatch.setattr(registration, 'build_registration_payloads', lambda *args: pytest.fail('blocked alias opened owner data'))
+    monkeypatch.setenv('CONTAINER_AUDIT_DATA_ROOT', str(tmp_path/'data'))
+    assert registration.main(['--producer-identity-path','~/original-owner.json']) == 2
+    assert captured == ['~/original-owner.json']
+
+
 def test_direct_main_records_before_gui_constructor(tmp_path, monkeypatch):
     import Container_Audit as app
 
@@ -65,11 +80,12 @@ def test_onboarding_refusal_prevents_state_or_ledger_open(tmp_path, monkeypatch)
     with pytest.raises(onboarding.CurrentUserOnboardingError, match="자료 판을 확인할 수 없어") as captured:
         onboarding.onboard_current_user(tmp_path / "code", ledger_factory=lambda *args: opened.append(True))
     assert not opened
-    report = json.loads(captured.value.report_path.read_bytes())
-    assert report["error_code"] == "data_generation_unknown"
+    assert isinstance(captured.value.__cause__, DataGenerationBlocked)
+    assert captured.value.__cause__.decision["message_key"] == "data_generation_unknown"
+    assert not captured.value.report_path.exists()
 
 
-def test_persistent_relay_reports_child_refusal_without_launch_time_marker(tmp_path, monkeypatch):
+def test_persistent_relay_reports_child_refusal_without_launch_time_marker(tmp_path, monkeypatch, capsys):
     import user_relay as relay
     from kmtech_shared import data_generation as generation
 
@@ -87,17 +103,17 @@ def test_persistent_relay_reports_child_refusal_without_launch_time_marker(tmp_p
     assert relay.main(["--data-root", str(data), "--once"]) == 1
     assert calls == [True]
     assert not (data / "data-generation.json").exists()
-    report = json.loads((data / "direct_sync/status/container_audit_user_relay.json").read_bytes())
-    assert "옛 판으로 되돌릴 수 없습니다" in report["last_cycle"]["error_message"]
+    assert not (data / "direct_sync/status/container_audit_user_relay.json").exists()
+    assert "옛 판으로 되돌릴 수 없습니다" in capsys.readouterr().out
 
 
-def test_raw_relay_refusal_prevents_queue_open(tmp_path, monkeypatch):
+def test_raw_relay_refusal_prevents_queue_open(tmp_path, monkeypatch, capsys):
     from tools import direct_sync_relay_runner as runner
     from data_generation_guard import DataGenerationBlocked
     from kmtech_shared import data_generation as generation
 
     opened = []
-    monkeypatch.setattr(runner, "record_before_data_open", lambda *args: (_ for _ in ()).throw(DataGenerationBlocked(
+    monkeypatch.setattr(runner, "record_before_owner_paths", lambda *args, **kwargs: (_ for _ in ()).throw(DataGenerationBlocked(
         {"status": "UNKNOWN", "allowed": False, "message_key": "data_generation_unknown", "message": generation.UNKNOWN_MESSAGE})))
     monkeypatch.setattr(runner, "run_relay_once", lambda *args: opened.append(True))
     arguments = []
@@ -107,7 +123,8 @@ def test_raw_relay_refusal_prevents_queue_open(tmp_path, monkeypatch):
         arguments.extend(["--" + option, str(tmp_path / leaf)])
     assert runner.main(arguments) == 1
     assert not opened and not (tmp_path / "queue.sqlite3").exists()
-    assert json.loads((tmp_path / "status.json").read_bytes())["error_code"] == "data_generation_unknown"
+    assert not (tmp_path / "status.json").exists()
+    assert "자료 판을 확인할 수 없어" in capsys.readouterr().out
 
 
 def test_gui_duplicate_lease_does_not_record_unused_generation(tmp_path, monkeypatch):

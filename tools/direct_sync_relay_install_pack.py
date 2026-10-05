@@ -371,13 +371,33 @@ def _apply_container_audit_storage_defaults(args: argparse.Namespace) -> dict:
     }
 
 
+def _redact_install_diagnostic(value):
+    """Remove known process-secret values before storing child diagnostics."""
+    secrets = tuple(secret_value for name in (
+        "CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN", "KM_LOGISTICS_INSTALL_BEARER_TOKEN",
+    ) if (secret_value := os.environ.get(name)))
+    def scrub(item):
+        if isinstance(item, str):
+            for secret in secrets:
+                for representation in (json.dumps(secret, ensure_ascii=True)[1:-1],
+                                       json.dumps(secret, ensure_ascii=False)[1:-1], secret):
+                    item = item.replace(representation, "[REDACTED]")
+            return item
+        if isinstance(item, dict):
+            return {scrub(key): scrub(child) for key, child in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [scrub(child) for child in item]
+        return item
+    return scrub(value)
+
+
 @writer_sink("direct_sync_install_pack")
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
         with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            json.dump(_redact_install_diagnostic(payload), handle, ensure_ascii=False, indent=2, sort_keys=True)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -815,8 +835,22 @@ def _producer_manifest_report(path: str | os.PathLike[str]) -> dict:
     return report
 
 
-def _credential_report(path: str | os.PathLike[str], *, forbid_raw_secret: bool = False) -> dict:
-    report, payload = _load_json_object_report(path, label="credential")
+def _credential_report(path: str | os.PathLike[str], *, forbid_raw_secret: bool = False, prepared_config=None) -> dict:
+    if prepared_config is None:
+        report, payload = _load_json_object_report(path, label="credential")
+    else:
+        report = {"status": "PASS", "blocked_reason": "", "path": str(prepared_config.credential_path)}
+        if prepared_config.credential_error is not None:
+            cause = prepared_config.credential_error.__cause__
+            report.update(status="FAIL", blocked_reason="credential file is not valid JSON")
+            if isinstance(cause, DirectSyncPushError):
+                report.update(error_type="DuplicateJSONKey", error_message=str(cause))
+            elif cause is not None:
+                report["error_type"] = type(cause).__name__
+            else:
+                report["blocked_reason"] = "credential file must be a JSON object"
+            return report
+        payload = prepared_config.payload
     if payload is None:
         return report
     required_missing = [
@@ -1042,7 +1076,8 @@ def build_install_plan(args: argparse.Namespace) -> dict:
     credential = (
         _skipped_report("uninstall does not read producer credentials")
         if uninstall
-        else _credential_report(args.credential_path, forbid_raw_secret=bool(getattr(args, "apply", False)))
+        else _credential_report(args.credential_path, forbid_raw_secret=bool(getattr(args, "apply", False)),
+                                prepared_config=getattr(args, "prepared_credential", None))
     )
     source_scan = _source_scan_config(args)
     source_scan_validation = (
@@ -1208,8 +1243,8 @@ def _run_command(command: Sequence[str]) -> dict:
         }
     return {
         "returncode": completed.returncode,
-        "stdout": completed.stdout,
-        "stderr": completed.stderr,
+        "stdout": _redact_install_diagnostic(completed.stdout),
+        "stderr": _redact_install_diagnostic(completed.stderr),
     }
 
 
@@ -1252,6 +1287,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--allow-interactive-task-for-local-test", action="store_true")
     parser.add_argument("--allow-noncanonical-layout-for-test", action="store_true")
     args = parser.parse_args(raw_argv)
+    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, resolve_owner_path
+    from writer_session_fence import writer_admission
     args.python_exe_explicit = "--python-exe" in raw_argv
     report_path_policy = _legacy_path_block_report("report_path", args.report_path)
     if report_path_policy:
@@ -1265,10 +1302,27 @@ def main(argv: list[str] | None = None) -> int:
                 "unsafe_paths": [report_path_policy],
             },
         }
-        print(json.dumps(plan, ensure_ascii=False, sort_keys=True))
+        print(json.dumps(_redact_install_diagnostic(plan), ensure_ascii=False, sort_keys=True))
         return 2
     try:
+        with writer_admission("direct_sync_install_pack"):
+            storage = build_container_audit_storage_paths(application_path=args.app_root)
+            files = []
+            for name in ('producer_manifest_path','credential_path','task_run_password_file','report_path'):
+                value = getattr(args, name, '')
+                if value:
+                    path = resolve_owner_path(value)
+                    setattr(args, name, str(path))
+                    files.append(path)
+            probe_before_owner_paths(storage.data_root, file_paths=files,
+                                     directory_paths=(args.program_data_root, args.scan_source_dir))
+            if not args.uninstall and Path(args.credential_path).is_file():
+                from direct_sync_runtime import prepare_credential_config
+                args.prepared_credential = prepare_credential_config(args.credential_path, data_root=storage.data_root)
         args.container_audit_storage = _apply_container_audit_storage_defaults(args)
+    except DataGenerationBlocked as exc:
+        print(exc.user_message)
+        return 2
     except ValueError as exc:
         plan = {
             "report_version": "container-audit-direct-sync-install-pack-v1",

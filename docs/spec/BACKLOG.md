@@ -72,6 +72,36 @@ native 73과 원 진단은 canonical/부모 journal에 보존됐고 protected di
 updater state 이동과 evidence 자리 보존을 확인한다. 소스 회귀는 실제 상승·예약 작업·relay·설치 성공의
 근거가 아니다. [현재 결과와 경계 표](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-107/REPORT.md)를 따른다.
 
+G 외부 입력 부류는 TLS CA·보호 관리자 profile·지원 receipt/password·등록 journal/context를
+초기 guard와 실제 reader의 동일 경로로 결속한다. Python 별도 프로세스와 PS5.1/PS7의
+허용/REFUSE/UNKNOWN 및 상대 경로 근거, 실제 stock 전진 pair와 남은 수용 범위는
+[sub-263 보고서](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-263/REPORT.md)를 따른다.
+호스트 실설치·GUI·Run/task·live relay·자격 저장소·VM/서버는 이 교정에서 실행하지 않는다.
+
+Credential locator/nested의 두 단계 admission과 기존 malformed/duplicate BLOCKED 진단을
+구분한다. Canonical 최초 G의 세 격리 분기에는 변경·removal·Run·relay·fence 잔류가 없다.
+Canonical nested 판정은 기존 product onboarding의 읽기 전용 호출로 모든 설치 변경 앞에
+놓고, 같은 해석 결과 digest를 child의 최초 기록 전에 대조한다. 실제 G를 켠 별도 프로세스
+RED/GREEN과 PS5.1/PS7 근거는
+[sub-272 보고서](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-272/REPORT.md)를 따른다.
+native 설치·복원과 최종 수용은 coordinator 독립 확인 범위로 남긴다.
+검증 복원도 old packet을 대상으로 같은 초기 locator/nested G와 단계 전 binding 대조를
+사용한다. 실제 first reader는 다시 시작하는 old relay이며 lifecycle-restore child 호출은 없다.
+sub-270 removal 거절의 일반 rollback도 독립 복원 시도와 finally release/restart로 교정한다.
+exact code·실제 G·runtime 증명 실패는 fenced 유지·한국어 화면/감사 안내이며 G를 거절한 code 복원은 0이다.
+최종 G에는 옛 판의 읽기 전용 locator/nested 판정도 포함하며, 설치 중 nested marker drift는 fence 유지로 처리한다. 설치 실패 안내·child 출력 감사의 알려진 비밀 환경 값은 고정 표식으로 치환하고 byte 검색으로 확인한다.
+지원 절차는 [운영 문서](operations.md#canonical-rollback-support-recovery)에 두고 retained-fence 랩 1회 PROVEN은 coordinator 예행 범위로 남긴다.
+Uninstall/retirement/refence 이전 실패의 안내·지원 복구 경로는 자리 지도에 별도로 남긴다.
+
+G 직접 입구/거절 부류: registrar 검증·2PC resume, support operator/profile,
+앱 active-work wrapper/report, lifecycle 복구·제거의 판독 전 보호와 온보딩/relay
+거절 시 기존 상태 보존을 교정한다. 별도 프로세스 RED/GREEN·선언 재생성·stock·
+집중/전체 실패 집합 근거는
+[sub-233 보고서](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-233/REPORT.md)를 따른다.
+실제 frozen GUI·운영 설치·서버/VM·현장 장비는 이번 host headless 범위에서 NOT TESTED다.
+G 교정으로 달라진 두 writer route의 전진 전환은 앱 전용 선언/reader로 한 쌍만
+결속한다. 파일 hash·route·sink/guard 위조와 역전환 거절 근거도 같은 보고서에 남긴다.
+
 자료 세대 내림 guard(sub-219)는 두 leaf·같은 판 새 build 하한 교집합의 격리 묶음31 PASS까지 PROVEN이다.
 CA의 자료-open 3곳과 restore/reinstall 7곳에 호출을 연결했으며 관련52 PASS와 native
 자료 사용 뒤 거절을 확인했다. 기존 d55cc94 집중 시험은308 PASS/2 FAIL; 두 옛 post-data
@@ -689,3 +719,11 @@ manifest 실제 stock 통과·상한1B 초과 거절, 최종 재생성/check·�
 근거는 [sub-265 REPORT](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-265/REPORT.md)와
 FOR-REVIEW.md에 기록한다. 실제 UAC·옛 v2.0.33 위 설치·현장 경로/계정 수용은
 NOT TESTED이며 coordinator의 랩 예행과 독립 확인에 남긴다.
+
+
+
+- sub-233 follow-up: preserve legitimate removal delegation through a single statically fixed, already-admitted G metadata probe with `probe_only=True`; actual marker writing keeps the original decorator. Add process snapshots of data/control file list, size and mtime and missing/equal/newer/UNKNOWN removal checks; retain legacy identity, string profile-path API and invalid-storage BLOCKED diagnostics. Conditional decision `msg_eb3b375df3eb`; targeted eleven cases and standard regen/check PASS on the clean follow-up source; final packet and wider verification are recorded in the task report.
+
+- sub-272 추가: startup 뒤 credential/profile/DPAPI/TLS 첫 판독의 G 재확인과
+  catch 감사 저장 실패 격리 구현. 실제 G·PS5.1/PS7·집중 기준선 증거는 해당
+  REPORT 최종 커밋에 결합하며, 증거 확정 전 UNPROVEN으로 유지한다.
