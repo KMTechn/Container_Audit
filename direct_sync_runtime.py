@@ -102,6 +102,17 @@ class PreparedCredentialConfig:
     payload: Mapping[str, Any] = field(repr=False)
     protected_secret_path: Path | None = field(default=None, repr=False)
     credential_error: DirectSyncPushError | None = field(default=None, repr=False)
+    data_root: Path | None = field(default=None, repr=False)
+    security_file_paths: tuple[Path, ...] = field(default=(), repr=False)
+    security_directory_paths: tuple[Path, ...] = field(default=(), repr=False)
+
+    def admit_security_inputs(self) -> None:
+        from data_generation_guard import probe_before_owner_paths
+
+        root = self.data_root or self.credential_path.parent
+        probe_before_owner_paths(root, file_paths=(self.credential_path,))
+        probe_before_owner_paths(root, file_paths=self.security_file_paths,
+                                 directory_paths=self.security_directory_paths)
 
 
 def prepare_credential_config(path, *, data_root) -> PreparedCredentialConfig:
@@ -123,7 +134,8 @@ def prepare_credential_config(path, *, data_root) -> PreparedCredentialConfig:
             # Invalid JSON is the existing credential validation failure, not
             # evidence of an unknown external owner. Keep the single read and
             # let the admitted caller retain its existing diagnostic contract.
-            return PreparedCredentialConfig(credential_path, MappingProxyType({}), credential_error=exc)
+            return PreparedCredentialConfig(credential_path, MappingProxyType({}), credential_error=exc,
+                                            data_root=resolve_owner_path(data_root))
         payload = dict(payload)
         files, directories = [], []
         protected_path = None
@@ -153,7 +165,10 @@ def prepare_credential_config(path, *, data_root) -> PreparedCredentialConfig:
             payload["isolated_qualification_context_path"] = str(context_path)
             files.append(context_path)
         probe_before_owner_paths(data_root, file_paths=files, directory_paths=directories)
-        return PreparedCredentialConfig(credential_path, MappingProxyType(payload), protected_path)
+        return PreparedCredentialConfig(credential_path, MappingProxyType(payload), protected_path,
+                                        data_root=resolve_owner_path(data_root),
+                                        security_file_paths=tuple(files),
+                                        security_directory_paths=tuple(directories))
     except DataGenerationBlocked:
         raise
     except Exception as exc:
@@ -480,8 +495,22 @@ def _read_credential_payload(credential_path: Path) -> dict:
 
 
 def load_credentials_from_json(path: str | os.PathLike[str], *,
-                               prepared_config: PreparedCredentialConfig | None = None) -> ProducerCredentials:
+                               prepared_config: PreparedCredentialConfig | None = None,
+                               data_root: str | os.PathLike[str] | None = None) -> ProducerCredentials:
+    from data_generation_guard import probe_before_owner_paths, resolve_owner_path
+
+    if prepared_config is None:
+        candidate = resolve_owner_path(path)
+        root = resolve_owner_path(data_root) if data_root is not None else candidate.parent
+        probe_before_owner_paths(root, file_paths=(candidate,))
+        if not candidate.is_file():
+            # Keep the existing missing-file credential validation contract.
+            _read_credential_payload(candidate)
+        prepared_config = prepare_credential_config(candidate, data_root=root)
     credential_path = prepared_config.credential_path if prepared_config is not None else Path(path)
+    # Startup admission is a snapshot, not permission to open inputs later.
+    # Recheck both stages using the admitted paths before any secret/TLS read.
+    prepared_config.admit_security_inputs()
     if prepared_config is not None and prepared_config.credential_error is not None:
         raise prepared_config.credential_error
     payload = prepared_config.payload if prepared_config is not None else _read_credential_payload(credential_path)
@@ -560,6 +589,10 @@ def load_credentials_from_json(path: str | os.PathLike[str], *,
         runtime_lease_mode=runtime_lease_mode,
         isolated_qualification_context_path=isolated_context_path,
         tls_ca_bundle_path=tls_ca_bundle_path,
+        credential_path=str(credential_path),
+        security_data_root=str(prepared_config.data_root or credential_path.parent),
+        security_file_paths=tuple(str(value) for value in prepared_config.security_file_paths),
+        security_directory_paths=tuple(str(value) for value in prepared_config.security_directory_paths),
     )
 
 
@@ -922,7 +955,7 @@ def enqueue_completed_source_file(
         return _append_runtime_event_with_status(config, "enqueue_blocked_disk_pressure", status)
     try:
         creds = credentials or (load_credentials_from_json(config.credential_path, prepared_config=config.prepared_credential)
-                                if config.prepared_credential is not None else load_credentials_from_json(config.credential_path))
+                                if config.prepared_credential is not None else load_credentials_from_json(config.credential_path, data_root=Path(config.db_path).parent))
         row = enqueue_source_file_for_relay(
             db_path=config.db_path,
             spool_dir=config.spool_dir,
@@ -1155,7 +1188,7 @@ def run_relay_once(
     try:
         reset_count = reset_stale_relay_leases(db_path=config.db_path, now=cycle_now)
         creds = credentials or (load_credentials_from_json(config.credential_path, prepared_config=config.prepared_credential)
-                                if config.prepared_credential is not None else load_credentials_from_json(config.credential_path))
+                                if config.prepared_credential is not None else load_credentials_from_json(config.credential_path, data_root=Path(config.db_path).parent))
         source_identity = _producer_manifest_identity(config)
         if source_identity.get("status") != "PASS":
             raise DirectSyncPushError(

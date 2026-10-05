@@ -732,6 +732,9 @@ def _private_update_request_kwargs(url: str) -> Dict[str, Any]:
         )
         if profile is None:
             return request_kwargs
+        security_guard = getattr(profile, "admit_security_inputs", None)
+        if security_guard is not None:
+            security_guard()
         requested = urlsplit(str(url or ""))
         enrolled = urlsplit(str(profile.base_url or ""))
         if (
@@ -745,6 +748,8 @@ def _private_update_request_kwargs(url: str) -> Dict[str, Any]:
         ca_bundle_path = str(profile.tls_ca_bundle_path or "").strip()
         if ca_bundle_path:
             request_kwargs["verify"] = ca_bundle_path
+    except DataGenerationBlocked:
+        raise
     except Exception:
         # Update discovery is optional; onboarding and catalog startup retain
         # their own fail-closed profile validation.
@@ -3286,10 +3291,15 @@ class ContainerAudit:
         candidate = WorkerRegistry.normalize_name(worker_name)
         if is_protected_admin_candidate(candidate):
             selected_profile = getattr(self, '_protected_admin_profile_path', None)
-            authenticated = (
-                is_protected_admin_code(candidate, profile_path=selected_profile)
-                if selected_profile is not None else is_protected_admin_code(candidate)
-            )
+            try:
+                authenticated = (
+                    is_protected_admin_code(candidate, profile_path=selected_profile)
+                    if selected_profile is not None else is_protected_admin_code(candidate)
+                )
+            except DataGenerationBlocked as exc:
+                self._authenticated_protected_admin = False
+                messagebox.showerror("자료 판 확인", exc.user_message, parent=self.root)
+                return None
             if not authenticated:
                 self._authenticated_protected_admin = False
                 messagebox.showerror(
@@ -8248,10 +8258,13 @@ class ContainerAudit:
         if self.storage_paths.credential_path.is_file():
             from direct_sync_runtime import prepare_credential_config
             with writer_admission("gui_constructor"):
+                startup_prepared = getattr(self, "_prepared_admin_pin_credential", None)
+                if startup_prepared is not None:
+                    startup_prepared.admit_security_inputs()
                 prepared = prepare_credential_config(self.storage_paths.credential_path,
                                                      data_root=self.storage_paths.data_root)
             return AdminPinClient(self.storage_paths.credential_path, prepared_config=prepared)
-        return AdminPinClient(self.storage_paths.credential_path)
+        return AdminPinClient(self.storage_paths.credential_path, data_root=self.storage_paths.data_root)
 
     def _admin_pin_audit(self, event: str, intent: Mapping[str, Any]) -> bool:
         resume_epoch = (str((intent.get("resuming_operator") or {}).get("login_epoch") or "")
@@ -21561,9 +21574,10 @@ def _prepare_gui_startup(*, data_root=None):
             probe_before_owner_paths(storage_paths.data_root, file_paths=(
                 *profile_candidates, protected_admin_profile,
             ))
+            prepared_admin_pin_credential = None
             if storage_paths.credential_path.is_file():
                 from direct_sync_runtime import prepare_credential_config
-                prepare_credential_config(
+                prepared_admin_pin_credential = prepare_credential_config(
                     storage_paths.credential_path, data_root=storage_paths.data_root,
                 )
             if storage_paths.custom_data_root:
@@ -21648,6 +21662,7 @@ def _prepare_gui_startup(*, data_root=None):
             with writer_admission("gui_startup"):
                 app = ContainerAudit()
             app._runtime_data_root = storage_paths.data_root
+            app._prepared_admin_pin_credential = prepared_admin_pin_credential
             app._protected_admin_profile_path = protected_admin_profile
             if catalog_unconfirmed:
                 app.item_catalog_unconfirmed = True

@@ -232,6 +232,8 @@ def _post_lease_request(
     session: Any,
     timeout: int,
 ) -> tuple[Dict[str, Any] | None, RuntimePreparation | None]:
+    from direct_sync_push import admit_credential_security_inputs
+    admit_credential_security_inputs(credentials)
     if session is None:
         import requests
 

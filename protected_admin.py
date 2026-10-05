@@ -257,6 +257,8 @@ def load_protected_admin_profile(
         profile_path or default_protected_admin_profile_path(),
         label="protected administrator profile",
     )
+    from data_generation_guard import probe_before_owner_paths
+    probe_before_owner_paths(target.parent, file_paths=(target,))
     try:
         metadata = os.lstat(target)
         if (

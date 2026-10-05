@@ -975,6 +975,9 @@ def refresh_item_catalog(
             if tls_ca_bundle_path:
                 request_kwargs["verify"] = tls_ca_bundle_path
         transport = get or (_hardened_get if central_enrolled else requests.get)
+        security_guard = getattr(profile, "admit_security_inputs", None)
+        if security_guard is not None:
+            security_guard()
         cache_paths = (cache, _cache_authority_path(cache), _cache_recovery_path(cache))
         prior_cache = tuple(path.read_bytes() if path.is_file() else None for path in cache_paths)
         _update_catalog_attempt_context(request_sent=True)

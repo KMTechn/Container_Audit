@@ -75,6 +75,17 @@ class LogisticsRuntimeProfile:
     isolated_qualification_authority_id: str = ""
     tls_ca_bundle_path: str = field(default="", repr=False)
 
+    def admit_security_inputs(self) -> None:
+        from data_generation_guard import probe_before_owner_paths
+
+        if self.profile_path:
+            root = Path(self.profile_path).parent
+            probe_before_owner_paths(root, file_paths=(self.profile_path,))
+            probe_before_owner_paths(root, file_paths=(self.tls_ca_bundle_path,))
+        elif self.tls_ca_bundle_path:
+            ca_path = Path(self.tls_ca_bundle_path)
+            probe_before_owner_paths(ca_path.parent, file_paths=(ca_path,))
+
     def redacted_summary(self) -> dict[str, Any]:
         return {
             "contract_version": PROFILE_CONTRACT_VERSION,
@@ -678,6 +689,8 @@ def load_logistics_runtime_profile(
         if required_value or explicit_path:
             raise LogisticsRuntimeConfigurationError("machine logistics profile is missing")
         return None
+    from data_generation_guard import probe_before_owner_paths
+    probe_before_owner_paths(path.parent, file_paths=(path,))
     profile = _read_profile(path)
     if "bearer_token" in profile:
         raise LogisticsRuntimeConfigurationError(
@@ -686,6 +699,8 @@ def load_logistics_runtime_profile(
     if profile.get("contract_version") != PROFILE_CONTRACT_VERSION:
         raise LogisticsRuntimeConfigurationError("machine logistics profile contract_version is invalid")
     secret_path = _resolve_secret_path(path, profile.get("bearer_token_ref"))
+    ca_reference = str(profile.get("tls_ca_bundle_path") or "").strip()
+    probe_before_owner_paths(path.parent, file_paths=(secret_path, ca_reference))
     try:
         encrypted = secret_path.read_bytes()
     except OSError as exc:

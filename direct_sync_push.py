@@ -140,6 +140,28 @@ class ProducerCredentials:
     runtime_lease_mode: str = "enforce"
     isolated_qualification_context_path: str = ""
     tls_ca_bundle_path: str = ""
+    credential_path: str = field(default="", repr=False, compare=False)
+    security_data_root: str = field(default="", repr=False, compare=False)
+    security_file_paths: tuple[str, ...] = field(default=(), repr=False, compare=False)
+    security_directory_paths: tuple[str, ...] = field(default=(), repr=False, compare=False)
+
+
+def admit_credential_security_inputs(credentials: ProducerCredentials) -> None:
+    """Recheck admitted owners immediately before deferred security input IO."""
+    from data_generation_guard import probe_before_owner_paths
+
+    locator = str(getattr(credentials, "credential_path", "") or "")
+    ca_path = str(getattr(credentials, "tls_ca_bundle_path", "") or "")
+    if locator:
+        root = getattr(credentials, "security_data_root", "") or Path(locator).parent
+        probe_before_owner_paths(root, file_paths=(locator,))
+        files = tuple(getattr(credentials, "security_file_paths", ()))
+        if ca_path and ca_path not in files:
+            files += (ca_path,)
+        probe_before_owner_paths(root, file_paths=files,
+                                 directory_paths=getattr(credentials, "security_directory_paths", ()))
+    elif ca_path:
+        probe_before_owner_paths(Path(ca_path).parent, file_paths=(ca_path,))
 
 
 @dataclass(frozen=True)
@@ -794,6 +816,7 @@ def restore_raw_artifact_to_file(
         if credentials.tls_ca_bundle_path:
             session.trust_env = False
             session.verify = credentials.tls_ca_bundle_path
+    admit_credential_security_inputs(credentials)
     temp_path = destination.with_name(f"{destination.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
         response = session.get(restore_url, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
@@ -1501,6 +1524,7 @@ def upload_source_file(
             headers = signed_headers(credentials, plan.metadata)
             if before_post is not None:
                 before_post()
+            admit_credential_security_inputs(credentials)
             try:
                 response = session.post(
                     credentials.endpoint_url,
