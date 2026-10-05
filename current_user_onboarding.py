@@ -1254,25 +1254,78 @@ def _prepare_onboarding_inputs(paths, tls_ca_source, environ, credential_loader)
     return tls_ca_source, prepared_credential, binding
 
 
-def preflight_current_user_onboarding(app_root, *, environ=None):
+def _verified_onboarding_target_release(target_root):
+    """Use the existing exact portable reader for the archived/restored target."""
+    from tools.check_release_version import read_current_version
+
+    root = _resolved(target_root)
+    record = _read_json(root / "bootstrap-integrity.json", "target bootstrap integrity record")
+    declared_root = root if record.get("code_root") == "." else _resolved(record.get("code_root") or "")
+    identity = _read_replacement_tree_identity(root, declared_root, acl_identity_reader=_windows_acl_identity)
+    manifest = _read_json(root / "portable-manifest.json", "target portable manifest")
+    version = read_current_version(root / "app" / "Container_Audit.py")
+    if manifest.get("version") != version:
+        raise ValueError("target release version binding differs")
+    return {"version": version, "build_id": identity["source_commit"],
+            "aggregate_sha256": identity["aggregate_sha256"]}
+
+
+def _probe_onboarding_target_owners(release, paths, *, file_paths=(), directory_paths=()):
+    from data_generation_guard import DataGenerationBlocked, marker_paths, owner_roots
+    from kmtech_shared import data_generation as generation
+    from tools.register_container_audit_worker_pc import _current_user_sid
+
+    sid = _current_user_sid()
+    for root in owner_roots(paths.data_root, file_paths=file_paths, directory_paths=directory_paths):
+        decision = generation.probe_downgrade(
+            marker_paths(root, sid), release["version"], app_id="container_audit",
+            subject_sid=sid, target_build_id=release["build_id"],
+        )
+        if not decision["allowed"]:
+            raise DataGenerationBlocked(decision)
+
+
+def preflight_current_user_onboarding(app_root, *, environ=None, target_release_root=""):
     """Admit locator and nested owners without changing installation or user state."""
     from data_generation_guard import DataGenerationBlocked
 
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
     try:
+        tls_ca_source = _configured_tls_ca_bundle_source(paths, environ)
+        release = None
+        if target_release_root:
+            release = _verified_onboarding_target_release(target_release_root)
+            from protected_admin import default_protected_admin_profile_path
+            _probe_onboarding_target_owners(release, paths, file_paths=(
+                *_owner_artifact_paths(paths).values(), tls_ca_source,
+                default_protected_admin_profile_path(environ=environ),
+            ))
         inputs = _prepare_onboarding_inputs(
-            paths, _configured_tls_ca_bundle_source(paths, environ), environ,
+            paths, tls_ca_source, environ,
             load_credentials_from_json,
         )
+        if release is not None and inputs[1] is not None:
+            prepared = inputs[1]
+            _probe_onboarding_target_owners(release, paths, file_paths=(
+                prepared.protected_secret_path, prepared.payload.get("tls_ca_bundle_path"),
+                prepared.payload.get("isolated_qualification_context_path"),
+            ), directory_paths=((prepared.payload.get("secret_data_dir"),)
+                if prepared.protected_secret_path is not None else ()))
     except DataGenerationBlocked as exc:
         raise CurrentUserOnboardingError(
             exc.user_message, report_path=paths.onboarding_report_path, status="FAILED",
+        ) from exc
+    except Exception as exc:
+        from kmtech_shared import data_generation as generation
+        raise CurrentUserOnboardingError(
+            generation.UNKNOWN_MESSAGE, report_path=paths.onboarding_report_path, status="FAILED",
         ) from exc
     if inputs[1] is not None and inputs[1].credential_error is not None:
         raise CurrentUserOnboardingError(
             str(inputs[1].credential_error), report_path=paths.onboarding_report_path, status="BLOCKED",
         ) from inputs[1].credential_error
-    return inputs[2]
+    return (hashlib.sha256((inputs[2] + json.dumps(release, sort_keys=True)).encode("utf-8")).hexdigest()
+            if release is not None else inputs[2])
 
 
 @writer_sink("current_user_onboarding", probe_only=True)
@@ -2080,10 +2133,11 @@ def onboarding_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--server-base-url", default=DEFAULT_SERVER_BASE_URL)
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--expected-input-binding", default="")
+    parser.add_argument("--target-release-root", default="")
     args = parser.parse_args(argv)
     try:
         if args.preflight_only:
-            binding = preflight_current_user_onboarding(args.app_root)
+            binding = preflight_current_user_onboarding(args.app_root, target_release_root=args.target_release_root)
             print(f"onboarding_input_binding={binding}")
             return 0
         report = onboard_current_user(

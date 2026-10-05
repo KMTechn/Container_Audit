@@ -16,6 +16,9 @@ Canonical 설치는 fence·placement·Run/task·relay 변경 전에 기존 onboa
 Python의 기존 해석 결과 digest를 `--expected-input-binding`으로 onboarding에 전달하고,
 child는 같은 resolved 경로·payload인지 기록 전에 대조한다. 거절은 기존 오류 코드·안내로
 끝나며 설치 상태 변경은 없다. rollback의 old-target G는 그대로 유지한다.
+검증 복원은 같은 읽기 전용 호출의 `--target-release-root`로 정확 old packet을 기존
+product reader로 검증하고, locator/nested owner를 그 old version/build로 판정한다.
+binding은 quiescence 직전과 복원된 old relay 시작 직전에 다시 비교한다.
 
 작업자 선택은 `worker-roster.v1`의 ACTIVE 공용 명단만 사용하며 직접 입력·PC 이름 등록은 없다. 기존 생산자 HMAC으로 `POST /api/worker-roster/v1/query`에 현장 ID와 `known_version`을 보내고 명단 응답만 262,144B까지 받는다. 시작·변경·60초 배경 조회는 writer admission 밖에서 수행하며 현재 조회 시도·로그인 epoch가 같은 응답만 적용한다. 조회 지연·실패는 스캔 내구 저장을 기다리게 하지 않는다.
 

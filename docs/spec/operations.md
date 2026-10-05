@@ -19,6 +19,11 @@ locator와 nested owner를 기존 Python reader로 검사한다. 보안 입력�
 않으며, 결과 digest를 실제 onboarding의 `--expected-input-binding`으로 넘겨 같은 입력인지
 최초 기록 전에 비교한다. 깨진 locator·중복 키는 기존 credential BLOCKED 오류 코드로
 종료한다. old-target rollback G는 유지하며 실제 native 설치·복원은 아직 NOT TESTED다.
+`RestoreVerifiedReplacement`는 fence 전에 old rollback tree(이미 복원됐으면 설치 tree)를
+`--target-release-root`로 정확 검증하고 locator와 nested owner에 old version/build G를
+적용한다. 같은 digest를 quiescence 직전과 old relay 재시작 직전에 대조한다. 이 경로는
+첫 현장 설치 경로와 별도인 지원 복원이며, 사전 거절의 transient authority mutex는
+기존 finally에서 놓는다.
 
 직접 등록(검증·2PC 복구 포함), relay 운영 명령, 사용자 profile 설치/확인,
 앱의 active-work wrapper·review report, lifecycle 복구·제거도 기존 admission 아래

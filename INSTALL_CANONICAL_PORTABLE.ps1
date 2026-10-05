@@ -850,13 +850,16 @@ function Product([string]$Root,[string]$Mode) {
     $process.WaitForExit()
     if ($process.ExitCode -ne 0) { throw "Product mode failed: $Mode/$($process.ExitCode)" }
 }
-function Get-CanonicalOnboardingInputBinding([string]$Root) {
+function Get-CanonicalOnboardingInputBinding([string]$Root,[string]$TargetReleaseRoot = '') {
     # The existing product reader owns locator/nested resolution. This call
     # performs only admission/readback and runs before any installer mutation.
     $start = New-Object System.Diagnostics.ProcessStartInfo
     $start.FileName = Join-Path $Root 'runtime\pythonw.exe'
     $start.Arguments = '-I -B {0} --onboard-current-user --app-root {1} --preflight-only' -f
         (Arg (Join-Path $Root 'app\main.py')),(Arg (Join-Path $Root 'app'))
+    if ($TargetReleaseRoot) {
+        $start.Arguments += ' --target-release-root ' + (Arg $TargetReleaseRoot)
+    }
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
@@ -1909,6 +1912,7 @@ if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRet
 }
 $statusRoot = Join-Path $activeRelayRoot 'status'
 $canonicalOnboardingInputBinding = ''
+$canonicalRestoreInputBinding = ''
 if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
     Assert-ContainerDataGenerationTarget -CandidateRoot $source -TargetSid $operatorSid `
         -LocalAppDataRoot $lad -DataRoot $activeDataRoot -HelperRoot $source
@@ -2071,6 +2075,10 @@ $canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority `
     -WriterContractSha256 $canonicalWriterFenceContractSha256
 if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
     $canonicalOnboardingInputBinding = Get-CanonicalOnboardingInputBinding $source
+}
+elseif ($RestoreVerifiedReplacement) {
+    $restoreTargetRoot = if ([string]$publicRestore.state -ceq 'RESTORED') { $install } else { [string]$publicRestore.receipt.rollback_root }
+    $canonicalRestoreInputBinding = Get-CanonicalOnboardingInputBinding $source $restoreTargetRoot
 }
 $canonicalWriterFencePreparedReceipt = New-CanonicalWriterFencePreparedReceipt `
     -Path $canonicalWriterFencePreparedPath `
@@ -2278,6 +2286,10 @@ $enteredPlacementTry = $true
         $audit.code_replacement.rollback_root = [string]$selectedReceipt.rollback_root
         $audit.code_replacement.prestate = [string]$publicRestore.state
         Sync-CanonicalWriterFenceInventory $currentTreeInventorySha256
+        $restoreTargetRoot = if ([string]$publicRestore.state -ceq 'RESTORED') { $install } else { [string]$selectedReceipt.rollback_root }
+        if ((Get-CanonicalOnboardingInputBinding $source $restoreTargetRoot) -cne $canonicalRestoreInputBinding) {
+            throw '복원 전 확인한 자격 설정 경로가 바뀌었습니다. 자료를 보존하고 복원을 다시 확인하세요.'
+        }
         $mutated = $true
         Product $install '--remove-current-user-setup'
         $removal = Get-Content $removalPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -2345,6 +2357,9 @@ $enteredPlacementTry = $true
         Clear-CanonicalWriterFenceReleaseDelegation
         Stop-CanonicalWriterFenceRelease $releaseAuthorization
         $canonicalWriterFenceActive = $false
+        if ((Get-CanonicalOnboardingInputBinding $source $install) -cne $canonicalRestoreInputBinding) {
+            throw '복원 전 확인한 자격 설정 경로가 바뀌었습니다. 자료를 보존하고 복원을 다시 확인하세요.'
+        }
         foreach ($item in $old) { [void](StartRaw ([string]$item.CommandLine)) }
         if ($old.Count -gt 0) { Start-Sleep -Seconds 3 }
         [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)

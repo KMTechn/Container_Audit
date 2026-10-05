@@ -13,6 +13,8 @@ Canonical nested 판정은 기존 product onboarding의 읽기 전용 호출로 
 RED/GREEN과 PS5.1/PS7 근거는
 [sub-272 보고서](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-272/REPORT.md)를 따른다.
 native 설치·복원과 최종 수용은 coordinator 독립 확인 범위로 남긴다.
+검증 복원도 old packet을 대상으로 같은 초기 locator/nested G와 단계 전 binding 대조를
+사용한다. 실제 first reader는 다시 시작하는 old relay이며 lifecycle-restore child 호출은 없다.
 
 G 직접 입구/거절 부류: registrar 검증·2PC resume, support operator/profile,
 앱 active-work wrapper/report, lifecycle 복구·제거의 판독 전 보호와 온보딩/relay
