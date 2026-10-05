@@ -8,7 +8,7 @@ if($clauses.Count -ne 1){throw 'exact catch not found'}
 
 $script:RollbackPython=$Python
 $script:RollbackChild=$Child
-$readerDefinitions=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalFailureDetails')},$true)
+$readerDefinitions=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalFailureDetails','Assert-CanonicalWriterRestoreReadback')},$true)
 foreach($definition in $readerDefinitions) {
     $readerBody=$definition.Extent.Text
     if($definition.Name -ceq 'Get-CanonicalOnboardingInputBinding') {
@@ -45,7 +45,7 @@ function Product {param($Root,$Mode) $script:observed.product_removal++; throw '
 function Save {param($Path,$Value) $script:observed.audit++}
 function Sync-CanonicalWriterFenceInventory {param($Digest)}
 function Assert-RollbackRelayPreimage {param($ExpectedRelays)}
-function Restore {param($Value) $script:observed.run_restore++;$script:state.run='before'}
+function Restore {param($Value) $script:observed.run_restore++;if($RecoveryCase -ceq 'run-restore-failure'){throw [IO.IOException]::new('SYNTHETIC_RUN_RESTORE_FAILURE')};$script:state.run='before'}
 function Snapshot {return @{exists=($script:state.run -ceq 'before');kind='String';data='synthetic-preserved'}}
 function Relays {if($script:state.relay -ceq 'before'){return $old};return @()}
 function Read-BootstrapReplacementReceipt {param($Path,$ExpectedSha256) return @{rollback_root=$Root}}
@@ -65,7 +65,13 @@ function New-CanonicalWriterFenceReleaseAuthorization {param($Path,$Phase,$Audit
 function Set-CanonicalWriterFenceReleaseAuthorization {param($Authorization)}
 function Clear-CanonicalWriterFenceReleaseDelegation {}
 function Stop-CanonicalWriterFenceRelease {param($Authorization) $script:observed.fence_release++}
-function Enable-CanonicalWriter {param($Install,$Before) $script:observed.task_restore++;$script:state.task='before';return @{}}
+function Enable-CanonicalWriter {
+ param($Install,$Before)
+ $script:observed.task_restore++
+ if($RecoveryCase -ceq 'task-restore-failure'){throw [IO.IOException]::new('SYNTHETIC_TASK_RESTORE_FAILURE')}
+ $script:state.task='before'
+ return @{present=$true;classification='CANONICAL_QUIESCE_RESTORE';enabled=$true;binding_sha256=('a'*64)}
+}
 function Confirm-CanonicalWriterRunning {param($Install,$Enabled) return @{}}
 function StartRaw {param($Command) $script:observed.relay_start++;$script:state.relay='before';return 42}
 function Start-Sleep {param($Seconds)}
@@ -87,7 +93,7 @@ $old=@(@{CommandLine='synthetic-relay-command';ExecutablePath=(Join-Path $Root '
 $mutated=$true;$audit=@{rollback=@{};scheduled_writer=@{};code_replacement=@{}}
 $sourceManifest=@{writer_fence_helper_sha256=('a'*64)};$canonicalWriterFencePreparedReceipt=@{path='synthetic';sha256=('a'*64)}
 $replacementReceiptPath='synthetic';$replacementReceiptSha256=('a'*64);$replacementRestoreEvidencePath='synthetic'
-$writerBefore=@{};$testMode=$true
+$writerBefore=@{binding_sha256=('a'*64)};$testMode=$true
 $operatorSid = 'S-1-5-21-233-233-233-1001'
 $lad = Join-Path $Root 'actual-g-local'
 $activeDataRoot = Join-Path $Root 'actual-g-data'

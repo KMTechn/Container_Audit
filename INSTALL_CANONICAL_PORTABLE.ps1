@@ -4610,8 +4610,12 @@ catch {
         if ($remainingRelays.Count -gt 0) {
             [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
         }
-        $runRestored=(-not $mutated -or [string]$audit.rollback.steps.run_restore.status -ceq 'PASS')
-        $rollbackRecoveryVerified=($codeRestoredExact -and $rollbackGenerationVerified -and $runRestored)
+        $runRestored=(-not $mutated -or ([string]$audit.rollback.steps.run_restore_attempt.status -ceq 'PASS' -and
+            [string]$audit.rollback.steps.run_restore.status -ceq 'PASS'))
+        $rollbackRuntimeIdentityVerified=($codeRestoredExact -and $rollbackGenerationVerified -and $runRestored -and
+            [string]::IsNullOrWhiteSpace($codeRollbackFailure) -and -not $legacyRelayRestoreNeeded)
+        $rollbackScheduledWriterVerified=(-not $writerRestoreNeeded)
+        $rollbackRecoveryVerified=($rollbackRuntimeIdentityVerified -and $rollbackScheduledWriterVerified)
         Record-CanonicalRollbackStep 'recovery_identity' $(if ($rollbackRecoveryVerified) { 'PASS' } else { 'UNPROVEN' }) ''
     }
     catch {
@@ -4621,9 +4625,13 @@ catch {
     if ($writerRestoreNeeded) {
         try {
             $writerEnabled=Enable-CanonicalWriter $install $writerBefore
+            Assert-CanonicalWriterRestoreReadback $writerBefore $writerEnabled
             $audit.scheduled_writer.restore_readback=$writerEnabled
             $audit.status='ROLLBACK_WRITER_ENABLED_AWAITING_NATURAL_TRIGGER'
             Record-CanonicalRollbackStep 'scheduled_writer_enable' 'PASS' ''
+            $rollbackScheduledWriterVerified=$true
+            $rollbackRecoveryVerified=($rollbackRuntimeIdentityVerified -and $rollbackScheduledWriterVerified)
+            Record-CanonicalRollbackStep 'recovery_identity' $(if ($rollbackRecoveryVerified) { 'PASS' } else { 'UNPROVEN' }) ''
             if (-not $rollbackRecoveryVerified) { throw 'ROLLBACK_RECOVERY_IDENTITY_UNPROVEN_FENCE_RETAINED' }
             $releaseAuthorization=New-CanonicalWriterFenceReleaseAuthorization `
                 -Path $rollbackNaturalTriggerAuthorizationPath `
@@ -4643,14 +4651,32 @@ catch {
         }
         catch {
             $writerRollbackFailure=$_.Exception.GetType().Name
+            $rollbackScheduledWriterVerified=$false
+            $rollbackRecoveryVerified=$false
             $audit.scheduled_writer.restore_failure_code='CANONICAL_WRITER_RESTORE_FAILED'
             Record-CanonicalRollbackStep 'scheduled_writer_restore' 'FAILED' $writerRollbackFailure
+            Record-CanonicalRollbackStep 'recovery_identity' 'FAILED' $writerRollbackFailure
+            if (-not $canonicalWriterFenceActive) {
+                try {
+                    [void](Start-ContainerWriterFence -Status 'RESTORE_FAILED' -OwnerKind 'canonical_installer' `
+                        -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
+                        -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+                        -SessionStartedAtUtc $canonicalWriterFenceStartedAtUtc -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
+                        -WriterContractSha256 $canonicalWriterFenceContractSha256 `
+                        -PreparedReceiptPath $canonicalWriterFenceLastReleaseAuthorizationPath `
+                        -PreparedReceiptSha256 $canonicalWriterFenceLastReleaseAuthorizationSha256 `
+                        -DelegationToken $Script:CanonicalWriterFenceDelegationToken -DelegatedSources $canonicalWriterFenceDelegatedSources `
+                        -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(20).ToString('o')) -AuthorityLease $canonicalWriterFenceAuthority)
+                    $canonicalWriterFenceActive=$true
+                    Record-CanonicalRollbackStep 'writer_failure_refence' 'PASS' ''
+                } catch { Record-CanonicalRollbackStep 'writer_failure_refence' 'FAILED' $_.Exception.GetType().Name }
+            }
         }
     }
     }
     finally {
-        # Always try to release this authority/tuple's fence, then attempt the
-        # saved relay preimage even if a preceding recovery stage has failed.
+        # Only proven code/G/Run/task recovery may reopen writers. Independent
+        # recovery attempts preserve every failure while an unproven task stays fenced.
         try {
             if ($canonicalWriterFenceActive -and $rollbackRecoveryVerified) {
                 $audit.status='ROLLBACK_AWAITING_FENCE_RELEASE'

@@ -390,6 +390,10 @@ def _setup(tmp_path, fault=''):
     canonical.write_text(text, encoding='utf-8-sig')
     helper = source / 'INSTALL_THIS_PC.ps1'
     text = helper.read_text(encoding='utf-8-sig').replace('$testOverride = (', HELPER_OS + '\n$testOverride = (')
+    preparation_exit = 'if(Test-InstallationEvidencePrivileged){exit (Get-InstallationPreparationExitCode $_)}'
+    assert text.count(preparation_exit) == 1
+    text = text.replace(preparation_exit,
+        "Write-Output (ConvertTo-KmtechRedactedSinkText -Text ('fixture_preparation_failure='+((Get-InstallationFailureDetails $_)|ConvertTo-Json -Depth 6 -Compress)))\n        " + preparation_exit)
     if fault in {'partial', 'restore_failure', 'partial_foreign', 'partial_damaged', 'diagnostic'}:
         target = '        $removed = Invoke-ContainerConvergentRemoval -InstallRoot $installRootFull -TaskFolder $folder -ExcludeProcessIds $excluded'
         assert text.count(target) == 1

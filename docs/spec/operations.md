@@ -42,6 +42,7 @@ preflight는 기존 exact reader의 코드/manifest 검증만 사용한다(ACL �
 직전에 대조한다. 일반 reader API의 `acl_identity_reader=None`은 거절한다.
 
 일반 rollback의 한 removal 실패는 나머지 code/Run/task 복원 시도를 막지 않는다.
+code·G·HKCU Run·예약 작업의 정확 복원 readback이 모두 검증된 경우에만 fence를 해제하고 옛 relay를 재시작한다. Run/task 복원 실패는 recovery identity를 무효화하며 fence와 지원 복구 기록을 유지한다.
 G·quiescence를 다시 확인하고 기존 exact 복원 evidence로 code를 증명한다. 정확 code와
 relay preimage가 증명되면 finally fence 해제·relay 재시작을 시도하고 각 실패를 보존한다.
 불일치면 fence를 유지하며 자료·확인 기록 보존과 관리자 지원 복구를 안내한다.
