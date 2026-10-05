@@ -44,7 +44,7 @@ os.environ['KMTECH_TEST_CA_WRITER_ROOT'] = str(root / 'control')
 os.environ['KMTECH_TEST_CA_WRITER_MUTEX'] = 'Local.KMTech.CA.External.' + hashlib.sha256(str(root).encode()).hexdigest()[:16]
 os.environ['CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH'] = str(data / 'logistics/profile.json')
 external = root / 'external'
-external.mkdir()
+external.mkdir(exist_ok=True)
 if scenario == 'tls-onboarding-default':
     os.environ.pop('CONTAINER_AUDIT_DATA_ROOT', None)
 paths = onboarding.resolve_current_user_onboarding_paths(source)

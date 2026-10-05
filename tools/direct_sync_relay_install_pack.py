@@ -379,10 +379,12 @@ def _redact_install_diagnostic(value):
     def scrub(item):
         if isinstance(item, str):
             for secret in secrets:
-                item = item.replace(secret, "[REDACTED]")
+                for representation in (json.dumps(secret, ensure_ascii=True)[1:-1],
+                                       json.dumps(secret, ensure_ascii=False)[1:-1], secret):
+                    item = item.replace(representation, "[REDACTED]")
             return item
         if isinstance(item, dict):
-            return {key: scrub(child) for key, child in item.items()}
+            return {scrub(key): scrub(child) for key, child in item.items()}
         if isinstance(item, (list, tuple)):
             return [scrub(child) for child in item]
         return item
@@ -1300,7 +1302,7 @@ def main(argv: list[str] | None = None) -> int:
                 "unsafe_paths": [report_path_policy],
             },
         }
-        print(json.dumps(plan, ensure_ascii=False, sort_keys=True))
+        print(json.dumps(_redact_install_diagnostic(plan), ensure_ascii=False, sort_keys=True))
         return 2
     try:
         with writer_admission("direct_sync_install_pack"):

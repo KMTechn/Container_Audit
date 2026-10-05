@@ -86,6 +86,18 @@ def test_relay_install_command_and_audit_remove_known_secret_bytes(tmp_path, mon
     assert result["stdout"] == "[REDACTED]"
     assert result["stderr"] == "[REDACTED]"
 
+    escaped_values = [value + chr(34) + chr(92) + chr(0xAC00) for value in values]
+    for name, value in zip(SECRET_NAMES, escaped_values):
+        monkeypatch.setenv(name, value)
+    encoded = json.dumps(escaped_values, ensure_ascii=True)
+    redacted = pack._redact_install_diagnostic(encoded)
+    assert json.loads(redacted) == ['[REDACTED]', '[REDACTED]']
+    pack._write_json(audit, {'failure_code': 'CHILD_FAILED', escaped_values[0]: encoded})
+    payload = audit.read_bytes()
+    representations = escaped_values + [json.dumps(value, ensure_ascii=True)[1:-1] for value in escaped_values]
+    _check_and_scrub_artifacts([audit], representations, [payload, redacted.encode()])
+    assert json.loads(payload)['failure_code'] == 'CHILD_FAILED'
+
 
 def test_profile_install_failure_does_not_echo_secret_exception(tmp_path, monkeypatch, capsys):
     from tools import install_logistics_runtime_profile as installer
