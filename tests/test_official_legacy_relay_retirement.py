@@ -38,6 +38,7 @@ function Same {param($Left,$Right);return [IO.Path]::GetFullPath($Left).Equals([
 function Assert-InstallationEvidenceProtectedPath {param($Path);Assert-BootstrapNoReparsePoint $Path 'isolated evidence' -PathOnly}
 function Assert-InstallationEvidenceWriteRoot {param($Root)}
 function Set-InstallationEvidenceAcl {param($Path,$Sid)}
+function Invoke-ContainerWriterFenceMutation {param($SessionId,$AttemptId,$ReplacementTransactionId,$DelegationToken,$AuthorityLease,$Action);& $Action}
 function Write-InstallationCaughtFailure {param($Failure)}
 function Get-InstallationFailureDetails {param($Failure);return @{type=$Failure.Exception.GetType().Name;message=$Failure.Exception.Message}}
 foreach($pointerFunctionName in @('Read-CanonicalOfficialLegacyRelayTransitionBinding','Save-CanonicalOfficialLegacyRelayTransitionPointer','Read-CanonicalOfficialLegacyRelayTransitionPointer')){

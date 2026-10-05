@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [switch]$DryRun,
     [switch]$Uninstall,
@@ -197,16 +197,16 @@ function Invoke-SelfElevated {
     }
     try {
         $process=Invoke-InstallationElevationCapture $BootstrapScriptPath $arguments $ElevationLogPath $OperatorSid
-        if($process.HelperStageEvidenceRoot){Write-Output ('installation_stage_evidence_root='+$process.HelperStageEvidenceRoot)}
-        Write-Output ('installation_elevation_result_path='+$process.ResultPath)
+        if($process.HelperStageEvidenceRoot){Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_stage_evidence_root='+$process.HelperStageEvidenceRoot))))}
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_elevation_result_path='+$process.ResultPath))))
     } catch {
     Write-InstallationCaughtFailure $_
 
-        Write-Output 'code_placement_preflight_failure=CONTAINER_PLACEMENT_ELEVATION_FAILED'
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('code_placement_preflight_failure=CONTAINER_PLACEMENT_ELEVATION_FAILED')))
         Complete-InstallationEvidenceStage 'forward' $_
         $summary=Complete-InstallationEvidence
-        Write-Output ('installation_evidence_status='+[string]$summary.status)
-        Write-Output ('installation_evidence_summary_path='+[string]$summary.summary_path)
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_status='+[string]$summary.status))))
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_summary_path='+[string]$summary.summary_path))))
         exit 1
     }
     if ($process.ExitCode -ne 0) {
@@ -233,13 +233,13 @@ function Invoke-SelfElevated {
     Write-InstallationCaughtFailure $_
  $failureCode = 'CONTAINER_PLACEMENT_LOG_UNREADABLE' }
         }
-        Write-Output "code_placement_preflight_failure=$failureCode"
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("code_placement_preflight_failure=$failureCode")))
     }
     $childFailure=if($process.ExitCode -ne 0){[Exception]::new('CONTAINER_PLACEMENT_CHILD_FAILED')}else{$null}
     Complete-InstallationEvidenceStage 'forward' $childFailure
     $summary=Complete-InstallationEvidence
-    Write-Output ('installation_evidence_status='+[string]$summary.status)
-    Write-Output ('installation_evidence_summary_path='+[string]$summary.summary_path)
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_status='+[string]$summary.status))))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_summary_path='+[string]$summary.summary_path))))
     exit $process.ExitCode
 }
 
@@ -738,7 +738,7 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
         foreach ($relativePath in @('runtime\python.exe', 'runtime\pythonw.exe')) {
             $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $Root $relativePath)
             if ([string]$signature.Status -cne 'Valid') {
-                throw "Portable CPython signature is not valid: $relativePath"
+                throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Portable CPython signature is not valid: $relativePath")) -UserLine)
             }
         }
     }
@@ -789,13 +789,13 @@ function Assert-HardenedCodeAcl([string]$Path, [switch]$Recursive) {
         $acl = Get-Acl -LiteralPath $target.FullName -ErrorAction Stop
         $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
         if ([string]$owner.Value -cne 'S-1-5-32-544') {
-            throw "Hardened code ACL owner is not BUILTIN\Administrators: $($target.FullName)"
+            throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Hardened code ACL owner is not BUILTIN\Administrators: $($target.FullName)")) -UserLine)
         }
         if ($isRoot -and -not $acl.AreAccessRulesProtected) {
-            throw "Hardened code root still inherits access rules: $($target.FullName)"
+            throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Hardened code root still inherits access rules: $($target.FullName)")) -UserLine)
         }
         if (-not $isRoot -and $acl.AreAccessRulesProtected) {
-            throw "Hardened code descendant does not inherit the root DACL: $($target.FullName)"
+            throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Hardened code descendant does not inherit the root DACL: $($target.FullName)")) -UserLine)
         }
         $actual = @{}
         foreach ($rule in @($acl.GetAccessRules(
@@ -810,7 +810,7 @@ function Assert-HardenedCodeAcl([string]$Path, [switch]$Recursive) {
                 ($isRoot -and $rule.IsInherited) -or
                 (-not $isRoot -and -not $rule.IsInherited)
             ) {
-                throw "Hardened code DACL contains an unexpected ACE for $sid on $($target.FullName)"
+                throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Hardened code DACL contains an unexpected ACE for $sid on $($target.FullName)")) -UserLine)
             }
             if (
                 $isRoot -and (
@@ -818,13 +818,13 @@ function Assert-HardenedCodeAcl([string]$Path, [switch]$Recursive) {
                     [string]$rule.PropagationFlags -cne 'None'
                 )
             ) {
-                throw "Hardened code root inheritance flags differ for $sid."
+                throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Hardened code root inheritance flags differ for $sid.")) -UserLine)
             }
             if (-not $actual.ContainsKey($sid)) { $actual[$sid] = [int64]0 }
             $actual[$sid] = [int64]$actual[$sid] -bor [int64]$rule.FileSystemRights
         }
         if ($actual.Count -ne $expected.Count) {
-            throw "Hardened code DACL principal count differs: $($target.FullName)"
+            throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Hardened code DACL principal count differs: $($target.FullName)")) -UserLine)
         }
         foreach ($sid in $expected.Keys) {
             if (
@@ -832,7 +832,7 @@ function Assert-HardenedCodeAcl([string]$Path, [switch]$Recursive) {
                 (ConvertTo-NormalizedAclRights ([int64]$actual[$sid])) -ne
                 (ConvertTo-NormalizedAclRights ([int64]$expected[$sid]))
             ) {
-                throw "Hardened code DACL rights differ for $sid on $($target.FullName)"
+                throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Hardened code DACL rights differ for $sid on $($target.FullName)")) -UserLine)
             }
         }
     }
@@ -890,19 +890,19 @@ function Set-HardenedCodeAcl([string]$Path, [switch]$Recursive) {
             $resetArgs += '/T'
         }
         $ownerResult = Invoke-InstallationEvidenceChild 'acl-owner' $icacls $ownerArgs
-        if ($ownerResult.ExitCode -ne 0) { throw "Hardened code owner assignment failed: $Path" }
+        if ($ownerResult.ExitCode -ne 0) { throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Hardened code owner assignment failed: $Path")) -UserLine) }
         $resetResult = Invoke-InstallationEvidenceChild 'acl-reset' $icacls $resetArgs
-        if ($resetResult.ExitCode -ne 0) { throw "Hardened code DACL reset failed: $Path" }
+        if ($resetResult.ExitCode -ne 0) { throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Hardened code DACL reset failed: $Path")) -UserLine) }
         $grantResult = Invoke-InstallationEvidenceChild 'acl-grant' $icacls @(
             $Path,'/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F',
             '*S-1-5-32-544:(OI)(CI)F','*S-1-5-32-545:(OI)(CI)RX','/L')
-        if ($grantResult.ExitCode -ne 0) { throw "Hardened code DACL installation failed: $Path" }
+        if ($grantResult.ExitCode -ne 0) { throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Hardened code DACL installation failed: $Path")) -UserLine) }
         Assert-HardenedCodeAcl $Path -Recursive:$Recursive.IsPresent
     }
     catch {
     Write-InstallationCaughtFailure $_
 
-        Write-Output "acl_readback_status=UNKNOWN"
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("acl_readback_status=UNKNOWN")))
         throw
     }
 }
@@ -916,10 +916,10 @@ function Get-LegacyTaskByNameFailClosed([string]$Name) {
     catch {
     Write-InstallationCaughtFailure $_
 
-        throw "Legacy scheduled task observation failed: $Name/$($_.Exception.GetType().Name)"
+        throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Legacy scheduled task observation failed: $Name/$($_.Exception.GetType().Name)")) -UserLine)
     }
     if ($taskMatches.Count -gt 1) {
-        throw "Legacy scheduled task observation is non-unique: $Name"
+        throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Legacy scheduled task observation is non-unique: $Name")) -UserLine)
     }
     return $taskMatches
 }
@@ -930,7 +930,7 @@ function Remove-OwnedLegacyTask([string]$Name, [string]$ExpectedRoot) {
     $task = $taskMatches[0]
     $actions = @($task.Actions)
     if ($actions.Count -ne 1) {
-        throw "Refusing to remove a legacy task with an ambiguous action: $Name"
+        throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Refusing to remove a legacy task with an ambiguous action: $Name")) -UserLine)
     }
     $actionText = "$([string]$actions[0].Execute) $([string]$actions[0].Arguments)"
     $ownedFieldLauncher = 'C:\ProgramData\KMTech\DirectSync\container_audit\bin\direct-sync-relay-container-audit.cmd'
@@ -939,7 +939,7 @@ function Remove-OwnedLegacyTask([string]$Name, [string]$ExpectedRoot) {
         $actionText.IndexOf($ownedFieldLauncher, [StringComparison]::OrdinalIgnoreCase) -ge 0
     )
     if (-not $owned) {
-        throw "Refusing to remove a scheduled task not owned by this application: $Name"
+        throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Refusing to remove a scheduled task not owned by this application: $Name")) -UserLine)
     }
     $taskPath = [string]$task.TaskPath
     $manifestPath = Join-Path $ExpectedRoot 'portable-manifest.json'
@@ -968,7 +968,7 @@ function Remove-OwnedLegacyTask([string]$Name, [string]$ExpectedRoot) {
         -TaskName ([string]$task.TaskName) `
         -TaskPath $taskPath)
     if (@(Get-LegacyTaskByNameFailClosed $Name).Count -ne 0) {
-        throw "Legacy scheduled task removal readback failed: $Name"
+        throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Legacy scheduled task removal readback failed: $Name")) -UserLine)
     }
 }
 
@@ -1205,7 +1205,7 @@ function Restore-ContainerStartupUpdatePreimage([string]$Root, [string]$Director
 function Initialize-ContainerStartupUpdate([string]$Root) {
     $settingsPath = Join-Path $Root 'app\auto-update-settings.json'
     if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) { return }
-    if ($testOverride) { Write-Output 'startup_update_status=NOT_TESTED_HOST'; return }
+    if ($testOverride) { Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('startup_update_status=NOT_TESTED_HOST'))); return }
     Set-InstallationEvidenceStage 'startup.trust' 'startup'
     Assert-ContainerStartupUpdateTrust $Root
     Set-InstallationEvidenceStage 'startup.save_preimage' 'startup'
@@ -1303,10 +1303,10 @@ function Initialize-ContainerStartupUpdate([string]$Root) {
             if (-not (Test-ContainerStartupUpdateTaskIdentity $actual $expected $OperatorSid)) { throw 'STARTUP_UPDATE_TASK_READBACK_FAILED' }
         } | Out-Null
     Complete-InstallationEvidenceStage 'startup'
-    Write-Output 'startup_update_status=REGISTERED_LOGON_SYSTEM_CODE_ONLY'
-    Write-Output ('startup_update_task=' + $spec.name)
-    Write-Output ('hiberboot_enabled=' + $hiberboot)
-    Write-Output ('hiberboot_read_status=' + $hiberbootReadStatus)
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('startup_update_status=REGISTERED_LOGON_SYSTEM_CODE_ONLY')))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('startup_update_task=' + $spec.name))))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('hiberboot_enabled=' + $hiberboot))))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('hiberboot_read_status=' + $hiberbootReadStatus))))
 }
 
 $testOverride = (
@@ -1349,10 +1349,10 @@ if ($ProbeVerifiedReplacementRestore.IsPresent) {
         -not $DryRun.IsPresent -or $Uninstall.IsPresent -or
         $ReplaceExistingVerifiedPortable.IsPresent -or $RestoreVerifiedReplacement.IsPresent
     ) { throw 'ProbeVerifiedReplacementRestore is a DryRun-only exclusive operation.' }
-    Write-Output 'replacement_restore_status=DRY_RUN'
-    Write-Output 'replacement_restore_schema=container-audit-verified-replacement-v1'
-    Write-Output 'replacement_restore_receipt_required_at_apply=true'
-    Write-Output 'identity_profile_created=false'
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('replacement_restore_status=DRY_RUN')))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('replacement_restore_schema=container-audit-verified-replacement-v1')))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('replacement_restore_receipt_required_at_apply=true')))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('identity_profile_created=false')))
     exit 0
 }
 if (
@@ -1400,7 +1400,7 @@ if (-not $DryRun.IsPresent -and ($ElevationLogPath -or (Test-InstallationEvidenc
         if($ReplaceExistingVerifiedPortable -and $ReplacementReceiptPath){$ReplacementReceiptPath=Join-Path $helperInstallationEvidenceRoot 'replacement-receipt.json'}
         if($RestoreEvidencePath){$RestoreEvidencePath=Join-Path $helperInstallationEvidenceRoot 'restore-evidence.json'}
     }
-    Write-Output "installation_stage_evidence_root=$helperInstallationEvidenceRoot"
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("installation_stage_evidence_root=$helperInstallationEvidenceRoot")))
     Set-InstallationEvidenceStage 'placement.writer_fence_preflight'
 }
 $placementWriterFenceLease = $null
@@ -1423,7 +1423,7 @@ if (-not $CompleteRollbackContinuation -and -not $RecordRollbackContinuationAuth
         if($failureCode -ceq 'CONTAINER_PLACEMENT_ANCESTOR_TRUST_FAILED') {
             $candidate=$_.Exception
             for($depth=0;$null -ne $candidate -and $depth -lt 8;$depth++) {
-                if($candidate.Data.Contains('ancestor_trust_failure')){Write-Output ('ancestor_trust_failure='+[string]$candidate.Data['ancestor_trust_failure']);break}
+                if($candidate.Data.Contains('ancestor_trust_failure')){Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('ancestor_trust_failure='+[string]$candidate.Data['ancestor_trust_failure']))));break}
                 $candidate=$candidate.InnerException
             }
         }
@@ -1435,11 +1435,11 @@ if (-not $CompleteRollbackContinuation -and -not $RecordRollbackContinuationAuth
             } catch {
     Write-InstallationCaughtFailure $_
 
-                Write-Output 'code_placement_preflight_failure=CONTAINER_PLACEMENT_LOG_WRITE_FAILED'
+                Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('code_placement_preflight_failure=CONTAINER_PLACEMENT_LOG_WRITE_FAILED')))
                 exit 42
             }
         }
-        Write-Output "code_placement_preflight_failure=$failureCode"
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("code_placement_preflight_failure=$failureCode")))
         throw
     }
 }
@@ -1536,9 +1536,9 @@ if ($RestoreVerifiedReplacement.IsPresent) {
         Write-BootstrapReplacementReceipt -Path $restoreEvidenceFull -Payload $evidence | Out-Null
         Write-InstallationEvidenceEvent ([ordered]@{event='RESTORE_EVIDENCE_READY';path=$restoreEvidenceFull;sha256=Get-FileSha256 $restoreEvidenceFull})
         if (-not $testOverride) { Write-ElevationLog 'PASS' 'Elevated Container verified replacement restore completed.' }
-        Write-Output "replacement_restore_status=$($result.status)"
-        Write-Output "replacement_restore_evidence=$restoreEvidenceFull"
-        Write-Output "replacement_restore_evidence_sha256=$(Get-FileSha256 $restoreEvidenceFull)"
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_restore_status=$($result.status)")))
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_restore_evidence=$restoreEvidenceFull")))
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_restore_evidence_sha256=$(Get-FileSha256 $restoreEvidenceFull)")))
         exit 0
     }
     catch {
@@ -1558,8 +1558,8 @@ if ($RestoreVerifiedReplacement.IsPresent) {
     Write-InstallationCaughtFailure $_
 }
         if (-not $testOverride) { Write-ElevationLog 'FAILED' 'Elevated Container verified replacement restore failed.' }
-        Write-Output 'replacement_restore_status=ROLLBACK_FAILED'
-        Write-Output "replacement_restore_evidence=$restoreEvidenceFull"
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('replacement_restore_status=ROLLBACK_FAILED')))
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_restore_evidence=$restoreEvidenceFull")))
         throw
     }
 }
@@ -1736,7 +1736,7 @@ function Test-ContainerRemovalFile([string]$Path, [string]$Sha256) {
     } catch {
         if ($_.Exception.Message -ceq 'REMOVAL_BOUNDARY_REDIRECTED') { return $false }
         # Unknown content cannot retire the inventory needed for the next try.
-        throw "제거 미완 — 사용 중인 파일: $Path [REMOVAL_FILE_OBSERVATION_UNKNOWN]"
+        throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("제거 미완 — 사용 중인 파일: $Path [REMOVAL_FILE_OBSERVATION_UNKNOWN]")) -UserLine)
     }
 }
 
@@ -1896,7 +1896,7 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
         Assert-ContainerRemovalBoundary $markerPath
         $markerFile = Get-Item -LiteralPath $markerPath -Force -ErrorAction Stop
         if ($markerFile.PSIsContainer) {
-            throw "제거 표식을 만드는 경로와 자료가 겹칩니다. 자료를 보존하고 경로를 확인하세요: $markerPath"
+            throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("제거 표식을 만드는 경로와 자료가 겹칩니다. 자료를 보존하고 경로를 확인하세요: $markerPath")) -UserLine)
         }
     }
     $evidenceParent = Join-Path $application 'removal-evidence'
@@ -2158,14 +2158,14 @@ if ($RestoreUninstallRecordPath) {
     if (Test-Path -LiteralPath $installRootFull) { Assert-ContainerUninstallRecoveryRemainder }
 }
 if ($DryRun.IsPresent) {
-    Write-Output "bootstrap_status=DRY_RUN"
-    Write-Output "code_root=$installRootFull"
-    Write-Output "release_layout=$releaseLayout"
-    Write-Output "file_count=$($sourceInventory.Count)"
-    Write-Output "aggregate_sha256=$sourceAggregate"
-    Write-Output "identity_profile_created=false"
-    Write-Output "tls_ca_bootstrap_configured=$(-not [string]::IsNullOrWhiteSpace($TlsCaBundlePath))"
-    Write-Output "elevation_points=1:code_placement"
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("bootstrap_status=DRY_RUN")))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("code_root=$installRootFull")))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("release_layout=$releaseLayout")))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("file_count=$($sourceInventory.Count)")))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("aggregate_sha256=$sourceAggregate")))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("identity_profile_created=false")))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("tls_ca_bootstrap_configured=$(-not [string]::IsNullOrWhiteSpace($TlsCaBundlePath))")))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("elevation_points=1:code_placement")))
     exit 0
 }
 
@@ -2451,32 +2451,32 @@ try {
         (Get-FileSha256 (Join-Path $installRootFull $IntegrityFileName)) -cne $ExpectedUninstallRecordSha256) {
         throw 'Uninstall recovery installed record readback failed.'
     }
-    Write-Output "bootstrap_status=$bootstrapStatus"
-    Write-Output "acl_readback_status=$aclReadbackStatus"
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("bootstrap_status=$bootstrapStatus")))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("acl_readback_status=$aclReadbackStatus")))
     if ($aclReadbackStatus -ceq 'PASS') {
-        Write-Output "acl_owner_sid=S-1-5-32-544"
-        Write-Output "dacl_normalized=true"
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("acl_owner_sid=S-1-5-32-544")))
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("dacl_normalized=true")))
     }
-    Write-Output "code_root=$installRootFull"
-    Write-Output "release_layout=$releaseLayout"
-    Write-Output "integrity_record=$(Join-Path $installRootFull $IntegrityFileName)"
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("code_root=$installRootFull")))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("release_layout=$releaseLayout")))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("integrity_record=$(Join-Path $installRootFull $IntegrityFileName)")))
     Set-InstallationEvidenceStage 'placement.startup_update'
     Initialize-ContainerStartupUpdate $installRootFull
     Set-InstallationEvidenceStage 'placement.tls_bootstrap'
     $tlsCaBootstrap = Install-CurrentUserTlsCaBootstrap $TlsCaBundlePath $OperatorLocalAppDataRoot
-    if ($null -eq $tlsCaBootstrap) { Write-Output "tls_ca_bootstrap_status=ABSENT" }
-    else { Write-Output "tls_ca_bootstrap_status=PASS"; Write-Output "tls_ca_bootstrap_path=$tlsCaBootstrap" }
-    Write-Output "file_count=$($sourceInventory.Count)"
-    Write-Output "aggregate_sha256=$sourceAggregate"
-    Write-Output "identity_profile_created=false"
-    Write-Output "elevation_points=1:code_placement"
+    if ($null -eq $tlsCaBootstrap) { Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("tls_ca_bootstrap_status=ABSENT"))) }
+    else { Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("tls_ca_bootstrap_status=PASS"))); Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("tls_ca_bootstrap_path=$tlsCaBootstrap"))) }
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("file_count=$($sourceInventory.Count)")))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("aggregate_sha256=$sourceAggregate")))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("identity_profile_created=false")))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("elevation_points=1:code_placement")))
     if ($replacementApplied) {
-        Write-Output 'replacement_rollback_status=PRESERVED'
-        Write-Output "replacement_rollback_root=$replacementRollbackRoot"
-        Write-Output 'replacement_receipt_status=OLD_PRESERVED_NEW_VERIFIED'
-        Write-Output "replacement_receipt_path=$($replacementReceipt.path)"
-        Write-Output "replacement_receipt_sha256=$($replacementReceipt.sha256)"
-        Write-Output "replacement_transaction_id=$ReplacementTransactionId"
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('replacement_rollback_status=PRESERVED')))
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_rollback_root=$replacementRollbackRoot")))
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('replacement_receipt_status=OLD_PRESERVED_NEW_VERIFIED')))
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_receipt_path=$($replacementReceipt.path)")))
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_receipt_sha256=$($replacementReceipt.sha256)")))
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_transaction_id=$ReplacementTransactionId")))
     }
     if (-not $testOverride) {
         Write-ElevationLog 'PASS' "Elevated Container code placement completed: $bootstrapStatus."
@@ -2503,11 +2503,11 @@ catch {
             catch {
     Write-InstallationCaughtFailure $_
 
-                Write-Output 'code_placement_preflight_failure=CONTAINER_PLACEMENT_LOG_WRITE_FAILED'
+                Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('code_placement_preflight_failure=CONTAINER_PLACEMENT_LOG_WRITE_FAILED')))
                 exit 42
             }
         }
-        Write-Output "code_placement_preflight_failure=$failureCode"
+        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("code_placement_preflight_failure=$failureCode")))
     } elseif (-not $testOverride) {
         try{Write-ElevationLog 'FAILED' ($originalPlacementFailure.Exception.GetType().Name)}catch{Write-InstallationCaughtFailure $_}
     }
@@ -2578,6 +2578,6 @@ finally {
     Complete-InstallationEvidenceStage 'forward'
     Complete-InstallationEvidenceStage 'rollback'
     $helperEvidenceSummary=Complete-InstallationEvidence
-    Write-Output ('installation_evidence_status='+[string]$helperEvidenceSummary.status)
-    Write-Output ('installation_evidence_summary_path='+[string]$helperEvidenceSummary.summary_path)
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_status='+[string]$helperEvidenceSummary.status))))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_summary_path='+[string]$helperEvidenceSummary.summary_path))))
 }

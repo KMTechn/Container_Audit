@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$SourceRoot = "",
     [string]$InstallRoot = "C:\KMTech\Apps\Container_Audit\current",
@@ -337,12 +337,12 @@ function InstalledManifest([string]$Root, [bool]$UnsignedOk) {
         'tools\container_writer_sink_inventory.json'
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $Root $relative) -PathType Leaf)) {
-            throw "Installed portable tree is missing $relative."
+            throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Installed portable tree is missing $relative.")) -UserLine)
         }
     }
     foreach ($item in @((Get-Item $Root -Force)) + @(Get-ChildItem $Root -Force -Recurse)) {
         if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "Installed portable tree contains a reparse point: $($item.FullName)"
+            throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Installed portable tree contains a reparse point: $($item.FullName)")) -UserLine)
         }
     }
     $path = Join-Path $Root 'portable-manifest.json'
@@ -394,7 +394,7 @@ function InstalledManifest([string]$Root, [bool]$UnsignedOk) {
     if (-not $UnsignedOk) {
         foreach ($relative in @('runtime\python.exe','runtime\pythonw.exe')) {
             if ([string](Get-AuthenticodeSignature (Join-Path $Root $relative)).Status -cne 'Valid') {
-                throw "Installed signed CPython readback failed: $relative"
+                throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Installed signed CPython readback failed: $relative")) -UserLine)
             }
         }
     }
@@ -568,7 +568,7 @@ function Snapshot {
     try {
         try { $kind = [string]$key.GetValueKind($RunName) }
         catch [IO.IOException] { return [ordered]@{exists=$false;kind='';data=''} }
-        if ($kind -notin @('String','ExpandString')) { throw "Unsupported Run type: $kind" }
+        if ($kind -notin @('String','ExpandString')) { throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Unsupported Run type: $kind")) -UserLine) }
         $data = [string]$key.GetValue($RunName,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
         return [ordered]@{exists=$true;kind=$kind;data=$data}
     } finally { $key.Dispose() }
@@ -1190,7 +1190,7 @@ function Product([string]$Root,[string]$Mode,[string]$AppRoot='') {
     $process = Invoke-InstallationEvidenceChild ('product'+$Mode.TrimStart('-')) (Join-Path $Root 'runtime\pythonw.exe') $args
     if ($process.ExitCode -ne 0) {
         $line=ConvertTo-KmtechRedactedSinkText -Text $(if($process.Stderr){$process.Stderr}else{$process.Stdout}) -UserLine
-        throw "Product mode failed: $Mode/$($process.ExitCode): $line"
+        throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Product mode failed: $Mode/$($process.ExitCode): $line")) -UserLine)
     }
 }
 function Get-CanonicalRetirementChildFailure($Child, [Collections.IDictionary]$Environment=$null) {
@@ -2175,7 +2175,7 @@ function Restore-CanonicalOfficialLegacyRelay($Binding) {
     # G remains the original shared gate; no current-tree dependency.
     if([string]::IsNullOrWhiteSpace([string]$record.old_code_root) -or -not[IO.Path]::IsPathRooted([string]$record.old_code_root)){throw 'OFFICIAL_LEGACY_OLD_CODE_ROOT_UNPROVEN'}
     try{Assert-ContainerDataGenerationTarget -CandidateRoot ([string]$record.old_code_root) -TargetSid $operatorSid -LocalAppDataRoot $lad -DataRoot $activeDataRoot -HelperRoot $source}
-    catch{Write-InstallationCaughtFailure $_;Write-Warning '자료 판이 옛 판의 실행을 허용하지 않아 옛 전송 예약 작업을 되살리지 않았습니다. 자료와 복구 기록을 보존하고 관리자 지원 복구를 요청하세요.';throw 'OFFICIAL_LEGACY_RELAY_G_BLOCKED'}
+    catch{Write-InstallationCaughtFailure $_;Write-Warning (ConvertTo-KmtechRedactedSinkText -Text ([string]('자료 판이 옛 판의 실행을 허용하지 않아 옛 전송 예약 작업을 되살리지 않았습니다. 자료와 복구 기록을 보존하고 관리자 지원 복구를 요청하세요.')) -UserLine);throw 'OFFICIAL_LEGACY_RELAY_G_BLOCKED'}
     if(@(Relays).Count -ne 0){throw 'OFFICIAL_LEGACY_RELAY_NEW_RUNTIME_NOT_QUIESCENT'}
     $live=Get-CanonicalOfficialLegacyRelayPreimage
     if($null -eq $live -or [string]$live.identity.sha256 -cne [string]$identity.sha256){throw 'NONCANONICAL_WRITER_ENABLED'}
@@ -2232,12 +2232,15 @@ function Save-CanonicalOfficialLegacyRelayTransitionPointer($Binding,[switch]$Re
     [void]($text|ConvertFrom-ContainerWriterFenceJson)
     $temporary=$onboardingPath+'.tmp.'+[Guid]::NewGuid().ToString('N')
     $bytes=[Text.UTF8Encoding]::new($false).GetBytes($text+"`n")
-    $stream=[IO.FileStream]::new($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
-    try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
-    try{
-        if((Sha $onboardingPath) -cne $priorSha){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_CHANGED'}
-        Move-Item -LiteralPath $temporary -Destination $onboardingPath -Force
-    }finally{if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary}}
+    [void](Invoke-ContainerWriterFenceMutation -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
+        -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
+        -AuthorityLease $canonicalWriterFenceAuthority -Action {
+            if((Sha $onboardingPath) -cne $priorSha){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_CHANGED'}
+            $stream=[IO.FileStream]::new($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+            try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
+            try{Move-Item -LiteralPath $temporary -Destination $onboardingPath -Force}
+            finally{if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary}}
+        })
     $readback=Read-CanonicalOfficialLegacyRelayTransitionPointer
     if($null -eq $readback -or $readback.path -cne $proof.path -or $readback.sha256 -cne $proof.sha256){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_READBACK_DIFFERS'}
 }
@@ -2766,6 +2769,8 @@ function Confirm-CanonicalWriterRunning([string]$InstallRootValue, $EnabledBasel
     }
 }
 
+# Public boundary covers preflight, transaction and finally failures.
+try {
 if (-not $SourceRoot) { $SourceRoot = $PSScriptRoot }
 if ($CompleteRetiredRemoval) {
     if ($Uninstall -or $RestoreVerifiedReplacement -or $ServerBaseUrl -or -not $OldSourceRoot -or
@@ -2873,9 +2878,9 @@ if ($PlanOnly) {
     if ($CompleteRetiredRemoval) { 'operation=COMPLETE_RETIRED_REMOVAL'; 'retirement_identity_status=NOT_CHECKED_PLAN_ONLY' }
     elseif ($Uninstall) { 'operation=UNINSTALL'; 'uninstall_identity_status=NOT_CHECKED_PLAN_ONLY' }
     if ($RestoreVerifiedReplacement) { 'operation=RESTORE_VERIFIED_REPLACEMENT'; 'restore_identity_status=NOT_CHECKED_PLAN_ONLY' }
-    "install_root=$install"
-    "autostart_command=$wanted"
-    "onboarding_server_base_url=$onboardingServerBaseUrlLabel"
+    (ConvertTo-KmtechRedactedSinkText -Text ([string]("install_root=$install")))
+    (ConvertTo-KmtechRedactedSinkText -Text ([string]("autostart_command=$wanted")))
+    (ConvertTo-KmtechRedactedSinkText -Text ([string]("onboarding_server_base_url=$onboardingServerBaseUrlLabel")))
     'replacement_prestate_required=VERIFIED_REPLACE'
     'replacement_restore_status=AVAILABLE_RECEIPT_BOUND'
     'registry_changed=false'
@@ -3541,8 +3546,8 @@ $enteredPlacementTry = $true
         }
         $capturedChild = Invoke-InstallationEvidenceChild 'public-code-restore' $winps $publicRestoreArguments
             $global:LASTEXITCODE=$capturedChild.ExitCode
-            if($capturedChild.ExitCode -ne 0){Write-Output (ConvertTo-KmtechRedactedSinkText -Text $capturedChild.Stdout -UserLine)}else{Write-Output $capturedChild.Stdout}
-        if ($LASTEXITCODE -ne 0) { throw "Canonical code restore failed: $LASTEXITCODE" }
+            if($capturedChild.ExitCode -ne 0){Write-Output (ConvertTo-KmtechRedactedSinkText -Text $capturedChild.Stdout -UserLine)}else{Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]($capturedChild.Stdout)))}
+        if ($LASTEXITCODE -ne 0) { throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Canonical code restore failed: $LASTEXITCODE")) -UserLine) }
         if (-not $testMode) {
             $restoreBinding=Read-InstallationHelperEvidenceBinding @($capturedChild.Stdout -split "`r?`n") $elevationLogPath $capturedChild.ProcessId $sourceHelperSha256
             $replacementRestoreEvidencePath=Read-CanonicalHelperArtifact $restoreBinding 'restore-evidence.json' 'RESTORE_EVIDENCE_READY'
@@ -3599,14 +3604,14 @@ $enteredPlacementTry = $true
         if ($rollbackContinuation) {
             Complete-CanonicalRollbackContinuation $rollbackContinuation
             $relayState=if($old.Count){'relay READY'}else{'relay 원 부재'}
-            "끝나지 않은 되돌리기를 마쳤습니다. 옛 판·Run·시작 작업·pointer·$relayState 확인했습니다."
+            (ConvertTo-KmtechRedactedSinkText -Text ([string]("끝나지 않은 되돌리기를 마쳤습니다. 옛 판·Run·시작 작업·pointer·$relayState 확인했습니다.")))
             'rollback_resume_status=COMPLETE'
         }
         'restore_status=PASS_RESTORED_VERIFIED_DATA_PRESERVED'
         'prior_code_exact=true'
         'failed_new_preserved=true'
         'current_user_runtime_preimage_restored=true'
-        "audit_path=$auditPath"
+        (ConvertTo-KmtechRedactedSinkText -Text ([string]("audit_path=$auditPath")))
         return
     }
     Set-InstallationEvidenceStage 'canonical.uninstall'
@@ -3742,13 +3747,13 @@ $enteredPlacementTry = $true
         if (-not $resumeCodeAbsent) {
             $capturedChild = Invoke-InstallationEvidenceChild 'uninstall-helper' $winps $uninstallArguments
             $global:LASTEXITCODE=$capturedChild.ExitCode
-            if($capturedChild.ExitCode -ne 0){Write-Output (ConvertTo-KmtechRedactedSinkText -Text $capturedChild.Stdout -UserLine)}else{Write-Output $capturedChild.Stdout}
+            if($capturedChild.ExitCode -ne 0){Write-Output (ConvertTo-KmtechRedactedSinkText -Text $capturedChild.Stdout -UserLine)}else{Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]($capturedChild.Stdout)))}
             if ($LASTEXITCODE -ne 0) {
                 if ($CompleteRetiredRemoval) {
                     $audit['retirement_child_failure']=Get-CanonicalRetirementChildFailure $capturedChild
-                    Write-Output ('retirement_failure_summary='+($audit.retirement_child_failure | ConvertTo-Json -Depth 12 -Compress))
+                    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('retirement_failure_summary='+($audit.retirement_child_failure | ConvertTo-Json -Depth 12 -Compress)))))
                 }
-                throw "Code removal failed: $LASTEXITCODE"
+                throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Code removal failed: $LASTEXITCODE")) -UserLine)
             }
         }
         if ((Test-Path -LiteralPath $install) -or (Snapshot).exists -or @(Relays).Count -ne 0) {
@@ -3783,12 +3788,12 @@ $enteredPlacementTry = $true
         $audit.completed_at = [DateTime]::UtcNow.ToString('o')
         Save $auditPath $audit $true
         if ($evidenceFull) { Save $evidenceFull $audit $true }
-        "uninstall_status=$($audit.status)"
+        (ConvertTo-KmtechRedactedSinkText -Text ([string]("uninstall_status=$($audit.status)")))
         'application_root_status=ABSENT'
         'current_user_relay_status=ABSENT'
         'user_state_preserved=true'
         'server_identity_retired=false'
-        "audit_path=$auditPath"
+        (ConvertTo-KmtechRedactedSinkText -Text ([string]("audit_path=$auditPath")))
         return
     }
     if($null -ne $legacyRelayPreimage){
@@ -3957,7 +3962,7 @@ $enteredPlacementTry = $true
                 '작업자 계정의 준비 폴더와 권한 상승 요청이 일치하지 않습니다.'
             }
             $inquiryCode = 'CA-' + (Get-ContainerWriterFenceStringSha256 ($operatorSid + '|' + $env:COMPUTERNAME + '|' + $Script:CanonicalWriterFenceAttemptId)).Substring(0, 12).ToUpperInvariant()
-            throw "설치 코드 배치 전 중단: $reason 문의 코드 $inquiryCode ($failureCode). 준비 상태를 다시 확인하고 설치를 재시도하세요. 기존 설치본과 기록은 그대로 보존되며, 이 시도는 보류하고 다른 업무를 계속할 수 있습니다."
+            throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("설치 코드 배치 전 중단: $reason 문의 코드 $inquiryCode ($failureCode). 준비 상태를 다시 확인하고 설치를 재시도하세요. 기존 설치본과 기록은 그대로 보존되며, 이 시도는 보류하고 다른 업무를 계속할 수 있습니다.")) -UserLine)
         }
         if($replaceExisting){Write-CanonicalInstallReentryRecord 'PLACEMENT_COMPLETED'}
         $audit.code_placement='PLACED_PENDING_VERIFICATION'
@@ -4036,6 +4041,9 @@ $enteredPlacementTry = $true
         throw 'Onboarding relay release deferral readback failed.'
     }
     Set-InstallationEvidenceStage 'canonical.relay_identity_and_status'
+    # Persist the READY installation result while this install session still
+    # holds admission, before any natural-trigger or resident-relay release.
+    if($null -ne $legacyRelayPreimage){Save-CanonicalOfficialLegacyRelayTransitionPointer $legacyRelayPreimage -Required}
     $pidValue=0
     $audit.status=if ($testMode) { 'TEST_ONLY_PARTIAL' } else { 'PRODUCT_PHASE_PASS' }
     $audit.stop_marker_absent=-not(Test-Path $stop)
@@ -4074,9 +4082,6 @@ $enteredPlacementTry = $true
         $legacyAfter=Get-CanonicalOfficialLegacyRelayPreimage
         if($null -eq $legacyAfter -or $legacyAfter.enabled -or $legacyAfter.identity.sha256 -cne $legacyRelayBefore.identity.sha256){throw 'OFFICIAL_LEGACY_RELAY_SUCCESS_NOT_DISABLED'}
         $audit.scheduled_writer.official_legacy.status='REPLACED_BY_CANONICAL_DISABLED_RETAINED'
-        # Onboarding produces a new READY result. Restore the explicit pointer
-        # in that same record before installation can report success.
-        Save-CanonicalOfficialLegacyRelayTransitionPointer $legacyRelayPreimage -Required
     }
     $terminalStatus=Get-CanonicalInstallSuccessStatus $testMode
     $audit.status='PRODUCT_AWAITING_RESIDENT_RELAY'
@@ -4103,22 +4108,22 @@ $enteredPlacementTry = $true
     $audit.completed_at=(Get-Date).ToUniversalTime().ToString('o')
     Save $auditPath $audit
     if ($evidenceFull) { Save $evidenceFull $audit }
-    "install_status=$terminalStatus"
-    "install_root=$install"
-    "code_placement_status=$placement"
+    (ConvertTo-KmtechRedactedSinkText -Text ([string]("install_status=$terminalStatus")))
+    (ConvertTo-KmtechRedactedSinkText -Text ([string]("install_root=$install")))
+    (ConvertTo-KmtechRedactedSinkText -Text ([string]("code_placement_status=$placement")))
     'autostart_status=PROVEN_NON_REBOOT_APPROXIMATION'
-    "autostart_command=$wanted"
-    "onboarding_server_base_url=$onboardingServerBaseUrlLabel"
-    "autostart_process_id=$pidValue"
-    "stop_marker_absent=$($audit.stop_marker_absent.ToString().ToLowerInvariant())"
+    (ConvertTo-KmtechRedactedSinkText -Text ([string]("autostart_command=$wanted")))
+    (ConvertTo-KmtechRedactedSinkText -Text ([string]("onboarding_server_base_url=$onboardingServerBaseUrlLabel")))
+    (ConvertTo-KmtechRedactedSinkText -Text ([string]("autostart_process_id=$pidValue")))
+    (ConvertTo-KmtechRedactedSinkText -Text ([string]("stop_marker_absent=$($audit.stop_marker_absent.ToString().ToLowerInvariant())")))
     if ($codeRestoreNeeded) {
-        "replacement_receipt_path=$replacementReceiptPath"
-        "replacement_receipt_sha256=$replacementReceiptSha256"
-        "replacement_transaction_id=$replacementTransactionId"
+        (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_receipt_path=$replacementReceiptPath")))
+        (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_receipt_sha256=$replacementReceiptSha256")))
+        (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_transaction_id=$replacementTransactionId")))
         'later_phase_replacement_restore_status=READY_PUBLIC_CANONICAL_RESTORE'
     }
     'cold_boot_status=UNPROVEN'
-    "audit_path=$auditPath"
+    (ConvertTo-KmtechRedactedSinkText -Text ([string]("audit_path=$auditPath")))
 }
 catch {
     Write-InstallationCaughtFailure $_
@@ -4137,16 +4142,16 @@ catch {
         catch {
             $audit['diagnostic_write_failures']=@($audit.diagnostic_write_failures)+@(
                 [ordered]@{phase=$Phase;target='audit';failure_type=$_.Exception.GetType().Name})
-            Write-Output 'rollback_audit_status=UNAVAILABLE'
+            Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('rollback_audit_status=UNAVAILABLE')))
         }
         if ($evidenceFull) {
             try { Save $evidenceFull $audit $true }
             catch {
                 $audit['diagnostic_write_failures']=@($audit.diagnostic_write_failures)+@(
                     [ordered]@{phase=$Phase;target='evidence';failure_type=$_.Exception.GetType().Name})
-                Write-Output 'rollback_evidence_status=UNAVAILABLE'
+                Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('rollback_evidence_status=UNAVAILABLE')))
                 try { Save $evidenceFull $audit $true }
-                catch { Write-Output 'rollback_evidence_failure_record_status=UNAVAILABLE' }
+                catch { Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('rollback_evidence_failure_record_status=UNAVAILABLE'))) }
             }
         }
     }
@@ -4203,7 +4208,7 @@ catch {
             }
             catch {
     Write-InstallationCaughtFailure $_
- throw "CANONICAL_WRITER_FENCE_EARLY_ABORT_FAILED: $($_.Exception.GetType().Name)" }
+ throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("CANONICAL_WRITER_FENCE_EARLY_ABORT_FAILED: $($_.Exception.GetType().Name)")) -UserLine) }
         }
         if (Test-Path -LiteralPath $canonicalWriterFencePreparedPath) {
             Remove-Item -LiteralPath $canonicalWriterFencePreparedPath -Force
@@ -4217,7 +4222,7 @@ catch {
             }
             [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
         }
-        $publicFailure=[InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text $original.Exception.Message -UserLine));$publicFailure.Data['original_type']=$original.Exception.GetType().FullName;$original=[Management.Automation.ErrorRecord]::new($publicFailure,'CanonicalInstallationFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null);throw $original
+        $publicFailure=[InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text $original.Exception.Message -UserLine),$original.Exception);$publicFailure.Data['original_type']=$original.Exception.GetType().FullName;$publicRecord=[Management.Automation.ErrorRecord]::new($publicFailure,'CanonicalInstallationFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null);throw $publicRecord
     }
     if (-not $canonicalWriterFenceActive) {
         try {
@@ -4249,7 +4254,7 @@ catch {
         catch {
     Write-InstallationCaughtFailure $_
 
-            throw "CANONICAL_WRITER_REFENCE_FAILED: $($_.Exception.GetType().Name)"
+            throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("CANONICAL_WRITER_REFENCE_FAILED: $($_.Exception.GetType().Name)")) -UserLine)
         }
     }
     if ($Uninstall -and -not $CompleteRetiredRemoval) {
@@ -4261,7 +4266,7 @@ catch {
         }
         $audit.status='FAILED_REMOVAL_INCOMPLETE';$audit.rollback.applied=$false;$audit.rollback.runtime_restored=$false
         try{Save $auditPath $audit;if($evidenceFull){Save $evidenceFull $audit}}catch{Write-InstallationCaughtFailure $_}
-        $publicFailure=[InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text $original.Exception.Message -UserLine));$publicFailure.Data['original_type']=$original.Exception.GetType().FullName;$original=[Management.Automation.ErrorRecord]::new($publicFailure,'CanonicalInstallationFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null);throw $original
+        $publicFailure=[InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text $original.Exception.Message -UserLine),$original.Exception);$publicFailure.Data['original_type']=$original.Exception.GetType().FullName;$publicRecord=[Management.Automation.ErrorRecord]::new($publicFailure,'CanonicalInstallationFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null);throw $publicRecord
     }
     if ($Uninstall) {
         $retirementAuditSealed=$false
@@ -4306,11 +4311,11 @@ catch {
                         '-ExpectedUninstallRecordSha256',$uninstallRecordSha256)
                     $capturedChild = Invoke-InstallationEvidenceChild 'uninstall-code-recovery' $winps $recoverCodeArguments
                     $global:LASTEXITCODE=$capturedChild.ExitCode
-                    if($capturedChild.ExitCode -ne 0){Write-Output (ConvertTo-KmtechRedactedSinkText -Text $capturedChild.Stdout -UserLine)}else{Write-Output $capturedChild.Stdout}
+                    if($capturedChild.ExitCode -ne 0){Write-Output (ConvertTo-KmtechRedactedSinkText -Text $capturedChild.Stdout -UserLine)}else{Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]($capturedChild.Stdout)))}
                     if ($LASTEXITCODE -ne 0) {
                         $audit['retirement_recovery_child_failure']=Get-CanonicalRetirementChildFailure $capturedChild
-                        Write-Output ('retirement_recovery_failure_summary='+($audit.retirement_recovery_child_failure | ConvertTo-Json -Depth 12 -Compress))
-                        throw "Uninstall exact code recovery failed: $LASTEXITCODE"
+                        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('retirement_recovery_failure_summary='+($audit.retirement_recovery_child_failure | ConvertTo-Json -Depth 12 -Compress)))))
+                        throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Uninstall exact code recovery failed: $LASTEXITCODE")) -UserLine)
                     }
                 }
                 [void](Assert-BootstrapIntegrityRecord $install)
@@ -4391,7 +4396,7 @@ catch {
         if ($retirementFenceReleased -and $audit.rollback.runtime_restored) {
             'uninstall_recovery_status=PASS_EXACT_PREIMAGE_SAFE_TO_RETRY'
         }
-        $publicFailure=[InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text $original.Exception.Message -UserLine));$publicFailure.Data['original_type']=$original.Exception.GetType().FullName;$original=[Management.Automation.ErrorRecord]::new($publicFailure,'CanonicalInstallationFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null);throw $original
+        $publicFailure=[InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text $original.Exception.Message -UserLine),$original.Exception);$publicFailure.Data['original_type']=$original.Exception.GetType().FullName;$publicRecord=[Management.Automation.ErrorRecord]::new($publicFailure,'CanonicalInstallationFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null);throw $publicRecord
     }
     if ($RestoreVerifiedReplacement) {
         # A child can restore the code and then fail while writing its evidence.
@@ -4494,7 +4499,7 @@ catch {
             $capturedChild=Invoke-InstallationEvidenceChild 'rollback-code-restore' $winps $restoreBootstrap
             $restoreOutput=@($capturedChild.Stdout)
             $restoreExitCode=$capturedChild.ExitCode
-            if ($restoreExitCode -ne 0) { throw "Code restore failed: $restoreExitCode" }
+            if ($restoreExitCode -ne 0) { throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Code restore failed: $restoreExitCode")) -UserLine) }
             if (-not $testMode) {
                 $restoreBinding=Read-InstallationHelperEvidenceBinding @($capturedChild.Stdout -split "`r?`n") $elevationLogPath $capturedChild.ProcessId $sourceHelperSha256
                 $replacementRestoreEvidencePath=Read-CanonicalHelperArtifact $restoreBinding 'restore-evidence.json' 'RESTORE_EVIDENCE_READY'
@@ -4726,7 +4731,7 @@ catch {
                 Record-CanonicalRollbackStep 'relay_restart' 'UNPROVEN_FENCE_RETAINED' ''
                 $audit.rollback.operator_message='이 PC의 코드, 자료 호환 여부 또는 실행 상태를 확인하지 못해 작업을 안전하게 멈췄습니다. 자료와 설치 기록을 보존하고 관리자 지원 복구를 요청하세요. 확인 없이 중지 표시를 지우거나 앱을 다시 실행하지 마세요.'
                 $audit.rollback.support_recovery_procedure='docs/spec/operations.md#canonical-rollback-support-recovery'
-                Write-Warning $audit.rollback.operator_message
+                Write-Warning (ConvertTo-KmtechRedactedSinkText -Text ([string]($audit.rollback.operator_message)) -UserLine)
                 Record-CanonicalRollbackStep 'support_recovery' 'REQUIRED_FENCE_RETAINED' ''
             }
         }
@@ -4750,7 +4755,7 @@ catch {
     if (-not [string]::IsNullOrWhiteSpace($fenceReleaseFailure)) {
         $audit.status='CANONICAL_WRITER_FENCE_RELEASE_FAILED'
         Record-CanonicalRollbackStep 'completion' 'FAILED' $fenceReleaseFailure
-        throw "CANONICAL_WRITER_FENCE_RELEASE_FAILED: $fenceReleaseFailure"
+        throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("CANONICAL_WRITER_FENCE_RELEASE_FAILED: $fenceReleaseFailure")) -UserLine)
     }
     $audit.status=if ($RestoreVerifiedReplacement) {
         'FAILED_RESTORE_RUNTIME_RECOVERED'
@@ -4764,9 +4769,9 @@ catch {
         catch {Write-InstallationCaughtFailure $_;$audit.rollback['continuation_completion_failure']=Get-CanonicalFailureDetails $_ 'ROLLBACK_COMPLETION';Save-CanonicalRecoveryDiagnostics 'rollback.continuation_completion'}
     }
     if ($placement -ceq 'PASS_NEW_VERIFIED') {
-        Write-Warning "Current-user runtime restored. New verified code remains at $install"
+        Write-Warning (ConvertTo-KmtechRedactedSinkText -Text ([string]("Current-user runtime restored. New verified code remains at $install")) -UserLine)
     }
-    $publicFailure=[InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text $original.Exception.Message -UserLine));$publicFailure.Data['original_type']=$original.Exception.GetType().FullName;$original=[Management.Automation.ErrorRecord]::new($publicFailure,'CanonicalInstallationFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null);throw $original
+    $publicFailure=[InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text $original.Exception.Message -UserLine),$original.Exception);$publicFailure.Data['original_type']=$original.Exception.GetType().FullName;$publicRecord=[Management.Automation.ErrorRecord]::new($publicFailure,'CanonicalInstallationFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null);throw $publicRecord
 }
 finally {
     # Even an early code/runtime rollback throw reaches this independent attempt.
@@ -4789,14 +4794,14 @@ finally {
         $audit['installation_evidence']=$finalEvidence
         try {
             if (-not $retirementAuditSealed) { Save $auditPath $audit $true }
-        }catch{Write-Warning 'INSTALLATION_EVIDENCE_FINAL_AUDIT_SAVE_FAILED'}
+        }catch{Write-Warning (ConvertTo-KmtechRedactedSinkText -Text ([string]('INSTALLATION_EVIDENCE_FINAL_AUDIT_SAVE_FAILED')) -UserLine)}
         if($evidenceFull){
             try {Save $evidenceFull $audit $true}
-            catch{Write-Warning 'INSTALLATION_EVIDENCE_FINAL_EVIDENCE_SAVE_FAILED'}
+            catch{Write-Warning (ConvertTo-KmtechRedactedSinkText -Text ([string]('INSTALLATION_EVIDENCE_FINAL_EVIDENCE_SAVE_FAILED')) -UserLine)}
         }
     }
-    Write-Output ('installation_evidence_status='+[string]$finalEvidence.status)
-    Write-Output ('installation_evidence_summary_path='+[string]$finalEvidence.summary_path)
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_status='+[string]$finalEvidence.status))))
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_summary_path='+[string]$finalEvidence.summary_path))))
     $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''
     foreach ($name in $canonicalWriterFenceEnvironmentNames) {
         [Environment]::SetEnvironmentVariable($name, $canonicalWriterFenceEnvironmentBefore[$name], 'Process')
@@ -4806,4 +4811,12 @@ finally {
     }
     Exit-RetirementResumeClaim $retirementResumeClaim
     if ($null -ne $continuationOldClaim) {Exit-CanonicalRollbackContinuationClaim $continuationOldClaim}
+}
+
+} catch {
+    $outputFailure=$_
+    $publicMessage=ConvertTo-KmtechRedactedSinkText -Text $outputFailure.Exception.Message -UserLine
+    $publicException=[InvalidOperationException]::new($publicMessage,$outputFailure.Exception)
+    $publicException.Data['original_type']=$outputFailure.Exception.GetType().FullName
+    throw [Management.Automation.ErrorRecord]::new($publicException,'CanonicalInstallationOutputFailure',[Management.Automation.ErrorCategory]::InvalidOperation,$null)
 }
