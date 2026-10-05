@@ -2,6 +2,7 @@
 import hashlib
 import io
 import json
+from pathlib import Path
 import zipfile
 
 import pytest
@@ -131,3 +132,14 @@ def test_builder_refuses_inventory_beyond_reader_bound_before_publication(tmp_pa
     with pytest.raises(builder.PortableBuildError, match='reader bound'):
         builder._write_runtime_file_inventory(tmp_path)
     assert not (tmp_path / service.RUNTIME_FILE_INVENTORY_FILENAME).exists()
+
+
+def test_actual_application_copy_omits_unused_validator_asset_preserving_used_defaults(tmp_path):
+    repo = Path(__file__).resolve().parents[1]
+    source = repo / 'config/validator_settings.json'
+    before = source.read_bytes()
+    app = tmp_path / 'app'
+    builder._copy_application(repo, app)
+    assert not (app / 'config/validator_settings.json').exists()
+    assert (app / 'config/container_audit_settings.json').read_bytes() == (repo / 'config/container_audit_settings.json').read_bytes()
+    assert source.read_bytes() == before

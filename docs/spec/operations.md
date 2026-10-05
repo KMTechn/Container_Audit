@@ -202,6 +202,8 @@ stock manifest의 `runtime_file_inventory_sha256`·`runtime_file_inventory_bytes
 별도 파일의 길이와 SHA256을 먼저 확인하며 그 파일만1MiB 판독 상한을 적용한다.
 추가 runtime 파일·해시 불일치·목록 부재나 민감 상태 파일은 `prepared.json` 게시 전에 거절한다.
 이 목록도 담는 packet SHA는 기존 설치 키로 서명한 feed manifest에서 인증한다.
+portable은 현재 제품 reader가 없는 config/validator_settings.json을 포장하지 않는다.
+source 자산은 보존하며 runtime-local denylist·정확 runtime 예외·feed 필터는 바꾸지 않는다.
 
 관리자 설치기는 기존 보호 코드 배치와 같은 writer delegation 아래서
 `versions/<source SHA>`·`update-control`을 보호하고, 지정 작업자 SID의 로그온으로

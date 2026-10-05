@@ -125,7 +125,6 @@ APP_DATA_FILES = (
     "kmtech_shared.manifest.json",
     "kmtech_shared.lock.json",
     "config/container_audit_settings.json",
-    "config/validator_settings.json",
 )
 EXTERNAL_TOOL_MODULES: tuple[str, ...] = ("tools.direct_sync_relay_operator",)
 PORTABLE_INSTALL_ASSETS = (

@@ -667,6 +667,8 @@ PS5.1/PS7 transport 회귀70개 PASS, 같은 기존206개는 시작188P·18F에�
 미배포 autoupdate의 runtime_files 목록을 별도 pinned runtime-file-inventory.json으로
 옮겼다. 기존 manifest 판독3곳을64KiB로 복원하고 공용 helper를 보존하며,
 별도 목록에만1MiB 상한·길이/SHA256/구성 검사를 적용한다.
+실제 stock feed 준비가 미사용 validator 설정 자산을 거절하는 기존 결함을 확인해
+portable 자산 목록 한 항목만 제외했다. source 파일·denylist·예외·필터는 유지한다.
 manifest 실제 stock 통과·상한1B 초과 거절, 최종 재생성/check·집중·LF clone stock의
 근거는 [sub-265 REPORT](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-265/REPORT.md)와
 FOR-REVIEW.md에 기록한다. 실제 UAC·옛 v2.0.33 위 설치·현장 경로/계정 수용은
