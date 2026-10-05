@@ -166,7 +166,7 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "cba2fe0c337c637fefb48ed8bd6f259485c9a90608b45a91925e9079271b6402"
+      "after": "9f2f316176404ab3fc0c6736812b8b20587204fc07b0c6c0e90a7c2096b21229"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -4528,7 +4528,7 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "cba2fe0c337c637fefb48ed8bd6f259485c9a90608b45a91925e9079271b6402"
+      "after": "9f2f316176404ab3fc0c6736812b8b20587204fc07b0c6c0e90a7c2096b21229"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -4613,7 +4613,7 @@
     {
       "path": "tools/direct_sync_relay_install_pack.py",
       "before": "67dded828d179145b38ff374082c0f6f56fade9a1d0ee7cb56c5f4fcbba70d9a",
-      "after": "d9be8dc758ec2482ab2fa36b6ff64791bf331588925625a9a5598200c7c222cb"
+      "after": "c62fd8a8fcf688ee8f314e1e77268256e97e72d58ffcab702c9bdbb00f875541"
     },
     {
       "path": "tools/direct_sync_relay_operator.py",

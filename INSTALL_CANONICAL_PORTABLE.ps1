@@ -811,17 +811,7 @@ function Restore($Before) {
     } finally { $key.Dispose() }
 }
 function ConvertTo-CanonicalSafeDiagnostic([string]$Text) {
-    foreach ($name in @('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','KM_LOGISTICS_INSTALL_BEARER_TOKEN')) {
-        $value=[Environment]::GetEnvironmentVariable($name,'Process')
-        if (-not [string]::IsNullOrEmpty($value)) {
-            $encoded=ConvertTo-Json -InputObject $value -Compress
-            if ($encoded.Length -ge 2) {
-                $Text=$Text.Replace($encoded.Substring(1,$encoded.Length-2),'[REDACTED]')
-            }
-            $Text=$Text.Replace($value,'[REDACTED]')
-        }
-    }
-    return $Text
+    return (ConvertTo-KmtechRedactedSinkText -Text $Text)
 }
 function Save([string]$Path, $Value, [bool]$SanitizeDiagnostics=$false) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null

@@ -1257,7 +1257,7 @@ Registration retains string profile-path arguments after shared resolution. Inva
 
 원 설치 시도의 authority가 사라진 채 fence가 남은 경우에는 현장에서 fence 파일을 지우거나 delegation/receipt를 만들어 진행하지 않는다. coordinator에게 보존한 기록과 실패 단계만 전달하고 지원 authority 회수 및 검증된 복구 실행을 요청한다. 종료 조건은 코드 신원·G·runtime 일치, 권한이 확인된 fence 해제, 옛 relay readback 및 업무 수량·소속 보존이다. 이 retained-fence 지원 절차의 실제 랩 1회 PROVEN은 1차 coordinator의 예행 범위이며 이 가지의 headless 격리 시험으로 대체하지 않는다; 아직 실제 랩 수용은 UNPROVEN이다.
 
-실패 안내와 감사에는 writer delegation token·설치 bearer 환경 값의 원문을 남기지 않는다. canonical 오류 안내와 audit/evidence의 JSON 저장, relay 설치기의 child stdout/stderr 및 감사 저장은 알려진 비밀 환경 값을 `[REDACTED]`로 치환한다. profile 설치기의 예외 안내는 예외 종류만 표시한다. 제어 프로토콜의 정상 delegation·receipt 값과 권한 검증은 그대로이며, 비밀 값이 없어도 원 실패 코드와 단계 결과는 유지한다. 실제 값이나 child 출력 전문을 운영 문서에 복사하지 않는다.
+실패 안내와 감사는 공통 가림 계약을 따른다. canonical sink wrapper는 `ConvertTo-KmtechRedactedSinkText`, relay 설치기 wrapper는 `redact_for_sink`와 공통 JSON 가림 함수를 호출한다. 이름으로 판정한 비밀 환경 값·민감 JSON 필드를 쓰기 전에 가리고, UTF-8 출력 전체는 표식 포함 65,536바이트 이내로 보존한다. relay 설치기 JSON은 전체 envelope를 제한하고 유효한 JSON으로 저장한다. true·false·null·경로·일반 digest 메타데이터와 원 실패 코드·단계 결과를 유지한다. 실제 값이나 child 출력 전문을 운영 문서에 복사하지 않는다.
 
 ### 실행 후 관리자 인증 또는 TLS 자료 판 거절
 

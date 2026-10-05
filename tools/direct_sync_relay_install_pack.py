@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from writer_session_fence import writer_sink  # noqa: E402
+from auto_update import redact_for_sink, redact_json_for_sink, serialize_json_for_sink  # noqa: E402
 
 from direct_sync_push import (  # noqa: E402
     DEFAULT_PRODUCER_ROLE,
@@ -372,32 +373,20 @@ def _apply_container_audit_storage_defaults(args: argparse.Namespace) -> dict:
 
 
 def _redact_install_diagnostic(value):
-    """Remove known process-secret values before storing child diagnostics."""
-    secrets = tuple(secret_value for name in (
-        "CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN", "KM_LOGISTICS_INSTALL_BEARER_TOKEN",
-    ) if (secret_value := os.environ.get(name)))
-    def scrub(item):
-        if isinstance(item, str):
-            for secret in secrets:
-                for representation in (json.dumps(secret, ensure_ascii=True)[1:-1],
-                                       json.dumps(secret, ensure_ascii=False)[1:-1], secret):
-                    item = item.replace(representation, "[REDACTED]")
-            return item
-        if isinstance(item, dict):
-            return {scrub(key): scrub(child) for key, child in item.items()}
-        if isinstance(item, (list, tuple)):
-            return [scrub(child) for child in item]
-        return item
-    return scrub(value)
+    """Apply the common environment, JSON-field and UTF-8 sink contract."""
+    if isinstance(value, str):
+        return redact_for_sink(value, os.environ)
+    return redact_json_for_sink(value, os.environ)
 
 
 @writer_sink("direct_sync_install_pack")
 def _write_json(path: Path, payload: dict) -> None:
+    encoded = serialize_json_for_sink(_redact_install_diagnostic(payload))
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
         with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-            json.dump(_redact_install_diagnostic(payload), handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write(encoded)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())

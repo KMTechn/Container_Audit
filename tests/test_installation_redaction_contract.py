@@ -51,13 +51,65 @@ def test_shared_python_vectors(vector):
     _check(vector, actual)
 
 
+def _assert_no_raw_environment_bytes(vector, text):
+    encoded = text.encode('utf-8')
+    for name, value in vector['environ'].items():
+        if len(value) < 4 or re.search(r'(?i)_(FILE|PATH|DIR|ROOT)$', name):
+            continue
+        for variant in (value, json.dumps(value, ensure_ascii=True)[1:-1], json.dumps(value, ensure_ascii=False)[1:-1]):
+            if variant.encode('utf-8') in encoded:
+                pytest.fail('Raw synthetic environment value survived sink byte search', pytrace=False)
+
+
+@pytest.mark.parametrize('vector', VECTORS, ids=lambda vector: vector['id'])
+def test_install_pack_wrapper_vectors(vector, monkeypatch):
+    from tools import direct_sync_relay_install_pack as pack
+    # Use exactly the synthetic environment supplied by the shared contract.
+    monkeypatch.setattr(pack.os, 'environ', dict(vector['environ']))
+    actual = pack._redact_install_diagnostic(vector.get('json', _text(vector)))
+    text = json.dumps(actual) if isinstance(actual, dict) else actual
+    _check(vector, text)
+    _assert_no_raw_environment_bytes(vector, text)
+
+
+@pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
+@pytest.mark.parametrize('vector', VECTORS, ids=lambda vector: vector['id'])
+def test_canonical_wrapper_vectors(tmp_path, engine, vector):
+    path = tmp_path / 'synthetic-vector.json'
+    path.write_text(json.dumps({'text': _text(vector), 'environment': vector['environ']}), encoding='utf-8')
+    result = run_functions(tmp_path, ROOT / 'INSTALL_CANONICAL_PORTABLE.ps1', ['ConvertTo-CanonicalSafeDiagnostic'], r'''
+$vector=Get-Content -LiteralPath $env:CA_VECTOR_PATH -Raw -Encoding UTF8|ConvertFrom-Json
+foreach($property in $vector.environment.PSObject.Properties){[Environment]::SetEnvironmentVariable($property.Name,[string]$property.Value,'Process')}
+ConvertTo-CanonicalSafeDiagnostic $vector.text
+''', engine=engine, values={'CA_VECTOR_PATH': str(path)})
+    if result.returncode:
+        pytest.fail('Canonical sink wrapper protocol failed', pytrace=False)
+    text = result.stdout.rstrip('\r\n')
+    _check(vector, text)
+    _assert_no_raw_environment_bytes(vector, text)
+
+
+def test_install_pack_json_sink_redacts_and_bounds_the_whole_envelope(tmp_path, monkeypatch):
+    from tools import direct_sync_relay_install_pack as pack
+    synthetic = 'private-install-sink-fixture-credential'
+    monkeypatch.setattr(pack.os, 'environ', {'CUSTOM_SERVICE_SECRET': synthetic})
+    target = tmp_path / 'result.json'
+    body = 'HEAD ' + synthetic + ' ' + '가나다' * 40000 + ' TAIL ' + synthetic
+    pack._write_json.__wrapped__(target, {'failure': body, 'stderr': body, 'nested': {'admin_pin': 'synthetic-only-pin'}})
+    data = target.read_bytes()
+    assert len(data) <= 65536
+    assert synthetic.encode() not in data
+    assert b'synthetic-only-pin' not in data
+    assert json.loads(data)['nested']['admin_pin'] == '[REDACTED:field]'
+
+
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 @pytest.mark.parametrize("vector", VECTORS, ids=lambda vector: vector["id"])
 def test_shared_powershell_vectors(tmp_path, engine, vector):
     # Inputs are private synthetic files so large vectors never become argv/env.
     path = tmp_path / "vector.json"
     path.write_text(json.dumps({"text": _text(vector), "environment": vector["environ"]}), encoding="utf-8")
-    result = run_functions(tmp_path, ROOT / "tools/bootstrap_integrity.ps1", ["Protect-InstallationText"], r'''
+    result = run_functions(tmp_path, ROOT / "tools/bootstrap_integrity.ps1", ["Protect-InstallationText", "ConvertTo-KmtechRedactedSinkText"], r'''
 $vector=Get-Content -LiteralPath $env:CA_VECTOR_PATH -Raw -Encoding UTF8|ConvertFrom-Json
 $environment=@{}
 foreach($property in $vector.environment.PSObject.Properties){$environment[$property.Name]=$property.Value}
@@ -70,7 +122,7 @@ Protect-InstallationText $vector.text -1 -Environment $environment -CommonOnly
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 def test_utf8_head_tail_budget_preserves_last_exception(engine, tmp_path):
-    result = run_functions(tmp_path, ROOT / "tools/bootstrap_integrity.ps1", ["Protect-InstallationText"], r'''
+    result = run_functions(tmp_path, ROOT / "tools/bootstrap_integrity.ps1", ["Protect-InstallationText", "ConvertTo-KmtechRedactedSinkText"], r'''
 $text='HEAD-'+('가나다'*40000)+' ValueError: last synthetic exception'
 $safe=Protect-InstallationText $text -1 -Environment @{} -CommonOnly
 if([Text.Encoding]::UTF8.GetByteCount($safe) -gt 65536 -or -not $safe.StartsWith('HEAD-') -or -not $safe.EndsWith('ValueError: last synthetic exception')){throw 'UTF8 head/tail bound differs.'}
