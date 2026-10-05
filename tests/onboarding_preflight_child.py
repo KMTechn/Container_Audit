@@ -158,15 +158,15 @@ try{{
  catch{{
   $original=$_
   $nativeErrors=@($Error|ForEach-Object {{@{{type=$_.Exception.GetType().Name;message=(ConvertTo-CanonicalSafeDiagnostic ([string]$_.Exception.Message))}}}})
-  [System.IO.File]::WriteAllText({quote(root/'powershell.native-errors.json')},(ConvertTo-Json -InputObject $nativeErrors))
+  [System.IO.File]::WriteAllText({quote(root.parent/'powershell.native-errors.json')},(ConvertTo-Json -InputObject $nativeErrors))
   $failure=@{{type=$_.Exception.GetType().Name;message=(ConvertTo-CanonicalSafeDiagnostic ([string]$_.Exception.Message))}}
-  [System.IO.File]::WriteAllText({quote(root/'powershell.preflight.exception.json')},($failure|ConvertTo-Json))
+  [System.IO.File]::WriteAllText({quote(root.parent/'powershell.preflight.exception.json')},($failure|ConvertTo-Json))
   Invoke-Expression $earlyCatch}}
  finally{{Invoke-Expression (($mainTry.Finally.Statements|ForEach-Object {{$_.Extent.Text}})-join "`n")}}
 }}
 catch{{
  $failure=@{{type=$_.Exception.GetType().Name;message=(ConvertTo-CanonicalSafeDiagnostic ([string]$_.Exception.Message))}}
- [System.IO.File]::WriteAllText({quote(root/'powershell.exception.json')},($failure|ConvertTo-Json))
+ [System.IO.File]::WriteAllText({quote(root.parent/'powershell.exception.json')},($failure|ConvertTo-Json))
  'preflight_status=REFUSED'
 }}
 $released=$false
@@ -226,9 +226,9 @@ try:
         result=subprocess.run([engine,'-NoProfile','-NonInteractive','-File',str(ps_script)],
             capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
         from tools.direct_sync_relay_install_pack import _redact_install_diagnostic
-        (root/'powershell.stdout.txt').write_text(
+        (root.parent/'powershell.stdout.txt').write_text(
             _redact_install_diagnostic(result.stdout),encoding='utf-8')
-        (root/'powershell.stderr.txt').write_text(
+        (root.parent/'powershell.stderr.txt').write_text(
             _redact_install_diagnostic(result.stderr),encoding='utf-8')
         status='PASS' if result.returncode==0 and 'preflight_status=PASS' in result.stdout else 'REFUSED'
         code=(0 if status=='PASS' else 4) if result.returncode==0 else None

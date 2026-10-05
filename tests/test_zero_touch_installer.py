@@ -1460,6 +1460,10 @@ def test_portable_preflight_failure_removes_prepared_writer_session(tmp_path):
     environment = dict(os.environ)
     environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
     environment["LOCALAPPDATA"] = str(local_app_data)
+    for known_folder in ("APPDATA", "PROGRAMDATA"):
+        isolated_folder = tmp_path / known_folder.lower()
+        isolated_folder.mkdir()
+        environment[known_folder] = str(isolated_folder)
     completed = run_powershell(
         [
             _powershell(),
