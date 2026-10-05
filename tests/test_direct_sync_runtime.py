@@ -406,8 +406,12 @@ def test_load_credentials_blocks_dpapi_secret_data_dir_in_legacy_syncthing_folde
         encoding="utf-8",
     )
 
-    with pytest.raises(DirectSyncPushError, match="legacy Syncthing folder"):
+    from data_generation_guard import DataGenerationBlocked
+    with pytest.raises(DataGenerationBlocked) as refusal:
         load_credentials_from_json(path)
+    assert refusal.value.decision["status"] == "UNKNOWN"
+    assert isinstance(refusal.value.__cause__, DirectSyncPushError)
+    assert "legacy Syncthing folder" in str(refusal.value.__cause__)
 
 
 def test_load_credentials_rejects_duplicate_json_keys(tmp_path):
