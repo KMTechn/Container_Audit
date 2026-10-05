@@ -2292,9 +2292,13 @@ function Get-CanonicalOfficialLegacyRelayAdmission([string]$ReportPath='') {
             try {
                 $reportFull=Full $ReportPath 'legacy admission report'
                 Assert-BootstrapNoReparsePoint (Split-Path -Parent $reportFull) 'legacy admission report parent' -PathOnly
-                if(Test-Path -LiteralPath $reportFull){Assert-BootstrapNoReparsePoint $reportFull 'legacy admission report' -PathOnly}
-                $reportJson=ConvertTo-CanonicalAuditJson ([ordered]@{status='REJECTED_BEFORE_PREPARATION';code=[string]$failure.Data['canonical_code'];message=$message})
-                [IO.File]::WriteAllText($reportFull,$reportJson,[Text.UTF8Encoding]::new($false))
+                if(Test-Path -LiteralPath $reportFull){
+                    Assert-BootstrapNoReparsePoint $reportFull 'legacy admission report' -PathOnly
+                    if(-not(Test-Path -LiteralPath $reportFull -PathType Leaf)){throw 'LEGACY_ADMISSION_REPORT_NOT_A_FILE'}
+                }
+                if(Test-Path -LiteralPath ($reportFull+'.tmp.'+$PID)){throw 'LEGACY_ADMISSION_REPORT_TEMP_PREEXISTS'}
+                $reportPayload=ConvertTo-CanonicalAuditJson ([ordered]@{status='REJECTED_BEFORE_PREPARATION';code=[string]$failure.Data['canonical_code'];message=$message}) | ConvertFrom-Json
+                Write-Utf8Json $reportFull $reportPayload
             } catch {
                 $failure.Data['report_failure']=ConvertTo-KmtechRedactedSinkText -Text $_.Exception.Message -UserLine
             }

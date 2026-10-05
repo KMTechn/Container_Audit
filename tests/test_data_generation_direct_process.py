@@ -24,7 +24,9 @@ def run_entry(tmp_path, scenario, generation_case):
     env['KMTECH_TEST_CA_WRITER_ROOT'] = str(root / 'control')
     env['KMTECH_TEST_CA_WRITER_MUTEX'] = 'Local.KMTech.CA.GClass.' + hashlib.sha256(str(root).encode()).hexdigest()[:16]
     completed = subprocess.run([sys.executable, '-B', str(Path(__file__).with_name('gclass_child.py')),
-        str(Path.cwd()), scenario, str(root), generation_case], env=env, capture_output=True, text=True,
+        # User-relative input is interpreted on the caller's drive. The admitted
+        # source root stays explicit when the fixture and repository differ.
+        str(Path.cwd()), scenario, str(root), generation_case], cwd=root, env=env, capture_output=True, text=True,
         creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     assert completed.returncode == 0, completed.stderr[-1200:]
     return json.loads(completed.stdout.splitlines()[-1])

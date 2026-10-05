@@ -25,7 +25,9 @@ def run_input(tmp_path, scenario, generation_case, spelling='absolute'):
         env.pop(name, None)
     env['PYTHONDONTWRITEBYTECODE'] = '1'
     process = subprocess.run([sys.executable, '-B', str(Path(__file__).with_name('external_input_child.py')),
-        str(Path.cwd()), scenario, str(root), generation_case, spelling], cwd=Path.cwd(), env=env,
+        # Keep caller-relative spellings meaningful across Windows drives while
+        # passing the admitted repository separately to the product probe.
+        str(Path.cwd()), scenario, str(root), generation_case, spelling], cwd=root, env=env,
         capture_output=True, text=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     (root/'child.stdout.txt').write_text(process.stdout, encoding='utf-8')
     (root/'child.stderr.txt').write_text(process.stderr, encoding='utf-8')

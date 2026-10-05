@@ -13,6 +13,9 @@ def test_first_install_legacy_admission_precedes_preparation(tmp_path,engine,cas
     names=re.findall(r'^function\s+([^\s(]+)',SOURCE.read_text(encoding='utf-8'),re.M)
     result=run_functions(tmp_path,SOURCE,names,XML_SETUP+r'''
 $source=$env:CA_FIXTURE_SOURCE;$root=$env:CA_CONTRACT_ROOT
+$inventoryPath=Join-Path $source 'tools/container_writer_sink_inventory.json'
+$inventory=Get-Content -LiteralPath $inventoryPath -Raw -Encoding UTF8|ConvertFrom-Json
+[void](Assert-WriterSinkInventory $inventoryPath (Sha $inventoryPath) ([string]$inventory.inventory_sha256))
 $operatorSid='S-1-5-21-350';$lad=Join-Path $root 'local';$activeDataRoot=Join-Path $root 'data'
 $canonical=Join-Path $root 'canonical-absent';$install=Join-Path $canonical 'current'
 $physical=Join-Path $root 'public-launchers';$old=Join-Path $root 'old-public-v2.0.33'
