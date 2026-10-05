@@ -100,7 +100,7 @@ if($RecoveryCase -ceq 'nested-high') {
 if ($RecoveryCase -ceq 'code-mismatch') {
     function ReadReplacementRestoreEvidence { throw 'ISOLATED_CODE_RESTORE_EVIDENCE_MISMATCH' }
 }
-if ($RecoveryCase -ceq 'g-unknown','nested-high') {
+if ($RecoveryCase -ceq 'g-unknown') {
     [IO.Directory]::CreateDirectory((Join-Path $activeDataRoot 'control')) | Out-Null
     [IO.File]::WriteAllText((Join-Path $activeDataRoot 'data-generation.json'), 'invalid isolated generation marker')
 }

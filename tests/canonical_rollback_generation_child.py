@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 
-source, scenario, root, generation_case, spelling = sys.argv[1:]
+source, scenario, root, generation_case, spelling = sys.argv[1:6]
 requested_scenario = scenario
 if scenario in {"nested-readonly", "nested-final-target"}:
     scenario = "nested-onboard-secret-explicit"
