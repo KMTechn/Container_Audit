@@ -204,6 +204,12 @@ writer inventory는 sink의 소스 행 번호도 포함한다. UI 등 앞선 코
 깨끗한 커밋에서 stock portable builder를 실행한다. builder의 파생 객체·canonical JSON byte
 일치 검사는 유지하며, 행 번호 차이를 무시하거나 설치 시 pin을 다시 계산하지 않는다.
 
+GUI·온보딩·relay 런타임에서 콘솔 프로그램을 호출할 때는 Windows의
+`CREATE_NO_WINDOW`를 지정한다. 소스 실행의 자료 세대 확인용 Git 두 호출도
+출력 캡처·종료 코드 처리는 유지하면서 창과 스캐너 입력의 포커스를 가져가지 않는다.
+`tests/test_runtime_console_launches.py`가 공개 자료 세대 진입점의 호출 인수와
+제품 Python 호출 전수를 검사한다. 설치·빌드·촬영 CLI 예외는 기존 함수와 호출 수로 한정한다.
+
 canonical installer는 초기에 로드하는 bootstrap 자체의 고정 SHA256부터 검증한다.
 portable 등록·관리자 복구의 직접 명령 `runtime/python.exe -I -B app/tools/register_container_audit_worker_pc.py`는 도구 자기 위치의 `app`와 `app/site-packages`를 먼저 싣는다. 격리 subprocess `--help`는 경로 준비만 증명하며 실제 등록·서버 복구 수용은 별도다.
 기존 `derive_container_writer_sinks.py --write/--check`가 이 pin과 inventory를 함께 갱신/검사하며
