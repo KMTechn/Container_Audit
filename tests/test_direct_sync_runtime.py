@@ -1294,7 +1294,9 @@ def test_runtime_retryable_failure_records_retry_wait_and_skips_early_retry(tmp_
         )
     )
 
-    status = run_relay_once(config, session=retry_session)
+    # The one-second backoff must not depend on how long G and status IO take.
+    cycle_now = "2099-01-01T00:00:00Z"
+    status = run_relay_once(config, session=retry_session, now=cycle_now)
 
     assert status["status"] == "retry_wait"
     assert status["last_result"]["retryable"] is True
@@ -1303,22 +1305,24 @@ def test_runtime_retryable_failure_records_retry_wait_and_skips_early_retry(tmp_
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             """
-            SELECT next_attempt_at, last_error_code, upload_status_path
+            SELECT next_attempt_at, attempt_count, last_error_code, upload_status_path
             FROM direct_sync_relay_batches
             """
         ).fetchone()
-    assert row["next_attempt_at"]
+    assert row["attempt_count"] == 1
+    retry_due = row["next_attempt_at"]
+    assert retry_due in {"2099-01-01T00:00:01Z", "2099-01-01T00:00:02Z"}
     assert row["last_error_code"] == "temporary_unavailable"
     assert Path(row["upload_status_path"]).is_file()
 
     early_success = EchoAcceptedSession()
-    idle = run_relay_once(config, session=early_success)
+    idle = run_relay_once(config, session=early_success, now=cycle_now)
 
     assert idle["status"] == "idle"
     assert early_success.calls == []
 
     due_success = EchoAcceptedSession()
-    due = run_relay_once(config, session=due_success, now="2999-01-01T00:00:00Z")
+    due = run_relay_once(config, session=due_success, now=retry_due)
 
     assert due["status"] == "acked"
     assert len(due_success.calls) == 1
