@@ -300,7 +300,10 @@ function Assert-InstallationEvidenceProtectedPath([string]$Path,[switch]$AllowSu
 }
 function New-InstallationProtectedDirectory([string]$Path,[string]$Sid,[switch]$RecoverAbandoned) {
     if(Test-UninstallFixtureProtectedPath $Path){
-        Assert-BootstrapNoReparsePoint $Path 'fixture protected directory' -PathOnly
+        $existing=$Path
+        while(-not(Test-Path -LiteralPath $existing)){$existing=Split-Path -Parent $existing}
+        if(-not(Test-UninstallFixtureRootPath $existing)){throw 'FIXTURE_OWNER_BOUNDARY_ESCAPED'}
+        Assert-BootstrapNoReparsePoint $existing 'fixture protected directory ancestor' -PathOnly
         [void][IO.Directory]::CreateDirectory($Path)
         Assert-InstallationEvidenceProtectedPath $Path
         return

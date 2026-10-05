@@ -390,7 +390,7 @@ def test_load_credentials_blocks_dpapi_secret_data_dir_in_legacy_syncthing_folde
                 "producer_id": "producer-runtime-1",
                 "key_id": "key-runtime-1",
                 "secret_ref": "dpapi:CONTAINER_RUNTIME_SECRET",
-                "secret_data_dir": r"C:\Sync\producer-secrets",
+                "secret_data_dir": str(tmp_path / "Sync" / "producer-secrets"),
                 "endpoint_url": "https://worker.example.invalid/api/producer-ingest/v1/source-file",
             },
             ensure_ascii=False,

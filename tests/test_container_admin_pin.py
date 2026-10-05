@@ -62,11 +62,14 @@ class SignedPinServer:
 
 
 def make_client(monkeypatch, server):
-    monkeypatch.setattr(pin, "load_credentials_from_json", lambda _path: SimpleNamespace(
+    def load_fixture_credentials(_path, *, data_root=None):
+        assert _path == "unused" and data_root is None
+        return SimpleNamespace(
         endpoint_url="https://pin.example.test/api/producer-ingest/v1",
         producer_id="producer", key_id="key", secret="test-secret",
         tls_ca_bundle_path="",
-    ))
+        )
+    monkeypatch.setattr(pin, "load_credentials_from_json", load_fixture_credentials)
     return pin.AdminPinClient("unused", transport=server)
 
 
