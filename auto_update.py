@@ -421,16 +421,7 @@ def write_json_durable(path: Path, payload: Mapping[str, Any]) -> None:
 
     _assert_no_reparse_components(path)
     temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
-    safe_payload = redact_json_for_sink(payload)
-    text = json.dumps(safe_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    if len(text.encode()) + 1 > 65536 and "failure_details" in safe_payload:
-        # Full messages/streams have separate protected, pinned records.
-        safe_payload["failure_details"] = [{key: _failure_text(value, limit=300) if key in {"message", "stdout", "stderr"} else value
-                                            for key, value in entry.items()} for entry in safe_payload["failure_details"]]
-        safe_payload["failure_preview_bounded"] = True
-        text = json.dumps(safe_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    if len(text.encode()) + 1 > 65536:
-        raise ValueError("redacted control JSON exceeds 65536 bytes")
+    text = serialize_json_for_sink(payload)
     with temporary.open("x", encoding="utf-8", newline="\n") as output:
         output.write(text + "\n")
         output.flush()
@@ -467,6 +458,8 @@ def _sink_policy() -> dict:
     return {"environment_names": frozenset(("DEFECT_FINAL_DEFECT_CLAIM_TOKEN", "DEFECT_FINAL_DEFECT_INTAKE_CLAIM_TOKEN", "DEFECT_LINKED_MANIFEST_LOCK_API_TOKEN", "DEFECT_LOGISTICS_API_TOKEN", "DEFECT_RETURN_MANIFEST_API_TOKEN", "DEFECT_SERVER_ACTIVE_LOCK_TOKEN", "DEFECT_TRANSFER_MANIFEST_API_TOKEN", "INSPECTION_WORKER_WAREHOUSE_RESPONSE_EXPORT_TOKEN", "KMTECH_DEFECT_WRITER_DELEGATION_TOKEN", "KMTECH_REWORK_TEMP_NG_CANDIDATE_TOKEN", "KMTECH_REWORK_TEMP_NG_CLAIM_TOKEN", "REWORK_ENROLLMENT_RESTORE_TOKEN", "REWORK_LOGISTICS_API_TOKEN", "CONTAINER_AUDIT_ENROLLMENT_TOKEN", "CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN", "CONTAINER_RUNTIME_SECRET", "KM_LOGISTICS_INSTALL_BEARER_TOKEN", "WORKER_ANALYSIS_LOGISTICS_API_TOKEN", "KMTECH_LABEL_WRITER_DELEGATION_TOKEN", "PRODUCER_SELF_ENROLL_TOKEN", "DIRECT_SYNC_AUTH_TOKEN", "PRODUCER_API_TOKEN", "LOGISTICS_API_TOKEN")),
             "sensitive_pattern": r"(?i)(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_?KEY|API_?KEY|COOKIE|SESSION_?KEY|DELEGATION|BEARER|ENROLLMENT_CODE|RESTORE_CODE|ADMIN_PIN)",
             "path_pattern": r"(?i)_(FILE|PATH|DIR|ROOT)$", "digest_pattern": r"(?i)_(sha256s?|fingerprint|hash)$", "short_digest_pattern": r"(?i)(pin|otp|password)", "env_marker": "[REDACTED:{name}]", "field_marker": "[REDACTED:field]",
+            "compatibility_field_pattern": r"(?i)^(authorization|registration[_-]?(?:value|code))$",
+            "diagnostic_fields": frozenset(("failure", "message", "detail", "stdout", "stderr", "stdout_tail", "stderr_tail")),
             "short_marker": "[REDACTION_NOTE:short_value_skipped:{name}]", "full_byte_cap": 65536, "head_byte_cap": 8192,
             "truncation_marker": "\n[TRUNCATED: {omitted} bytes omitted]\n"}
 
@@ -532,7 +525,7 @@ def _redact_field(name, value, policy):
         return False
     if re.search(policy["digest_pattern"], name) and not re.search(policy["short_digest_pattern"], name):
         return False
-    return bool(re.search(policy["sensitive_pattern"], name) or name.lower() in {"pin", "otp", "password"})
+    return bool(re.search(policy["sensitive_pattern"], name) or re.search(policy["compatibility_field_pattern"], name) or name.lower() in {"pin", "otp", "password"})
 
 
 def redact_json_for_sink(value, environ: Mapping[str, str] = os.environ):
@@ -545,6 +538,41 @@ def redact_json_for_sink(value, environ: Mapping[str, str] = os.environ):
     if isinstance(value, str):
         return redact_for_sink(value, environ)
     return value
+
+
+
+def serialize_json_for_sink(payload: Mapping[str, Any]) -> str:
+    """Redact before opening any file; keep a valid bounded JSON envelope."""
+    safe = redact_json_for_sink(dict(payload))
+    policy = _sink_policy()
+    def diagnostics(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in policy["diagnostic_fields"] and isinstance(item, str):
+                    yield value, key, item
+                else:
+                    yield from diagnostics(item)
+        elif isinstance(value, list):
+            for item in value:
+                yield from diagnostics(item)
+    for _ in range(512):
+        encoded = json.dumps(safe, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        if len(encoded.encode("utf-8")) + 1 <= policy["full_byte_cap"]:
+            return encoded
+        candidates = sorted(diagnostics(safe), key=lambda row: len(row[2].encode("utf-8")), reverse=True)
+        if not candidates or len(candidates[0][2].encode("utf-8")) <= 300:
+            raise ValueError("redacted JSON metadata exceeds sink byte limit")
+        owner, key, value = candidates[0]
+        owner[key] = redact_for_sink(value, {}, limit=max(300, len(value.encode("utf-8")) * 3 // 4))
+        safe["sink_json_bounded"] = True
+    raise ValueError("redacted JSON envelope could not be bounded")
+
+
+def failure_user_line(error: object) -> str:
+    safe = _failure_text(error, limit=65536)
+    lines = [line.strip() for line in safe.splitlines() if line.strip()
+             and not line.strip().startswith(("[TRUNCATED:", "[REDACTION_NOTE:"))]
+    return (lines[-1] if lines else "Failure detail unavailable")[:300]
 
 
 def _failure_text(value, *, limit: int = 16384) -> str:
@@ -587,7 +615,7 @@ def _failure_details(error: BaseException) -> list[dict]:
     while error is not None and id(error) not in seen and len(details) < 16:
         seen.add(id(error))
         item = {"type": type(error).__module__ + "." + type(error).__name__,
-                "message": _failure_text(error, limit=4096)}
+                "message": _failure_text(getattr(error, "original_failure_text", error), limit=4096)}
         for name in ("errno", "winerror", "exit_code"):
             value = getattr(error, name, None)
             if type(value) is int:
@@ -608,7 +636,7 @@ def _write_failure_evidence(control: Path, error: BaseException) -> list[dict]:
     while error is not None and id(error) not in seen and len(refs) < 64:
         seen.add(id(error))
         entry = {"type": type(error).__module__ + "." + type(error).__name__, "streams": {}}
-        for name, value in (("message", str(error)), ("stdout", getattr(error, "stdout", None)), ("stderr", getattr(error, "stderr", None))):
+        for name, value in (("message", getattr(error, "original_failure_text", str(error))), ("stdout", getattr(error, "stdout", None)), ("stderr", getattr(error, "stderr", None))):
             if not isinstance(value, (str, bytes)):
                 continue
             # JSON escaping and envelope bytes are budgeted before writing;

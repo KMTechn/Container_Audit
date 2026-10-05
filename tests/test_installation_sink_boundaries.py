@@ -103,3 +103,129 @@ if($ui.Length -gt 300 -or -not $ui.StartsWith('ValueError: last cause') -or $ui.
 'PASS'
 ''',engine=engine,values={'CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN':'synthetic-child-authority-273'})
     assert result.returncode==0,result.stderr
+
+
+from pathlib import Path
+import importlib
+import json
+import pytest
+
+@pytest.mark.parametrize('module_name,function_name', (
+    ('direct_sync_auto_bootstrap', '_write_json'),
+    ('current_user_onboarding', '_write_json_atomic'),
+    ('current_user_onboarding', '_write_json_atomic_create_new'),
+))
+def test_related_report_sink_redacts_before_temporary_file(tmp_path, monkeypatch, module_name, function_name):
+    module = importlib.import_module(module_name)
+    secret = 'synthetic-final-report-sink-273'
+    monkeypatch.setenv('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN', secret)
+    destination = tmp_path / 'failure-report.json'
+    publish_name = 'link' if function_name.endswith('create_new') else 'replace'
+    publish = getattr(module.os, publish_name)
+    observed = []
+    def checked_publish(source, target):
+        raw = Path(source).read_bytes()
+        observed.append(raw)
+        assert secret.encode() not in raw, 'Known authority bytes reached temporary report sink'
+        return publish(source, target)
+    monkeypatch.setattr(module.os, publish_name, checked_publish)
+    getattr(module, function_name).__wrapped__(destination, {
+        'status': 'FAILED', 'failure': 'first cause ' + secret,
+        'credential': {'opaque': 'synthetic-unknown-field-secret'},
+        'token_elevated': False, 'writer_contract_sha256': 'a' * 64,
+    })
+    assert observed and secret.encode() not in destination.read_bytes()
+    payload = json.loads(destination.read_bytes())
+    assert payload['credential'] == '[REDACTED:field]'
+    assert payload['token_elevated'] is False
+    assert payload['writer_contract_sha256'] == 'a' * 64
+
+@pytest.mark.parametrize('field_name', ('authorization', 'registration_value', 'registration_code'))
+def test_existing_json_credential_protection_is_retained(field_name):
+    import auto_update
+    value = {'status': 'FAILED', field_name: 'synthetic-outside-env-secret'}
+    assert auto_update.redact_json_for_sink(value)[field_name] == '[REDACTED:field]'
+
+@pytest.mark.parametrize('module_name,function_name', (
+    ('direct_sync_auto_bootstrap', '_write_json'),
+    ('current_user_onboarding', '_write_json_atomic'),
+    ('current_user_onboarding', '_write_json_atomic_create_new'),
+))
+def test_related_report_sink_bounds_valid_json_after_redaction(tmp_path, monkeypatch, module_name, function_name):
+    module = importlib.import_module(module_name)
+    secret = 'synthetic-utf8-report-secret-273'
+    monkeypatch.setenv('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN', secret)
+    path = tmp_path / 'failure-report.json'
+    getattr(module, function_name).__wrapped__(path, {
+        'status': 'FAILED', 'failure': 'FIRST ' + ('가"' * 50000) + secret + ' ValueError: LAST',
+    })
+    raw = path.read_bytes()
+    assert len(raw) <= 65536 and secret.encode() not in raw
+    payload = json.loads(raw)
+    assert payload['failure'].startswith('FIRST ')
+    assert payload['failure'].endswith('ValueError: LAST')
+    assert '[TRUNCATED:' in payload['failure']
+
+
+def test_onboarding_failure_report_retains_full_stream_refs_and_temporary_bytes_are_safe(tmp_path, monkeypatch):
+    import auto_update as update
+    import current_user_onboarding as onboarding
+    import hashlib
+    import json
+    secret = 'synthetic-onboarding-child-273'
+    monkeypatch.setenv('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN', secret)
+    monkeypatch.setattr(onboarding, '_write_json_atomic', onboarding._write_json_atomic.__wrapped__)
+    monkeypatch.setattr(update, 'write_json_durable', update.write_json_durable.__wrapped__)
+    error = OSError('fixed child failure')
+    error.stderr = 'FIRST CHILD CONTEXT ' + ('x' * 100000) + secret + ' ValueError: LAST CHILD CAUSE'
+    error.exit_code = 73
+    report = {'status': 'FAILED'}
+    path = tmp_path / 'onboarding.json'
+    onboarding._persist_failure_report(path, report, error)
+    body = json.loads(path.read_bytes())
+    assert body['failure_evidence_status'] == 'RECORDED'
+    ref = body['failure_evidence_refs'][0]['streams']['stderr']
+    full = Path(ref['path']).read_bytes()
+    assert hashlib.sha256(full).hexdigest() == ref['sha256']
+    assert b'FIRST CHILD CONTEXT' in full and b'LAST CHILD CAUSE' in full
+    assert ref['complete'] is False
+    for saved in tmp_path.glob('*.json'):
+        raw = saved.read_bytes()
+        assert len(raw) <= 65536 and secret.encode() not in raw
+
+
+def test_onboarding_report_metadata_uses_contract_names_without_changing_private_comparison(tmp_path):
+    import current_user_onboarding as onboarding
+    import json
+    original = {'status': 'READY', 'owner_artifact_paths': {'credential': 'isolated/credential.json'},
+                'owner_artifact_fingerprints_before': {'credential': 'b' * 64}}
+    path = tmp_path / 'metadata.json'
+    onboarding._write_json_atomic.__wrapped__(path, original)
+    body = json.loads(path.read_bytes())
+    assert body['owner_artifact_paths']['credential_path'] == 'isolated/credential.json'
+    assert body['owner_artifact_fingerprints_before']['credential_sha256'] == 'b' * 64
+    assert original['owner_artifact_paths'] == {'credential': 'isolated/credential.json'}
+    assert original['owner_artifact_fingerprints_before'] == {'credential': 'b' * 64}
+
+
+def test_onboarding_user_error_keeps_full_redacted_cause_and_last_line_only(monkeypatch):
+    import current_user_onboarding as onboarding
+    secret = 'synthetic-onboarding-ui-273'
+    monkeypatch.setenv('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN', secret)
+    failure = onboarding.CurrentUserOnboardingError('FIRST\n' + ('x' * 100000) + '\nValueError: LAST ' + secret,
+                                                   report_path=Path('isolated/failure.json'))
+    assert len(str(failure)) <= 300 and str(failure).startswith('ValueError: LAST')
+    assert secret not in str(failure) and secret not in failure.original_failure_text
+    assert failure.original_failure_text.startswith('FIRST')
+    assert '[TRUNCATED:' in failure.original_failure_text
+
+
+def test_report_create_new_preserves_existing_preimage(tmp_path):
+    import current_user_onboarding as onboarding
+    path = tmp_path / 'existing.json'
+    original = b'{"status":"ORIGINAL"}'
+    path.write_bytes(original)
+    with pytest.raises(FileExistsError):
+        onboarding._write_json_atomic_create_new.__wrapped__(path, {'status': 'FAILED'})
+    assert path.read_bytes() == original
+    assert not list(tmp_path.glob('*.tmp'))

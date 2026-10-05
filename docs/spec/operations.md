@@ -1153,4 +1153,8 @@ sub-265 REPORT에 기록하며 실제 task 제거/전체 설치의 랩 수용과
 
 공통 redactor는 모든 sink 직전에 ENV 원문/escape와 JSON 비밀 필드를 가리고 typed 메타데이터·지문·경로를 보존한다. 64 KiB는 잘림 표식을 포함한다. child는 디스크에 원문을 쓰지 않고 RAM에서 가린 뒤 저장한다. 32 MiB RAM 입력 초과는 전문 불가를 명시하고 부분 원문을 저장하지 않는다. journal은 64 KiB 부분 파일 최대16개와 지문 참조를 쓴다.
 
+onboarding·제거·복원 보고서와 DirectSync 보고서도 임시 파일 생성 전에 같은 가림과 유효 JSON 상한을 적용한다. 실패의 원 예외/child 출력은 보호된 별도 JSON과 SHA256 참조로 보존하며 저장 실패를 원 오류로 바꾸지 않는다. 사용자 예외는 가린 마지막 줄 300자와 별도의 가린 전문을 가진다. owner artifact의 내부 경로·지문 비교는 그대로 두고, 보고서 직렬화에서는 경로/지문 이름에 `_path`/`_sha256`를 붙여 공통 메타데이터 계약을 지킨다.
+
 공식 공개 태그의 정체성 묶음과 완전 일치한 옛 relay 예약 작업만 보호된 원 XML/Enabled preimage 후 비활성화한다. 성공 시 비활성화된 작업을 보존하고 새 Run만 활성화한다. 실패 복원은 current/code 복원 결과와 독립적이며 기존 G와 새 relay 부재 확인 뒤 원 작업 Enabled를 자격 없이 복원하고 원 XML SHA256을 확인한다. G 거절은 비활성화를 유지하고 한국어 복구 안내를 남긴다. source-mode/미공개 태그 Run은 공개 묶음에 포함하지 않는다. actual guest 로그오프/로그온과 예약 실행은 코디 예행 몫이며 격리 함수 회귀와 구별한다.
+
+코디가 랩1/2 통과를 확인한 후보에서는 같은 사용자 Password/InteractiveToken도 공식 정체성 묶음으로 인정한다. 실패 설치 복원·성공 설치의 옛 작업 비활성/동시 enabled0은 예행3/4에서 확인하며 실패 시 단일 스위치를 닫는다. 정체성은 XML만 읽으며 guest 실측 계약대로 RunLevel 없음은 LeastPrivilege, SYSTEM LogonType 없음은 ServiceAccount, 사용자 LogonType 없음은 ABSENT로 정규화한다. 명시/생략 XML의 지문은 같고, 미지 값은 거절한다.

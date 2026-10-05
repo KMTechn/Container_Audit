@@ -663,9 +663,10 @@ w9next 567ff27 + autoupdate 7247634를 merge a63ae29로 통합했다. 양쪽 G�
 재획득하던 설치 거절을 기존 pinned PowerShell reader의 같은 스레드 판독으로 교정한다.
 실제 격리 mutex RED와 PS5.1/PS7 첫 설치·잔여 control/task·조회 UNKNOWN 회귀는 PROVEN이다.
 실패 summary/감사는 공통 가림 뒤 64 KiB 전문과 지문 참조를 보존하며 안내는 마지막 예외 한 줄 300자다.
+onboarding·제거/복원·DirectSync JSON 보고서의 임시 파일 저장 전 가림 누락도 교정하고, 원 오류/child 전문 참조·원자적 create-new·typed 메타데이터와 UTF-8/JSON 예산을 바이트 회귀로 확인한다.
 옛 공식 relay 작업은 태그 묶음 전체 정체성이 일치할 때 preimage 뒤 비활성화하고,
 current 부재/코드 복원 실패와 독립적으로 원 G가 허용할 때만 Enabled와 원 XML 지문을 복원한다.
-암호 저장/대화형 principal은 랩 승인 스위치가 닫혀 있으며 공개 HKCU Run writer는 없다.
+암호 저장/대화형 principal은 코디의 랩1/2 증명 및 후보 승인으로 같은 작업 사용자만 허용한다. 예행3/4 실패 시 한 곳의 스위치를 다시 닫는다. 공개 HKCU Run writer는 없다.
 원 sub-271 stdout 소실 때문에 원 실패의 직접 세부는 UNPROVEN이며 새 native 설치·GUI·
 현장 배포 수용은 NOT TESTED다. 검증/stock 판정은
 [sub-273 REPORT](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-273/REPORT.md)를 따른다.

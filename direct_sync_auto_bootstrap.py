@@ -43,11 +43,13 @@ def _now() -> str:
 
 @writer_sink("bootstrap_status")
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    from auto_update import serialize_json_for_sink
+    safe_text = serialize_json_for_sink(payload)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write(safe_text)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())

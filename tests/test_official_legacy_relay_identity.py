@@ -33,7 +33,43 @@ if((Get-BootstrapOfficialLegacyRelayIdentity $otherTask $xml $expected).matched)
 $recordVariant=$xml.Replace('AUTHOR_PLACEHOLDER','OTHER_AUTHOR_PLACEHOLDER').Replace('2020-01-01','2024-02-02').Replace('PT24H','P3650D').Replace('<Hidden>true</Hidden>','<Hidden>false</Hidden>').Replace('<Enabled>true</Enabled>','<Enabled>false</Enabled>')
 if(-not(Get-BootstrapOfficialLegacyRelayIdentity $task $recordVariant $expected).matched){throw 'OS-filled record incorrectly became identity.'}
 if(-not(Get-BootstrapOfficialLegacyRelayIdentity $task ($xml.Replace('PT1M','PT60S')) $expected).matched){throw 'Equivalent ISO duration normalization differs.'}
-if(@($expected|Where-Object {$_.allowed -and $_.branch -ne 'system_vbs'}).Count){throw 'Unproven credential branch or unpublished identity opened.'}
+if(@($expected|Where-Object {$_.branch -cin @('stored_password_current_user','interactive_current_user') -and -not $_.allowed}).Count){throw 'Coordinator candidate credential admission was not enabled.'}
+if(@($expected|Where-Object {$_.allowed -and $_.branch -cnotin @('system_vbs','stored_password_current_user','interactive_current_user')}).Count){throw 'Unpublished identity opened.'}
+'PASS'
+''', engine=engine)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
+def test_xml_logon_absence_is_distinct_from_unknown_and_same_user_credential_modes(tmp_path, engine):
+    result = run_functions(tmp_path, CANONICAL, ['Get-CanonicalOfficialLegacyRelayExpectedSet'], XML_SETUP + r'''
+$expected=Get-CanonicalOfficialLegacyRelayExpectedSet
+$absent=$xml.Replace('<LogonType>ServiceAccount</LogonType>','')
+$explicit=Get-BootstrapOfficialLegacyRelayIdentity $task $xml $expected
+foreach($variant in @($absent,$xml.Replace('<RunLevel>LeastPrivilege</RunLevel>',''),$absent.Replace('<RunLevel>LeastPrivilege</RunLevel>',''))){
+ $missing=Get-BootstrapOfficialLegacyRelayIdentity $task $variant $expected
+ if(-not $missing.matched -or $missing.sha256 -cne $explicit.sha256){throw 'Guest-proven SYSTEM omitted/explicit defaults have different identities.'}
+}
+foreach($value in @('UNRECOGNIZED','ABSENT','')){
+ $unknown=Get-BootstrapOfficialLegacyRelayIdentity $task ($xml.Replace('ServiceAccount',$value)) $expected
+ if($unknown.matched -or $unknown.reason_code -cne 'LOGON_TYPE_UNKNOWN'){throw 'Unknown XML value was guessed or conflated.'}
+}
+# The real SID stays only in this RAM XML and is never copied to a fixture.
+$current=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+foreach($mode in @('Password','InteractiveToken')){
+ $currentXml=$xml.Replace($sid,$current).Replace('ServiceAccount',$mode)
+ if(-not(Get-BootstrapOfficialLegacyRelayIdentity $task $currentXml $expected).matched){throw 'Exact same-user official credential mode rejected.'}
+ $currentIdentity=Get-BootstrapOfficialLegacyRelayIdentity $task $currentXml $expected
+ $omittedLevel=Get-BootstrapOfficialLegacyRelayIdentity $task ($currentXml.Replace('<RunLevel>LeastPrivilege</RunLevel>','')) $expected
+ if(-not $omittedLevel.matched -or $omittedLevel.sha256 -cne $currentIdentity.sha256){throw 'Guest-proven user omitted/explicit RunLevel differs.'}
+ $absentUser=Get-BootstrapOfficialLegacyRelayIdentity $task ($currentXml.Replace('<LogonType>'+$mode+'</LogonType>','')) $expected
+ if($absentUser.matched -or $absentUser.reason_code -cne 'LOGON_TYPE_ABSENT_UNMATCHED'){throw 'User LogonType absence was guessed or conflated.'}
+ if((Get-BootstrapOfficialLegacyRelayIdentity $task ($xml.Replace('ServiceAccount',$mode)) $expected).matched){throw 'Credential principal of another user was admitted.'}
+}
+foreach($value in @('UNRECOGNIZED','Limited','Highest','')){
+ $unknown=Get-BootstrapOfficialLegacyRelayIdentity $task ($xml.Replace('LeastPrivilege',$value)) $expected
+ if($unknown.matched -or $unknown.reason_code -cne 'RUN_LEVEL_UNKNOWN'){throw 'Unknown XML RunLevel was admitted.'}
+}
 'PASS'
 ''', engine=engine)
     assert result.returncode == 0, result.stderr

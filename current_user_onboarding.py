@@ -111,7 +111,9 @@ class CurrentUserOnboardingError(RuntimeError):
     def __init__(
         self, message: str, *, report_path: Path, status: str = "FAILED"
     ) -> None:
-        super().__init__(message)
+        from auto_update import _failure_text, failure_user_line
+        self.original_failure_text = _failure_text(message, limit=65536)
+        super().__init__(failure_user_line(message))
         self.report_path = Path(report_path)
         self.status = status
 
@@ -256,15 +258,46 @@ def resolve_current_user_onboarding_paths(
     )
 
 
+
+def _report_metadata_for_sink(payload: Mapping[str, Any]) -> dict[str, Any]:
+    # Give existing path/digest metadata its contract field names. This is
+    # serialization only: owner comparisons and the returned report stay exact.
+    result = dict(payload)
+    for field, suffix in (("owner_artifact_paths", "_path"),
+                          ("owner_artifact_fingerprints_before", "_sha256"),
+                          ("owner_artifact_fingerprints_after", "_sha256")):
+        entries = result.get(field)
+        if isinstance(entries, Mapping):
+            result[field] = {name + suffix: value for name, value in entries.items()}
+    return result
+
+
+def _persist_failure_report(path: Path, report: dict[str, Any], error: BaseException,
+                            *, create_new: bool = False) -> None:
+    from auto_update import _failure_text, _failure_details, _write_failure_evidence
+    report["failure"] = _failure_text(getattr(error, "original_failure_text", error), limit=65536)
+    report["failure_details"] = _failure_details(error)
+    try:
+        report["failure_evidence_refs"] = _write_failure_evidence(path.parent, error)
+        report["failure_evidence_status"] = "RECORDED"
+    except Exception as recording_error:
+        report["failure_evidence_status"] = "FAILED"
+        report["failure_evidence_error_type"] = type(recording_error).__name__
+    if create_new:
+        _write_json_atomic_create_new(path, report)
+    else:
+        _write_json_atomic(path, report)
+
+
 @writer_sink("current_user_onboarding_storage")
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    from auto_update import serialize_json_for_sink
+    safe_text = serialize_json_for_sink(_report_metadata_for_sink(payload))
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-            json.dump(
-                dict(payload), handle, ensure_ascii=False, indent=2, sort_keys=True
-            )
+            handle.write(safe_text)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -277,13 +310,13 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
 def _write_json_atomic_create_new(path: Path, payload: Mapping[str, Any]) -> None:
     """Publish JSON atomically without ever replacing an existing pathname."""
 
+    from auto_update import serialize_json_for_sink
+    safe_text = serialize_json_for_sink(_report_metadata_for_sink(payload))
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         with temporary.open("x", encoding="utf-8", newline="\n") as handle:
-            json.dump(
-                dict(payload), handle, ensure_ascii=False, indent=2, sort_keys=True
-            )
+            handle.write(safe_text)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -1488,22 +1521,20 @@ def onboard_current_user(
             return report
     except CurrentUserOnboardingError as exc:
         report["status"] = exc.status
-        report["failure"] = str(exc)
         report["error_type"] = exc.__class__.__name__
         with attempt.apply() as current:
             if current:
-                _write_json_atomic(paths.onboarding_report_path, report)
+                _persist_failure_report(paths.onboarding_report_path, report, exc)
         raise
     except Exception as exc:
         report["status"] = "FAILED"
-        report["failure"] = str(exc)[:500]
         report["error_type"] = exc.__class__.__name__
         from data_generation_guard import DataGenerationBlocked
         if isinstance(exc, DataGenerationBlocked):
             report["error_code"] = exc.decision["message_key"]
         with attempt.apply() as current:
             if current:
-                _write_json_atomic(paths.onboarding_report_path, report)
+                _persist_failure_report(paths.onboarding_report_path, report, exc)
         raise CurrentUserOnboardingError(
             f"Container_Audit first-run onboarding failed: {exc}",
             report_path=paths.onboarding_report_path,
@@ -1564,21 +1595,19 @@ def remove_current_user_setup(
         report.update(
             {
                 "status": exc.status,
-                "failure": str(exc)[:500],
                 "error_type": exc.__class__.__name__,
             }
         )
-        _write_json_atomic(paths.removal_report_path, report)
+        _persist_failure_report(paths.removal_report_path, report, exc)
         raise
     except Exception as exc:
         report.update(
             {
                 "status": "FAILED",
-                "failure": str(exc)[:500],
                 "error_type": exc.__class__.__name__,
             }
         )
-        _write_json_atomic(paths.removal_report_path, report)
+        _persist_failure_report(paths.removal_report_path, report, exc)
         raise CurrentUserOnboardingError(
             f"Container_Audit current-user removal failed: {exc}",
             report_path=paths.removal_report_path,
@@ -1978,7 +2007,7 @@ def restore_current_user_lifecycle_after_replacement(
             }
         )
         try:
-            _write_json_atomic_create_new(report_path, report)
+            _persist_failure_report(report_path, report, exc, create_new=True)
         except Exception as persistence_exc:
             raise CurrentUserOnboardingError(
                 "Container_Audit replacement lifecycle failure evidence could not be persisted",

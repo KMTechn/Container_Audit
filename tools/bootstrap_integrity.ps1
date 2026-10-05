@@ -2291,8 +2291,9 @@ function Test-BootstrapLifecycleJsonEqual($Left,$Right) {
 }
 
 function Get-BootstrapOfficialLegacyRelayExpectedIdentitySet {
-    # Coordinator opens this single switch only after credential-free lab proof.
-    $allowCredentialPrincipalTransition=$false
+    # Candidate authorization: lab1/2 passed; guest must prove install3/4.
+    # Coordinator closes this single switch if guest recovery or exclusion fails.
+    $allowCredentialPrincipalTransition=$true
     $entries=@((@'
 [{"branch":"interactive_current_user","field_templates":{"task.path":"\\","task.name":"direct-sync-relay-container-audit","action.count":"1","action.type":"Exec","action.command":"{system_directory}\\wscript.exe","action.arguments":"//B //NoLogo {program_data}\\KMTech\\DirectSync\\container_audit\\bin\\direct-sync-relay-container-audit.vbs","action.workdir":"","principal.user":"{current_user}","principal.logon_type":"InteractiveToken","principal.run_level":"LeastPrivilege","trigger.count":"1","trigger.type":"TimeTrigger","trigger.repetition_interval":"PT1M"},"tags":["v2.0.10","v2.0.11","v2.0.12","v2.0.13","v2.0.14","v2.0.15","v2.0.16","v2.0.17"],"allowed":false},{"branch":"stored_password_current_user","field_templates":{"task.path":"\\","task.name":"direct-sync-relay-container-audit","action.count":"1","action.type":"Exec","action.command":"{system_directory}\\wscript.exe","action.arguments":"//B //NoLogo {program_data}\\KMTech\\DirectSync\\container_audit\\bin\\direct-sync-relay-container-audit.vbs","action.workdir":"","principal.user":"{current_user}","principal.logon_type":"Password","principal.run_level":"LeastPrivilege","trigger.count":"1","trigger.type":"TimeTrigger","trigger.repetition_interval":"PT1M"},"tags":["v2.0.12","v2.0.13","v2.0.14","v2.0.15","v2.0.16","v2.0.17","v2.0.18","v2.0.19","v2.0.20","v2.0.21","v2.0.22","v2.0.23","v2.0.24","v2.0.25","v2.0.26","v2.0.27","v2.0.28","v2.0.29","v2.0.30","v2.0.31","v2.0.32","v2.0.33","v2.0.34","v2.0.36","v2.0.37","v2.0.52","v2.0.53","v2.0.54","v2.0.55","v2.0.56","v2.0.57","v2.0.58","v2.0.59","v2.0.61"],"allowed":false},{"branch":"system_vbs","field_templates":{"task.path":"\\","task.name":"direct-sync-relay-container-audit","action.count":"1","action.type":"Exec","action.command":"{system_directory}\\wscript.exe","action.arguments":"//B //NoLogo {program_data}\\KMTech\\DirectSync\\container_audit\\bin\\direct-sync-relay-container-audit.vbs","action.workdir":"","principal.user":"SYSTEM","principal.logon_type":"ServiceAccount","principal.run_level":"LeastPrivilege","trigger.count":"1","trigger.type":"TimeTrigger","trigger.repetition_interval":"PT1M"},"tags":["v2.0.18","v2.0.19","v2.0.20","v2.0.21","v2.0.22","v2.0.23","v2.0.24","v2.0.25","v2.0.26","v2.0.27","v2.0.28","v2.0.29","v2.0.30","v2.0.31","v2.0.32","v2.0.33","v2.0.34","v2.0.36","v2.0.37","v2.0.52","v2.0.53","v2.0.54","v2.0.55","v2.0.56","v2.0.57","v2.0.58","v2.0.59","v2.0.61"],"allowed":true}]
 '@ | ConvertFrom-Json))
@@ -2302,7 +2303,7 @@ function Get-BootstrapOfficialLegacyRelayExpectedIdentitySet {
 
 function Get-BootstrapOfficialLegacyRelayIdentity($Task,[string]$Xml='',[object[]]$ExpectedIdentitySet=@()) {
     # v2.0.33 tools/direct_sync_relay_install_pack.py:40,133-153,978-988.
-    # OS-independent identity contract 492dd940; generated dates/settings are records.
+    # Identity contract 298c9729; guest-proven XML default normalization.
     $name='direct-sync-relay-container-audit'
     $empty=[pscustomobject]@{matched=$false;sha256='';fields=@();records=@();entry_tag='';reason_code='IDENTITY_DIFFERS'}
     if(-not $ExpectedIdentitySet.Count){$ExpectedIdentitySet=Get-BootstrapOfficialLegacyRelayExpectedIdentitySet}
@@ -2330,6 +2331,14 @@ function Get-BootstrapOfficialLegacyRelayIdentity($Task,[string]$Xml='',[object[
     $principal=Task-Text $principals[0] 'UserId'
     try{$sid=ConvertTo-BootstrapPrincipalSid $principal}catch{return $empty}
     $principalLabel=if($sid -ceq (@('S','1','5','18') -join '-')){'SYSTEM'}elseif($sid -ceq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value){'CURRENT_USER'}else{'OTHER'}
+    $logonNode=$principals[0].SelectSingleNode('*[local-name()="LogonType"]')
+    $logonType=if($null -eq $logonNode){if($principalLabel -ceq 'SYSTEM'){'ServiceAccount'}else{'ABSENT'}}else{[string]$logonNode.InnerText}
+    if($null -ne $logonNode -and $logonType -cnotin @('Password','S4U','InteractiveToken','Group','ServiceAccount','InteractiveTokenOrPassword')){
+        $empty.reason_code='LOGON_TYPE_UNKNOWN';return $empty
+    }
+    $runLevelNode=$principals[0].SelectSingleNode('*[local-name()="RunLevel"]')
+    $runLevel=if($null -eq $runLevelNode){'LeastPrivilege'}else{[string]$runLevelNode.InnerText}
+    if($runLevel -cnotin @('LeastPrivilege','HighestAvailable')){$empty.reason_code='RUN_LEVEL_UNKNOWN';return $empty}
     $arguments=Task-Text $actions[0] 'Arguments'
     function Task-Arguments([string]$Value){
         $tokens=@([regex]::Matches($Value.Trim(),'"[^"]*"|[^\s]+')|ForEach-Object {
@@ -2348,7 +2357,7 @@ function Get-BootstrapOfficialLegacyRelayIdentity($Task,[string]$Xml='',[object[
         'action.count'=[string]$actions.Count;'action.type'=[string]$actions[0].LocalName
         'action.command'=Task-Path (Task-Text $actions[0] 'Command') -Executable
         'action.arguments'=$argumentIdentity;'action.workdir'=Task-Path (Task-Text $actions[0] 'WorkingDirectory')
-        'principal.user'=$principalLabel;'principal.logon_type'=Task-Text $principals[0] 'LogonType';'principal.run_level'=Task-Text $principals[0] 'RunLevel'
+        'principal.user'=$principalLabel;'principal.logon_type'=$logonType;'principal.run_level'=$runLevel
         'trigger.count'=[string]$triggers.Count;'trigger.type'=[string]$triggers[0].LocalName;'trigger.repetition_interval'=$interval
     }
     $equal=$false;$entryTag='';$expected=$null
@@ -2380,7 +2389,7 @@ function Get-BootstrapOfficialLegacyRelayIdentity($Task,[string]$Xml='',[object[
     }
     $records=@()
     foreach($node in @($document.SelectNodes('/*[local-name()="Task"]/*[local-name()="RegistrationInfo"]/* | /*[local-name()="Task"]/*[local-name()="Settings"] | /*[local-name()="Task"]/*[local-name()="Triggers"]/*/*[local-name()="StartBoundary" or local-name()="EndBoundary"]'))){$records+=,@{name=[string]$node.LocalName;sha256=(Task-Sha $node.OuterXml)}}
-    return [pscustomobject]@{matched=$equal;sha256=(Task-Sha $lines);fields=$fields;records=$records;entry_tag=$entryTag;reason_code=if($equal){'EXACT_OFFICIAL_SOURCE_IDENTITY'}else{'IDENTITY_DIFFERS'}}
+    return [pscustomobject]@{matched=$equal;sha256=(Task-Sha $lines);fields=$fields;records=$records;entry_tag=$entryTag;reason_code=if($equal){'EXACT_OFFICIAL_SOURCE_IDENTITY'}elseif($logonType -ceq 'ABSENT'){'LOGON_TYPE_ABSENT_UNMATCHED'}else{'IDENTITY_DIFFERS'}}
 }
 
 function Get-BootstrapSupportedLifecycleContext([string]$Root,[string]$Operation='inspect',[string]$ExpectedFromCommit='') {
