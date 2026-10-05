@@ -143,3 +143,46 @@ if($result.audit[0].status -cne 'PROVEN' -or -not $result.state[0].enabled){thro
 'PASS'
 ''',engine=engine)
     assert result.returncode==0,result.stderr
+
+
+@pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
+def test_guest_export_and_explicit_defaults_match_measured_fingerprint(tmp_path, engine):
+    fixture = ROOT / 'tests/fixtures/official_legacy_relay_guest_v2_0_33.xml'
+    provenance = json.loads(fixture.with_suffix('.provenance.json').read_bytes())
+    import hashlib
+    assert hashlib.sha256(fixture.read_bytes()).hexdigest() == provenance['fixture_sha256']
+    assert provenance['kind'] == 'guest_export_with_record_only_placeholders'
+    result = run_functions(tmp_path, CANONICAL, ['Get-CanonicalOfficialLegacyRelayExpectedSet', 'Get-CanonicalOfficialLegacyRelayState'], r"""
+$xml=[IO.File]::ReadAllText($env:CA_GUEST_FIXTURE)
+[xml]$doc=$xml
+$principal=$doc.SelectSingleNode("//*[local-name()='Principal']")
+if($null -eq $principal -or $null -ne $principal.SelectSingleNode("*[local-name()='RunLevel' or local-name()='LogonType']")){throw 'Guest fixture default omissions were changed.'}
+$task=[pscustomobject]@{TaskName='direct-sync-relay-container-audit';TaskPath='\'}
+$expected=Get-CanonicalOfficialLegacyRelayExpectedSet
+$identity=Get-BootstrapOfficialLegacyRelayIdentity $task $xml $expected
+if(-not $identity.matched -or $identity.fields.Count -ne 13 -or $identity.sha256 -cne $env:CA_GUEST_FINGERPRINT){throw 'Guest XML differs from measured normalized expected set.'}
+foreach($name in @('RunLevel','LogonType')){
+ $node=$doc.CreateElement($name,$principal.NamespaceURI)
+ $node.InnerText=if($name -ceq 'RunLevel'){'LeastPrivilege'}else{'ServiceAccount'}
+ [void]$principal.AppendChild($node)
+}
+$explicit=Get-BootstrapOfficialLegacyRelayIdentity $task $doc.OuterXml $expected
+if(-not $explicit.matched -or $explicit.sha256 -cne $identity.sha256){throw 'Guest omitted and explicit XML defaults differ.'}
+$writer=[pscustomobject]@{mechanism='scheduled_task';task_path='\';task_name=$task.TaskName;xml=$xml;observed_enabled=$true;transition_record=$null}
+$state=Get-CanonicalOfficialLegacyRelayState $writer $expected $env:CA_CONTRACT_ROOT
+if(-not $state.recognized -or $state.full_fingerprint -cne $identity.sha256){throw 'Shared guest state interface differs.'}
+if(-not $state.enabled){throw 'Observed guest enabled state lost.'}
+$writer.observed_enabled=$false
+$disabled=Get-CanonicalOfficialLegacyRelayState $writer $expected $env:CA_CONTRACT_ROOT
+if(-not $disabled.recognized -or $disabled.enabled){throw 'Observed disabled state was guessed.'}
+$writer.observed_enabled=$null
+$unknown=Get-CanonicalOfficialLegacyRelayState $writer $expected $env:CA_CONTRACT_ROOT
+if($unknown.recognized -or $unknown.reason_code -cne 'TASK_ENABLED_STATE_UNKNOWN'){throw 'Unobserved XML enabled default was guessed.'}
+$writer.observed_enabled=$false
+$writer.xml=$doc.OuterXml.Replace('</Settings>','<Enabled>true</Enabled></Settings>')
+$changed=Get-CanonicalOfficialLegacyRelayState $writer $expected $env:CA_CONTRACT_ROOT
+if($changed.recognized -or $changed.reason_code -cne 'TASK_ENABLED_OBSERVATION_DIFFERS'){throw 'Contradicting scheduler and XML states admitted.'}
+
+'PASS'
+""", engine=engine, values={'CA_GUEST_FIXTURE': str(fixture), 'CA_GUEST_FINGERPRINT': provenance['expected_full_fingerprint']})
+    assert result.returncode == 0, result.stderr

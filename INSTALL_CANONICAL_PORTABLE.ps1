@@ -2036,7 +2036,7 @@ function Get-CanonicalOfficialLegacyRelayWriters {
     $writers=@()
     $tasks=@(Get-ScheduledTask -ErrorAction Stop|Where-Object {[string]$_.TaskName -ieq 'direct-sync-relay-container-audit'})
     if($tasks.Count -gt 1){throw 'OFFICIAL_LEGACY_NAME_CARDINALITY_UNKNOWN'}
-    foreach($task in $tasks){$xml=Export-ScheduledTask -TaskName ([string]$task.TaskName) -TaskPath ([string]$task.TaskPath) -ErrorAction Stop;$writers+=,[pscustomobject]@{mechanism='scheduled_task';task_path=[string]$task.TaskPath;task_name=[string]$task.TaskName;xml=[string]$xml;transition_record=$null}}
+    foreach($task in $tasks){$xml=Export-ScheduledTask -TaskName ([string]$task.TaskName) -TaskPath ([string]$task.TaskPath) -ErrorAction Stop;$writers+=,[pscustomobject]@{mechanism='scheduled_task';task_path=[string]$task.TaskPath;task_name=[string]$task.TaskName;xml=[string]$xml;observed_enabled=$task.Settings.Enabled;transition_record=$null}}
     # No official public release creates HKCU Run relay persistence.
     # Existing canonical Run belongs to the canonical lifecycle, outside this set.
     return ,$writers
@@ -2048,9 +2048,21 @@ function Get-CanonicalOfficialLegacyRelayState {
         $identity=Get-BootstrapOfficialLegacyRelayIdentity $task $Writer.xml $ExpectedIdentitySet
         # Identity parser prohibits DTDs before this read-only settings extraction.
         $definition=[xml]$Writer.xml
-        $enabledValue=[string]$definition.Task.Settings.Enabled
-        if($enabledValue -cnotin @('true','false')){$identity.matched=$false;$identity.reason_code='TASK_ENABLED_STATE_UNKNOWN'}
-        $enabled=($enabledValue -ceq 'true')
+        $enabledNode=$definition.SelectSingleNode("/*[local-name()='Task']/*[local-name()='Settings']/*[local-name()='Enabled']")
+        $observedProperty=$Writer.PSObject.Properties['observed_enabled']
+        $hasObservation=($null -ne $observedProperty -and $observedProperty.Value -is [bool])
+        $enabled=$null
+        if($null -ne $enabledNode){
+            $enabledValue=[string]$enabledNode.InnerText
+            if($enabledValue -cin @('true','false')){
+                $enabled=($enabledValue -ceq 'true')
+                if($hasObservation -and $enabled -ne [bool]$observedProperty.Value){$identity.matched=$false;$identity.reason_code='TASK_ENABLED_OBSERVATION_DIFFERS'}
+            }else{$identity.matched=$false;$identity.reason_code='TASK_ENABLED_STATE_UNKNOWN'}
+        }elseif($hasObservation){
+            # Guest exports omit Enabled. Use the separately observed scheduler
+            # bool, never an XML default or a cast from null/unknown.
+            $enabled=[bool]$observedProperty.Value
+        }else{$identity.matched=$false;$identity.reason_code='TASK_ENABLED_STATE_UNKNOWN'}
     }elseif([string]$Writer.mechanism -ceq 'hkcu_run'){
         $identity=[pscustomobject]@{matched=$false;sha256='';entry_tag='';reason_code='PUBLIC_HISTORY_HAS_NO_HKCU_RUN_RELAY'}
         $enabled=[bool]$Writer.run.exists
@@ -2085,7 +2097,14 @@ function Invoke-CanonicalOfficialLegacyRelayTransition {
             }
         }catch{Write-InstallationCaughtFailure $_;$failure=Get-InstallationFailureDetails $_}
         try{
-            if($writer.mechanism -ceq 'scheduled_task'){$writer.xml=[string](Export-ScheduledTask -TaskName ([string]$writer.task_name) -TaskPath ([string]$writer.task_path) -ErrorAction Stop)}
+            if($writer.mechanism -ceq 'scheduled_task'){
+                $writer.xml=[string](Export-ScheduledTask -TaskName ([string]$writer.task_name) -TaskPath ([string]$writer.task_path) -ErrorAction Stop)
+                if($null -ne $writer.PSObject.Properties['observed_enabled']){
+                    $live=@(Get-ScheduledTask -TaskName ([string]$writer.task_name) -TaskPath ([string]$writer.task_path) -ErrorAction Stop)
+                    if($live.Count -ne 1 -or $live[0].Settings.Enabled -isnot [bool]){throw 'TASK_ENABLED_STATE_UNKNOWN'}
+                    $writer.observed_enabled=$live[0].Settings.Enabled
+                }
+            }
             $state=Get-CanonicalOfficialLegacyRelayState $writer $ExpectedIdentitySet $installationEvidenceRoot
         }catch{Write-InstallationCaughtFailure $_;$failure=Get-InstallationFailureDetails $_;$state=[pscustomobject]@{recognized=$false;entry_tag='';mechanism=[string]$writer.mechanism;enabled=$null;full_fingerprint='';transition_record=$null;reason_code='POST_TRANSITION_QUERY_UNKNOWN'}}
         $audit+=,@{mechanism=[string]$writer.mechanism;mode=$Mode;status=if($null -eq $failure){'PROVEN'}else{'FAILED'};failure=$failure}
