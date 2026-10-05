@@ -10,6 +10,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -152,8 +153,11 @@ function Restore($Before) { Save (Join-Path $env:CA_UNINSTALL_ROOT 'registry.jso
 function Relays {
     if (Test-Path -LiteralPath (Join-Path $env:CA_UNINSTALL_ROOT 'relay.ready')) {
         $relayPid = [int](Get-Content (Join-Path $env:CA_UNINSTALL_ROOT 'relay.pid'))
-        if (Get-Process -Id $relayPid -ErrorAction SilentlyContinue) {
-            return Get-Content (Join-Path $env:CA_UNINSTALL_ROOT 'relay-observation.json') -Raw | ConvertFrom-Json
+        $nativeRelay = Get-Process -Id $relayPid -ErrorAction SilentlyContinue
+        if ($null -ne $nativeRelay) {
+            $observation = Get-Content (Join-Path $env:CA_UNINSTALL_ROOT 'relay-observation.json') -Raw | ConvertFrom-Json
+            $observation | Add-Member -NotePropertyName CreationDate -NotePropertyValue $nativeRelay.StartTime -Force
+            return $observation
         }
     }
     return @()
@@ -316,11 +320,16 @@ function Assert-BootstrapProtectedRelayPath([string]$Path,[switch]$AllowSupporte
 
 
 def _ps(path, env, *args):
-    return run_powershell(
+    result = run_powershell(
         [_powershell(), '-NoLogo', '-NoProfile', '-NonInteractive',
          '-ExecutionPolicy', 'Bypass', '-File', str(path), *args],
         env=env, capture_output=True, text=True, timeout=90,
     )
+    observations = [json.loads(line.removeprefix('ca_fixture_audit='))
+                    for line in result.stdout.splitlines() if line.startswith('ca_fixture_audit=')]
+    assert len(observations) <= 1
+    result.fixture_audit = observations[0] if observations else None
+    return result
 
 
 def _setup(tmp_path, fault=''):
@@ -343,9 +352,21 @@ def _setup(tmp_path, fault=''):
     source = _portable_release_fixture(tmp_path, directory='packet')
     canonical = source / 'INSTALL_CANONICAL_PORTABLE.ps1'
     text = canonical.read_text(encoding='utf-8-sig').replace('$wanted = Command $install', OS_BOUNDARIES + '\n$wanted = Command $install')
+    audit_assignment = '$auditPath = Join-Path $auditRoot "canonical-portable-$runId.json"'
+    assert text.count(audit_assignment) == 1
+    # Observe real run/PID provenance; evidence initialization and BasePath stay
+    # byte-for-byte product calls (3115733), including their actual tree location.
+    text = text.replace(audit_assignment, audit_assignment + '\n'
+                        + "[Console]::WriteLine('ca_fixture_audit=' + ([ordered]@{run_id=$runId; process_id=$PID; audit_path=$auditPath} | ConvertTo-Json -Compress))")
+    if fault == 'diagnostic':
+        env['CA_UNINSTALL_SYNTHETIC'] = uuid.uuid4().hex + uuid.uuid4().hex
+        text, replacements = re.subn(r'(?m)^(\$Script:CanonicalWriterFenceDelegationToken\s*=\s*).+$',
+                                     r'\1$env:CA_UNINSTALL_SYNTHETIC', text)
+        assert replacements == 2  # Initial attempt and rollback-continuation renewal.
     if fault == 'after_removal':
-        text = text.replace("if ($LASTEXITCODE -ne 0) { throw \"Code removal failed: $LASTEXITCODE\" }",
-                            "if ($LASTEXITCODE -ne 0) { throw \"Code removal failed: $LASTEXITCODE\" }\n        throw 'AFTER_REMOVAL_INJECTED_FAILURE'")
+        target = '        if ((Test-Path -LiteralPath $install) -or (Snapshot).exists -or @(Relays).Count -ne 0) {'
+        assert text.count(target) == 1
+        text = text.replace(target, "        throw 'AFTER_REMOVAL_INJECTED_FAILURE'\n" + target)
     elif fault in {'final_evidence', 'audit_unavailable'}:
         condition = "$Value['status'] -ceq 'PASS_UNINSTALLED_DATA_PRESERVED' -and $Path -ceq $EvidencePath"
         if fault == 'audit_unavailable':
@@ -353,20 +374,32 @@ def _setup(tmp_path, fault=''):
         text = text.replace('function Save([string]$Path, $Value) {',
                             "function Save([string]$Path, $Value) {\n    if ($Value -is [Collections.IDictionary] -and $Value.Contains('status') -and (" + condition + ")) { throw 'AUDIT_INJECTED_FAILURE' }")
     elif fault == 'forged':
-        text = text.replace('& $winps @uninstallArguments',
-                            "$uninstallArguments[$uninstallArguments.IndexOf('-WriterFenceDelegationToken') + 1] = ('e' * 64)\n        & $winps @uninstallArguments")
+        target = "$capturedChild = Invoke-InstallationEvidenceChild 'uninstall-helper' $winps $uninstallArguments"
+        assert text.count(target) == 1
+        text = text.replace(target, "$uninstallArguments[$uninstallArguments.IndexOf('-WriterFenceDelegationToken') + 1] = ('e' * 64)\n        $capturedChild = Invoke-InstallationEvidenceChild 'uninstall-helper' $winps $uninstallArguments")
     elif fault == 'fence_release':
-        text = text.replace('Clear-CanonicalWriterFenceReleaseDelegation\n        Stop-CanonicalWriterFenceRelease $releaseAuthorization',
-                            "Clear-CanonicalWriterFenceReleaseDelegation\n        throw 'FENCE_RELEASE_INJECTED_FAILURE'\n        Stop-CanonicalWriterFenceRelease $releaseAuthorization")
+        target = "        if ($CompleteRetiredRemoval) { Set-InstallationEvidenceStage 'retirement.release_authorized' }\n        Stop-CanonicalWriterFenceRelease $releaseAuthorization"
+        assert text.count(target) == 1
+        text = text.replace(target, target.replace('        Stop-CanonicalWriterFenceRelease',
+                            "        throw 'FENCE_RELEASE_INJECTED_FAILURE'\n        Stop-CanonicalWriterFenceRelease"))
     canonical.write_text(text, encoding='utf-8-sig')
     helper = source / 'INSTALL_THIS_PC.ps1'
     text = helper.read_text(encoding='utf-8-sig').replace('$testOverride = (', HELPER_OS + '\n$testOverride = (')
-    if fault in {'partial', 'restore_failure'}:
+    if fault in {'partial', 'restore_failure', 'partial_foreign', 'partial_damaged', 'diagnostic'}:
         target = '        $removed = Invoke-ContainerConvergentRemoval -InstallRoot $installRootFull -TaskFolder $folder -ExcludeProcessIds $excluded'
         assert text.count(target) == 1
-        text = text.replace(target, "        Remove-Item -LiteralPath (Join-Path $installRootFull 'app\\main.py') -Force\n        throw 'PARTIAL_REMOVAL_INJECTED_FAILURE'")
+        extra = ''
+        if fault == 'partial_foreign':
+            extra = "        [IO.File]::WriteAllText((Join-Path $installRootFull 'unknown.txt'),'preserve-unknown')\n"
+        elif fault == 'partial_damaged':
+            extra = "        [IO.File]::WriteAllText((Join-Path $installRootFull 'app\\Container_Audit.py'),'changed-known-file')\n"
+        elif fault == 'diagnostic':
+            extra = "        [Console]::Out.WriteLine(('first-cause-'*800)+'END_FIRST_CAUSE'+$WriterFenceDelegationToken)\n"
+        text = text.replace(target, "        Remove-Item -LiteralPath (Join-Path $installRootFull 'app\\main.py') -Force\n" + extra + "        throw 'PARTIAL_REMOVAL_INJECTED_FAILURE'")
         if fault == 'restore_failure':
-            text = text.replace('        if ($uninstallMutationStarted) {', "        if ($uninstallMutationStarted) {\n            throw 'RESTORE_INJECTED_FAILURE'")
+            recovery = '    if ($RestoreUninstallRecordPath) {\n        Copy-Item -LiteralPath $RestoreUninstallRecordPath'
+            assert text.count(recovery) == 1
+            text = text.replace(recovery, "    if ($RestoreUninstallRecordPath) {\n        throw 'RESTORE_INJECTED_FAILURE'\n        Copy-Item -LiteralPath $RestoreUninstallRecordPath")
     elif fault == 'helper_after_removal':
         text = text.replace("        Write-Output 'uninstall_status=PASS_CODE_REMOVED_STATE_PRESERVED'",
                             "        throw 'HELPER_AFTER_REMOVAL_INJECTED_FAILURE'")

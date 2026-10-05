@@ -2012,12 +2012,31 @@ if ($sourceInventory.Count -eq 0) {
     throw "Frozen release code inventory is empty."
 }
 $sourceAggregate = Get-InventoryAggregate $sourceInventory
+function Assert-ContainerUninstallRecoveryRemainder {
+    # A failed convergent removal may retain only unchanged pinned code. Never
+    # replace an unknown/changed file or erase the remnant to make recovery pass.
+    Assert-NoReparsePoint $installRootFull 'uninstall recovery remainder'
+    $expected = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+    foreach ($item in $sourceInventory) { $expected.Add([string]$item.path, $item) }
+    foreach ($item in @(Get-CodeInventory $installRootFull)) {
+        if (-not $expected.ContainsKey([string]$item.path) -or
+            [int64]$item.size -ne [int64]$expected[[string]$item.path].size -or
+            [string]$item.sha256 -cne [string]$expected[[string]$item.path].sha256) {
+            throw 'UNINSTALL_RECOVERY_REMAINDER_DIFFERS'
+        }
+    }
+    $record = Join-Path $installRootFull $IntegrityFileName
+    if ((Test-Path -LiteralPath $record) -and
+        (Get-FileSha256 $record) -cne $ExpectedUninstallRecordSha256) {
+        throw 'UNINSTALL_RECOVERY_RECORD_CHANGED'
+    }
+}
 if ($RestoreUninstallRecordPath) {
-    if ($DryRun -or (Test-Path -LiteralPath $installRootFull) -or
+    if ($DryRun -or
         $ExpectedUninstallRecordSha256 -cnotmatch '^[0-9a-f]{64}$' -or
         $sourceAggregate -cne $ExpectedInstalledAggregateSha256 -or
         (Get-FileSha256 (Join-Path $sourceRootFull 'portable-manifest.json')) -cne $ExpectedInstalledManifestSha256) {
-        throw 'UNINSTALL_RECOVERY_IDENTITY_INVALID: exact source and absent target required.'
+        throw 'UNINSTALL_RECOVERY_IDENTITY_INVALID: exact source required.'
     }
     $RestoreUninstallRecordPath = Get-StrictFullPath $RestoreUninstallRecordPath 'uninstall integrity preimage'
     Assert-NoReparsePoint $RestoreUninstallRecordPath 'uninstall integrity preimage'
@@ -2025,6 +2044,7 @@ if ($RestoreUninstallRecordPath) {
         throw 'UNINSTALL_RECOVERY_RECORD_CHANGED'
     }
     Assert-ContainerReplacementRestoreQuiescent -CurrentRoot $installRootFull -SkipOwnedTaskCheckForGuardedTest:$testOverride
+    if (Test-Path -LiteralPath $installRootFull) { Assert-ContainerUninstallRecoveryRemainder }
 }
 if ($DryRun.IsPresent) {
     Write-Output "bootstrap_status=DRY_RUN"
@@ -2116,6 +2136,7 @@ if($SupportedActiveVersionPlacement){Invoke-ContainerSupportedActiveVersionPlace
 $applicationParent = Split-Path -Parent $installRootFull
 $stagingRoot = Join-Path $applicationParent ('.current.bootstrap.' + [Guid]::NewGuid().ToString('N'))
 $replacementApplied = $false
+$uninstallPartialRoot = ''
 $replacementRollbackRoot = ''
 $replacementReceiptFull = ''
 $replacementReceiptWritten = $false
@@ -2159,6 +2180,15 @@ try {
         Set-HardenedCodeAcl $stagingRoot -Recursive
     }
     Set-InstallationEvidenceStage 'placement.old_tree_and_swap'
+    if ($RestoreUninstallRecordPath -and (Test-Path -LiteralPath $installRootFull)) {
+        if ($WriterFenceAttemptId -cnotmatch '^[0-9a-f]{32}$') { throw 'UNINSTALL_RECOVERY_ATTEMPT_INVALID' }
+        $uninstallPartialRoot = Join-Path $applicationParent ('.current.uninstall.' + $WriterFenceAttemptId)
+        if (Test-Path -LiteralPath $uninstallPartialRoot) { throw 'UNINSTALL_RECOVERY_CUSTODY_EXISTS' }
+        Assert-NoReparsePoint $uninstallPartialRoot 'uninstall recovery custody' -PathOnly
+        Assert-ContainerReplacementRestoreQuiescent -CurrentRoot $installRootFull -SkipOwnedTaskCheckForGuardedTest:$testOverride
+        Assert-ContainerUninstallRecoveryRemainder
+        Move-Item -LiteralPath $installRootFull -Destination $uninstallPartialRoot
+    }
     if (Test-Path -LiteralPath $installRootFull) {
         $existingRecordPath = Join-Path $installRootFull $IntegrityFileName
         $existingAggregate = ''
@@ -2241,7 +2271,14 @@ try {
         }
     }
     else {
-        Move-Item -LiteralPath $stagingRoot -Destination $installRootFull
+        try { Move-Item -LiteralPath $stagingRoot -Destination $installRootFull }
+        catch {
+            if ($uninstallPartialRoot -and -not (Test-Path -LiteralPath $installRootFull)) {
+                Assert-NoReparsePoint $uninstallPartialRoot 'uninstall recovery custody'
+                Move-Item -LiteralPath $uninstallPartialRoot -Destination $installRootFull
+            }
+            throw
+        }
         $bootstrapStatus = 'PASS'
     }
     Set-InstallationEvidenceStage 'placement.installed_acl'

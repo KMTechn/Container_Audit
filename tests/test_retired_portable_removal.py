@@ -11,8 +11,41 @@ import zipfile
 import pytest
 
 from tests.test_canonical_portable_uninstall import HELPER_OS, ROOT, _install, _launch_relay, _ps, _setup, _sha, _tree
+from tests.powershell_contracts import run_functions
 
 OLD_COMMIT = 'd69dd303c8829132b02971473d8093e024e8b6dd'
+
+
+def _expected_evidence_tree(root, before, result, *, claimant=False):
+    """Add only this observed run/PID's exact 3115733 diagnostic artifacts."""
+    observation = result.fixture_audit
+    assert observation is not None
+    audit = Path(observation['audit_path'])
+    assert audit.name == 'canonical-portable-' + observation['run_id'] + '.json'
+    assert type(observation['process_id']) is int and observation['process_id'] > 0
+    directory = Path(str(audit) + '.evidence.' + str(observation['process_id']))
+    assert directory.resolve().is_relative_to(root.resolve())
+    stages = directory / 'stages.jsonl'
+    expected_paths = {stages}
+    if claimant:
+        expected_paths.add(directory / 'evidence-status.json')
+    assert {p for p in directory.rglob('*') if p.is_file()} == expected_paths
+    rows = [json.loads(line) for line in stages.read_text(encoding='utf-8-sig').splitlines()]
+    assert rows and all(isinstance(row, dict) for row in rows)
+    assert rows[0]['event'] == 'INITIALIZED'
+    assert rows[0]['process_id'] == observation['process_id']
+    assert any(row.get('stage') == 'canonical.writer_fence_preflight' for row in rows)
+    if claimant:
+        assert any(row.get('event') == 'END' and row.get('result') == 'FAILED' for row in rows)
+        assert any(row.get('lane') == 'rollback' for row in rows)
+        summary = json.loads((directory / 'evidence-status.json').read_text(encoding='utf-8-sig'))
+        assert summary['root'] == str(directory) and summary['summary_written'] is True
+    expected = dict(before)
+    for path in expected_paths:
+        relative = str(path.relative_to(root))
+        assert relative not in expected
+        expected[relative] = _sha(path)
+    return expected
 
 
 def _retired_fixture(tmp_path, fault='', *, historical=False):
@@ -31,8 +64,11 @@ def _retired_fixture(tmp_path, fault='', *, historical=False):
         ):
             payload = committed(relative)
             if relative == 'INSTALL_THIS_PC.ps1':
+                # d69 predates 3115733 evidence APIs. Keep precisely its original
+                # OS seams; the current protected-journal seam has no old consumer.
+                historical_os = HELPER_OS.split('# Only OS protection is simulated;')[0]
                 payload = payload.decode('utf-8-sig').replace(
-                    '$testOverride = (', HELPER_OS + '\n$testOverride = (').encode('utf-8-sig')
+                    '$testOverride = (', historical_os + '\n$testOverride = (').encode('utf-8-sig')
             elif relative == 'tools/container_writer_fence.ps1':
                 payload = payload.replace(b'Local\\KMTech.ContainerAudit.WriterAdmission.v1',
                                           env['CA_UNINSTALL_MUTEX'].encode())
@@ -200,6 +236,103 @@ def test_retirement_failure_restores_exact_code_run_and_retired_marker(tmp_path,
     assert not (Path(env['CONTAINER_AUDIT_DATA_ROOT']) / 'direct_sync/control/container_audit_user_relay.stop.json').exists()
 
 
+@pytest.mark.parametrize('fault', ['restore_failure', 'partial_foreign', 'partial_damaged'])
+def test_retirement_failed_code_recovery_still_restores_run_and_records_every_tail(tmp_path, fault):
+    env, old_source, manager, install, protected, receipt, marker = _retired_fixture(tmp_path, fault)
+    preserved = {p: p.read_bytes() for p in [*protected, receipt, marker]}
+    registry = json.loads((tmp_path / 'registry.json').read_text())
+    result = _complete(tmp_path, env, old_source, manager, install, receipt, marker)
+    assert result.returncode != 0
+    assert 'PASS_EXACT_PREIMAGE_SAFE_TO_RETRY' not in result.stdout
+    assert json.loads((tmp_path / 'registry.json').read_text(encoding='utf-8-sig')) == registry
+    assert all(p.read_bytes() == content for p, content in preserved.items())
+    audit = json.loads((tmp_path / 'retirement-audit.json').read_text(encoding='utf-8-sig'))
+    steps = {row['step']: row['status'] for row in audit['rollback']['steps']}
+    assert steps == {'delegation': 'PROVEN', 'code': 'FAILED', 'retired_pair': 'PROVEN',
+                     'relay_identity': 'PROVEN', 'run_preimage': 'PROVEN', 'stop_preimage': 'PROVEN',
+                     'fence_release': 'FAILED', 'old_relay': 'FAILED'}
+    control = Path(env['LOCALAPPDATA']) / 'KMTech/DirectSync/container_audit/control/writer-session/active.json'
+    assert control.is_file() and audit['rollback']['code_exact'] is False
+    assert audit['status'] == 'RETIREMENT_ROLLBACK_INCOMPLETE_FENCED'
+    if fault == 'partial_foreign':
+        assert (install / 'unknown.txt').read_text() == 'preserve-unknown'
+    elif fault == 'partial_damaged':
+        assert (install / 'app/Container_Audit.py').read_text() == 'changed-known-file'
+
+
+def test_retirement_first_child_diagnostic_is_complete_and_masks_environment_value(tmp_path):
+    result = run_functions(tmp_path, ROOT / 'INSTALL_CANONICAL_PORTABLE.ps1',
+                           ['Get-CanonicalRetirementChildFailure'], r'''
+$ErrorActionPreference='Stop'
+. (Join-Path $env:CA_CONTRACT_SOURCE_ROOT 'tools\bootstrap_integrity.ps1')
+$name='CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN'
+$synthetic=[Guid]::NewGuid().ToString('N')+[Guid]::NewGuid().ToString('N')
+$prior=[Environment]::GetEnvironmentVariable($name,'Process')
+try {
+    [Environment]::SetEnvironmentVariable($name,$synthetic,'Process')
+    $long=('first-cause-'*800)+'END_FIRST_CAUSE'
+    $child=[pscustomobject]@{ProcessId=123;ExitCode=73;Stdout=($long+"`n"+$synthetic);Stderr=($synthetic+"`n"+$long);Streams=@{}}
+    $failure=Get-CanonicalRetirementChildFailure $child -Environment @{$name=$synthetic}
+    $summary=$failure|ConvertTo-Json -Depth 12 -Compress
+    $path=Join-Path $env:CA_CONTRACT_ROOT 'failure-audit.json'
+    [IO.File]::WriteAllText($path,$summary,[Text.UTF8Encoding]::new($false))
+    if ($summary.Contains($synthetic) -or [IO.File]::ReadAllText($path).Contains($synthetic)) {throw 'SECRET_RAW_VALUE_RETAINED'}
+    if ($failure.stdout -cne ($long+"`n[REDACTED:CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN]") -or $failure.stderr -cne ("[REDACTED:CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN]`n"+$long)) {throw 'FIRST_DIAGNOSTIC_TRUNCATED'}
+    'PASS_COMPLETE_REDACTED'
+} finally {[Environment]::SetEnvironmentVariable($name,$prior,'Process')}
+''', values={'CA_CONTRACT_SOURCE_ROOT': str(ROOT)})
+    assert result.returncode == 0, 'complete redacted retirement diagnostic contract failed'
+    assert result.stdout.strip() == 'PASS_COMPLETE_REDACTED'
+
+
+def test_retirement_first_child_failure_survives_recovery_and_contains_no_raw_secret(tmp_path):
+    env, old_source, manager, install, protected, receipt, marker = _retired_fixture(tmp_path, 'diagnostic')
+    before = _tree(install)
+    result = _complete(tmp_path, env, old_source, manager, install, receipt, marker)
+    assert result.returncode != 0
+    assert 'uninstall_recovery_status=PASS_EXACT_PREIMAGE_SAFE_TO_RETRY' in result.stdout
+    assert _tree(install) == before
+    audit_path = tmp_path / 'retirement-audit.json'
+    failure = json.loads(audit_path.read_text(encoding='utf-8-sig'))['retirement_child_failure']
+    full_cause = 'first-cause-' * 800 + 'END_FIRST_CAUSE[REDACTED:CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN]'
+    raw = env['CA_UNINSTALL_SYNTHETIC'].encode()
+    safe = all(raw not in payload for payload in (result.stdout.encode(), result.stderr.encode(), audit_path.read_bytes()))
+    assert safe, 'secret present in guidance/summary/audit (value suppressed)'
+    observation = result.fixture_audit
+    directory = Path(observation['audit_path'] + '.evidence.' + str(observation['process_id']))
+    assert all(raw not in p.read_bytes() for p in directory.rglob('*') if p.is_file()), 'secret in evidence (value suppressed)'
+    full_present = full_cause in failure['stdout'] and full_cause in result.stdout
+    assert full_present, 'first child diagnostic missing or truncated (output suppressed)'
+
+
+@pytest.mark.parametrize('operation', ['install', 'ordinary_remove', 'update'])
+def test_general_finally_still_persists_installation_evidence(tmp_path, operation):
+    # Execute the actual finally consumer, independently of native authority
+    # admission (which remains a separate non-elevated UNPROVEN positive).
+    result = run_functions(tmp_path, ROOT / 'INSTALL_CANONICAL_PORTABLE.ps1', ['Sha'], r'''
+$ErrorActionPreference='Stop'
+$block=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.TryStatementAst] -and
+    $null -ne $n.Finally -and $n.Finally.Extent.Text.Contains('$finalEvidence=Complete-InstallationEvidence')},$true))
+if($block.Count -ne 1){throw 'canonical finally not unique'}
+$Uninstall=($env:CA_FINAL_OPERATION -ceq 'ordinary_remove');$CompleteRetiredRemoval=$false
+$retirementAuditSealed=$false;$original=$null
+$audit=@{rollback=@{runtime_restored=$true}}
+$auditPath=Join-Path $env:CA_CONTRACT_ROOT 'audit.json';$evidenceFull=''
+$canonicalWriterFenceEnvironmentNames=@();$canonicalWriterFenceAuthority=$null
+$retirementResumeClaim=$null;$continuationOldClaim=$null
+function Complete-InstallationEvidenceStage {}
+function Complete-InstallationEvidence {return @{status='COMPLETE';summary_written=$true}}
+function Save($Path,$Value) {[IO.File]::WriteAllText($Path,($Value|ConvertTo-Json -Depth 12))}
+function Exit-RetirementResumeClaim {}
+$body=$block[0].Finally.Extent.Text
+. ([scriptblock]::Create($body.Substring(1,$body.Length-2))) | Out-Null
+$stored=Get-Content -LiteralPath $auditPath -Raw | ConvertFrom-Json
+if(-not $stored.installation_evidence.summary_written -or $stored.installation_evidence.status -cne 'COMPLETE'){throw 'general final evidence missing'}
+'PASS'
+''', values={'CA_FINAL_OPERATION': operation})
+    assert result.returncode == 0 and result.stdout.strip() == 'PASS'
+
+
 def test_new_canonical_install_after_retirement_reuses_adopted_identity(tmp_path):
     env, old_source, manager, install, protected, receipt, marker = _retired_fixture(tmp_path)
     host = Path(env['CA_UNINSTALL_HOST'])
@@ -270,7 +403,9 @@ def test_retirement_rejects_foreign_requests_and_overlapping_output_before_mutat
     result = _complete(tmp_path, env, old_source, manager, install, receipt, marker, **pins)
     assert result.returncode != 0
     assert 'RETIREMENT_' in result.stderr or 'CANONICAL_STOP_MARKER_PREEXISTS' in result.stderr
-    assert _tree(tmp_path) == original
+    expected = (_expected_evidence_tree(tmp_path, original, result)
+                if difference == 'active_marker' else original)
+    assert _tree(tmp_path) == expected
 
 
 @pytest.mark.parametrize('bound', [True, False])
@@ -340,3 +475,127 @@ def test_fresh_removal_requires_its_own_stop_marker_before_code_removal(tmp_path
     assert result.returncode != 0
     assert _tree(install) == before
     assert all(p.read_bytes() == content for p, content in original.items())
+
+
+@pytest.mark.parametrize('ending',['failure','natural_exit'])
+def test_sealed_finally_keeps_bytes_and_records_evidence(tmp_path,ending):
+    result=run_functions(tmp_path,ROOT/'INSTALL_CANONICAL_PORTABLE.ps1',['Sha'],r'''
+function Set-InstallationEvidenceAcl {}
+$block=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally -and $n.Finally.Extent.Text.Contains('$finalEvidence=Complete-InstallationEvidence')},$true))
+if($block.Count -ne 1){throw 'finally not unique'}
+$auditPath=Join-Path $env:CA_CONTRACT_ROOT 'audit.json';$evidenceFull=''
+[IO.File]::WriteAllText($auditPath,'sealed-exact-audit',[Text.UTF8Encoding]::new($false))
+$pin=Sha $auditPath
+$root=Initialize-InstallationEvidence $auditPath 'S-1-5-21-111-222-333-1001'
+Set-InstallationEvidenceStage 'retirement.release_authorized'
+$retirementAuditSealed=$true;$CompleteRetiredRemoval=$true;$Uninstall=$true
+$audit=@{rollback=@{runtime_restored=$false}};$original=$null
+if($env:CA_ENDING -ceq 'failure'){
+ try{throw 'POST_SEAL_FAILURE'}catch{$original=$_;Fail-InstallationEvidenceStages $_}
+ Set-InstallationEvidenceStage 'rollback.retirement' 'rollback'
+}else{Write-InstallationEvidenceEvent ([ordered]@{event='FIXTURE_CONTROLLER_EXIT';exit_code=97})}
+$canonicalWriterFenceEnvironmentNames=@();$canonicalWriterFenceAuthority=$null
+$retirementResumeClaim=$null;$continuationOldClaim=$null
+function Save($Path,$Value){[IO.File]::WriteAllText($Path,($Value|ConvertTo-Json -Depth 12))}
+function Exit-RetirementResumeClaim {}
+$body=$block[0].Finally.Extent.Text
+. ([scriptblock]::Create($body.Substring(1,$body.Length-2)))|Out-Null
+if((Sha $auditPath) -cne $pin){throw 'SEALED_BYTES_CHANGED'}
+$rows=@(Get-Content -LiteralPath (Join-Path $root 'stages.jsonl')|ForEach-Object{$_|ConvertFrom-Json})
+if($env:CA_ENDING -ceq 'failure'){
+ if(@($rows|Where-Object{$_.event -ceq 'CAUGHT_FAILURE' -and $_.failure.exception_chain[0].message -match 'POST_SEAL_FAILURE'}).Count -ne 1){throw 'failure absent'}
+ if(@($rows|Where-Object{$_.event -ceq 'END' -and $_.result -ceq 'FAILED'}).Count -ne 2){throw 'forward/rollback failure absent'}
+}else{
+ if(@($rows|Where-Object{$_.event -ceq 'FIXTURE_CONTROLLER_EXIT' -and $_.exit_code -eq 97}).Count -ne 1){throw 'exit absent'}
+ if(@($rows|Where-Object{$_.event -ceq 'END' -and $_.stage -ceq 'retirement.release_authorized'}).Count -ne 1){throw 'exit stage absent'}
+}
+if(@(Get-ChildItem -LiteralPath $root -File).Count -ne 2){throw 'evidence count differs'}
+'PASS'
+''',values={'CA_ENDING':ending})
+    assert result.returncode==0 and result.stdout.strip()=='PASS','sealed finally/evidence consumer failed'
+
+@pytest.mark.parametrize('fault', ['partial', 'after_removal'])
+def test_retirement_exact_recovery_restarts_the_preexisting_live_relay(tmp_path, fault):
+    env, old_source, manager, install, protected, receipt, marker = _retired_fixture(tmp_path, fault)
+    original = {p: p.read_bytes() for p in [*protected, receipt, marker]}
+    registry = json.loads((tmp_path / 'registry.json').read_text())
+    before = _tree(install)
+    with _launch_relay(tmp_path, env) as relay:
+        first_pid = relay.pid
+        result = _complete(tmp_path, env, old_source, manager, install, receipt, marker)
+        assert result.returncode != 0
+        assert 'uninstall_recovery_status=PASS_EXACT_PREIMAGE_SAFE_TO_RETRY' in result.stdout
+        relay.wait(timeout=10)
+        assert (tmp_path / 'relay.ready').is_file()
+        launches = [json.loads(line) for line in (tmp_path / 'relay-launches.jsonl').read_text().splitlines()]
+        assert len(launches) == 2
+        assert launches[0]['ProcessId'] == first_pid and launches[1]['ProcessId'] != first_pid
+        assert launches[1]['fence_active'] is False
+        assert _tree(install) == before
+        assert json.loads((tmp_path / 'registry.json').read_text(encoding='utf-8-sig')) == registry
+        assert all(p.read_bytes() == content for p, content in original.items())
+        audit = json.loads((tmp_path / 'retirement-audit.json').read_text(encoding='utf-8-sig'))
+        assert len(audit['rollback']['steps']) == 8
+        assert all(row['status'] == 'PROVEN' for row in audit['rollback']['steps'])
+        assert audit['rollback']['runtime_restored'] is True
+
+
+@pytest.mark.parametrize('sealed',[False,True])
+def test_common_catch_preserves_seal_and_records_unsealed_failure(tmp_path,sealed):
+    result=run_functions(tmp_path,ROOT/'INSTALL_CANONICAL_PORTABLE.ps1',['Sha','Get-CanonicalFailureDetails'],r'''
+function Set-InstallationEvidenceAcl {}
+$main=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally -and $n.Finally.Extent.Text.Contains('$finalEvidence=Complete-InstallationEvidence')},$true))
+if($main.Count -ne 1){throw 'main catch not unique'}
+$statements=$main[0].CatchClauses[0].Body.Statements
+$placement=@($statements|Where-Object{$_ -is [Management.Automation.Language.IfStatementAst] -and $_.Clauses[0].Item1.Extent.Text -ceq '$enteredPlacementTry'})
+if($placement.Count -ne 1){throw 'placement catch not unique'}
+$auditPath=Join-Path $env:CA_CONTRACT_ROOT 'audit.json';$evidenceFull=''
+[IO.File]::WriteAllText($auditPath,'sealed-audit-bytes',[Text.UTF8Encoding]::new($false));$pin=Sha $auditPath
+$root=Initialize-InstallationEvidence $auditPath 'S-1-5-21-111-222-333-1001'
+Set-InstallationEvidenceStage 'retirement.release_authorized'
+$retirementAuditSealed=($env:CA_SEALED -ceq 'True');$CompleteRetiredRemoval=$retirementAuditSealed
+$audit=@{rollback=@{runtime_restored=$false}};$enteredPlacementTry=$true
+function Save($Path,$Value){[IO.File]::WriteAllText($Path,($Value|ConvertTo-Json -Depth 12))}
+try{throw 'POST_SEAL_CAUGHT_FAILURE'}catch{
+ $initial=$_
+ foreach($statement in @($statements|Select-Object -First 4)){. ([scriptblock]::Create($statement.Extent.Text))}
+ foreach($statement in @($placement[0].Clauses[0].Item2.Statements|Select-Object -First 3)){. ([scriptblock]::Create($statement.Extent.Text))}
+ if(-not [object]::ReferenceEquals($original,$initial)){throw 'original exception replaced'}
+}
+if($retirementAuditSealed){if((Sha $auditPath) -cne $pin){throw 'SEALED_CATCH_BYTES_CHANGED'}}
+else{
+ $saved=Get-Content -LiteralPath $auditPath -Raw|ConvertFrom-Json
+ if(-not $saved.failure -or $saved.failure_type -cne $original.Exception.GetType().Name){throw 'GENERAL_CATCH_FAILURE_MISSING'}
+}
+$rows=@(Get-Content -LiteralPath (Join-Path $root 'stages.jsonl')|ForEach-Object{$_|ConvertFrom-Json})
+if(@($rows|Where-Object{$_.event -ceq 'CAUGHT_FAILURE' -and $_.failure.exception_chain[0].message -ceq 'POST_SEAL_CAUGHT_FAILURE'}).Count -ne 2){throw 'post-seal evidence failure missing'}
+if(@($rows|Where-Object{$_.event -ceq 'END' -and $_.result -ceq 'FAILED' -and $_.stage -ceq 'retirement.release_authorized'}).Count -ne 1){throw 'post-seal failed stage missing'}
+'PASS'
+''',values={'CA_SEALED':str(sealed)})
+    assert result.returncode==0 and result.stdout.strip()=='PASS','actual catch audit/evidence consumer failed'
+
+@pytest.mark.parametrize('case',['enabled','unrecognized','noncanonical_disabled'])
+def test_retirement_rejects_legacy_writers_without_disabled_transition_proof(tmp_path,case):
+    result=run_functions(tmp_path,ROOT/'INSTALL_CANONICAL_PORTABLE.ps1',['Sha','Assert-CanonicalRetiredLegacyWriterAdmission'],r'''
+$CompleteRetiredRemoval=$true;$Uninstall=$true;$RestoreVerifiedReplacement=$false
+$installationEvidenceRoot=$env:CA_CONTRACT_ROOT
+$writerBefore=@{present=($env:CA_TASK_CASE -cne 'noncanonical_disabled');enabled=($env:CA_TASK_CASE -ceq 'enabled');task_name='synthetic-unknown';task_path='\';noncanonical_disabled=@()}
+if($env:CA_TASK_CASE -ceq 'noncanonical_disabled'){$writerBefore.noncanonical_disabled=@(@{task_name='synthetic-unknown';task_path='\'})}
+$nodes=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.IfStatementAst] -and $n.Extent.Text.Contains('$retirementLegacyWriterAdmission=Assert-CanonicalRetiredLegacyWriterAdmission')},$true)|Sort-Object {$_.Extent.Text.Length})
+if(-not $nodes.Count){throw 'legacy retirement consumer absent'}
+$rejected=$false
+try{. ([scriptblock]::Create($nodes[0].Extent.Text))}catch{$rejected=$_.Exception.Message -ceq 'Uninstall/restore requires the current-user layout without legacy scheduled writers.'}
+if(-not $rejected){throw 'UNKNOWN_OR_ENABLED_LEGACY_ADMITTED'}
+'PASS'
+''',values={'CA_TASK_CASE':case})
+    assert result.returncode==0 and result.stdout.strip()=='PASS','legacy writer rejection consumer failed'
+
+def test_retirement_without_legacy_writers_needs_no_common_identity_supplier(tmp_path):
+    result=run_functions(tmp_path,ROOT/'INSTALL_CANONICAL_PORTABLE.ps1',
+                         ['Assert-CanonicalRetiredLegacyWriterAdmission'],r'''
+$snapshot=[ordered]@{present=$false;classification='TEST_BYPASS';restore_required=$false}
+$proofs=@(Assert-CanonicalRetiredLegacyWriterAdmission $snapshot $env:CA_CONTRACT_ROOT)
+if($proofs.Count -ne 0){throw 'absent legacy writers gained authority'}
+'PASS'
+''')
+    assert result.returncode==0 and result.stdout.strip()=='PASS'

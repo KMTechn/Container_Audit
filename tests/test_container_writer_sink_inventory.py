@@ -284,7 +284,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
     assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
         "call_operator": 16,
         "com_wmi_process_create": 5,
-        "dot_source": 22,
+        "dot_source": 24,  # Admitted manager parser plus retirement independent action invocation.
         "dotnet_process_start": 2,
         "invoke_expression": 1,
         "native_process_api": 4,
@@ -326,9 +326,9 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         if row['file'] == 'INSTALL_CANONICAL_PORTABLE.ps1'
         and row['caller'] == '__script__'
     ]
-    # Five delegated bootstrap invocations (including public late restore) and
-    # two read-only integrity probes.
-    assert len(helper_calls) == 7
+    # Six delegated bootstrap invocations (including the independent retirement
+    # recovery call and public late restore) and two read-only integrity probes.
+    assert len(helper_calls) == 8
     assert all(row['installer_guarded'] for row in helper_calls)
     assert capture_proof['guarded']
     assert capture_proof['guard_name'] == 'byte_pinned_installer_caller_closure'
@@ -350,7 +350,9 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         < installer.index("$sourceManifest = Manifest")
         < installer.index("$BootstrapIntegrityFunctions = Join-Path $source 'tools\\bootstrap_integrity.ps1'")
         < installer.rindex(". $BootstrapIntegrityFunctions")
-        < installer.index("[void](Assert-BootstrapIntegrityRecord $install)")
+        # The earlier recovery function declaration is not a main-flow call.
+        < installer.index("[void](Assert-BootstrapIntegrityRecord $install)",
+                          installer.rindex(". $BootstrapIntegrityFunctions"))
         < installer.index("[void](Start-ContainerWriterFence")
     )
     raster_write = next(
@@ -382,7 +384,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
     }
     installer_tasks = [row for row in scheduled if row["file"] == "INSTALL_THIS_PC.ps1"]
     assert {row["wrapper_function"] for row in installer_tasks} == {
-        "Restore-ContainerStartupUpdatePreimage", "Initialize-ContainerStartupUpdate", "",
+        "Restore-ContainerStartupUpdatePreimage", "Initialize-ContainerStartupUpdate",
     }
     assert all(row["guard_name"] == "Enter-ContainerPlacementWriterFence" for row in installer_tasks)
 
