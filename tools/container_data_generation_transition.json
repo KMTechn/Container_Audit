@@ -171,7 +171,7 @@
     {
       "path": "INSTALL_THIS_PC.ps1",
       "before": "95bb11b9fb4ed0035f229d7b6c6ca2abba17760caef15837734b7a809c52fc4c",
-      "after": "97a910caea2a6be49f08aafa1b60556154ce96eb427c8ce7f3ac3b184a7cfd8b"
+      "after": "f460f3830ec1b006df6e23ad13f74f1fe53cf8dcf631dfaad6ab0398de824034"
     },
     {
       "path": "app/Container_Audit.py",
@@ -4533,7 +4533,7 @@
     {
       "path": "INSTALL_THIS_PC.ps1",
       "before": "08f1bb2c468e24998460192d25b546788417d2ed1dd09d3e0ee601e826d9c909",
-      "after": "97a910caea2a6be49f08aafa1b60556154ce96eb427c8ce7f3ac3b184a7cfd8b"
+      "after": "f460f3830ec1b006df6e23ad13f74f1fe53cf8dcf631dfaad6ab0398de824034"
     },
     {
       "path": "container_admin_pin.py",
@@ -4613,7 +4613,7 @@
     {
       "path": "tools/direct_sync_relay_install_pack.py",
       "before": "67dded828d179145b38ff374082c0f6f56fade9a1d0ee7cb56c5f4fcbba70d9a",
-      "after": "c62fd8a8fcf688ee8f314e1e77268256e97e72d58ffcab702c9bdbb00f875541"
+      "after": "ad036557e0db90381265542709f9ff4ae3402ddc2cbf18d964945096176b3513"
     },
     {
       "path": "tools/direct_sync_relay_operator.py",

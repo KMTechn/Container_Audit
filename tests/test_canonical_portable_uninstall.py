@@ -402,7 +402,7 @@ def _setup(tmp_path, fault=''):
             assert text.count(recovery) == 1
             text = text.replace(recovery, "    if ($RestoreUninstallRecordPath) {\n        throw 'RESTORE_INJECTED_FAILURE'\n        Copy-Item -LiteralPath $RestoreUninstallRecordPath")
     elif fault == 'helper_after_removal':
-        target = "        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ('uninstall_status=PASS_CODE_REMOVED_STATE_PRESERVED'))"
+        target = "        'uninstall_status=PASS_KNOWN_FILES_REMOVED_STATE_PRESERVED'"
         assert text.count(target) == 1
         text = text.replace(target, "        throw 'HELPER_AFTER_REMOVAL_INJECTED_FAILURE'")
     helper.write_text(text, encoding='utf-8-sig')

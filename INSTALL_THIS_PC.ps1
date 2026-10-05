@@ -2003,7 +2003,7 @@ if ($Uninstall.IsPresent) {
         $removed = Invoke-ContainerConvergentRemoval -InstallRoot $installRootFull -TaskFolder $folder -ExcludeProcessIds $excluded
         'uninstall_status=PASS_KNOWN_FILES_REMOVED_STATE_PRESERVED'
         'lifecycle_state=REMOVED'
-        'removal_evidence_root='+[string]$removed.evidence_root
+        ConvertTo-KmtechRedactedSinkText -Text ('removal_evidence_root='+[string]$removed.evidence_root)
         'retained_path_count='+@($removed.retained_paths).Count
         'user_state_preserved=true'
     } finally { if ($gateHeld) { $gate.ReleaseMutex() }; $gate.Dispose() }

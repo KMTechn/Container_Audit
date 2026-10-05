@@ -1310,7 +1310,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.prepared_credential = prepare_credential_config(args.credential_path, data_root=storage.data_root)
         args.container_audit_storage = _apply_container_audit_storage_defaults(args)
     except DataGenerationBlocked as exc:
-        print(exc.user_message)
+        print(_redact_install_diagnostic(exc.user_message))
         return 2
     except ValueError as exc:
         plan = {
@@ -1323,7 +1323,7 @@ def main(argv: list[str] | None = None) -> int:
             },
         }
         _write_json(Path(args.report_path), plan)
-        print(f"install_pack_report={Path(args.report_path).resolve()}")
+        print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
         return 2
 
     plan = build_install_plan(args)
@@ -1331,19 +1331,19 @@ def main(argv: list[str] | None = None) -> int:
         plan["status"] = "BLOCKED"
         plan["blocked_reason"] = plan["task_name_validation"]["blocked_reason"]
         _write_json(Path(args.report_path), plan)
-        print(f"install_pack_report={Path(args.report_path).resolve()}")
+        print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
         return 2
     if plan["explicit_path_boundary"]["status"] != "PASS":
         plan["status"] = "BLOCKED"
         plan["blocked_reason"] = plan["explicit_path_boundary"]["blocked_reason"]
         _write_json(Path(args.report_path), plan)
-        print(f"install_pack_report={Path(args.report_path).resolve()}")
+        print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
         return 2
     if args.apply and not args.confirm_production_install:
         plan["status"] = "BLOCKED"
         plan["blocked_reason"] = "apply requires --confirm-production-install"
         _write_json(Path(args.report_path), plan)
-        print(f"install_pack_report={Path(args.report_path).resolve()}")
+        print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
         return 2
     if (
         args.apply
@@ -1358,68 +1358,68 @@ def main(argv: list[str] | None = None) -> int:
             else "production apply requires the canonical Container_Audit field layout"
         )
         _write_json(Path(args.report_path), plan)
-        print(f"install_pack_report={Path(args.report_path).resolve()}")
+        print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
         return 2
     if plan["task_principal"]["status"] not in {"PASS", "SKIPPED"}:
         plan["status"] = "BLOCKED"
         plan["blocked_reason"] = plan["task_principal"]["blocked_reason"]
         _write_json(Path(args.report_path), plan)
-        print(f"install_pack_report={Path(args.report_path).resolve()}")
+        print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
         return 2
     if not args.uninstall:
         if plan["runtime_path_boundary"]["status"] != "PASS":
             plan["status"] = "BLOCKED"
             plan["blocked_reason"] = plan["runtime_path_boundary"]["blocked_reason"]
             _write_json(Path(args.report_path), plan)
-            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
             return 2
         if plan["app_root_dependencies"]["status"] != "PASS" and not plan.get("use_bundled_relay_executable"):
             plan["status"] = "BLOCKED"
             plan["blocked_reason"] = plan["app_root_dependencies"]["blocked_reason"]
             _write_json(Path(args.report_path), plan)
-            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
             return 2
         if plan["python_executable"]["status"] != "PASS" and not plan.get("use_bundled_relay_executable"):
             plan["status"] = "BLOCKED"
             plan["blocked_reason"] = plan["python_executable"]["blocked_reason"]
             _write_json(Path(args.report_path), plan)
-            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
             return 2
         if plan["python_runtime_imports"]["status"] == "FAIL":
             plan["status"] = "BLOCKED"
             plan["blocked_reason"] = plan["python_runtime_imports"]["blocked_reason"]
             _write_json(Path(args.report_path), plan)
-            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
             return 2
         if plan["producer_manifest"]["status"] != "PASS":
             plan["status"] = "BLOCKED"
             plan["blocked_reason"] = plan["producer_manifest"]["blocked_reason"]
             _write_json(Path(args.report_path), plan)
-            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
             return 2
         if plan["credential"]["status"] != "PASS":
             plan["status"] = "BLOCKED"
             plan["blocked_reason"] = plan["credential"]["blocked_reason"]
             _write_json(Path(args.report_path), plan)
-            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
             return 2
         if plan["source_scan_validation"]["status"] != "PASS":
             plan["status"] = "BLOCKED"
             plan["blocked_reason"] = plan["source_scan_validation"]["blocked_reason"]
             _write_json(Path(args.report_path), plan)
-            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
             return 2
         if plan["backpressure_validation"]["status"] != "PASS":
             plan["status"] = "BLOCKED"
             plan["blocked_reason"] = plan["backpressure_validation"]["blocked_reason"]
             _write_json(Path(args.report_path), plan)
-            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
             return 2
         if plan["task_runtime_acl"]["status"] != "PASS":
             plan["status"] = "BLOCKED"
             plan["blocked_reason"] = plan["task_runtime_acl"]["blocked_reason"]
             _write_json(Path(args.report_path), plan)
-            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
             return 2
 
     if args.apply:
@@ -1432,7 +1432,7 @@ def main(argv: list[str] | None = None) -> int:
                 plan["blocked_reason"] = actual_principal["blocked_reason"]
                 plan["task_principal"] = actual_principal
                 _write_json(Path(args.report_path), plan)
-                print(f"install_pack_report={Path(args.report_path).resolve()}")
+                print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
                 return 2
             task_action_parts = _scheduled_task_action_parts(plan["scheduled_task_launcher_path"])
             if actual_principal["mode"] == "stored_password":
@@ -1462,7 +1462,7 @@ def main(argv: list[str] | None = None) -> int:
                 plan["status"] = "FAIL"
                 plan["blocked_reason"] = acl_result["blocked_reason"]
                 _write_json(Path(args.report_path), plan)
-                print(f"install_pack_report={Path(args.report_path).resolve()}")
+                print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
                 return 1
         plan["status"] = "APPLYING"
         _write_json(Path(args.report_path), plan)
@@ -1483,7 +1483,7 @@ def main(argv: list[str] | None = None) -> int:
             plan["status"] = "PASS" if plan["command_result"]["returncode"] == 0 else "FAIL"
 
     _write_json(Path(args.report_path), plan)
-    print(f"install_pack_report={Path(args.report_path).resolve()}")
+    print(_redact_install_diagnostic(f"install_pack_report={Path(args.report_path).resolve()}"))
     return 0 if plan["status"] in {"DRY_RUN", "PASS"} else 1
 
 
