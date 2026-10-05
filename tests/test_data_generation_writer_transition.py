@@ -24,7 +24,19 @@ def test_forward_generation_exception_is_exact_and_closed(tmp_path, mutation):
     (after/'main.py').write_bytes(b'# guarded entry\n')
     (before/'portable-manifest.json').write_text(json.dumps({'source_commit':'ea566d131f37db3ee74468e1645c6b57ac45b6fa'}))
     old = json.loads(subprocess.check_output(['git','show','ea566d1:tools/container_writer_sink_inventory.json'],cwd=ROOT))
-    new = json.loads((ROOT/'tools/container_writer_sink_inventory.json').read_text())
+    # This predicate authorizes only the two original route changes.  The whole
+    # assembly is admitted separately through exact approved release pairs.
+    new = copy.deepcopy(old)
+    new['inventory_sha256'] = hashlib.sha256(b'isolated two-route fixture').hexdigest()
+    relay = next(route for route in new['known_route_coverage'] if route['route_id']=='persistent_relay')
+    relay['reachable_sources'] = sorted(set(relay['reachable_sources']) | {'data_generation_marker'})
+    relay['reachable_direct_mutation_functions'] = sorted(set(relay['reachable_direct_mutation_functions']) | {
+        'data_generation_guard._runtime_release', 'kmtech_shared.data_generation.record_generation'})
+    runner = next(route for route in new['known_route_coverage'] if route['route_id']=='raw_runner')
+    runner['reachable_sources'] = [value for value in runner['reachable_sources']
+        if value not in ('hosted_relay_failure', 'hosted_relay_json', 'hosted_relay_jsonl')]
+    runner['reachable_direct_mutation_functions'] = [value for value in runner['reachable_direct_mutation_functions']
+        if value not in ('container_audit_product_host._append_jsonl', 'container_audit_product_host._write_json_atomic')]
     replacements = []
     for route_id in ('persistent_relay','raw_runner'):
         old_route = next(route for route in old['known_route_coverage'] if route['route_id']==route_id)

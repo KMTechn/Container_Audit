@@ -371,8 +371,9 @@ def _setup(tmp_path, fault=''):
         condition = "$Value['status'] -ceq 'PASS_UNINSTALLED_DATA_PRESERVED' -and $Path -ceq $EvidencePath"
         if fault == 'audit_unavailable':
             condition = "($Value['status'] -ceq 'UNINSTALL_AWAITING_FENCE_RELEASE' -or $Value['status'] -ceq 'FAILED_ROLLED_BACK')"
-        text = text.replace('function Save([string]$Path, $Value) {',
-                            "function Save([string]$Path, $Value) {\n    if ($Value -is [Collections.IDictionary] -and $Value.Contains('status') -and (" + condition + ")) { throw 'AUDIT_INJECTED_FAILURE' }")
+        target = 'function Save([string]$Path, $Value, [bool]$SanitizeDiagnostics=$false) {'
+        assert text.count(target) == 1
+        text = text.replace(target, target + "\n    if ($Value -is [Collections.IDictionary] -and $Value.Contains('status') -and (" + condition + ")) { throw 'AUDIT_INJECTED_FAILURE' }")
     elif fault == 'forged':
         target = "$capturedChild = Invoke-InstallationEvidenceChild 'uninstall-helper' $winps $uninstallArguments"
         assert text.count(target) == 1
@@ -401,8 +402,9 @@ def _setup(tmp_path, fault=''):
             assert text.count(recovery) == 1
             text = text.replace(recovery, "    if ($RestoreUninstallRecordPath) {\n        throw 'RESTORE_INJECTED_FAILURE'\n        Copy-Item -LiteralPath $RestoreUninstallRecordPath")
     elif fault == 'helper_after_removal':
-        text = text.replace("        Write-Output 'uninstall_status=PASS_CODE_REMOVED_STATE_PRESERVED'",
-                            "        throw 'HELPER_AFTER_REMOVAL_INJECTED_FAILURE'")
+        target = "        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ('uninstall_status=PASS_CODE_REMOVED_STATE_PRESERVED'))"
+        assert text.count(target) == 1
+        text = text.replace(target, "        throw 'HELPER_AFTER_REMOVAL_INJECTED_FAILURE'")
     helper.write_text(text, encoding='utf-8-sig')
     fence = source / 'tools/container_writer_fence.ps1'
     text = fence.read_text(encoding='utf-8-sig').replace(
