@@ -121,7 +121,8 @@ def prepare_credential_config(path, *, data_root) -> PreparedCredentialConfig:
     This is a read-only operation: security input directories acquire no
     generation records. The returned snapshot is also the loader's input.
     """
-    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, resolve_owner_path
+    from data_generation_guard import (DataGenerationBlocked, probe_before_owner_paths,
+                                       resolve_owner_path, _owner_root_cannot_exist)
 
     try:
         credential_path = resolve_owner_path(path)
@@ -164,6 +165,11 @@ def prepare_credential_config(path, *, data_root) -> PreparedCredentialConfig:
             context_path = resolve_owner_path(context_value)
             payload["isolated_qualification_context_path"] = str(context_path)
             files.append(context_path)
+        # A plain-file ancestor proves that these owner paths cannot be opened.
+        # Reuse the guard's path interpretation; fail before any caller mutation.
+        if (any(_owner_root_cannot_exist(path.parent) for path in files)
+                or any(_owner_root_cannot_exist(path) for path in directories)):
+            raise DirectSyncPushError("credential security input owner path cannot exist")
         probe_before_owner_paths(data_root, file_paths=files, directory_paths=directories)
         return PreparedCredentialConfig(credential_path, MappingProxyType(payload), protected_path,
                                         data_root=resolve_owner_path(data_root),
@@ -507,13 +513,13 @@ def load_credentials_from_json(path: str | os.PathLike[str], *,
             # Keep the existing missing-file credential validation contract.
             _read_credential_payload(candidate)
         prepared_config = prepare_credential_config(candidate, data_root=root)
-    credential_path = prepared_config.credential_path if prepared_config is not None else Path(path)
+    credential_path = prepared_config.credential_path
     # Startup admission is a snapshot, not permission to open inputs later.
     # Recheck both stages using the admitted paths before any secret/TLS read.
     prepared_config.admit_security_inputs()
-    if prepared_config is not None and prepared_config.credential_error is not None:
+    if prepared_config.credential_error is not None:
         raise prepared_config.credential_error
-    payload = prepared_config.payload if prepared_config is not None else _read_credential_payload(credential_path)
+    payload = prepared_config.payload
     producer_id = str(payload.get("producer_id") or "").strip()
     key_id = str(payload.get("key_id") or "").strip()
     raw_secret = payload.get("secret")
@@ -551,7 +557,7 @@ def load_credentials_from_json(path: str | os.PathLike[str], *,
             secret_ref,
             credential_path=credential_path,
             secret_data_dir=str(payload.get("secret_data_dir") or ""),
-            protected_secret_path=prepared_config.protected_secret_path if prepared_config is not None else None,
+            protected_secret_path=prepared_config.protected_secret_path,
         )
     if not producer_id or not key_id or not secret or not endpoint_url:
         raise DirectSyncPushError("credential file is missing producer_id, key_id, secret/secret_ref, or endpoint_url")
