@@ -24,6 +24,15 @@ locator와 nested owner를 기존 Python reader로 검사한다. 보안 입력�
 적용한다. 같은 digest를 quiescence 직전과 old relay 재시작 직전에 대조한다. 이 경로는
 첫 현장 설치 경로와 별도인 지원 복원이며, 사전 거절의 transient authority mutex는
 기존 finally에서 놓는다.
+preflight는 기존 exact reader의 코드/manifest 검증만 사용한다(ACL 필드를 만들지 않음).
+같은 digest의 코드 부분을 실제 ACL 검증 복원 결과와 초기·quiescence 직전·relay 시작
+직전에 대조한다. 일반 reader API의 `acl_identity_reader=None`은 거절한다.
+
+일반 rollback의 한 removal 실패는 나머지 code/Run/task 복원 시도를 막지 않는다.
+G·quiescence를 다시 확인하고 기존 exact 복원 evidence로 code를 증명한다. 정확 code와
+relay preimage가 증명되면 finally fence 해제·relay 재시작을 시도하고 각 실패를 보존한다.
+불일치면 fence를 유지하며 자료·확인 기록 보존과 관리자 지원 복구를 안내한다.
+별도 uninstall/retirement 및 refence 이전 실패 경로는 기존 안전 계약을 유지한다.
 
 직접 등록(검증·2PC 복구 포함), relay 운영 명령, 사용자 profile 설치/확인,
 앱의 active-work wrapper·review report, lifecycle 복구·제거도 기존 admission 아래

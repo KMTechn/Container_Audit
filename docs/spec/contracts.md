@@ -19,6 +19,15 @@ child는 같은 resolved 경로·payload인지 기록 전에 대조한다. 거�
 검증 복원은 같은 읽기 전용 호출의 `--target-release-root`로 정확 old packet을 기존
 product reader로 검증하고, locator/nested owner를 그 old version/build로 판정한다.
 binding은 quiescence 직전과 복원된 old relay 시작 직전에 다시 비교한다.
+이 읽기 전용 판정의 코드/manifest digest는 ACL까지 검증한 복원 receipt의 old identity와
+함께 대조한다. 기존 복원 reader의 기본 ACL 검증은 유지하며 ACL 없는 code identity는
+target-generation preflight 전용 호출에서만 사용할 수 있다.
+
+일반 설치/검증 교체 rollback은 removal 실패를 보존하고 G와 실제 quiescence를 다시
+검사한 뒤 code 복원을 독립 시도한다. Run과 task 복원도 앞 실패 때문에 생략하지 않는다.
+각 단계 결과를 기록하며 정확 code와 relay preimage 검증이 성공하면 finally에서 fence를
+해제하고 옛 relay를 다시 시작한다. 불일치/미확인은 fence를 유지하고 한국어 지원 복구를
+안내한다. G가 거절한 code 복원은 실행하지 않으며 기존 rollback 오류 코드를 보존한다.
 
 작업자 선택은 `worker-roster.v1`의 ACTIVE 공용 명단만 사용하며 직접 입력·PC 이름 등록은 없다. 기존 생산자 HMAC으로 `POST /api/worker-roster/v1/query`에 현장 ID와 `known_version`을 보내고 명단 응답만 262,144B까지 받는다. 시작·변경·60초 배경 조회는 writer admission 밖에서 수행하며 현재 조회 시도·로그인 epoch가 같은 응답만 적용한다. 조회 지연·실패는 스캔 내구 저장을 기다리게 하지 않는다.
 

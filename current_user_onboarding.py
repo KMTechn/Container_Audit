@@ -69,6 +69,7 @@ ONBOARDING_EXIT_CODE = 4
 SELF_ENROLLMENT_CONTRACT_VERSION = "producer-self-enrollment-v2"
 REPLACEMENT_RECEIPT_VERSION = "container-audit-verified-replacement-v1"
 PORTABLE_MANIFEST_VERSION = "container-audit-portable-tree-v1"
+_TARGET_PREFLIGHT_CODE_IDENTITY_ONLY = object()
 
 _REPLACEMENT_IDENTITY_FIELDS = frozenset(
     {
@@ -607,9 +608,13 @@ def _read_replacement_tree_identity(
     tree_root: Path,
     declared_code_root: Path,
     *,
-    acl_identity_reader: Callable[[Path], Mapping[str, Any]] = _windows_acl_identity,
+    acl_identity_reader: Callable[[Path], Mapping[str, Any]] | None = _windows_acl_identity,
+    _preflight_code_identity: object | None = None,
 ) -> dict[str, Any]:
     """Read an exact portable tree identity without executing code from that tree."""
+
+    if acl_identity_reader is None and _preflight_code_identity is not _TARGET_PREFLIGHT_CODE_IDENTITY_ONLY:
+        raise ValueError("code-only identity is restricted to target-generation preflight")
 
     selected_root = _resolved(tree_root)
     expected_code_root = _resolved(declared_code_root)
@@ -719,6 +724,14 @@ def _read_replacement_tree_identity(
         or not re.fullmatch(r"[0-9a-f]{40}", source_tree)
     ):
         raise ValueError("replacement portable manifest identity is invalid")
+    if acl_identity_reader is None:
+        return {
+            "file_count": len(files), "aggregate_sha256": aggregate,
+            "integrity_sha256": _file_sha256(record_path),
+            "manifest_sha256": _file_sha256(manifest_path),
+            "source_commit": source_commit, "source_tree": source_tree,
+            "reparse_count": 0,
+        }
     acl = dict(acl_identity_reader(selected_root))
     if set(acl) != {
         "owner_sid",
@@ -1261,13 +1274,17 @@ def _verified_onboarding_target_release(target_root):
     root = _resolved(target_root)
     record = _read_json(root / "bootstrap-integrity.json", "target bootstrap integrity record")
     declared_root = root if record.get("code_root") == "." else _resolved(record.get("code_root") or "")
-    identity = _read_replacement_tree_identity(root, declared_root, acl_identity_reader=_windows_acl_identity)
+    identity = _read_replacement_tree_identity(
+        root, declared_root, acl_identity_reader=None,
+        _preflight_code_identity=_TARGET_PREFLIGHT_CODE_IDENTITY_ONLY,
+    )
     manifest = _read_json(root / "portable-manifest.json", "target portable manifest")
     version = read_current_version(root / "app" / "Container_Audit.py")
     if manifest.get("version") != version:
         raise ValueError("target release version binding differs")
     return {"version": version, "build_id": identity["source_commit"],
-            "aggregate_sha256": identity["aggregate_sha256"]}
+            "aggregate_sha256": identity["aggregate_sha256"],
+            "manifest_sha256": identity["manifest_sha256"]}
 
 
 def _probe_onboarding_target_owners(release, paths, *, file_paths=(), directory_paths=()):
@@ -1324,8 +1341,12 @@ def preflight_current_user_onboarding(app_root, *, environ=None, target_release_
         raise CurrentUserOnboardingError(
             str(inputs[1].credential_error), report_path=paths.onboarding_report_path, status="BLOCKED",
         ) from inputs[1].credential_error
-    return (hashlib.sha256((inputs[2] + json.dumps(release, sort_keys=True)).encode("utf-8")).hexdigest()
-            if release is not None else inputs[2])
+    if release is None:
+        return inputs[2]
+    input_binding = hashlib.sha256((inputs[2] + json.dumps(release, sort_keys=True)).encode("utf-8")).hexdigest()
+    code_binding = hashlib.sha256((release["build_id"] + "|" + release["aggregate_sha256"]
+        + "|" + release["manifest_sha256"]).encode("utf-8")).hexdigest()
+    return input_binding + ":" + code_binding
 
 
 @writer_sink("current_user_onboarding", probe_only=True)
@@ -2147,6 +2168,10 @@ def onboarding_main(argv: list[str] | None = None) -> int:
             expected_input_binding=args.expected_input_binding,
         )
     except CurrentUserOnboardingError as exc:
+        if args.preflight_only:
+            # Native PS5.1 and PS7 transports must not depend on a console code page.
+            print("onboarding_preflight_error=" + json.dumps(str(exc), ensure_ascii=True))
+            return ONBOARDING_EXIT_CODE
         print(f"onboarding_status={exc.status}")
         print(str(exc))
         print(f"onboarding_report={exc.report_path}")

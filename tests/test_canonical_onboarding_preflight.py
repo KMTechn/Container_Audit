@@ -35,7 +35,7 @@ def test_readonly_onboarding_preflight_real_child(tmp_path,case):
 @pytest.mark.parametrize('engine',['powershell.exe','pwsh.exe'])
 @pytest.mark.parametrize('case',['nested-newer','nested-unknown','locator-newer','same','absent','malformed','duplicate',
     'restore-newer','restore-locator-newer','restore-same','restore-absent','restore-unknown',
-    'restore-bootstrap-tampered','restore-manifest-tampered'])
+    'restore-bootstrap-tampered','restore-manifest-tampered','restore-code-binding-wrong'])
 def test_canonical_powershell_readonly_child(tmp_path,engine,case):
     assert shutil.which(engine), f'required PowerShell engine unavailable: {engine}'
     root=tmp_path/'isolated'
@@ -59,6 +59,7 @@ def test_canonical_powershell_readonly_child(tmp_path,engine,case):
 @pytest.mark.parametrize('case',[
     'restore-newer','restore-locator-newer','restore-same','restore-absent',
     'restore-unknown','restore-bootstrap-tampered','restore-manifest-tampered',
+    'restore-api-none-denied',
 ])
 def test_verified_restore_uses_old_target_generation_before_changes(tmp_path,case):
     root=tmp_path/'isolated'

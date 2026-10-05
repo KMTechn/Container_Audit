@@ -853,31 +853,34 @@ function Product([string]$Root,[string]$Mode) {
 function Get-CanonicalOnboardingInputBinding([string]$Root,[string]$TargetReleaseRoot = '') {
     # The existing product reader owns locator/nested resolution. This call
     # performs only admission/readback and runs before any installer mutation.
-    $start = New-Object System.Diagnostics.ProcessStartInfo
-    $start.FileName = Join-Path $Root 'runtime\pythonw.exe'
-    $start.Arguments = '-I -B {0} --onboard-current-user --app-root {1} --preflight-only' -f
-        (Arg (Join-Path $Root 'app\main.py')),(Arg (Join-Path $Root 'app'))
-    if ($TargetReleaseRoot) {
-        $start.Arguments += ' --target-release-root ' + (Arg $TargetReleaseRoot)
-    }
-    $start.UseShellExecute = $false
-    $start.CreateNoWindow = $true
-    $start.RedirectStandardOutput = $true
-    $start.RedirectStandardError = $true
-    $start.StandardOutputEncoding = [Text.Encoding]::UTF8
-    $start.EnvironmentVariables['PYTHONIOENCODING'] = 'utf-8'
-    $process = [Diagnostics.Process]::Start($start)
-    try {
-        $output = $process.StandardOutput.ReadToEnd()
-        [void]$process.StandardError.ReadToEnd()
-        $process.WaitForExit()
-        if ($process.ExitCode -ne 0) { throw $output.Trim() }
-        if ($output.Trim() -cnotmatch '^onboarding_input_binding=([0-9a-f]{64})$') {
-            throw '설치 전 자격 설정 경로 확인 결과가 올바르지 않습니다. 자료를 보존하고 설치를 다시 확인하세요.'
+    $preflightArguments=@('-I','-B',(Join-Path $Root 'app\main.py'),
+        '--onboard-current-user','--app-root',(Join-Path $Root 'app'),'--preflight-only')
+    if ($TargetReleaseRoot) { $preflightArguments+=@('--target-release-root',$TargetReleaseRoot) }
+    $output=@(& (Join-Path $Root 'runtime\python.exe') @preflightArguments 2>&1)
+    $preflightExitCode=$LASTEXITCODE
+    if ($preflightExitCode -ne 0) {
+        $diagnostic=@($output | Where-Object { [string]$_ -clike 'onboarding_preflight_error=*' })
+        if ($diagnostic.Count -eq 1) {
+            try { $message=([string]$diagnostic[0]).Substring('onboarding_preflight_error='.Length) | ConvertFrom-Json }
+            catch { $message='' }
+            if ($message -is [string] -and $message) { throw $message }
         }
-        return $Matches[1]
+        throw '설치 전 자격 설정 경로를 확인하지 못했습니다. 자료와 확인 기록을 보존하고 관리자 지원 복구를 요청하세요.'
     }
-    finally { $process.Dispose() }
+    $bindingPattern=if ($TargetReleaseRoot) { '^onboarding_input_binding=([0-9a-f]{64}:[0-9a-f]{64})$' }
+        else { '^onboarding_input_binding=([0-9a-f]{64})$' }
+    if ($output.Count -ne 1 -or [string]$output[0] -cnotmatch $bindingPattern) {
+        throw '설치 전 자격 설정 경로 확인 결과가 올바르지 않습니다. 자료를 보존하고 설치를 다시 확인하세요.'
+    }
+    return $Matches[1]
+}
+function Assert-CanonicalRestoreCodeBinding([string]$Binding,$VerifiedRestore) {
+    $oldIdentity = $VerifiedRestore.receipt.old
+    $expected = Get-ContainerWriterFenceStringSha256 (
+        [string]$oldIdentity.source_commit + '|' + [string]$oldIdentity.aggregate_sha256 + '|' + [string]$oldIdentity.manifest_sha256)
+    if ($Binding -cnotmatch '^[0-9a-f]{64}:([0-9a-f]{64})$' -or $Matches[1] -cne $expected) {
+        throw '복원 코드와 자격 설정 확인 결과가 검증한 옛 코드와 다릅니다. 자료를 보존하고 복원을 다시 확인하세요.'
+    }
 }
 function Read-CanonicalRetiredRemoval {
     # These are observations, never authority. The caller still acquires the
@@ -2079,6 +2082,7 @@ if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRet
 elseif ($RestoreVerifiedReplacement) {
     $restoreTargetRoot = if ([string]$publicRestore.state -ceq 'RESTORED') { $install } else { [string]$publicRestore.receipt.rollback_root }
     $canonicalRestoreInputBinding = Get-CanonicalOnboardingInputBinding $source $restoreTargetRoot
+    Assert-CanonicalRestoreCodeBinding $canonicalRestoreInputBinding $publicRestore
 }
 $canonicalWriterFencePreparedReceipt = New-CanonicalWriterFencePreparedReceipt `
     -Path $canonicalWriterFencePreparedPath `
@@ -2287,7 +2291,9 @@ $enteredPlacementTry = $true
         $audit.code_replacement.prestate = [string]$publicRestore.state
         Sync-CanonicalWriterFenceInventory $currentTreeInventorySha256
         $restoreTargetRoot = if ([string]$publicRestore.state -ceq 'RESTORED') { $install } else { [string]$selectedReceipt.rollback_root }
-        if ((Get-CanonicalOnboardingInputBinding $source $restoreTargetRoot) -cne $canonicalRestoreInputBinding) {
+        $restoreRecheck = Get-CanonicalOnboardingInputBinding $source $restoreTargetRoot
+        Assert-CanonicalRestoreCodeBinding $restoreRecheck $publicRestore
+        if ($restoreRecheck -cne $canonicalRestoreInputBinding) {
             throw '복원 전 확인한 자격 설정 경로가 바뀌었습니다. 자료를 보존하고 복원을 다시 확인하세요.'
         }
         $mutated = $true
@@ -2357,7 +2363,9 @@ $enteredPlacementTry = $true
         Clear-CanonicalWriterFenceReleaseDelegation
         Stop-CanonicalWriterFenceRelease $releaseAuthorization
         $canonicalWriterFenceActive = $false
-        if ((Get-CanonicalOnboardingInputBinding $source $install) -cne $canonicalRestoreInputBinding) {
+        $restoreRecheck = Get-CanonicalOnboardingInputBinding $source $install
+        Assert-CanonicalRestoreCodeBinding $restoreRecheck $verifiedRestore
+        if ($restoreRecheck -cne $canonicalRestoreInputBinding) {
             throw '복원 전 확인한 자격 설정 경로가 바뀌었습니다. 자료를 보존하고 복원을 다시 확인하세요.'
         }
         foreach ($item in $old) { [void](StartRaw ([string]$item.CommandLine)) }
@@ -2908,6 +2916,26 @@ catch {
     }
     $autostartRollbackFailure=''
     $codeRollbackFailure=''
+    $writerRollbackFailure=''
+    $fenceReleaseFailure=''
+    $codeRestoredExact=(-not $codeRestoreNeeded)
+    $rollbackRecoveryVerified=$false
+    $audit.failure_type=$original.Exception.GetType().Name
+    $audit.rollback.applied=$mutated
+    $audit.rollback.runtime_restored=(-not $mutated)
+    $audit.rollback.steps=[ordered]@{}
+    # Recording is best effort: unavailable audit storage must not skip recovery.
+    $recordRollbackStep = {
+        param([string]$Step, [string]$Status, [string]$FailureType)
+        $audit.rollback.steps[$Step]=[ordered]@{status=$Status;failure_type=$FailureType}
+        try { Save $auditPath $audit }
+        catch { Write-Output 'rollback_audit_status=UNAVAILABLE' }
+        if ($evidenceFull) {
+            try { Save $evidenceFull $audit }
+            catch { Write-Output 'rollback_evidence_status=UNAVAILABLE' }
+        }
+    }
+    try {
     if ($codeRestoreNeeded) {
         try {
             $generationRestoreReceipt = Read-BootstrapReplacementReceipt -Path $replacementReceiptPath `
@@ -2916,6 +2944,23 @@ catch {
                 -TargetSid $operatorSid -LocalAppDataRoot $lad -DataRoot $activeDataRoot -HelperRoot $source
             Sync-CanonicalWriterFenceInventory $Script:ContainerWriterFenceInventorySha256
             Product $install '--remove-current-user-setup'
+            if ((Snapshot).exists -or @(Relays).Count -ne 0) {
+                throw 'Replacement rollback runtime quiescence failed.'
+            }
+            & $recordRollbackStep 'code_quiescence' 'PASS' ''
+        }
+        catch {
+            $codeRollbackFailure=$_.Exception.GetType().Name
+            $audit.code_replacement.restore_failure_type=$codeRollbackFailure
+            & $recordRollbackStep 'code_quiescence' 'FAILED' $codeRollbackFailure
+        }
+        # A failed removal call does not prove that the runtime is still live.
+        # Recheck G and actual quiescence before the independent restore attempt.
+        try {
+            $generationRestoreReceipt = Read-BootstrapReplacementReceipt -Path $replacementReceiptPath `
+                -ExpectedSha256 $replacementReceiptSha256
+            Assert-ContainerDataGenerationTarget -CandidateRoot ([string]$generationRestoreReceipt.rollback_root) `
+                -TargetSid $operatorSid -LocalAppDataRoot $lad -DataRoot $activeDataRoot -HelperRoot $source
             if ((Snapshot).exists -or @(Relays).Count -ne 0) {
                 throw 'Replacement rollback runtime quiescence failed.'
             }
@@ -2957,157 +3002,202 @@ catch {
             $audit.code_replacement.restore_evidence_sha256=Sha $replacementRestoreEvidencePath
             $audit.code_replacement.later_restore_surface='CONSUMED'
             $codeRestoreNeeded=$false
-            Save $auditPath $audit
-            if ($evidenceFull) { Save $evidenceFull $audit }
+            $codeRestoredExact=$true
+            & $recordRollbackStep 'code_restore' 'PASS' ''
         }
         catch {
             $codeRollbackFailure=$_.Exception.GetType().Name
             $audit.status='CODE_ROLLBACK_FAILED'
             $audit.code_replacement.status='ROLLBACK_FAILED_CONTAINED_OR_STOPPED'
             $audit.code_replacement.restore_failure_type=$codeRollbackFailure
-            Save $auditPath $audit
-            if ($evidenceFull) { Save $evidenceFull $audit }
+            & $recordRollbackStep 'code_restore' 'FAILED' $codeRollbackFailure
         }
     }
-    $audit.rollback.applied = $mutated
-    $audit.rollback.runtime_restored = (-not $mutated)
-    try {
-        if ($mutated -and [string]::IsNullOrWhiteSpace($codeRollbackFailure)) {
+    if ($mutated) {
+        # Removal, persistence, and the scheduled writer are independent recovery
+        # attempts. A refused code restore must not suppress the latter stages.
+        try {
             Sync-CanonicalWriterFenceInventory $currentTreeInventorySha256
             Product $install '--remove-current-user-setup'
             [void](Assert-RollbackRelayPreimage -ExpectedRelays @())
+            & $recordRollbackStep 'runtime_quiescence' 'PASS' ''
+        }
+        catch {
+            $autostartRollbackFailure=$_.Exception.GetType().Name
+            & $recordRollbackStep 'runtime_quiescence' 'FAILED' $autostartRollbackFailure
+        }
+        try {
             Restore $before
             if (Test-Path $stop) { Remove-Item $stop -Force }
-            $check = Snapshot
-            if (
-                [bool]$check.exists -ne [bool]$before.exists -or
+            $check=Snapshot
+            if ([bool]$check.exists -ne [bool]$before.exists -or
                 [string]$check.kind -cne [string]$before.kind -or
-                [string]$check.data -cne [string]$before.data
-            ) { throw 'registry restore failed' }
-            $audit.rollback.runtime_restored = ($old.Count -eq 0)
+                [string]$check.data -cne [string]$before.data) { throw 'registry restore failed' }
+            & $recordRollbackStep 'run_restore' 'PASS' ''
+        }
+        catch {
+            $autostartRollbackFailure=$_.Exception.GetType().Name
+            & $recordRollbackStep 'run_restore' 'FAILED' $autostartRollbackFailure
         }
     }
-    catch {
-        $audit.status = 'AUTOSTART_ROLLBACK_FAILED'
-        $audit.rollback.runtime_restored = $false
-        $autostartRollbackFailure = $_.Exception.GetType().Name
-        $audit.failure_type = $original.Exception.GetType().Name
-        Save $auditPath $audit
-        if ($evidenceFull) { Save $evidenceFull $audit }
+    # Validate the remaining runtime against the saved relay identities before
+    # reopening writers. This gate never treats a failed code proof as success.
+    try {
+        $remainingRelays=@(Relays)
+        if ($remainingRelays.Count -gt 0) {
+            [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
+        }
+        $runRestored=(-not $mutated -or [string]$audit.rollback.steps.run_restore.status -ceq 'PASS')
+        $rollbackRecoveryVerified=($codeRestoredExact -and $runRestored)
+        & $recordRollbackStep 'recovery_identity' $(if ($rollbackRecoveryVerified) { 'PASS' } else { 'UNPROVEN' }) ''
     }
-    if ($writerRestoreNeeded -and [string]::IsNullOrWhiteSpace($codeRollbackFailure)) {
+    catch {
+        $autostartRollbackFailure=$_.Exception.GetType().Name
+        & $recordRollbackStep 'recovery_identity' 'FAILED' $autostartRollbackFailure
+    }
+    if ($writerRestoreNeeded) {
         try {
-            $writerEnabled = Enable-CanonicalWriter $install $writerBefore
-            $audit.scheduled_writer.restore_readback = $writerEnabled
+            $writerEnabled=Enable-CanonicalWriter $install $writerBefore
+            $audit.scheduled_writer.restore_readback=$writerEnabled
             $audit.status='ROLLBACK_WRITER_ENABLED_AWAITING_NATURAL_TRIGGER'
-            Save $auditPath $audit
-            if ($evidenceFull) { Save $evidenceFull $audit }
-            $releaseAuthorization = New-CanonicalWriterFenceReleaseAuthorization `
+            & $recordRollbackStep 'scheduled_writer_enable' 'PASS' ''
+            if (-not $rollbackRecoveryVerified) { throw 'ROLLBACK_RECOVERY_IDENTITY_UNPROVEN_FENCE_RETAINED' }
+            $releaseAuthorization=New-CanonicalWriterFenceReleaseAuthorization `
                 -Path $rollbackNaturalTriggerAuthorizationPath `
-                -Phase 'ROLLBACK_NATURAL_TRIGGER' `
-                -AuditPath $auditPath `
-                -EnabledBaseline $writerEnabled
-            $canonicalWriterFenceLastReleaseAuthorizationPath = [string]$releaseAuthorization.path
-            $canonicalWriterFenceLastReleaseAuthorizationSha256 = [string]$releaseAuthorization.sha256
+                -Phase 'ROLLBACK_NATURAL_TRIGGER' -AuditPath $auditPath -EnabledBaseline $writerEnabled
+            $canonicalWriterFenceLastReleaseAuthorizationPath=[string]$releaseAuthorization.path
+            $canonicalWriterFenceLastReleaseAuthorizationSha256=[string]$releaseAuthorization.sha256
             Set-CanonicalWriterFenceReleaseAuthorization $releaseAuthorization
             Clear-CanonicalWriterFenceReleaseDelegation
             Stop-CanonicalWriterFenceRelease $releaseAuthorization
-            $canonicalWriterFenceActive = $false
-            $writerRunning = Confirm-CanonicalWriterRunning $install $writerEnabled
-            $audit.scheduled_writer.natural_trigger_proof = $writerRunning
+            $canonicalWriterFenceActive=$false
+            & $recordRollbackStep 'fence_release' 'PASS' ''
+            $writerRunning=Confirm-CanonicalWriterRunning $install $writerEnabled
+            $audit.scheduled_writer.natural_trigger_proof=$writerRunning
             $audit.rollback.scheduled_writer_restored=$true
             $writerRestoreNeeded=$false
+            & $recordRollbackStep 'scheduled_writer_restore' 'PASS' ''
         }
         catch {
-            $restoreFailure = $_
-            if (-not $canonicalWriterFenceActive) {
+            $writerRollbackFailure=$_.Exception.GetType().Name
+            $audit.scheduled_writer.restore_failure_code='CANONICAL_WRITER_RESTORE_FAILED'
+            & $recordRollbackStep 'scheduled_writer_restore' 'FAILED' $writerRollbackFailure
+        }
+    }
+    }
+    finally {
+        # Always try to release this authority/tuple's fence, then attempt the
+        # saved relay preimage even if a preceding recovery stage has failed.
+        try {
+            if ($canonicalWriterFenceActive -and $rollbackRecoveryVerified) {
+                $audit.status='ROLLBACK_AWAITING_FENCE_RELEASE'
+                & $recordRollbackStep 'fence_release' 'ATTEMPTING' ''
                 try {
-                    [void](Start-ContainerWriterFence `
-                        -Status 'RESTORE_FAILED' `
-                        -OwnerKind 'canonical_installer' `
-                        -SessionId $Script:CanonicalWriterFenceSessionId `
-                        -AttemptId $Script:CanonicalWriterFenceAttemptId `
-                        -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
-                        -SessionStartedAtUtc $canonicalWriterFenceStartedAtUtc `
-                        -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
-                        -WriterContractSha256 $canonicalWriterFenceContractSha256 `
-                        -PreparedReceiptPath $canonicalWriterFenceLastReleaseAuthorizationPath `
-                        -PreparedReceiptSha256 $canonicalWriterFenceLastReleaseAuthorizationSha256 `
-                        -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
-                        -DelegatedSources $canonicalWriterFenceDelegatedSources `
-                        -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(20).ToString('o')) `
-                        -AuthorityLease $canonicalWriterFenceAuthority)
-                    $canonicalWriterFenceActive = $true
-                    [void](Disable-CanonicalWriter $install $writerBefore)
+                    $releaseAuthorization=New-CanonicalWriterFenceReleaseAuthorization `
+                        -Path $rollbackCompleteAuthorizationPath -Phase 'ROLLBACK_COMPLETE' -AuditPath $auditPath
+                    $canonicalWriterFenceLastReleaseAuthorizationPath=[string]$releaseAuthorization.path
+                    $canonicalWriterFenceLastReleaseAuthorizationSha256=[string]$releaseAuthorization.sha256
+                    Set-CanonicalWriterFenceReleaseAuthorization $releaseAuthorization
+                    Clear-CanonicalWriterFenceReleaseDelegation
+                    Stop-CanonicalWriterFenceRelease $releaseAuthorization
+                    $canonicalWriterFenceActive=$false
+                    & $recordRollbackStep 'fence_release' 'PASS' ''
                 }
                 catch {
-                    throw "CANONICAL_WRITER_REFENCE_FAILED: $($_.Exception.GetType().Name)"
+                    $fenceReleaseFailure=$_.Exception.GetType().Name
+                    & $recordRollbackStep 'fence_release' 'FAILED' $fenceReleaseFailure
+                    # Existing abort verifies session authority and the exact
+                    # tuple; no unbound or foreign fence can be removed here.
+                    try {
+                        [void](Abort-ContainerWriterFence `
+                            -SessionId $Script:CanonicalWriterFenceSessionId `
+                            -AttemptId $Script:CanonicalWriterFenceAttemptId `
+                            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+                            -AuthorityLease $canonicalWriterFenceAuthority)
+                        $canonicalWriterFenceActive=$false
+                        & $recordRollbackStep 'fence_abort' 'PASS' ''
+                    }
+                    catch { & $recordRollbackStep 'fence_abort' 'FAILED' $_.Exception.GetType().Name }
                 }
             }
-            $audit.status='CANONICAL_WRITER_RESTORE_FAILED'
-            $audit.scheduled_writer.restore_failure_code='CANONICAL_WRITER_RESTORE_FAILED'
-            $audit.failure_type=$original.Exception.GetType().Name
-            Save $auditPath $audit
-            if ($evidenceFull) { Save $evidenceFull $audit }
-            throw "CANONICAL_WRITER_RESTORE_FAILED: $($restoreFailure.Exception.GetType().Name)"
+        }
+        finally {
+            if ($mutated -and $rollbackRecoveryVerified -and -not $canonicalWriterFenceActive) {
+                $relayRollbackFailed=$false
+                $relayAttempt=0
+                foreach ($item in $old) {
+                    $relayAttempt++
+                    $relayStep="relay_restart_$relayAttempt"
+                    try {
+                        $remaining=@(Relays)
+                        $matching=@($remaining | Where-Object {
+                            (Same ([string]$_.ExecutablePath) ([string]$item.ExecutablePath)) -and
+                            [string]$_.CommandLine -ceq [string]$item.CommandLine
+                        })
+                        if ($matching.Count -gt 1) { throw 'rollback relay duplicate preimage' }
+                        if ($matching.Count -eq 0) {
+                            if ($RestoreVerifiedReplacement) {
+                                $relayRestore=Read-CanonicalReplacementRestore
+                                $relayBinding=Get-CanonicalOnboardingInputBinding $source $install
+                                Assert-CanonicalRestoreCodeBinding $relayBinding $relayRestore
+                            }
+                            $newPid=StartRaw ([string]$item.CommandLine)
+                            Start-Sleep -Seconds 3
+                            $p=Get-CimInstance Win32_Process -Filter "ProcessId = $newPid" -ErrorAction SilentlyContinue
+                            if ($null -eq $p -or -not (Same ([string]$p.ExecutablePath) ([string]$item.ExecutablePath))) {
+                                throw 'runtime restore failed'
+                            }
+                        }
+                        & $recordRollbackStep $relayStep 'PASS' ''
+                    }
+                    catch {
+                        $relayRollbackFailed=$true
+                        $autostartRollbackFailure=$_.Exception.GetType().Name
+                        & $recordRollbackStep $relayStep 'FAILED' $autostartRollbackFailure
+                    }
+                }
+                try { [void](Assert-RollbackRelayPreimage -ExpectedRelays $old) }
+                catch {
+                    $relayRollbackFailed=$true
+                    $autostartRollbackFailure=$_.Exception.GetType().Name
+                }
+                & $recordRollbackStep 'relay_restart' $(if ($relayRollbackFailed) { 'FAILED' } else { 'PASS' }) $autostartRollbackFailure
+                $audit.rollback.runtime_restored=(-not $relayRollbackFailed -and $rollbackRecoveryVerified)
+            }
+            elseif ($canonicalWriterFenceActive) {
+                & $recordRollbackStep 'fence_release' 'UNPROVEN_FENCE_RETAINED' ''
+                & $recordRollbackStep 'relay_restart' 'UNPROVEN_FENCE_RETAINED' ''
+                Write-Warning '이 PC의 옛 코드와 실행 상태를 확인할 수 없어 자동 복구를 마치지 못했습니다. 자료와 확인 기록을 보존하고 관리자 지원 복구를 요청하세요.'
+            }
         }
     }
-    if (-not [string]::IsNullOrWhiteSpace($autostartRollbackFailure)) {
-        throw "AUTOSTART_ROLLBACK_FAILED: $autostartRollbackFailure"
-    }
+    # Keep the earlier failure code and every failed stage after later attempts.
     if (-not [string]::IsNullOrWhiteSpace($codeRollbackFailure)) {
+        $audit.status='CODE_ROLLBACK_FAILED'
+        & $recordRollbackStep 'completion' 'FAILED' $codeRollbackFailure
         throw "CODE_ROLLBACK_FAILED: $codeRollbackFailure"
     }
-    $audit.status='ROLLBACK_AWAITING_FENCE_RELEASE'
-    $audit.failure_type=$original.Exception.GetType().Name
-    Save $auditPath $audit
-    if ($evidenceFull) { Save $evidenceFull $audit }
-    if ($canonicalWriterFenceActive) {
-        $releaseAuthorization = New-CanonicalWriterFenceReleaseAuthorization `
-            -Path $rollbackCompleteAuthorizationPath `
-            -Phase 'ROLLBACK_COMPLETE' `
-            -AuditPath $auditPath
-        $canonicalWriterFenceLastReleaseAuthorizationPath = [string]$releaseAuthorization.path
-        $canonicalWriterFenceLastReleaseAuthorizationSha256 = [string]$releaseAuthorization.sha256
-        Set-CanonicalWriterFenceReleaseAuthorization $releaseAuthorization
-        Clear-CanonicalWriterFenceReleaseDelegation
-        Stop-CanonicalWriterFenceRelease $releaseAuthorization
-        $canonicalWriterFenceActive = $false
+    if (-not [string]::IsNullOrWhiteSpace($writerRollbackFailure)) {
+        $audit.status='CANONICAL_WRITER_RESTORE_FAILED'
+        & $recordRollbackStep 'completion' 'FAILED' $writerRollbackFailure
+        throw "CANONICAL_WRITER_RESTORE_FAILED: $writerRollbackFailure"
     }
-    # Win32_Process.Create does not inherit this process's delegation. Restore
-    # the old relay only after releasing the fence, as on the success path.
-    try {
-        if ($mutated) {
-            foreach ($item in $old) {
-                $newPid = StartRaw ([string]$item.CommandLine)
-                Start-Sleep -Seconds 3
-                $p = Get-CimInstance Win32_Process -Filter "ProcessId = $newPid" -ErrorAction SilentlyContinue
-                if ($null -eq $p -or -not (Same ([string]$p.ExecutablePath) ([string]$item.ExecutablePath))) {
-                    throw 'runtime restore failed'
-                }
-            }
-            [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
-            $audit.rollback.runtime_restored = $true
-        }
-    }
-    catch {
+    if (-not [string]::IsNullOrWhiteSpace($autostartRollbackFailure)) {
         $audit.status='AUTOSTART_ROLLBACK_FAILED'
-        $audit.rollback.runtime_restored=$false
-        Save $auditPath $audit
-        if ($evidenceFull) { Save $evidenceFull $audit }
-        throw "AUTOSTART_ROLLBACK_FAILED: $($_.Exception.GetType().Name)"
+        & $recordRollbackStep 'completion' 'FAILED' $autostartRollbackFailure
+        throw "AUTOSTART_ROLLBACK_FAILED: $autostartRollbackFailure"
     }
-    # A fresh placement has no old code tree to restore. Its verified files
-    # remain available even after the current-user runtime preimage is restored.
-    $audit.status = if ($RestoreVerifiedReplacement) {
+    if (-not [string]::IsNullOrWhiteSpace($fenceReleaseFailure)) {
+        $audit.status='CANONICAL_WRITER_FENCE_RELEASE_FAILED'
+        & $recordRollbackStep 'completion' 'FAILED' $fenceReleaseFailure
+        throw "CANONICAL_WRITER_FENCE_RELEASE_FAILED: $fenceReleaseFailure"
+    }
+    $audit.status=if ($RestoreVerifiedReplacement) {
         'FAILED_RESTORE_RUNTIME_RECOVERED'
     } elseif ($placement -ceq 'PASS_NEW_VERIFIED') {
         'FAILED_RUNTIME_RESTORED_CODE_RETAINED'
-    } else {
-        'FAILED_ROLLED_BACK'
-    }
-    Save $auditPath $audit
-    if ($evidenceFull) { Save $evidenceFull $audit }
+    } else { 'FAILED_ROLLED_BACK' }
+    & $recordRollbackStep 'completion' 'PASS' ''
     if ($placement -ceq 'PASS_NEW_VERIFIED') {
         Write-Warning "Current-user runtime restored. New verified code remains at $install"
     }

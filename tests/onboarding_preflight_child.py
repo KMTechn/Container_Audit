@@ -36,19 +36,18 @@ if case.startswith('restore-'):
     (target_root/'runtime').mkdir()
     (target_root/'app/Container_Audit.py').write_text('CURRENT_VERSION = "v2.0.98"\n',encoding='utf-8')
     (target_root/'app/main.py').write_text('# isolated metadata-only target\n',encoding='utf-8')
-    (target_root/'runtime/pythonw.exe').write_bytes(b'isolated target is never executed')
-    manifest={'schema':onboarding.PORTABLE_MANIFEST_VERSION,'entrypoint':'runtime/pythonw.exe app/main.py',
+    (target_root/'runtime/python.exe').write_bytes(b'isolated target is never executed')
+    manifest={'schema':onboarding.PORTABLE_MANIFEST_VERSION,'entrypoint':'runtime/python.exe app/main.py',
         'source_commit':'1'*40,'source_tree':'2'*40,'version':'v2.0.98'}
     (target_root/'portable-manifest.json').write_text(json.dumps(manifest),encoding='utf-8')
     files=[]
-    for name in ('app/Container_Audit.py','app/main.py','runtime/pythonw.exe','portable-manifest.json'):
+    for name in ('app/Container_Audit.py','app/main.py','runtime/python.exe','portable-manifest.json'):
         raw=(target_root/name).read_bytes()
         files.append({'path':name,'size':len(raw),'sha256':hashlib.sha256(raw).hexdigest()})
     aggregate=hashlib.sha256(''.join(f"{f['sha256']} {f['size']} {f['path']}\n" for f in files).encode()).hexdigest()
     record={'schema_version':onboarding.BOOTSTRAP_INTEGRITY_VERSION,'status':'PASS','code_root':'.',
         'file_count':len(files),'files':files,'aggregate_sha256':aggregate}
     (target_root/'bootstrap-integrity.json').write_text(json.dumps(record),encoding='utf-8')
-    onboarding._windows_acl_identity=lambda path:{'owner_sid':'S-1-5-21-272','access_rules_protected':True,'acl_sddl_sha256':'3'*64}
     for name in ('current-app.txt','old-run.txt','old-task.txt','old-relay.txt','existing-fence.txt'):
         (root/name).write_text('preserved synthetic current state',encoding='utf-8')
     if case=='restore-bootstrap-tampered':
@@ -116,8 +115,6 @@ runtime._read_wincred_secret=forbidden
 import winreg
 winreg.OpenKey=forbidden
 from current_user_onboarding import onboarding_main
-import current_user_onboarding as onboarding
-onboarding._windows_acl_identity=lambda path:{{'owner_sid':'S-1-5-21-272','access_rules_protected':True,'acl_sddl_sha256':'3'*64}}
 raise SystemExit(onboarding_main(sys.argv[2:]))
 """.replace('REPO',repr(str(repo))).replace('{{','{').replace('}}','}')
     (packet/'app/main.py').write_text(wrapper,encoding='utf-8')
@@ -126,14 +123,14 @@ raise SystemExit(onboarding_main(sys.argv[2:]))
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile({quote(repo/'INSTALL_CANONICAL_PORTABLE.ps1')},[ref]$tokens,[ref]$errors)
 if($errors.Count){{throw 'parse errors'}}
-foreach($name in @('Arg','Get-CanonicalOnboardingInputBinding','Exit-RetirementResumeClaim')){{
+foreach($name in @('Arg','Get-CanonicalOnboardingInputBinding','Assert-CanonicalRestoreCodeBinding','Exit-RetirementResumeClaim')){{
  $found=$ast.FindAll({{param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name}},$true)
  if($found.Count -ne 1){{throw 'preflight function unavailable'}}
  Invoke-Expression $found[0].Extent.Text
 }}
 $Script:PythonExe={quote(sys.executable)}
 function Join-Path {{param($Path,$ChildPath)
- if($ChildPath -ceq 'runtime\\pythonw.exe'){{return $Script:PythonExe}}
+ if($ChildPath -ceq 'runtime\\python.exe'){{return $Script:PythonExe}}
  return Microsoft.PowerShell.Management\\Join-Path $Path $ChildPath
 }}
 . {quote(repo/'tools/container_writer_fence.ps1')}
@@ -149,7 +146,7 @@ $canonicalWriterFenceAuthority=$null;$canonicalWriterFenceEnvironmentNames=@()
 $canonicalWriterFencePreparedPath={quote(root/'no-receipt.json')}
 $source={quote(packet)};$install={quote(root/'existing-code')};$old=@()
 $Uninstall=$false;$CompleteRetiredRemoval=$false;$RestoreVerifiedReplacement={'$true' if target_root is not None else '$false'}
-$publicRestore=@{{state='PENDING';receipt=@{{rollback_root={quote(target_root or root/'unused')}}}}}
+$publicRestore=@{{state='PENDING';receipt=@{{rollback_root={quote(target_root or root/'unused')};old=@{{source_commit='1'*40;aggregate_sha256={quote(('0'*64 if case=='restore-code-binding-wrong' else aggregate) if target_root is not None else '')};manifest_sha256={quote(hashlib.sha256(json.dumps(manifest).encode()).hexdigest() if target_root is not None else '')}}}}}}
 $Script:CanonicalWriterFenceSessionId='a'*32;$Script:CanonicalWriterFenceAttemptId='b'*32
 $canonicalWriterFenceOrchestratorSha256='c'*64;$Script:CanonicalWriterFenceTransactionId='d'*32
 $canonicalWriterFenceContractSha256='e'*64
@@ -188,6 +185,14 @@ try:
         status='PASS' if result.returncode==0 and 'preflight_status=PASS' in result.stdout else 'REFUSED'
         code=(0 if status=='PASS' else 4) if result.returncode==0 else None
         authority_released='preflight_authority_released=true' in result.stdout
+    elif case=='restore-api-none-denied':
+        try:
+            onboarding._read_replacement_tree_identity(target_root,target_root,acl_identity_reader=None)
+            status='UNEXPECTED_ALLOWED'
+            code=0
+        except ValueError:
+            status='DENIED'
+            code=4
     elif target_root is not None:
         code=onboarding.onboarding_main(['--app-root',str(repo),'--preflight-only','--target-release-root',str(target_root)])
         status='PASS' if code==0 else 'REFUSED'
