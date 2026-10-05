@@ -166,7 +166,7 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "50604bb3a052a166f49b541e3e137e57ed6a8478e58664ef0ec537b0e0539680"
+      "after": "0633825b738f150786b7a9276413b787ba06e08ab711fb047fb6ffcb1dbb1092"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -4528,7 +4528,7 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "50604bb3a052a166f49b541e3e137e57ed6a8478e58664ef0ec537b0e0539680"
+      "after": "0633825b738f150786b7a9276413b787ba06e08ab711fb047fb6ffcb1dbb1092"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
