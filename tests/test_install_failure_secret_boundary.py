@@ -48,6 +48,16 @@ $value=[Environment]::GetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_
 $other=[Environment]::GetEnvironmentVariable('KM_LOGISTICS_INSTALL_BEARER_TOKEN','Process')
 Save $Audit @{status='FAILED';failure_code='PRODUCT_FAILED';child_output=$value;nested=@{stderr=$other}} $true
 Write-Output (ConvertTo-CanonicalSafeDiagnostic ('PRODUCT_FAILED: '+$value+' '+$other))
+
+$codeRollbackFailure=$value+' '+$other
+$writerRollbackFailure=$codeRollbackFailure
+$autostartRollbackFailure=$codeRollbackFailure
+$codes=@('CODE_ROLLBACK_FAILED:','CANONICAL_WRITER_RESTORE_FAILED:','AUTOSTART_ROLLBACK_FAILED:')
+foreach($code in $codes) {
+    $throws=$ast.FindAll({param($node) $node -is [Management.Automation.Language.ThrowStatementAst] -and $node.Extent.Text.Contains($code)},$true)
+    if($throws.Count -ne 1) {throw 'exact rollback notice unavailable'}
+    try {Invoke-Expression $throws[0].Extent.Text} catch {Write-Output $_.Exception.Message}
+}
 """, encoding="utf-8")
     audit = tmp_path / "audit.json"
     result = subprocess.run(
@@ -95,7 +105,7 @@ def test_relay_install_command_and_audit_remove_known_secret_bytes(tmp_path, mon
     pack._write_json(audit, {'failure_code': 'CHILD_FAILED', escaped_values[0]: encoded})
     payload = audit.read_bytes()
     representations = escaped_values + [json.dumps(value, ensure_ascii=True)[1:-1] for value in escaped_values]
-    _check_and_scrub_artifacts([audit], representations, [payload, redacted.encode()])
+    _check_and_scrub_artifacts([payload, redacted.encode()], representations, audit)
     assert json.loads(payload)['failure_code'] == 'CHILD_FAILED'
 
 

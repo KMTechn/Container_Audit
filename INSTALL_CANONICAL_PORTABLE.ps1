@@ -3228,17 +3228,17 @@ catch {
     if (-not [string]::IsNullOrWhiteSpace($codeRollbackFailure)) {
         $audit.status='CODE_ROLLBACK_FAILED'
         Record-CanonicalRollbackStep 'completion' 'FAILED' $codeRollbackFailure
-        throw "CODE_ROLLBACK_FAILED: $codeRollbackFailure"
+        throw (ConvertTo-CanonicalSafeDiagnostic "CODE_ROLLBACK_FAILED: $codeRollbackFailure")
     }
     if (-not [string]::IsNullOrWhiteSpace($writerRollbackFailure)) {
         $audit.status='CANONICAL_WRITER_RESTORE_FAILED'
         Record-CanonicalRollbackStep 'completion' 'FAILED' $writerRollbackFailure
-        throw "CANONICAL_WRITER_RESTORE_FAILED: $writerRollbackFailure"
+        throw (ConvertTo-CanonicalSafeDiagnostic "CANONICAL_WRITER_RESTORE_FAILED: $writerRollbackFailure")
     }
     if (-not [string]::IsNullOrWhiteSpace($autostartRollbackFailure)) {
         $audit.status='AUTOSTART_ROLLBACK_FAILED'
         Record-CanonicalRollbackStep 'completion' 'FAILED' $autostartRollbackFailure
-        throw "AUTOSTART_ROLLBACK_FAILED: $autostartRollbackFailure"
+        throw (ConvertTo-CanonicalSafeDiagnostic "AUTOSTART_ROLLBACK_FAILED: $autostartRollbackFailure")
     }
     if (-not [string]::IsNullOrWhiteSpace($fenceReleaseFailure)) {
         $audit.status='CANONICAL_WRITER_FENCE_RELEASE_FAILED'
