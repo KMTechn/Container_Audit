@@ -1,4 +1,15 @@
-# 운영·환경·장애 복구
+﻿# 운영·환경·장애 복구
+
+canonical 부모는 상승 direct/wrapper helper의 보호 원본 receipt와 restore evidence를 그 실행의
+bound evidence root·journal SHA로 읽는다. 일반 caller 사본의 존재를 요구하지 않는다.
+startup preimage 두 필드는 한 쌍으로 검증하며 원 preimage.json의 SHA가 같아야 한다.
+PS5.1/7 실제 소비자·기존 export/startup 34 PASS, 랩 G 기록은 보존하고 native 복구는 별도 판정이다.
+
+설치와 되돌리기의 resident relay READY 대기는 같은 기본 360초(상한 600초)를 쓴다.
+G 요청부터 첫 기록된 READY까지 275.561초라는 관측 상한에 84.439초 여유를 더했다.
+시간 초과는 되돌리기의 나머지 기록·끝 상태 저장을 계속하되 실패를 유지한다.
+끝의 한국어 한 줄은 코드·Run·시작 작업과 미확인 relay를 구별하며 종료 코드는 0이 아니다.
+PS5.1/7 실행 회귀 RED4→GREEN4; 새 native 설치·재진입 수용과 구별한다.
 
 자료 세대 보호 helper `kmtech_shared/data_generation.py`와
 `kmtech_shared/powershell/data_generation.ps1`은 사용자 자료를 열었던 가장 새 판과
@@ -165,12 +176,160 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 
 **하루 건수(PC·날짜별):** 작업자 화면 `금일 작업 현황`의 품목 행 `(옛 N · 새 중앙 N · 새 로컬 N · 새 형식오류 N · 중복 N)`, 또는 이벤트 CSV(`이적작업이벤트로그_[작업자]_[날짜].csv`)의 `TRAY_COMPLETE` 행 `transition_class`·`transition_reasons`·`transition_duplicate`·`source_computer_id`·`app_version`. `중복 N`은 앞 분류 건수에 이미 든 중복 회차 수이고, 부분 제출도 한 건으로 센다. 재시작하면 CSV로 다시 세며 같은 완료의 재전송·재기록은 한 건이다. 서버 대시보드는 아직 분류를 구분하지 않는다([CA-G17](BACKLOG.md#ca-g17)).
 
+<a id="ca-startup-update"></a>
+## 로그온 자동 갱신 운영
+
+지원 `-Uninstall`은 외부 stock 지원 소스를 실행 호스트로 사용한다. 각 current/versions 및
+보호 packet의 해시 일치 파일을 `removal-evidence/<UUID>`로 개별 보존 이동한다. 고정 legacy
+작업과 실제 경로/SID 및 고정 SYSTEM action이 맞는 StartupUpdate 작업만 제거/부재 확인한다.
+목록 없는 폴더·외부 정션·내용이 다른 같은 이름 파일은 그대로 남고 `removed.json`에 경로를
+기록한다. 잠긴/관측 불명 파일은 미완으로 남기며 같은 제거를 재실행한다. 업무 자료와 등록,
+전송 대기는 보존한다. 잔여 current는 관리자가 보존 이관한 뒤 지원 설치를 다시 실행한다.
+내용 제거 중 controller가 종료되면 같은 외부 stock 소스에서 같은 `-Uninstall`을 재실행한다.
+설치기가 남긴 보호 removal journal과 원 감사 사본이 정확한 source/fence/owner를 증명할 때만
+종료한 controller의 같은 session을 이어간다. 추가 중단도 같은 불변 기록으로 수렴한다.
+owner가 살아 있거나 기록·source가 다르면 거절한다. 사용자 감사나 잔류 fence를 임의로 고치지 않는다.
+보호 journal을 만들기 전의 중단에는 이 재진입 권한이 없으며 지원 담당자의 확인이 필요하다.
+
+자동 feed는 설치 키로 검증한 manifest의 정확한 양방향 쌍 하나만 권한으로 쓴다.
+실제 stock 판 번호·계약 원문 SHA를 사용자 준비와 SYSTEM 적용/재개에서 다시 대조한다.
+같은/낮은 판·unsigned 정책 목록·Unicode 호스트·redirect/응답 URL 불일치는 거절한다.
+국제 도메인은 ASCII punycode로 설정한다. 판 번호가 없는 옛 stock은 지원 재설치를 안내하며,
+feed가 꺼진 기존 실행/relay의 SHA 식별 경로에는 판 번호를 새 전제로 넣지 않는다.
+canonical feed ZIP은 `Container_Audit/` 아래 원문으로 준비한다. bundled runtime은
+빌더의 stock `runtime_files`에 기록한 정확한 경로·해시와 실제 ZIP이 일치해야 한다.
+추가 runtime 파일·해시 불일치·목록 부재나 민감 상태 파일은 `prepared.json` 게시 전에 거절한다.
+이 목록도 담는 packet SHA는 기존 설치 키로 서명한 feed manifest에서 인증한다.
+
+관리자 설치기는 기존 보호 코드 배치와 같은 writer delegation 아래서
+`versions/<source SHA>`·`update-control`을 보호하고, 지정 작업자 SID의 로그온으로
+숨겨진 SYSTEM 작업 `KMTech.ContainerAudit.StartupUpdate.<경로/SID 식별값>`을 등록한다.
+작업 action은 OS 고정 PowerShell과 `current/tools/apply_prepared_update.ps1`뿐이다.
+작업자는 읽기·실행만 하고 action을 바꿀 수 없다. HKCU Run과 GUI launcher는
+고정 일반 권한 bootstrap을 거쳐 준비된 새 판과 진행 중 journal을 먼저 확인한다.
+기존 설치의 사전 Run 값은 설치된 설정 유무로 판정한다. 설정이 없는 옛 판의 정확한
+main.py relay 명령은 인정하고 설치 성공 뒤 bootstrap 명령으로 바꾼다.
+사용자가 바꾼 값·종류·인자와 다른 relay는 거절하며 실패 시 원 Run·relay를 복원한다.
+옛 relay의 제거 receipt는 정지 요청 ID·표식과 함께 확인한다. runtime lease가 풀린 뒤
+인터프리터가 나갈 때까지 최대 15초 기다리며, 정확한 사전 relay 외 프로세스·UNKNOWN·
+실제 잔류를 인정하지 않는다. 첫 제거 receipt는 rollback의 재제거 전에 audit에 보존한다.
+최종 설치/복구 relay는 같은 SID·대화형 세션의 일반 토큰으로 시작하고 이를 조회한다.
+상승 호출은 기존 desktop shell의 일반 토큰만 사용한다. shell 부재·다른 사용자/세션·
+토큰 조회 실패는 거절하며 installer 토큰이나 자격 증명/임시 task로 우회하지 않는다.
+primary 복제 권한은 `0x18B`(ASSIGN_PRIMARY·DUPLICATE·QUERY·ADJUST_DEFAULT·ADJUST_SESSIONID)다.
+실제 랩의 무해한 PowerShell 자식에서 기존 `11`의 Win32 5와 `0x18B`의 같은 SID/세션·일반 토큰·정상 종료를 확인했다.
+제품 시작·복구 수용 범위는 [sub-84/sub-85 보고](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-84/REPORT.md)를 따른다.
+canonical의 `failure`는 최초 설치 오류를 보존하고 `rollback.failure`는 복구 오류를
+별도로 기록한다. 메시지·인수 원문 없이 호출 이름·Win32 번호·예외 종류·분류를 남긴다.
+relay 복구 실패 뒤 Run 종류/값이 정확하고 stop 표식·relay가 없으며 scheduled writer가
+복원됐을 때만 `RUN_RESTORED_RELAY_NEXT_LOGON`을 기록하고 다음 로그온 안내를 낸다.
+`runtime_restored=false`와 실패 종료는 유지하며 즉시 복구 성공으로 처리하지 않는다.
+SYSTEM은 credential/profile을 읽거나 작업자 프로세스를 띄우지 않는다.
+설치 시 SYSTEM 실행 경로의 전체 조상과 코드 ACL을 먼저 검증하고, native helper는
+다른 helper를 읽기 전에 bootstrap·control·version 경계를 검증한다. 위험한 조상은 설치를
+거절하므로 관리자가 승인한 안전한 배치가 필요하다. 승인된 두 shared 조상의 정확한
+default/goal ACL 보호 범위는 [자동 갱신 계약](contracts.md#ca-startup-update)을 따른다.
+bootstrap 경유 Run은 active version의 실제 relay PID와 신선한 status로 확인한다.
+설치 중 onboarding의 PID0은 fence 해제 대기이며 성공 proof가 아니다. 해제 뒤 75초의
+resident 확인 실패는 원 status hash·원 오류와 rollback 결과를 보존하고 설치 실패로 남긴다.
+일반 사용자에서 시작한 설치 helper의 UAC wrapper는 안쪽의 유한 child만 capture하고,
+실제 helper PID의 journal과 outer/wrapper PID를 구분해 bind한다. 유한 자식의 stdout/stderr는
+각 1MiB cap·bytes/hash/encoding/redacted/truncated/complete로 기록한다. 이미 일반 사용자로
+호출한 lifecycle producer도 outer journal 유무와 관계없이 자체 private root와 final summary를
+생성한다. 지속 pythonw stdio는 붙지 않는다. JSON authorization/credential와 escape된 값도 마스킹한다.
+유한 lifecycle 진단은 `<lifecycle receipt path>.producer.normal.evidence.<adapterPID>`에 있고,
+Highest hop의 안쪽 capture는 그 아래 `normal-producer-capture.evidence.<wrapperPID>`에 있다.
+native 준비/시작 실패도 최초 exception chain·Win32 code와 final summary를 이 root에 보존한다.
+두 installer의 최종 `installation_evidence_status`와 `evidence-status.json`을 함께 회수한다.
+placement child의 첫 native 종료 코드와 bounded fallback 한 줄은 canonical 요약과
+부모 journal에 보존한다. 뒤 evidence 결속 실패는 추가 진단이며 첫 실패를 바꾸지 않는다.
+직접 높은 권한 helper의 증거 자리도 exact protected control/run, 원 basename/PID와
+보호/no-reparse 검사로 결속한다. 성공한 child의 증거가 결속되지 않으면 계속 거절한다.
+exact shared ancestor admission에서 선택한 폴더가 없으면 부모/대상 생성 전에
+기존 ancestor trust 오류로 거절한다. 읽기 admission은 조상을 만들거나 강화하지 않는다.
+journal I/O/ACL/limit 실패는 INCOMPLETE이며 business 결과와 구별한다. 원 오류를 덮거나
+부분 진단을 완전한 증거로 수용하지 않는다. 실제 UAC·일반 token lifecycle hop·5차 제품 설치는
+[지정 보고](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-84/REPORT.md)의 환경·결과를 확인한다.
+READY/trial 읽기 경합은 last_ready_error에 종류만 기록하고 정상 종료·코드 복귀 판단을 계속한다.
+형식은 유효해도 UTC로 표현할 수 없는 READY 시각은 미확인으로 처리한다.
+원래 기한과 정상 종료·검증된 이전 코드 복귀를 계속하며 사용자 자료를 되돌리지 않는다.
+
+builder `--auto-update-settings <JSON>`은 HTTPS `feed_url`, `channel`,
+`approved_transitions`, `profile_auth`, `apply_during_work`를 받는다.
+설정이 없으면 feed와 승인은 비어 있고 갱신 없이 기존 사용자 동작으로 시작한다.
+`profile_auth=true`는 현재 사용자의 기존 물류 profile을 쓰되 feed와 같은 인증 원본에만
+bearer를 전달한다. redirect·cookie 재사용은 거절한다. 새 credential 저장소를 만들지 않는다.
+실제 feed·인증은 코디네이터가 정한 뒤 보호된 설치 입력으로 제공한다.
+자동 갱신의 양방향 승인은 앱 키로 서명한 manifest 안의 정확한 현재/후보 SHA와
+실제 writer 계약 해시 두 방향에만 둔다. 별도 설정·다른 키·다른 출발점은 거절한다.
+writer 및 데이터/API 계약이 같은 판은 추가 승인 없이 기존 호환 규칙을 따른다.
+이 동일 계약 예외는 DDL·직렬화·실제 복구 모듈의 바이트 일치도 요구한다.
+데이터/API가 바뀌는 갱신은 정확한 writer 쌍이 있어도 자동 적용하지 않고 지원 관리자 경로로 처리한다.
+확인 전 실패는 policy를 바꾸지 않고, CONFIRMED 뒤 역방향 승인만 보호 감사로 남긴다.
+프로토콜 1 이전 판이나 다른 공개 키의 최초 전환은 관리자 canonical 설치/복구로
+수행하고, 자동 갱신으로 우회하지 않는다.
+writer 의미가 바뀌는 첫 지원 설치에는 실제 old packet의 `source_commit`과
+`writer_sink_inventory_contract_sha256`, 새 source SHA와 새 inventory 계약 해시로 만든
+정방향·역방향 `approved_transitions`를 builder 입력에 제공한다. 새 SHA를 wildcard로
+대체하지 않으며 기본 빌드는 빈 목록을 유지한다. 정확한 사후 코드 복원은 같은 successor
+packet의 역방향 승인과 원 replacement receipt를 함께 사용한다. 핀은 코드 전이만 허용하며
+사용자 자료·신원·장부를 과거 snapshot으로 되돌리지 않는다.
+옛 releases/latest 경로를 켜지 않는다.
+
+설치 때 HiberbootEnabled를 읽고 policy에 값/읽기 결과만 기록한다.
+SYSTEM 로그온 작업의 XML은 SYSTEM SID와 HighestAvailable을 유지하고 선택
+LogonType 요소를 생략한다. ServiceAccount는 cmdlet/COM enum이며 XML schema 값이
+아니다. trigger/action/조건·Task 1.4는 그대로다. 호스트 schema 회귀와 랩 등록 수용을
+구별하며 [전수와 원 실패](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-151/TASK-XML-SITES.md)를 따른다.
+2026-10-03 랩 예행 E는 교정 XML을 비활성 등록/해제했으나 단일 설치의 task 되읽기
+guard에서 실패했다(native 73 보존, protected helper 결속 통과). 옛 코드/Run/ACL/일반 relay
+지원 복원은 PROVEN이며 새 설치의 시작 화면/업데이트 확인은 NOT TESTED다.
+[예행 E 증거](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-151/CA-5TH-REHEARSAL-E.md)는
+probe의 SID→계정명 되읽기와 설치 실패를 구별하며 실제 설치 task XML은 rollback 전에 수집하지 않았다.
+예약 작업의 preimage·기존 작업·등록 뒤 되읽기는 주체와 trigger의 계정 표현을 이 PC에서
+SID로 해석해 기대 SID와 비교한다. 해석 실패·다른 SID·다른 action은 거절하고 원 XML을 보존한다.
+canonical relay 작업의 주체 판정도 같은 SID 해석을 쓴다. PS5.1/7의 세 소비자 회귀는
+소스 검증이며 [예행 F](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-156/CA-5TH-REHEARSAL-F.md)의 native 결과와 구별한다.
+일반 보호 경로의 특권 소유자 규칙은 SYSTEM·Administrators·TrustedInstaller의 정확한 SID 셋이다.
+설치·relay·업데이트 적용이 같은 pure 함수를 쓰며, helper를 신뢰하기 전 업데이트 검사는
+그 함수의 동일한 로컬 사본을 사용한다. hardened 폴더의 정확 BA 소유자 및 원본 receipt/operator
+소유자 결속은 유지한다. [전수표](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-156/OWNER-RULE-SITES.md)는 이 두 요구와 형제 앱의 미교정 소비자를 구별한다.
+예행 F(205f877, 2026-10-03)는 native 비활성 작업의 SID 판정과 실제 설치의 task 등록·되읽기를 통과했다.
+설치 1회는 뒤이은 receipt 결속에서 bootstrap_integrity.ps1:1799의
+`Replacement receipt path already exists.`로 FAILED_ROLLED_BACK(native 73, 부모 1)이다.
+INSTALL_THIS_PC.ps1:1564의 최초 receipt 작성 뒤 :1588이 같은 경로를 교체 허용 없이 다시 작성한다.
+지원 rollback과 독립 old2302파일·Run·ACL·비상승 relay 복원은 PROVEN이다. 시작 화면/업데이트 확인은
+NOT TESTED이며 재시도0이다. 원 예외·보호 원본·실제 9/10구간은 위 예행 F 문서에 보존한다.
+CA-R1 교정 후 replacement receipt는 startup 설정이 있는 경우 원 startup preimage의 경로·hash를
+처음부터 포함해 실제 보호 run 경로에 한 번만 작성한다. startup 변경은 그 뒤에 실행하며 같은
+preimage를 사용한다. 새 실행은 새 run/attempt 경로를 사용하고 기존 receipt를 덮어쓰지 않는다.
+receipt_path는 원 caller/export 경로를 유지한다. protected destination으로 이 필드를 바꾸면
+ordinary export/restore 소비자 검증이 실패하므로 그 변경은 적용하지 않는다.
+실패 복원·원 receipt hash/old-new identity 검사는 유지한다. PS5.1/7 소스 회귀와 실제 예행 G의
+범위·결과는 [sub-162](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-162/REPORT.md)를 따른다.
+예행 G의 설치1회는 helper0/REPLACED_VERIFIED 뒤 부모 caller receipt 부재(OpenRead,
+portable.ps1:6/호출2887, inner HRESULT -2147024894)로 실패했다. 뒤 rollback917의
+CANONICAL_RELAY_READY_TIMEOUT/native1/AUTOSTART_ROLLBACK_FAILED를 첫 실패와 분리한다.
+current dac6157/2304파일·active pointerdac·startup task1이 남았으며 old code 복원은 FAILED다.
+public3/business82/Machine2/원 Run144·5 ACL·형제 판 동일과 늦은 Medium ordinary relay RUNNING은
+별도 관측이다. 원 rollback tree·startup preimage·보험과 protected 원본을 보존했고 수동
+receipt export/추가repair/재설치/GUI/update0이다. 현재 상태의 지원 복구는 다음 작업이다.
+켜진 작업자가 이미 있으면 로그온 작업은 DEFERRED로 남기며 업무를 멈추지 않는다.
+수명주기 교체/복구는 진행 중 자동 전이나 실행 중 작업이 있으면 거절한다.
+기존 policy·pointer·journal·task XML/ACL은 보호된 `.startup-update-install.<attempt>`에
+보존하고 교체 실패/정확한 원본 복구에 함께 되돌린다. 제거 시 소유 작업을 등록 해제하고
+versions/control은 `.startup-update-uninstall.<attempt>`에 보존한다. 업무 데이터는 건드리지 않는다.
+
+PROVEN 범위는 순수 결정·핀·내구 쓰기 순서와 명령 생성, 코드 inventory 검사다.
+실제 task 등록/ACL, 일반 사용자 GUI READY, 로그온 경합, 전원 중단·실패 복귀,
+Hiberboot 값 관측은 호스트에서 실행하지 않았다. [CA-G19](BACKLOG.md#ca-g19)가 실기 수용을 관리한다.
+
 <a id="ca-o01"></a>
 ## CA-O01 실행 구조·시작·권한
 
 이적 PC는 마지막으로 작업을 시작한 등록·활성 일반 작업자 이름을 기존 작업자 목록에 기억하고, 다음 실행에서 확인 창이나 `작업 시작` 누름 없이 같은 시작 경로로 작업 화면을 연다. 현재 이름은 기존 작업자 표시 영역에 보이며 `작업자 변경`으로 새 이름을 시작하면 그 이름을 기억한다. 첫 실행·기억 없음·이름 중지/제거·PC 연결 설정 필요·세션/현재 트레이/본인 보류 복구 필요·이름 기록 불확실은 선택 화면에 머문다. 세션 시작 저장 실패도 결속과 배경 전송 없이 선택 화면으로 돌아가고 화면 안 안내를 보인다. 검증된 오프라인 품목 캐시와 로컬 연결 설정이 있으면 같은 자동 시작을 사용하며 기존 `저장 전송` 안내를 유지한다.
 
-portable builder의 `APP_ROOT_FILES`는 제품 identity 포트, transfer client/common/store·member exchange view·tray completion을 포함한 root Python 57개를 명시한다.
+portable builder의 `APP_ROOT_FILES`는 제품 identity 포트, transfer client/common/store·member exchange view·tray completion과 자동 갱신 bootstrap을 명시한다.
 `APP_PACKAGE_DIRS`·데이터 목록·`PORTABLE_INSTALL_ASSETS`와 실제 import에서 파생한
 relay/등록/profile 도구 3개와 외부 운영 CLI `tools.direct_sync_relay_operator`를 함께 탑재한다.
 CLI의 목적지는 `app/tools/direct_sync_relay_operator.py`다. 새 root 스크립트는 자동 탑재하지 않으며,
@@ -753,3 +912,208 @@ CA-T01의 이름 14개와 실제 register→ValueError, CA-T02의 malformed JSON
 고정 Web committed source `56c32028ce6b30ccf774e7cc635e3e4b377266ed`의 실제 Flask 서명 HTTP 진입점·SQLite 저장소와 CA 승인 진입점·내구 intent를 함께 사용했다. 성공 2건과 틀린 PIN·중앙 ADMIN 잠금·root 철회·역할 없음·잠금+root 철회 5건의 7 PASS를 확인했다. ADMIN 잠금은 서로 다른 3장치에서 5회씩 실패하여 실제 15회 한계를 충족하며 새 장치에서도 서버 `PIN_LOCKED` 감사와 CA REJECTED를 확인한다. 철회된 이전 grant는 REVOKED로 남고 redeem 거절, 원 recovery 파일 보존·PIN 미저장을 단언한다. 권한 상태 준비는 지원 store API를 이용한 격리 fixture이며 실제 root UI·production·네트워크 배포 수용은 NOT TESTED. 초기 fixture/입력 실패와 잘못된 10회 oracle을 지우지 않고 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)에 연결한다.
 
 G 시작 거절 대화상자는 REFUSE/UNKNOWN에 맞는 고정 한국어 원인·복구 안내만 전달한다. 임의 예외 진단은 작업자 대화상자에 전달하지 않는다. 전체 비교에서 드러난 relay 모의는 read-only Git 신원 확인을 보존하며, 실제 자료 경계/호환 판정은 동일하다.
+# Installation follow-up evidence — 2026-10-02
+
+설치 상승 wrapper와 일반 토큰 producer wrapper는 파일 없이 메모리 명령으로 실행한다.
+상승 helper·bootstrap library·writer fence helper와 일반 토큰 API는 한 번 읽은
+바이트의 SHA256을 확인하고 그 바이트를 파싱·평가한다. 실행 동안 source handle을
+독점 보유하지 않는다. 높은 권한의 stage journal·stream·summary·placement log·
+replacement/restore 결과는 `C:\KMTech\Apps\Container_Audit\update-control\installation-evidence\run-<guid>`에 둔다.
+폴더 소유자는 Administrators, SYSTEM/Administrators만 쓰며 operator는 읽기만 한다.
+일반 부모의 사전 검사는 앱 부모 부재와 두 공유 조상의 검토된 기본 ACL 모양을
+지원 상승 단계로 넘긴다. 사용자 소유·재분석 지점·지원 모양 밖의 쓰기 권한은
+한국어 한 줄로 거절한다. 높은 권한 단계는 증거 생성 전에 두 조상
+`C:\KMTech`·`C:\KMTech\Apps`에만 비재귀 강화 B를 적용하고, 앱 부모를
+보호된 DACL로 생성·신뢰 재검사한 뒤 control/store/run을 만든다. 이미 목표
+모양이면 확인만 하며 뒤의 writer-fence 획득 후 B도 ACL을 다시 바꾸지 않는다.
+공유 조상 보호는 제거·되돌리기로 원래 권한에 복귀하지 않는다.
+준비 중 메모리에 모은 단계 경계·전후 SDDL은 run 생성 직후 `preparation.json`에
+내구 기록한다. run 생성 전 실패는 높은 권한의 사용자 쓰기 가능 대체 경로를
+만들지 않고 종료 코드 61(지원 밖 ACL), 62(재분석), 63(소유자), 64(앱 부모 생성),
+65(control/증거 생성), 66(기타)로 돌아온다. 일반 부모가 자신의 journal에
+`PREPARATION_FAILED`와 `INSTALLATION_PREPARATION_*` 한국어 진단을 기록하며,
+이 경우 원 ErrorRecord는 회수하지 못했다고 표시한다. 기존 보호 경로 검사
+실패는 원 ErrorRecord를 먼저 가림·상한 적용해 기록하고 inner exception을 보존한다.
+관리자 단계가 시작할 때 최근 5회만 남긴다. 일반 부모가 보호된 원본을 읽고
+자신의 operator evidence/결과 경로에 요약·필요한 결과 사본을 쓴다.
+
+제거 목록에서 `update-control\installation-evidence`는 최근 5회 증거로 보존한다.
+updater의 나머지 control 항목과 `versions`는 기존 보호된 startup uninstall
+preimage로 이동한다. 되돌리기는 그 state를 원 control에 복귀시키고, 진행 중인
+증거와 보존 증거의 경로·바이트는 바꾸지 않는다. 목적지 항목이 이미 있으면 거절한다.
+실제 제거/되돌리기와 5차 설치에서의 위치 전이는 **NOT TESTED**이며
+[sub-107 보고서](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-107/REPORT.md)의
+버전·시험 범위·예외를 따른다. published pin/선언은 최종 컷에서 별도로 갱신한다.
+
+The2136233 lab fourth installation FAILED_ROLLED_BACK before onboarding/relay.
+The old0d tree/Run and absent CA relay were restored; harmless0x18B child proof
+does not prove an actual CA relay start. Current read-only stage diagnostic V1
+reproduced startup ancestor trust rejection, independently of its lost historical
+exception: lab/TEST1 shared ancestors inherit AU self Modify; C:\ owner is
+TrustedInstaller. V1's empty-preimage failure is a diagnostic defect, preserved
+and corrected only in a new frozen V2.
+
+Shared protection is a one-way pre-placement step on the two declared ancestors;
+rollback comparisons must separate this intentional ACL change from preserved
+code/data/identity/Run state. Uninstall retains protection for other SYSTEM
+consumers; restoration requires the supported coordinated procedure. Unsupported
+ACL shapes stop with a plain Korean path/reason, without broad reset or recursion.
+Source evidence tests:27 checks PASS for finite child bytes/private ACLs/redacted
+failures;34 memory checks PASS for exact privileged owner SIDs and B shape/guard
+behavior. [V5 lab result](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-66/CA-STAGE-ACL-DIAG-V5.md)
+and JSON SHA301aa20353919a85086c2630cf9407d0c5372521974e2626896ed6363d762e08
+prove B's exact SDDL/guard, creation/legacy preservation, six native5 denial
+boundaries, unchanged repeat and user-owned preclaim rejection under the verified
+same-SID/session1/medium filtered token. Actual shared-ancestor repair and fifth
+installation remain NOT TESTED. The frozen diagnostic's no-BOM Korean text
+defect is preserved; shipped installers/bootstrap now retain UTF8 BOM and an
+actual PS5 file-decoding/rejection regression. No field-wide claim follows from
+the two observed Windows machines or this account's filtered administrator token.
+
+### Shared ancestor inheritance propagation — 2026-10-02
+
+Admission and target readback compare sorted ACE tuples (SID, mask, allow/deny,
+inheritance, propagation, inherited), with exact owner/group and protection state.
+After protecting the parent, the child is read again: equal permissions with a
+different ACE order are admitted; changed permissions/identity/protection stop.
+The fresh descriptor supplies both the write and the before-SDDL evidence.
+Both default, either intermediate state and both protected are supported.
+Native NTFS RED on the original helper and GREEN on PS5.1/PS7 cover propagation,
+unchanged legacy/sibling effective rights, normal writes/rename, repeat and an
+external permission change. The non-elevated host test translates owner admission
+only; real privileged ownership and the next lab installation are NOT TESTED.
+The first-run fixture maps only canonical paths and preserves an already mapped
+run, including a short C: basetemp; its original six fixture failures are retained.
+[Evidence and candidate](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-123/REPORT.md).
+
+### Placement ACL scope and failed installation recovery — 2026-10-03
+
+Placement retains the protected application parent and admits existing control
+directories through the protected creator. Only placed code trees are hardened;
+update-control, evidence, user data and unknown siblings are excluded. Native
+child exit and redacted output are retained before evidence persistence. A failed
+helper emits one bounded JSON stdout diagnostic: 71 for evidence persistence,
+72 for a failed native child, 73 for another helper failure. Canonical captures it
+in its own journal; original exceptions remain distinct from recording failures.
+
+Rollback attempts parent protection, supported product removal, exact Run restore
+and marker cleanup independently, recording every result. Protection uses the
+same nonrecursive creator; an ordinary caller's repair is admitted inside the
+pinned elevation wrapper under its held writer authority. Existing code/fence
+readback still gates release and ordinary relay readiness gates recovery success.
+
+A new installer durably flushes a reentry record before runtime mutation and
+updates it after completed removal and before placement. It records owner PID
+and UTC start, exact fence/prepared tuple and hashes, delegation hash (no token),
+old metadata hashes and Run preimage, removal completion and marker hash.
+Reentry supports intact old code with completed removal and uncompleted placement,
+no scheduled writer, absent Run/relays, dead PID and a newly claimed old authority.
+PID reuse, existing/inaccessible mutexes, missing/ambiguous records, changed code
+or tuples stop with one Korean diagnostic. It completes rollback and proves the
+old ordinary relay ready before normal installation. Ordinary evidence retains
+the established operator-owned ACL; elevated evidence remains machine protected.
+This is a narrow rollback finisher, not general lifecycle convergence.
+The ordinary repair preflight validates its explicit held authority lease on the
+owning thread; only the separate elevated wrapper probes foreign ownership.
+Actual same-thread mutex tests cover valid, absent and wrong leases on both PS
+engines while stopping before UAC. The shared argument formatter also works
+when capture is called from canonical rather than the placement helper.
+
+PROVEN on Windows 11/Python 3.12.10/PS 5.1.26100.9444 and PS 7.6.5: baseline
+c75853e native placement/evidence RED; corrected native ACL preservation and parent
+repair, fallback capture, continued rollback and durable-record reentry GREEN.
+Native owner admission/assignment are translated only in owned D: fixtures;
+registry/relay/UAC callbacks are isolated in reentry tests. PS 7 JSON reads preserve
+UTC wire strings using DateKind String when available. Original fixture failures
+are retained. Actual privileged ownership, UAC, lab installation/GUI and release
+acceptance remain NOT TESTED. The legacy sub-125 lab build has no qualifying
+reentry record and is deliberately refused; its separate lab repair plan is not
+a product hash exception. [Evidence and limits](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-127/REPORT.md).
+
+### Shared ancestor recovery admission — 2026-10-03
+
+Strict relay/evidence, installation and startup-update admission use the existing
+ancestor ACE-set/Administrators-owner/protection/reparse check for the literal
+`C:\KMTech` and `C:\KMTech\Apps`. Read-only `ProtectedAncestor` admission requires
+the protected target; it cannot prepare missing/default folders or write ACLs.
+Other paths retain their existing strict leaf masks and rejection diagnostics.
+The updater retains its initial code trust check before loading bootstrap, then
+rechecks with the validated library's exact ancestor admission before proceeding.
+
+PS5.1/PS7 native D: fixtures cover both literal leaves, supported recovery
+admission, default/extra-write/user-owner/reparse rejection, unchanged ACLs and
+strict rejection of a matching shape at another path (70 PASS; unchanged owner
+admission is translated for the non-elevated host). Old committed helpers reject
+the supported shape. Rehearsal-only declarations/packet and lab repair/install
+evidence are separate from the formal source change; see
+[the task report](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-142/REPORT.md).
+
+### ACL descriptor readback — 2026-10-03
+
+Get-BootstrapAclComparisonKey ignores only native DACL AI bookkeeping and ACE
+order for the supported all-Allow models; mixed Allow/Deny order stays exact.
+Shared-ancestor admission still checks its exact supported model; task
+restore still checks exact XML. PS5.1/PS7 executable task-restore regression
+changes the original AI/order failures to PASS and rejects owner/group,
+protection, ACE/inherited flag, other control and invalid-descriptor drift.
+Owned native D: ACE addition and protection removal remain rejected. This
+evidence does not prove reproduction of the lab's parent-induced AI transition,
+privileged ownership, lab repair or installation. Raw hash-only receipt recovery
+uses exact raw SHA or AI-only raw SHA proof; it cannot recover legacy ACE order.
+New receipts retain raw SDDL alongside the unchanged hash. PS5.1/PS7 and Python
+receipt regressions cover AI/order admission, legacy conservative rejection,
+raw-hash binding and all permission negatives. Formal declaration regeneration
+remains zero; the canonical receipt reader changes but its bootstrap pin remains
+frozen until the separately committed rehearsal declaration refresh.
+
+### 끝나지 않은 되돌리기 이어 하기 — sub-172 소스 계약
+
+고친 설치기의 보호 control/rollback-continuations/transaction 자리에는 최초 receipt의
+바이트 그대로인 사본과 SHA, 최초 자기 경로, 옛·새 manifest, 원 Run/relay 증명,
+owner PID/시작 시각과 session/attempt를 묶은 불변 journal을 한 번만 쓴다. 최근 실행
+증거 회전과 별도로 남기며 완료 표식도 한 번만 작성한다. canonical 준비/release와
+복구 journal의 시각은 기존 fence JSON 문자열 파서를 써 PS5.1/7의 wire 값이 같다.
+
+같은 successor packet으로 설치기를 다시 실행하면 원 owner가 종료했고 원 receipt,
+양쪽 전체 코드/record/ACL, startup preimage, source와 operator가 모두 같은지 먼저
+검사한다. PlanOnly는 VERIFIED_PENDING만 보고한다. 실제 재진입은 기존 authority와
+placement admission 안에서 원 receipt가 가리키는 옛 트리, 정확한 Run, task/pointer,
+옛 일반 사용자 relay를 복원한다. 코드가 이미 복원된 경우도 남은 단계를 확인하며
+완료 표식 뒤 다음 PlanOnly는 NOT_FOUND다. 불일치는 기록·트리 변경 전에 한국어로
+거절한다. 기록 자체를 다시 쓰거나 guard를 우회하지 않는다.
+
+G처럼 고치기 전 installer의 기록만 있는 상태는 이 계약의 입력이 아니다. 공개
+legacy receipt self-path 규칙은 그대로이고, 새 journal로 검증된 사본만 최초 binding
+경로와 구별한다. 128개를 넘는 retained continuation은 보수적으로 거절하며 자동
+정리하지 않는다. 독립 native 랩 수용과 장기간 보관 정책은 별도 확인이 필요하다.
+
+2026-10-04 실제 랩 근거는 [sub-172 REPORT](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-172/REPORT.md),
+[G 수선 결과](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-172/LAB-REPAIR-RESULT-G.md),
+[H 예행](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-172/CA-5TH-REHEARSAL-H.md)로 구별한다.
+G는 새 계약 journal이 없어 NOT_FOUND였고 제품 밖 기존 지원 함수로 원2302/Run/task/pointer/보호/일반 relay를 복원했다.
+예행 packet9ca39a8의 H 설치1회는 native0/PASS/REPLACED_VERIFIED이며 실제 보호 child receipt 소비를 확인했다.
+원 보호 G receipt와 보험 사본은 유지했고 새 H 보호 parent/helper raw는 D에 byte/SHA 차이0으로 회수했다.
+비상승 SID1000/session1/integrity8192 relay RUNNING, 일반 세션 시작 화면/조작0,
+지원 check_for_updates1회/provider off/후보 없음/적용0을 확인했다. 외부 feed 조회/실제 업데이트 적용의 증명은 아니다.
+H 성공으로 native 미완 rollback 이어 하기를 실행하지 않았으며 그 장애 경로와 독립 검토는 여전히 별도다.
+현재 새 복구 수용 범위는 원 startup task 부재/retired writer 부재/원 relay0~1이다.
+반복 복구가 fresh controller 생성 뒤 중단된 경우의 native 검증은 없으며 fail-closed 한계를 독립 검토에 남긴다.
+
+## sub-189 지원 설치 운영 경계 (2026-10-04)
+
+A≠B일 때 INSTALL_CANONICAL_PORTABLE.ps1이 실제 B를 from으로 선택하며, direct helper의 current 통째 교체는 거절한다. 새 C와 기존 A/B를 검증하고 보호 receipt를 제어 게시보다 먼저 만든다. 부분 게시/후속 실패는 같은 receipt 복원으로 C를 보존하고 원 policy/active/transition/task와 사용자 Run·relay를 복원한다. 보호 기록에 없는 bytes나 권한 변화는 수용하지 않는다. 미완 복구는 정확한 successor packet과 protected 원 기록이 있어야 이어 간다.
+
+NTFS 함수 회귀의 코드 이동·hash·반복 복원은 실제다. Task Scheduler/CIM/ACL/승격/사용자 token 관측은 시험 seam이며 실제 PC의 A≠B→C 성공·실패·전원 단절 수용은 아직 NOT TESTED다. 첫 설치/A=B 경로의 기존 집중 회귀를 재검증하고, 배포 전 랩에서 옛 판 위 설치 1회 및 내용 소유 제거 수렴 1회를 진행한다. 정식 선언·pin·서명 쌍 재생성은 coordinator 수용 단계로 남긴다.
+
+### sub-189 P2-1 검증 범위
+
+PS5.1/PS7 owned NTFS fixture에서 최초 미완 복구 뒤 controller를 두 번 더 중단하고 같은 원 receipt/journal로 VERIFIED_PENDING에 재진입한다. 실제 Python admission root는 PS의 canonical control root와 일치시킨다. 보호 ACL/registry/task/token 관측은 seam이며 native 상승·전원 단절은 NOT TESTED다. D 경합 timeout은 C의 같은 90초 조건으로 대조하며 실패 로그를 보존한다.
+
+### sub-189 P2-2 검증 범위
+
+fixture Python canonical_control_root는 PS의 L/c와 같다. ordinary persistent relay의 실제 status admission은 active fence에서 종료됨을 부정 사례로 확인한다. completion helper 지연과 구판 completion fence 게시 직후의 2초 scheduling cut로 기존 결함을 노출하고, 수정 판은 같은 ordinary relay PID가 완료 뒤 두 주기 이상 생존함을 확인한다. 최초 중단 뒤 추가 중단 2회→완료도 확인한다. PS5.1/PS7 owned NTFS·process는 실제, 보호 ACL/registry/COM/token 관측은 seam; native UAC/전원 단절은 NOT TESTED.
+
+
+## 설치 통합의 읽기 전용 수명주기 검사 (sub-248)
+
+canonical의 PlanOnly/설치 상태 분류보다 앞선 검사는 처음 검증한 bootstrap library 안에서 같은 프로세스로 실행한다. 설치 namespace/stock identity·control·trust 설정·실제 task XML의 read-only 관측을 확인하며 거절 시 원래 지원 제거 안내를 유지한다. JSON은 중복 key, 잘못된 key 대소문자, 비객체, 손상/1MiB 초과와 잘못된 판 식별자를 거절하고, 확인 뒤 control을 다시 읽어 의미상 동일함을 검사한다. 실제 query의 subprocess 경로는 기존 auto_update_control admission이 spawn 전에 거절한다. pinned library ScriptBlock은 이미 승인된 변수 기호에 결속하며 원 bytes/hash/AST 검증을 계속 적용한다. 설치/복원/G 및 host/native 증거의 범위는 sub-248 REPORT와 COVERAGE-FIX에 기록한다.

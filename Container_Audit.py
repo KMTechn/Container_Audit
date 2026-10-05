@@ -1125,6 +1125,11 @@ class ContainerAudit:
         self.legacy_label_transition = legacy_label_transition_enabled()
         self._transfer_coordinator_ui_owner_thread_id = threading.get_ident()
         self.root = tk.Tk()
+        from auto_update import trial_context
+
+        self._startup_update_pending = trial_context(Path(__file__).resolve().parent) is not None
+        if self._startup_update_pending:
+            self.root.withdraw()
         if startup_geometry:
             self.root.withdraw()
         self.root.title(
@@ -13779,6 +13784,8 @@ class ContainerAudit:
         ``behind_live_save`` asks whether only a running product save stands in
         the way, so the scan can wait for it in order.
         """
+        if getattr(self, "_startup_update_pending", False):
+            return "프로그램 준비 중입니다. 잠시 뒤 다시 스캔하세요."
         pending_exchange = getattr(self, "_local_exchange_checkpoint_pending", None)
         if pending_exchange is not None and pending_exchange is getattr(self, "current_tray", None):
             return "교환 상태 저장을 다시 확인하고 있습니다. 현재 트레이를 보존합니다."
@@ -13937,6 +13944,9 @@ class ContainerAudit:
 
     def process_barcode(self, event=None):
         """UI의 스캔 엔트리에서 바코드를 읽어 로직을 실행합니다."""
+        if getattr(self, "_startup_update_pending", False):
+            self._refuse_entry_scan("프로그램 준비 중입니다. 잠시 뒤 다시 스캔하세요.")
+            return
         raw_barcode = self.scan_entry.get().strip()
         if raw_barcode and getattr(self, "_progress_visible", False):
             self._hide_logistics_progress(raw_barcode)
@@ -21483,6 +21493,12 @@ def _item_catalog_cache_time_for_display(value: object) -> str:
 
 def main(argv: list[str] | None = None):
     arguments = list(sys.argv[1:] if argv is None else argv)
+    from auto_update import startup_gate, trial_context, publish_gui_ready, trial_stop_requested
+
+    application_code_root = Path(__file__).resolve().parent
+    gate_result = startup_gate(application_code_root, arguments)
+    if gate_result is not None:
+        return gate_result
     hosted_result = dispatch_product_mode(arguments)
     if hosted_result is not None:
         return hosted_result
@@ -21503,6 +21519,25 @@ def main(argv: list[str] | None = None):
     if not isinstance(startup, tuple):
         return startup
     app, instance_lease = startup
+    if trial_context(application_code_root) is not None:
+        app.root.withdraw()
+        def await_update_readiness():
+            if trial_stop_requested(application_code_root):
+                # The hidden trial accepts no scans. Flush its existing queue
+                # without prompting to discard an operator's unfinished tray.
+                app._finalize_application_close()
+                return
+            context = trial_context(application_code_root)
+            if context is None:
+                app._startup_update_pending = False
+                app.root.deiconify()
+                return
+            try:
+                publish_gui_ready(application_code_root)
+            except (OSError, ValueError):
+                pass  # A readback failure remains unconfirmed; data is preserved.
+            app.root.after(250, await_update_readiness)
+        app.root.after(0, await_update_readiness)
     try:
         # The resident UI must let the relay and background writers acquire
         # admission between their own guarded mutations.
@@ -21631,7 +21666,11 @@ def _prepare_gui_startup(*, data_root=None):
                 pass
             _show_item_catalog_startup_error(exc.cause_code)
             return ITEM_CATALOG_STARTUP_EXIT_CODE
-        app.root.after(500, lambda: schedule_update_check(app.root))
+        from auto_update import control_root, read_json
+
+        startup_control = control_root(Path(application_path))
+        if startup_control is None or not read_json(startup_control / "policy.json").get("feed_url"):
+            app.root.after(500, lambda: schedule_update_check(app.root))
         startup_complete = True
         return app, instance_lease
     finally:

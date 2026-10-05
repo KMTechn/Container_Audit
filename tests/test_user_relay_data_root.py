@@ -199,6 +199,7 @@ def test_installer_restart_and_lifecycle_validator_agree_with_python(tmp_path, c
     values.update(CA_CODE_ROOT=str(code), CA_EXPECTED_COMMAND=expected, CA_REPO_ROOT=str(repo))
     result = run_functions(
         tmp_path, repo / "INSTALL_CANONICAL_PORTABLE.ps1", ["Full", "Arg", "Command"],
+        "$SourceRoot=$env:CA_CODE_ROOT\n"
         "if ((Command $env:CA_CODE_ROOT) -cne $env:CA_EXPECTED_COMMAND) { throw 'restart root differs' }",
         values=values,
     )

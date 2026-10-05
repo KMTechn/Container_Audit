@@ -425,6 +425,7 @@ def test_portable_rollback_product_failure_records_explicit_failure_without_rest
     environment = dict(os.environ)
     environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
     command = r"""
+. (Join-Path (Split-Path -Parent $env:KMTECH_TEST_INSTALLER_PATH) 'tools\bootstrap_integrity.ps1')
 $tokens = $null
 $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile(
@@ -433,6 +434,13 @@ $ast = [Management.Automation.Language.Parser]::ParseFile(
     [ref]$errors
 )
 if ($errors.Count -ne 0) { exit 20 }
+$failureHelper = $ast.Find({
+    param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -ceq 'Get-CanonicalFailureDetails'
+}, $true)
+if ($null -eq $failureHelper) { exit 29 }
+Invoke-Expression $failureHelper.Extent.Text
 $candidates = @($ast.FindAll({
     param($node)
     $node -is [Management.Automation.Language.TryStatementAst] -and
@@ -620,11 +628,13 @@ exit 0
     ],
 )
 def test_portable_runtime_binding_accepts_only_executable_quote_spelling(
-    spelling, accepted,
+    spelling, accepted, tmp_path,
 ):
-    executable = r"C:\KMTech\Apps\Container_Audit\current\runtime\pythonw.exe"
+    root = tmp_path / "current"
+    root.mkdir()
+    executable = str(root / "runtime/pythonw.exe")
     arguments = (
-        r" -I -B C:\KMTech\Apps\Container_Audit\current\app\main.py"
+        " -I -B " + str(root / "app/main.py") +
         " --container-audit-user-relay"
     )
     canonical = executable + arguments
@@ -649,6 +659,8 @@ def test_portable_runtime_binding_accepts_only_executable_quote_spelling(
         KMTECH_TEST_INSTALLER_PATH=str(PORTABLE_INSTALLER),
         KMTECH_TEST_RELAY_COMMAND=commands[spelling],
         KMTECH_TEST_RELAY_ACCEPTED=str(int(accepted)),
+        KMTECH_TEST_RELAY_ROOT=str(root),
+        CONTAINER_AUDIT_DATA_ROOT="",
     )
     command = canonical_leaf_prelude(PORTABLE_INSTALLER) + r'''
 $ErrorActionPreference = 'Stop'
@@ -664,8 +676,9 @@ foreach ($definition in $ast.EndBlock.Statements) {
         Invoke-Expression $definition.Extent.Text
     }
 }
-$root = 'C:\KMTech\Apps\Container_Audit\current'
-$expected = Command $root
+$root = $env:KMTECH_TEST_RELAY_ROOT
+$SourceRoot = $root
+$expected = Command $root -Installed
 $before = [ordered]@{ exists=$true; kind='String'; data=$expected }
 $process = New-CimInstance -ClassName Win32_Process -ClientOnly -Property @{
     ExecutablePath=(Join-Path $root 'runtime\pythonw.exe')
@@ -1128,14 +1141,11 @@ exit 0
 
 def test_portable_runtime_json_scalar_guards_reject_string_false_and_zero():
     text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
-    assert "if(Test-JsonTrue $relay.persistent_retry){break}" in text
-    assert (
-        "if($null-eq$relay -or -not (Test-JsonTrue "
-        "$relay.persistent_retry)){throw 'Fresh relay status proof failed.'}"
-    ) in text
+    integrity = (ROOT / "tools/bootstrap_integrity.ps1").read_text(encoding="utf-8-sig")
+    assert "$Status.persistent_retry -isnot [bool] -or -not $Status.persistent_retry" in integrity
     assert "[bool]$relay.persistent_retry" not in text
     assert (
-        "Test-JsonPositiveInt32 $onboarding.relay_start.process_id"
+        "Test-BootstrapJsonInteger $onboarding.relay_start.process_id"
     ) in text
     assert (
         "Test-JsonTrue "
@@ -2217,8 +2227,10 @@ foreach ($name in @('Arg','Product')) {
     Invoke-Expression $functions[0].Extent.Text
 }
 $script:launches = @()
-function Start-Process {
-    param($FilePath, $ArgumentList, $WindowStyle, [switch]$PassThru)
+function Invoke-InstallationEvidenceChild {
+    param($Name, $Executable, $Arguments)
+    $FilePath=$Executable
+    $ArgumentList=($Arguments | ForEach-Object { Arg ([string]$_) }) -join ' '
     $script:launches += [pscustomobject]@{
         FilePath = [string]$FilePath
         ArgumentList = [string]$ArgumentList

@@ -187,7 +187,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         "Path-method mutation detection is conservative and requires static path-like receiver evidence.",
         "HTTP network mutation detection conservatively treats calls named post or request as writer sites.",
         "External process creation is conservatively treated as a writer boundary; static Python literals are also scanned for scheduled-task and service control commands.",
-        "PowerShell discovery derives the six shipped portable PowerShell assets from PORTABLE_INSTALL_ASSETS and records dot-source boundaries; it does not execute PowerShell or recursively interpret sourced code.",
+        "PowerShell discovery derives the shipped portable PowerShell assets from PORTABLE_INSTALL_ASSETS and records dot-source boundaries; it does not execute PowerShell or recursively interpret sourced code.",
         "PowerShell Start-Process/Invoke-Item, Invoke-Expression/IEX, call-operator, direct script/native command, module import, explicit COM/WMI or native process creation, explicit .NET Process.Start, scheduler COM, service-control, runspace/job/event-action, and reflection primitives are conservatively treated as writer boundaries.",
         "A dynamic PowerShell invocation primitive can be detected and denied when unfenced, but its runtime-computed target or decoded payload cannot in general be resolved statically.",
         "PowerShell guard attribution enforces one bounded top-level guard lifetime and direct intra-file function-call reachability, but remains syntactic and does not prove computed or cross-module calls, alias resolution, module dispatch, or every multiline/here-string control-flow relationship.",
@@ -260,9 +260,21 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
                 ]
                 if row["file"] == "INSTALL_THIS_PC.ps1"
             ),
+        },
+        {
+            "file": "tools/apply_prepared_update.ps1",
+            "source": "auto_update_control",
+            "guard_name": "Enter-ContainerStartupUpdateAuthority",
+            "guard_line": next(row["guard_line"] for row in payload["powershell_execution_inventory"]["script_entrypoints"] if row["file"] == "tools/apply_prepared_update.ps1"),
+            "release_name": "",
+            "release_line": None,
+            "guarded": True,
+            "writer_site_count": next(row["writer_site_count"] for row in payload["powershell_execution_inventory"]["script_entrypoints"] if row["file"] == "tools/apply_prepared_update.ps1"),
+            "writer_site_kinds": next(row["writer_site_kinds"] for row in payload["powershell_execution_inventory"]["script_entrypoints"] if row["file"] == "tools/apply_prepared_update.ps1"),
         }
     ]
     assert "canonical_code_placement" in payload["writer_sink_sources"]
+    assert "auto_update_control" in payload["writer_sink_sources"]
     assert payload["powershell_execution_inventory"]["asset_derivation"] == (
         "portable_builder.PORTABLE_INSTALL_ASSETS"
     )
@@ -270,21 +282,56 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         path.as_posix() for path in module._discover_shipped_powershell_paths(ROOT)
     ]
     assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
-        "call_operator": 22,
-        "com_wmi_process_create": 1,
-        "dot_source": 11,
-        "start_process": 3,
+        "call_operator": 16,
+        "com_wmi_process_create": 5,
+        "dot_source": 22,
+        "dotnet_process_start": 2,
+        "invoke_expression": 1,
+        "native_process_api": 4,
+        "reflective_invocation": 6,
+        "scheduler_com": 5,
+        "start_process": 2,
     }
-    helper_calls = [
+    # Preserve both canonical declarations and both consumed native calls.
+    native_starts = [
         row for row in payload["powershell_execution_inventory"]["execution_sites"]
-        if row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1"
-        and row["kind"] == "call_operator" and row["target"] == "$winps"
+        if row["kind"] == "native_process_api"
+    ]
+    assert len(native_starts) == 4
+    declarations = [row for row in native_starts
+                    if row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1"
+                    and row["function"] == "Initialize-CanonicalUserProcessApi"]
+    assert len(declarations) == 2
+    source_lines = (ROOT / "INSTALL_CANONICAL_PORTABLE.ps1").read_text(encoding="utf-8").splitlines()
+    assert all(row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1" and row["guarded"]
+               and row["guard_name"] == "Enter-ContainerWriterSessionAuthority"
+               and "CreateProcessWithTokenW" in source_lines[row["line"] - 1]
+               and row["command"] == "CreateProcessWithTokenW"
+               for row in declarations)
+    for owner, function, guard in (
+        ("INSTALL_CANONICAL_PORTABLE.ps1", "Start-CanonicalLimitedRelay", "Enter-ContainerWriterSessionAuthority"),
+        ("tools/bootstrap_integrity.ps1", "Start-BootstrapNormalProducerWrapper", "byte_pinned_installer_caller_closure"),
+    ):
+        calls = [row for row in native_starts if row["file"] == owner and row["function"] == function]
+        assert len(calls) == 1
+        assert calls[0]["guarded"] and calls[0]["guard_name"] == guard
+        assert calls[0]["command"] == "ContainerAuditCanonicalUserProcess.StartLimited"
+    capture_proof = next(
+        row for row in payload['powershell_execution_inventory']['function_guard_proofs']
+        if row['file'] == 'tools/bootstrap_integrity.ps1'
+        and row['function'] == 'Invoke-InstallationEvidenceChild'
+    )
+    helper_calls = [
+        row for row in capture_proof['call_sites']
+        if row['file'] == 'INSTALL_CANONICAL_PORTABLE.ps1'
+        and row['caller'] == '__script__'
     ]
     # Five delegated bootstrap invocations (including public late restore) and
     # two read-only integrity probes.
     assert len(helper_calls) == 7
-    assert all(row["guarded"] for row in helper_calls)
-    assert {row["guard_name"] for row in helper_calls} == {"Enter-ContainerWriterSessionAuthority"}
+    assert all(row['installer_guarded'] for row in helper_calls)
+    assert capture_proof['guarded']
+    assert capture_proof['guard_name'] == 'byte_pinned_installer_caller_closure'
     bootstrap_loads = [
         row for row in payload["powershell_execution_inventory"]["execution_sites"]
         if row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1"
@@ -325,14 +372,19 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
 
     scheduled = payload["powershell_execution_inventory"]["mutation_sites"]
     assert scheduled and all(row["guarded"] for row in scheduled)
-    assert {row["file"] for row in scheduled} == {"tools/container_writer_fence.ps1"}
-    assert {row["wrapper_function"] for row in scheduled} <= {
+    assert {row["file"] for row in scheduled} == {"tools/container_writer_fence.ps1", "INSTALL_THIS_PC.ps1"}
+    assert {row["wrapper_function"] for row in scheduled if row["file"] == "tools/container_writer_fence.ps1"} <= {
         "Disable-ContainerScheduledTaskUnderWriterFence",
         "Enable-ContainerScheduledTaskUnderWriterFence",
         "Stop-ContainerScheduledTaskUnderWriterFence",
         "DisableAndStop-ContainerScheduledTaskUnderWriterFence",
         "Remove-ContainerScheduledTaskUnderWriterFence",
     }
+    installer_tasks = [row for row in scheduled if row["file"] == "INSTALL_THIS_PC.ps1"]
+    assert {row["wrapper_function"] for row in installer_tasks} == {
+        "Restore-ContainerStartupUpdatePreimage", "Initialize-ContainerStartupUpdate", "",
+    }
+    assert all(row["guard_name"] == "Enter-ContainerPlacementWriterFence" for row in installer_tasks)
 
     lexical_sink = next(
         row
@@ -922,6 +974,86 @@ def _fenced_powershell_fixture(injected_line: str) -> str:
         "    Exit-ContainerWriterAdmission $lease\n"
         "}\n"
     )
+
+
+@pytest.mark.parametrize('unsafe_position', ('none', 'before', 'after', 'unknown', 'ambiguous'))
+def test_shared_bootstrap_execution_requires_every_shipped_caller_fenced(
+    tmp_path: Path, unsafe_position: str,
+) -> None:
+    module = _load_module()
+    _write_minimal_inventory_fixture(tmp_path, 'def main():\n    pass\n')
+    library = tmp_path / 'tools/bootstrap_integrity.ps1'
+    library.parent.mkdir(exist_ok=True)
+    library.write_text(
+        'function Initialize-SharedCapture {\n'
+        '    Add-Type -TypeDefinition "fixture"\n'
+        '}\n'
+        'function Invoke-SharedCapture {\n'
+        '    Initialize-SharedCapture\n'
+        '}\n', encoding='utf-8',
+    )
+    source = _fenced_powershell_fixture('    Invoke-SharedCapture\n')
+    if unsafe_position == 'before':
+        source = 'Invoke-SharedCapture\n' + source
+    elif unsafe_position == 'after':
+        source += 'Invoke-SharedCapture\n'
+    elif unsafe_position == 'ambiguous':
+        source = 'function Initialize-SharedCapture {}\n' + source
+    elif unsafe_position == 'unknown':
+        (tmp_path / 'tools/unknown.ps1').write_text(
+            'Invoke-SharedCapture\n', encoding='utf-8',
+        )
+        assets = tuple((path.as_posix(), path.as_posix()) for path in module.POWERSHELL_PATHS)
+        assets += (('tools/unknown.ps1', 'tools/unknown.ps1'),)
+        (tmp_path / 'tools/build_portable_release_candidate.py').write_text(
+            'PORTABLE_INSTALL_ASSETS = ' + repr(assets) + '\n', encoding='utf-8',
+        )
+    (tmp_path / 'INSTALL_THIS_PC.ps1').write_text(source, encoding='utf-8')
+    inventory = module._collect_powershell_inventory(tmp_path)
+    shared = [row for row in inventory['all_sites']
+              if row['file'] == library.relative_to(tmp_path).as_posix()
+              and row['kind'] == 'reflective_invocation']
+    assert len(shared) == 1
+    assert shared[0]['guarded'] is (unsafe_position == 'none')
+    rejected = [row for row in inventory['guard_failures']
+                if row['file'] == library.relative_to(tmp_path).as_posix()]
+    assert bool(rejected) is (unsafe_position != 'none')
+
+
+def test_direct_shared_capture_api_before_admission_remains_unfenced(tmp_path: Path) -> None:
+    module = _load_module()
+    _write_minimal_inventory_fixture(tmp_path, 'def main():\n    pass\n')
+    (tmp_path / 'INSTALL_THIS_PC.ps1').write_text(
+        "[KMTechInstallationChildCapture]::Run('fixture',@(),'fixture')\n"
+        + _fenced_powershell_fixture(''), encoding='utf-8',
+    )
+    inventory = module._collect_powershell_inventory(tmp_path)
+    assert any(row['kind'] == 'dotnet_process_start' and not row['guarded']
+               for row in inventory['guard_failures'])
+
+
+@pytest.mark.parametrize('unsafe_position', ('none', 'before', 'unknown', 'ambiguous'))
+def test_shared_normal_user_api_requires_registered_session_caller(tmp_path, unsafe_position):
+    module = _load_module()
+    _write_minimal_inventory_fixture(tmp_path, 'def main():\n    pass\n')
+    library = tmp_path / 'tools/bootstrap_integrity.ps1'
+    library.parent.mkdir(exist_ok=True)
+    library.write_text('function Invoke-SharedNormalProducer {\n'
+                       ' [ContainerAuditCanonicalUserProcess]::StartLimitedWithOverrides("fixture","sid",1,@(),@())\n'
+                       '}\n', encoding='utf-8')
+    source = 'Assert-ContainerWriterPublicInvocation\nInvoke-SharedNormalProducer\n'
+    if unsafe_position == 'before':
+        source = 'Invoke-SharedNormalProducer\n' + source
+    elif unsafe_position == 'ambiguous':
+        source = 'function Invoke-SharedNormalProducer {\n}\n' + source
+    elif unsafe_position == 'unknown':
+        (tmp_path / 'INSTALL_THIS_PC.ps1').write_text('Invoke-SharedNormalProducer\n', encoding='utf-8')
+    (tmp_path / 'tools/container_writer_session.ps1').write_text(source, encoding='utf-8')
+    inventory = module._collect_powershell_inventory(tmp_path)
+    calls = [row for row in inventory['execution_sites'] if row['file'] == 'tools/bootstrap_integrity.ps1'
+             and row['kind'] == 'native_process_api']
+    assert len(calls) == 1
+    assert calls[0]['guarded'] is (unsafe_position == 'none')
 
 
 def _run_inventory_release_gate(

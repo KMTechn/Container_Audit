@@ -40,6 +40,7 @@ from user_relay import (
     USER_RELAY_RUN_VALUE,
     USER_RELAY_MODE,
     install_user_relay_autostart,
+    installation_relay_start_deferred,
     relay_data_root_arguments,
     remove_user_relay_autostart,
     request_user_relay_stop,
@@ -536,7 +537,7 @@ def _windows_acl_identity(path: Path) -> dict[str, Any]:
         "[ordered]@{owner_sid=[string]$acl.GetOwner("
         "[Security.Principal.SecurityIdentifier]).Value;"
         "access_rules_protected=[bool]$acl.AreAccessRulesProtected;"
-        "acl_sddl_sha256=$hash}|ConvertTo-Json -Compress"
+        "acl_sddl_sha256=$hash;acl_sddl=$sddl}|ConvertTo-Json -Compress"
     )
     completed = subprocess.run(
         [
@@ -558,7 +559,7 @@ def _windows_acl_identity(path: Path) -> dict[str, Any]:
     )
     if (
         completed.returncode != 0
-        or len(completed.stdout.encode("utf-8")) > 4096
+        or len(completed.stdout.encode("utf-8")) > 131072
         or len(completed.stderr.encode("utf-8")) > 4096
     ):
         raise OSError("replacement lifecycle ACL readback failed")
@@ -571,11 +572,70 @@ def _windows_acl_identity(path: Path) -> dict[str, Any]:
     return result
 
 
+def _validate_acl_raw_binding(value: Mapping[str, Any], raw_field: str, hash_field: str) -> None:
+    if raw_field in value:
+        raw = value[raw_field]
+        if (not isinstance(raw, str) or not raw.strip() or len(raw) > 65536
+                or hashlib.sha256(raw.encode("utf-8")).hexdigest() != value[hash_field]):
+            raise ValueError("replacement ACL raw descriptor binding is invalid")
+
+
+@writer_sink("current_user_lifecycle_restore")
+def _replacement_identities_match(expected: Mapping[str, Any], actual: Mapping[str, Any]) -> bool:
+    fields = _REPLACEMENT_IDENTITY_FIELDS - {"acl_sddl_sha256"}
+    if any(expected[field] != actual[field] for field in fields):
+        return False
+    if "acl_sddl" not in expected and "acl_sddl" not in actual:
+        return expected["acl_sddl_sha256"] == actual["acl_sddl_sha256"]
+    # Use the same library shipped with this executing module, never a helper
+    # from either receipt-selected tree. Parsing only extracts trusted functions.
+    module_root = Path(__file__).resolve().parent
+    helper = module_root / "tools" / "bootstrap_integrity.ps1"
+    if not helper.exists():
+        helper = module_root.parent / "tools" / "bootstrap_integrity.ps1"
+    info = _require_regular_unredirected_file(helper, "executing ACL comparison library")
+    if info.st_size > 1048576:
+        raise ValueError("executing ACL comparison library is oversized")
+    import ctypes
+
+    directory = ctypes.create_unicode_buffer(32768)
+    length = ctypes.windll.kernel32.GetSystemDirectoryW(directory, len(directory))
+    if length <= 0 or length >= len(directory):
+        raise OSError("Windows system directory readback failed")
+    powershell = Path(directory.value) / "WindowsPowerShell/v1.0/powershell.exe"
+    _require_regular_unredirected_file(powershell, "Windows PowerShell ACL reader")
+    escaped = str(helper).replace("'", "''")
+    command = (
+        "$ErrorActionPreference='Stop';$tokens=$null;$errors=$null;"
+        f"$ast=[Management.Automation.Language.Parser]::ParseFile('{escaped}',[ref]$tokens,[ref]$errors);"
+        "if($errors.Count){throw 'Invalid ACL library'};"
+        "$names=@('Get-BootstrapStringSha256','Get-BootstrapAclComparisonKey',"
+        "'Test-BootstrapAclRawBinding','Test-BootstrapAclIdentity');"
+        "foreach($name in $names){$nodes=@($ast.FindAll({param($n) "
+        "$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name},$false));"
+        "if($nodes.Count -ne 1){throw 'Invalid ACL function'};"
+        "Invoke-Expression $nodes[0].Extent.Text};"
+        "$pair=[Console]::In.ReadToEnd()|ConvertFrom-Json;"
+        "Test-BootstrapAclIdentity $pair.expected $pair.actual 'acl_sddl_sha256' 'acl_sddl'"
+    )
+    completed = subprocess.run(
+        [str(powershell), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        input=json.dumps({"expected": dict(expected), "actual": dict(actual)}),
+        capture_output=True, text=True, encoding="utf-8", errors="strict",
+        timeout=15, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if completed.returncode != 0 or completed.stdout.strip() not in ("True", "False"):
+        raise OSError("replacement ACL comparison failed")
+    return completed.stdout.strip() == "True"
+
+
 def _normalized_replacement_identity(
     value: Any,
     purpose: str,
 ) -> dict[str, Any]:
-    if not isinstance(value, Mapping) or set(value) != _REPLACEMENT_IDENTITY_FIELDS:
+    if not isinstance(value, Mapping) or set(value) not in (
+        _REPLACEMENT_IDENTITY_FIELDS, _REPLACEMENT_IDENTITY_FIELDS | {"acl_sddl"}
+    ):
         raise ValueError(f"{purpose} shape is invalid")
     file_count = value.get("file_count")
     reparse_count = value.get("reparse_count")
@@ -600,7 +660,8 @@ def _normalized_replacement_identity(
     owner_sid = str(value.get("owner_sid") or "")
     if not owner_sid or len(owner_sid) > 184:
         raise ValueError(f"{purpose} owner identity is invalid")
-    return {field: value[field] for field in _REPLACEMENT_IDENTITY_FIELDS}
+    _validate_acl_raw_binding(value, "acl_sddl", "acl_sddl_sha256")
+    return dict(value)
 
 
 def _read_replacement_tree_identity(
@@ -720,11 +781,11 @@ def _read_replacement_tree_identity(
     ):
         raise ValueError("replacement portable manifest identity is invalid")
     acl = dict(acl_identity_reader(selected_root))
-    if set(acl) != {
+    if set(acl) not in ({
         "owner_sid",
         "access_rules_protected",
         "acl_sddl_sha256",
-    }:
+    }, {"owner_sid", "access_rules_protected", "acl_sddl_sha256", "acl_sddl"}):
         raise ValueError("replacement code ACL identity is invalid")
     return _normalized_replacement_identity(
         {
@@ -737,6 +798,7 @@ def _read_replacement_tree_identity(
             "owner_sid": acl["owner_sid"],
             "access_rules_protected": acl["access_rules_protected"],
             "acl_sddl_sha256": acl["acl_sddl_sha256"],
+            **({"acl_sddl": acl["acl_sddl"]} if "acl_sddl" in acl else {}),
             "reparse_count": 0,
         },
         "replacement code identity",
@@ -795,6 +857,13 @@ def _replacement_user_relay_command(
         entrypoint,
         "replacement lifecycle canonical relay entrypoint",
     )
+    from auto_update import control_root
+
+    control = control_root(selected)
+    if control is not None:
+        fixed = control.parent / "current"
+        return [str(fixed / "runtime/pythonw.exe"), "-I", "-B", str(fixed / "app/auto_update.py"), "--bootstrap", "--role", "relay", "--", USER_RELAY_MODE,
+                *relay_data_root_arguments(selected, environ=environ)]
     return [str(pythonw), "-I", "-B", str(entrypoint), USER_RELAY_MODE,
             *relay_data_root_arguments(selected, environ=environ)]
 
@@ -1227,7 +1296,21 @@ def onboard_current_user(
     autostart_installer: Callable[..., Mapping[str, Any]] = install_user_relay_autostart,
     relay_launcher: Callable[..., Mapping[str, Any]] = start_user_relay_process,
 ) -> dict[str, Any]:
+    from auto_update import installation_root, resolve_lifecycle_context
+    managed = installation_root(Path(app_root))
+    if managed is not None and any((managed / 'update-control' / name).exists() for name in ('policy.json', 'active.json', 'transition.json')):
+        owner = _read_json(managed / 'current/portable-manifest.json', 'fixed owner manifest')
+        pointer = _read_json(managed / 'update-control/active.json', 'active pointer')
+        if pointer.get('sha') != owner.get('source_commit'):
+            app_root = resolve_lifecycle_context(managed, operation='register')['active_app_root']
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
+    if managed is not None:
+        namespaces = tuple(managed / name for name in ('current', 'versions', 'update-control', 'removal-evidence', 'removed.json'))
+        if any(path_is_within(candidate, namespace) or path_is_within(namespace, candidate)
+               for candidate in (paths.data_root, paths.direct_sync_root, paths.logistics_profile_path, paths.bootstrap_tls_ca_bundle_path)
+               for namespace in namespaces):
+            raise CurrentUserOnboardingError('자료 경로가 코드·제어·제거 증거 경로와 겹칩니다. 자료를 보존하고 별도 경로를 선택하세요.',
+                                             report_path=paths.registration_report_path, status='FAILED')
     tls_ca_source = _configured_tls_ca_bundle_source(paths, environ)
     attempt = RemoteAttempt.begin(paths.onboarding_report_path, "current_user_onboarding")
     with writer_admission("current_user_onboarding"):
@@ -1374,7 +1457,11 @@ def onboard_current_user(
                     report_path=paths.onboarding_report_path,
                     status="UNKNOWN",
                 )
-            if relay_start_status != "START_REQUESTED":
+            deferred = (
+                report["relay_start"] == {"status": "DEFERRED_CANONICAL_RELEASE", "process_id": 0}
+                and installation_relay_start_deferred()
+            )
+            if relay_start_status != "START_REQUESTED" and not deferred:
                 raise ValueError("current-user relay launch was not requested")
             apply_current_user_runtime_environment(
                 paths,
@@ -1659,7 +1746,10 @@ def restore_current_user_lifecycle_after_replacement(
         parent_acl = receipt.get("parent_acl")
         if (
             not isinstance(parent_acl, Mapping)
-            or set(parent_acl) != {"owner_sid", "access_rules_protected", "sddl_sha256"}
+            or set(parent_acl) not in (
+                {"owner_sid", "access_rules_protected", "sddl_sha256"},
+                {"owner_sid", "access_rules_protected", "sddl_sha256", "sddl"},
+            )
             or not str(parent_acl.get("owner_sid") or "")
             or type(parent_acl.get("access_rules_protected")) is not bool
             or not re.fullmatch(
@@ -1668,6 +1758,7 @@ def restore_current_user_lifecycle_after_replacement(
             )
         ):
             raise ValueError("replacement lifecycle parent ACL receipt is invalid")
+        _validate_acl_raw_binding(parent_acl, "sddl", "sddl_sha256")
         for field in ("helper_sha256", "integrity_helper_sha256"):
             if not re.fullmatch(r"[0-9a-f]{64}", str(receipt.get(field) or "")):
                 raise ValueError(
@@ -1729,7 +1820,8 @@ def restore_current_user_lifecycle_after_replacement(
             identity_reader(failed_root, selected_code_root),
             "failed-new replacement code identity",
         )
-        if restored_identity != old_identity or failed_new_identity != new_identity:
+        if (not _replacement_identities_match(old_identity, restored_identity)
+                or not _replacement_identities_match(new_identity, failed_new_identity)):
             raise ValueError(
                 "replacement lifecycle trees differ from the exact receipt"
             )

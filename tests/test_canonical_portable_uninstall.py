@@ -142,6 +142,10 @@ else:
 '''
 
 OS_BOUNDARIES = r'''
+# PowerShell 7 prepends its own module directory after Python env isolation.
+# Restore this fixture's existing Windows PowerShell module path for the
+# actual WinPS placement child; keep every child/receipt assertion intact.
+$env:PSModulePath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules'
 function Get-AuthenticodeSignature { return [pscustomobject]@{ Status='NotTested' } }
 function Snapshot { return Get-Content (Join-Path $env:CA_UNINSTALL_ROOT 'registry.json') -Raw | ConvertFrom-Json }
 function Restore($Before) { Save (Join-Path $env:CA_UNINSTALL_ROOT 'registry.json') $Before }
@@ -154,7 +158,8 @@ function Relays {
     }
     return @()
 }
-function Product([string]$Root, [string]$Mode) {
+function Product([string]$Root, [string]$Mode, [string]$AppRoot='') {
+    if (-not $AppRoot) { $AppRoot = Join-Path $Root 'app' }
     $expectedPreimagePath = Join-Path $env:CA_UNINSTALL_ROOT 'expected-registry-preimage.json'
     if (Test-Path -LiteralPath $expectedPreimagePath) {
         $persistedAudit = Get-Content -LiteralPath $auditPath -Raw | ConvertFrom-Json
@@ -172,7 +177,7 @@ function Product([string]$Root, [string]$Mode) {
         '--onboard-current-user' { 'onboard' }
         default { throw 'Unexpected product mode' }
     }
-    & $env:CA_UNINSTALL_PYTHON -I -B $env:CA_UNINSTALL_HOST $operation (Join-Path $Root 'app')
+    & $env:CA_UNINSTALL_PYTHON -I -B $env:CA_UNINSTALL_HOST $operation $AppRoot
     if ($LASTEXITCODE -ne 0) {
         if ($operation -ceq 'remove') { throw "Real current-user removal failed: $LASTEXITCODE" }
         throw "Real current-user onboarding failed: $LASTEXITCODE"
@@ -202,15 +207,112 @@ function StartRaw([string]$Line) {
 }
 '''
 
-HELPER_OS = r'''
+HELPER_OS = r"""
 function Test-CurrentUserRelayPersistencePresent { return [bool](Get-Content (Join-Path $env:CA_UNINSTALL_ROOT 'registry.json') -Raw | ConvertFrom-Json).exists }
 function Get-CimInstance {
     if ($env:CA_UNINSTALL_INTERACTIVE -ceq '1') {
         return [pscustomobject]@{ ProcessId=1; ExecutablePath=(Join-Path $InstallRoot 'runtime\pythonw.exe'); CommandLine='interactive fixture' }
     }
-    return @()
+    $ownedRows=@(); $selectedPid=$PID
+    for ($depth=0; $selectedPid -gt 0 -and $depth -lt 8; $depth++) {
+        $actual=CimCmdlets\Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId='+$selectedPid) -ErrorAction Stop
+        if ($null -eq $actual) { throw 'owned helper process disappeared' }
+        if ($depth -gt 0 -and ([string]$actual.CommandLine).IndexOf($env:CA_UNINSTALL_ROOT,[StringComparison]::OrdinalIgnoreCase) -lt 0) { break }
+        $ownedRows += $actual
+        $selectedPid=[int]$actual.ParentProcessId
+    }
+    if ($ownedRows.Count -lt 2) { throw 'owned helper parent chain was not exercised' }
+    Add-Content -LiteralPath (Join-Path $env:CA_UNINSTALL_ROOT 'helper-boundary-phases.txt') -Value 'owned_process_ancestry'
+    return $ownedRows
 }
-'''
+
+Add-Type -TypeDefinition @'
+using System; using System.Collections.Generic; using System.Runtime.InteropServices;
+public class RemovalTask {
+ public string Name="fixture"; public string Xml="<Task><Fixture/></Task>";
+ public string GetSecurityDescriptor(int flags){return "fixture-sddl";} public void Stop(int flags){}
+}
+public class RemovalFolder {
+ public HashSet<string> Tasks=new HashSet<string>{"direct-sync-relay-container-audit","container-audit-isolated-qualification-authority"};
+ public object[] GetTasks(int flags){return new object[0];}
+ public RemovalTask GetTask(string name){if(!Tasks.Contains(name))throw new COMException("absent",unchecked((int)0x80070002)); return new RemovalTask();}
+ public void DeleteTask(string name,int flags){Tasks.Remove(name);}
+}
+'@
+
+# The empty task folder is the same implementation as test_convergent_removal.
+$script:CAUninstallTaskFolder=[RemovalFolder]::new()
+$script:CAUninstallTaskFolder.Tasks.Clear()
+$script:CAUninstallTaskService=[pscustomobject]@{Folder=$script:CAUninstallTaskFolder}
+$script:CAUninstallTaskService | Add-Member ScriptMethod Connect {}
+$script:CAUninstallTaskService | Add-Member ScriptMethod GetFolder {
+    param($Path)
+    if ($Path -cne '\') { throw 'unexpected task folder' }
+    Add-Content -LiteralPath (Join-Path $env:CA_UNINSTALL_ROOT 'helper-boundary-phases.txt') -Value 'isolated_task_folder'
+    return $this.Folder
+}
+function New-Object {
+    param([string]$TypeName,[object[]]$ArgumentList,[string]$ComObject)
+    if ($ComObject) {
+        if ($ComObject -cne 'Schedule.Service') { throw 'unexpected COM consumer' }
+        return $script:CAUninstallTaskService
+    }
+    return Microsoft.PowerShell.Utility\New-Object @PSBoundParameters
+}
+
+# Only OS protection is simulated; journal bytes, tuple and process are real.
+$Script:CAUninstallOriginalProtectionFunctions=@{}
+foreach($name in @('Test-InstallationEvidencePrivileged','Get-InstallationEvidenceControlRoot','Assert-InstallationEvidenceProtectedPath','New-InstallationProtectedDirectory','Set-InstallationEvidenceAcl','Assert-BootstrapProtectedRelayPath')) {
+    $Script:CAUninstallOriginalProtectionFunctions[$name]=(Get-Command $name -CommandType Function -ErrorAction Stop).ScriptBlock
+}
+function Test-UninstallFixtureRootPath([string]$Path) {
+    if([string]::IsNullOrWhiteSpace($env:CA_UNINSTALL_ROOT) -or [string]::IsNullOrWhiteSpace($Path)){return $false}
+    $root=[IO.Path]::GetFullPath($env:CA_UNINSTALL_ROOT).TrimEnd('\')
+    $full=[IO.Path]::GetFullPath($Path)
+    return $full.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)
+}
+function Test-UninstallFixtureProtectedPath([string]$Path) {
+    return (Test-UninstallFixtureRootPath $Path)
+}
+function Test-InstallationEvidencePrivileged {
+    if(Test-UninstallFixtureRootPath $UninstallAuditPath){return $true}
+    return (& $Script:CAUninstallOriginalProtectionFunctions['Test-InstallationEvidencePrivileged'])
+}
+function Get-InstallationEvidenceControlRoot {
+    if(-not [string]::IsNullOrWhiteSpace($env:CA_UNINSTALL_ROOT)){return (Join-Path $env:CA_UNINSTALL_ROOT 'protected-removal')}
+    return (& $Script:CAUninstallOriginalProtectionFunctions['Get-InstallationEvidenceControlRoot'])
+}
+function Assert-InstallationEvidenceProtectedPath([string]$Path,[switch]$AllowSupportedPreparation) {
+    if(Test-UninstallFixtureProtectedPath $Path){
+        if(-not(Test-Path -LiteralPath $Path)){throw 'FIXTURE_PROTECTED_PATH_MISSING'}
+        Assert-BootstrapNoReparsePoint $Path 'fixture protected boundary' -PathOnly
+        return
+    }
+    & $Script:CAUninstallOriginalProtectionFunctions['Assert-InstallationEvidenceProtectedPath'] $Path -AllowSupportedPreparation:$AllowSupportedPreparation
+}
+function New-InstallationProtectedDirectory([string]$Path,[string]$Sid,[switch]$RecoverAbandoned) {
+    if(Test-UninstallFixtureProtectedPath $Path){
+        Assert-BootstrapNoReparsePoint $Path 'fixture protected directory' -PathOnly
+        [void][IO.Directory]::CreateDirectory($Path)
+        Assert-InstallationEvidenceProtectedPath $Path
+        return
+    }
+    & $Script:CAUninstallOriginalProtectionFunctions['New-InstallationProtectedDirectory'] $Path $Sid -RecoverAbandoned:$RecoverAbandoned
+}
+function Set-InstallationEvidenceAcl([string]$Path,[string]$Sid,[switch]$Directory,[switch]$PrepareOnly) {
+    if(Test-UninstallFixtureProtectedPath $Path){Assert-InstallationEvidenceProtectedPath $Path;return}
+    & $Script:CAUninstallOriginalProtectionFunctions['Set-InstallationEvidenceAcl'] $Path $Sid -Directory:$Directory -PrepareOnly:$PrepareOnly
+}
+
+function Assert-BootstrapProtectedRelayPath([string]$Path,[switch]$AllowSupportedPreparation) {
+    if(Test-UninstallFixtureProtectedPath $Path){
+        if(-not(Test-Path -LiteralPath $Path)){throw 'FIXTURE_PROTECTED_PATH_MISSING'}
+        Assert-BootstrapNoReparsePoint $Path 'fixture protected relay boundary' -PathOnly
+        return
+    }
+    & $Script:CAUninstallOriginalProtectionFunctions['Assert-BootstrapProtectedRelayPath'] $Path -AllowSupportedPreparation:$AllowSupportedPreparation
+}
+"""
 
 
 def _ps(path, env, *args):
@@ -260,7 +362,7 @@ def _setup(tmp_path, fault=''):
     helper = source / 'INSTALL_THIS_PC.ps1'
     text = helper.read_text(encoding='utf-8-sig').replace('$testOverride = (', HELPER_OS + '\n$testOverride = (')
     if fault in {'partial', 'restore_failure'}:
-        target = '        Remove-Item -LiteralPath $installRootFull -Recurse -Force -ErrorAction Stop'
+        target = '        $removed = Invoke-ContainerConvergentRemoval -InstallRoot $installRootFull -TaskFolder $folder -ExcludeProcessIds $excluded'
         assert text.count(target) == 1
         text = text.replace(target, "        Remove-Item -LiteralPath (Join-Path $installRootFull 'app\\main.py') -Force\n        throw 'PARTIAL_REMOVAL_INJECTED_FAILURE'")
         if fault == 'restore_failure':

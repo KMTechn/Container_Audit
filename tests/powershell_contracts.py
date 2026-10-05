@@ -57,6 +57,10 @@ def canonical_leaf_prelude(source):
 . '{root}/tools/bootstrap_integrity.ps1'
 $contractSharedLeaf = Get-BootstrapSharedPortableLeaf '{root}'
 . $contractSharedLeaf
+$jsonAst=[Management.Automation.Language.Parser]::ParseFile('{root}/tools/container_writer_fence.ps1',[ref]$null,[ref]$null)
+$jsonFunction=@($jsonAst.EndBlock.Statements|Where-Object {{$_.Name -ceq 'ConvertFrom-ContainerWriterFenceJson'}})
+if($jsonFunction.Count -ne 1){{throw 'actual writer JSON parser missing'}}
+Invoke-Expression $jsonFunction[0].Extent.Text
 """
 
 
@@ -71,8 +75,9 @@ $ErrorActionPreference='Stop'
 $tokens=$null; $errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile($env:CA_CONTRACT_SOURCE,[ref]$tokens,[ref]$errors)
 if ($errors.Count) { throw 'product PowerShell parse failed' }
+$definition_nodes=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$true))
 foreach ($name in $env:CA_CONTRACT_NAMES.Split(',')) {
-    $functions=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name},$true))
+    $functions=@($definition_nodes | Where-Object {$_.Name -ceq $name})
     if ($functions.Count -ne 1) { throw ('expected one actual product function: '+$name) }
     Invoke-Expression $functions[0].Extent.Text
 }

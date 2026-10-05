@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('Contract', 'Prepare', 'ValidatePrepared', 'ValidateReplacement', 'RestoreWriter', 'Recover', 'SelfTest')]
@@ -1368,7 +1368,7 @@ function Test-ReplacementReceiptShape($Receipt) {
         $top = @('schema_version','status','app_id','transaction_id','created_at','helper_sha256','integrity_helper_sha256','receipt_path','install_root','install_parent','rollback_root','failed_root','parent_acl','old','new','identity_or_credential_copied')
         $tree = @('file_count','aggregate_sha256','integrity_sha256','manifest_sha256','source_commit','source_tree','owner_sid','access_rules_protected','acl_sddl_sha256','reparse_count')
         $acl = @('owner_sid','access_rules_protected','sddl_sha256')
-        if (-not (Test-ExactPropertySet $Receipt $top) -or -not (Test-ExactPropertySet $Receipt.old $tree) -or -not (Test-ExactPropertySet $Receipt.new $tree) -or -not (Test-ExactPropertySet $Receipt.parent_acl $acl)) { return $false }
+        if (-not (Test-ExactPropertySet $Receipt $top) -or -not (Test-BootstrapAclPropertySet $Receipt.old $tree 'acl_sddl' 'acl_sddl_sha256') -or -not (Test-BootstrapAclPropertySet $Receipt.new $tree 'acl_sddl' 'acl_sddl_sha256') -or -not (Test-BootstrapAclPropertySet $Receipt.parent_acl $acl)) { return $false }
         [void](ConvertTo-RoundTripUtc ([string]$Receipt.created_at) 'replacement receipt creation')
         return (
             [string]$Receipt.schema_version -ceq $Script:ReplacementSchema -and
@@ -1401,6 +1401,9 @@ function Test-ContainerLifecycleMutationEvidence($Receipt, [string]$ExpectedCode
         $root = Get-StrictFullPath $ExpectedCodeRoot 'Container install root'
         $runtime = Join-Path $root 'runtime\pythonw.exe'
         $entry = Join-Path $root 'app\main.py'
+        $bootstrap = Test-Path -LiteralPath (Join-Path $root 'app\auto-update-settings.json') -PathType Leaf
+        if($bootstrap){$entry=Join-Path $root 'app\auto_update.py'}
+        $relayArguments=if($bootstrap){'--bootstrap --role relay -- '+$Script:UserRelayMode}else{$Script:UserRelayMode}
         $dataRootArgument = ''
         if (-not [string]::IsNullOrWhiteSpace($env:CONTAINER_AUDIT_DATA_ROOT)) {
             $dataRoot = Get-StrictFullPath $env:CONTAINER_AUDIT_DATA_ROOT 'Container data root'
@@ -1411,7 +1414,7 @@ function Test-ContainerLifecycleMutationEvidence($Receipt, [string]$ExpectedCode
         $commands = @()
         foreach ($runtimeToken in @($runtime, ('"' + $runtime + '"'))) {
             foreach ($entryToken in @($entry, ('"' + $entry + '"'))) {
-                $commands += "$runtimeToken -I -B $entryToken $($Script:UserRelayMode)$dataRootArgument"
+                $commands += "$runtimeToken -I -B $entryToken $relayArguments$dataRootArgument"
             }
         }
         $relayPid = $Receipt.relay_start.process_id
@@ -1430,17 +1433,22 @@ function Test-ContainerLifecycleMutationEvidence($Receipt, [string]$ExpectedCode
     catch { return $false }
 }
 
-function Test-ContainerUserRelayLiveReadbackValues($Receipt, [string]$ExpectedCodeRoot, [string]$RegistryCommand, [string]$RegistryValueKind, $Process, [int]$CandidateProcessCount, [int]$MatchingProcessCount, [string]$CurrentUserSid) {
+function Test-ContainerUserRelayLiveReadbackValues($Receipt, [string]$ExpectedCodeRoot, [string]$RegistryCommand, [string]$RegistryValueKind, $Process, [int]$CandidateProcessCount, [int]$MatchingProcessCount, [string]$CurrentUserSid, $Security=$null, $Caller=$null, $RuntimeStatus=$null) {
     try {
         if (-not (Test-ContainerLifecycleMutationEvidence $Receipt $ExpectedCodeRoot)) { return $false }
         $root = Get-StrictFullPath $ExpectedCodeRoot 'Container install root'
-        $runtime = Join-Path $root 'runtime\pythonw.exe'
+        $identity=Get-BootstrapRelayExpectedIdentity $root ([string]$Receipt.relay_autostart.command)
+        $snapshot=Get-BootstrapRelayReadinessSnapshot $identity
+        if(-not $snapshot.settled){return $false};$identity=$snapshot.identity
+        $runtime = [string]$identity.executable
         $expectedCommand = [string]$Receipt.relay_autostart.command
         $relayPid = $Receipt.relay_start.process_id
         $captured = ConvertTo-RoundTripUtc ([string]$Receipt.captured_at) 'lifecycle receipt capture'
         $completed = ConvertTo-RoundTripUtc ([string]$Receipt.completed_at) 'lifecycle receipt completion'
         if ($Process.CreationDate -isnot [DateTime]) { return $false }
         $created = ([DateTime]$Process.CreationDate).ToUniversalTime()
+        if($identity.managed -and ($null -eq $Security -or $null -eq $Caller -or $null -eq $RuntimeStatus)){return $false}
+        if($null -ne $Security -and -not(Test-BootstrapRelayReadback $identity $Process $Security $Caller $RuntimeStatus $captured)){return $false}
         return (
             $RegistryCommand -ceq $expectedCommand -and
             $RegistryValueKind -ceq 'String' -and
@@ -1448,16 +1456,69 @@ function Test-ContainerUserRelayLiveReadbackValues($Receipt, [string]$ExpectedCo
             $CandidateProcessCount -eq 1 -and
             $MatchingProcessCount -eq 1 -and
             ($Process.ProcessId -is [int] -or $Process.ProcessId -is [long] -or $Process.ProcessId -is [uint32]) -and
-            [int64]$Process.ProcessId -eq [int64]$relayPid -and
+            ($identity.managed -or [int64]$Process.ProcessId -eq [int64]$relayPid) -and
             (Test-BootstrapSamePath ([string]$Process.ExecutablePath) $runtime) -and
-            [string]$Process.CommandLine -ceq $expectedCommand -and
+            (Get-BootstrapRelayCommandIdentity ([string]$Process.CommandLine) $runtime) -ceq (Get-BootstrapRelayCommandIdentity ([string]$identity.command) $runtime) -and
             [string]$Process.OwnerSid -ceq $CurrentUserSid -and
             $CurrentUserSid -cmatch '^S-1-' -and
             $created -ge $captured.Subtract($Script:EvidenceClockTolerance) -and
-            $created -le $completed.AddSeconds(5)
+            $created -le $completed.AddSeconds($(if($identity.managed){75}else{5}))
         )
     }
     catch { return $false }
+}
+
+function Get-ContainerUserRelayObservation([string]$ExpectedCodeRoot) {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run', $false)
+    if ($null -eq $key) { return $false }
+    try {
+        $registryKind = $key.GetValueKind('KMTech.ContainerAudit.Relay').ToString()
+        $registryCommand = [string]$key.GetValue(
+            'KMTech.ContainerAudit.Relay',
+            $null,
+            [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+        )
+    }
+    finally { $key.Dispose() }
+    $root = Get-StrictFullPath $ExpectedCodeRoot 'Container install root'
+    $identity=Get-BootstrapRelayExpectedIdentity $root $registryCommand
+    $runtime = [string]$identity.executable
+    $caller=Get-BootstrapRelaySecurity $PID
+    $currentSid = [string]$caller.sid
+    $runtimeWql = $runtime.Replace('\', '\\').Replace("'", "''")
+    $observedCandidates = @()
+    $securityByPid=@{}
+    foreach ($candidate in @(Get-CimInstance -ClassName Win32_Process -Filter "ExecutablePath = '$runtimeWql'" -ErrorAction Stop)) {
+        $owner = Invoke-CimMethod -InputObject $candidate -MethodName GetOwnerSid -ErrorAction Stop
+        if ($owner.ReturnValue -isnot [uint32] -or [uint32]$owner.ReturnValue -ne 0) { return $false }
+        $observedCandidates += [pscustomobject][ordered]@{
+            ProcessId = $candidate.ProcessId
+            ExecutablePath = [string]$candidate.ExecutablePath
+            CommandLine = [string]$candidate.CommandLine
+            CreationDate = $candidate.CreationDate
+            OwnerSid = [string]$owner.Sid
+        }
+        $securityByPid[[string]$candidate.ProcessId]=Get-BootstrapRelaySecurity ([int]$candidate.ProcessId)
+    }
+    $statusPath=if([string]::IsNullOrWhiteSpace($env:CONTAINER_AUDIT_DATA_ROOT)){
+        Join-Path $env:LOCALAPPDATA 'KMTech\DirectSync\container_audit\status\container_audit_user_relay.json'
+    }else{Join-Path $env:CONTAINER_AUDIT_DATA_ROOT 'direct_sync\status\container_audit_user_relay.json'}
+    $runtimeStatus=$null
+    if(Test-Path -LiteralPath $statusPath -PathType Leaf){
+        Assert-BootstrapNoReparsePoint $statusPath 'lifecycle relay status' -PathOnly
+        if((Get-Item -LiteralPath $statusPath).Length -gt 65536){return $false}
+        $runtimeStatus=Get-Content -LiteralPath $statusPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    $observation = [pscustomobject][ordered]@{
+        registry_command = $registryCommand
+        registry_value_kind = $registryKind
+        current_user_sid = $currentSid
+        candidates = @($observedCandidates)
+        caller_security=$caller
+        process_security=$securityByPid
+        runtime_status=$runtimeStatus
+    }
+    return $observation
 }
 
 function Test-ContainerUserRelayLiveReadback {
@@ -1471,41 +1532,19 @@ function Test-ContainerUserRelayLiveReadback {
             $observation = & $ObservationProvider
         }
         else {
-            $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run', $false)
-            if ($null -eq $key) { return $false }
-            try {
-                $registryKind = $key.GetValueKind('KMTech.ContainerAudit.Relay').ToString()
-                $registryCommand = [string]$key.GetValue(
-                    'KMTech.ContainerAudit.Relay',
-                    $null,
-                    [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
-                )
-            }
-            finally { $key.Dispose() }
-            $root = Get-StrictFullPath $ExpectedCodeRoot 'Container install root'
-            $runtime = Join-Path $root 'runtime\pythonw.exe'
-            $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-            $runtimeWql = $runtime.Replace('\', '\\').Replace("'", "''")
-            $observedCandidates = @()
-            foreach ($candidate in @(Get-CimInstance -ClassName Win32_Process -Filter "ExecutablePath = '$runtimeWql'" -ErrorAction Stop)) {
-                $owner = Invoke-CimMethod -InputObject $candidate -MethodName GetOwnerSid -ErrorAction Stop
-                if ($owner.ReturnValue -isnot [uint32] -or [uint32]$owner.ReturnValue -ne 0) { return $false }
-                $observedCandidates += [pscustomobject][ordered]@{
-                    ProcessId = $candidate.ProcessId
-                    ExecutablePath = [string]$candidate.ExecutablePath
-                    CommandLine = [string]$candidate.CommandLine
-                    CreationDate = $candidate.CreationDate
-                    OwnerSid = [string]$owner.Sid
-                }
-            }
-            $observation = [pscustomobject][ordered]@{
-                registry_command = $registryCommand
-                registry_value_kind = $registryKind
-                current_user_sid = $currentSid
-                candidates = @($observedCandidates)
-            }
+            $watch=[Diagnostics.Stopwatch]::StartNew()
+            do {
+                $observation=Get-ContainerUserRelayObservation $ExpectedCodeRoot
+                $provider={return $observation}.GetNewClosure()
+                if(Test-ContainerUserRelayLiveReadback -Receipt $Receipt -ExpectedCodeRoot $ExpectedCodeRoot -ObservationProvider $provider){return $true}
+                Start-Sleep -Milliseconds 500
+            }while($watch.Elapsed.TotalSeconds -lt 75)
+            return $false
         }
-        if (-not (Test-ExactPropertySet $observation @('registry_command','registry_value_kind','current_user_sid','candidates'))) { return $false }
+        $hasSecurity=@($observation.PSObject.Properties.Name) -ccontains 'caller_security'
+        $fields=@('registry_command','registry_value_kind','current_user_sid','candidates')
+        if($hasSecurity){$fields+=@('caller_security','process_security','runtime_status')}
+        if (-not (Test-ExactPropertySet $observation $fields)) { return $false }
         $registryCommand = [string]$observation.registry_command
         $registryKind = [string]$observation.registry_value_kind
         $currentSid = [string]$observation.current_user_sid
@@ -1514,14 +1553,18 @@ function Test-ContainerUserRelayLiveReadback {
             if (-not (Test-ExactPropertySet $candidate @('ProcessId','ExecutablePath','CommandLine','CreationDate','OwnerSid'))) { return $false }
         }
         $expectedCommand = [string]$Receipt.relay_autostart.command
+        $identity=Get-BootstrapRelayExpectedIdentity $ExpectedCodeRoot $expectedCommand
         $matching = @()
         foreach ($candidate in $candidates) {
-            if ([string]$candidate.CommandLine -cne $expectedCommand) { continue }
+            if ((Get-BootstrapRelayCommandIdentity ([string]$candidate.CommandLine) ([string]$identity.executable)) -cne
+                (Get-BootstrapRelayCommandIdentity ([string]$identity.command) ([string]$identity.executable))) { continue }
             if ([string]$candidate.OwnerSid -cne $currentSid) { continue }
             $matching += $candidate
         }
         if ($candidates.Count -ne 1 -or $matching.Count -ne 1) { return $false }
-        return Test-ContainerUserRelayLiveReadbackValues $Receipt $ExpectedCodeRoot $registryCommand $registryKind $matching[0] $candidates.Count $matching.Count $currentSid
+        $security=$null;$caller=$null;$status=$null
+        if($hasSecurity){$security=$observation.process_security[[string]$matching[0].ProcessId];$caller=$observation.caller_security;$status=$observation.runtime_status}
+        return Test-ContainerUserRelayLiveReadbackValues $Receipt $ExpectedCodeRoot $registryCommand $registryKind $matching[0] $candidates.Count $matching.Count $currentSid $security $caller $status
     }
     catch { return $false }
 }
@@ -1589,11 +1632,7 @@ function Get-ContainerReplacementReceiptValidation {
             throw 'Replacement receipt tree identity readback differs.'
         }
         $parentAcl = Get-BootstrapAclIdentity $parent
-        if (
-            [string]$receipt.parent_acl.owner_sid -cne [string]$parentAcl.owner_sid -or
-            [string]$receipt.parent_acl.access_rules_protected -cne [string]$parentAcl.access_rules_protected -or
-            [string]$receipt.parent_acl.sddl_sha256 -cne [string]$parentAcl.sddl_sha256
-        ) { throw 'Replacement receipt parent ACL readback differs.' }
+        if (-not (Test-BootstrapAclIdentity $Receipt.parent_acl $parentAcl)) { throw 'Replacement receipt parent ACL readback differs.' }
         $siblings = @(Get-ChildItem -LiteralPath $parent -Directory -Force | Where-Object { $_.Name -match '^\.current\.(rollback|failed)\.' })
         if ($siblings.Count -ne 1 -or -not (Test-BootstrapSamePath $siblings[0].FullName $rollback)) {
             throw 'Replacement receipt sibling set is ambiguous.'
@@ -1668,8 +1707,8 @@ function Test-ContainerLifecycleRestoreReceipt {
         }
         $exact = (
             (Test-LifecycleReceiptStructuralGuard $receipt) -and
-            (Test-ExactPropertySet $receipt.restored_code_identity $tree) -and
-            (Test-ExactPropertySet $receipt.failed_new_code_identity $tree) -and
+            (Test-BootstrapAclPropertySet $receipt.restored_code_identity $tree 'acl_sddl' 'acl_sddl_sha256') -and
+            (Test-BootstrapAclPropertySet $receipt.failed_new_code_identity $tree 'acl_sddl' 'acl_sddl_sha256') -and
             (Test-ExactPropertySet $receipt.owner_artifact_paths $ownerArtifacts) -and
             (Test-ExactPropertySet $receipt.owner_artifact_fingerprints_before $ownerArtifacts) -and
             (Test-ExactPropertySet $receipt.owner_artifact_fingerprints_after $ownerArtifacts) -and
@@ -1840,6 +1879,10 @@ function Invoke-ContainerLifecycleRestoreProduct {
         $missingDelegatedSources = @($Script:LifecycleDelegatedWriterSources | Where-Object { $_ -cnotin $knownWriterSources })
         if ($missingDelegatedSources.Count -ne 0) { throw 'Lifecycle delegation names are absent from the code-derived writer inventory.' }
         $delegatedWriterSources = [Object[]]@($Script:LifecycleDelegatedWriterSources)
+        if(Test-Path -LiteralPath (Join-Path $CanonicalInstallRoot 'app\auto-update-settings.json') -PathType Leaf) {
+            if('auto_update_control' -cnotin $knownWriterSources){throw 'Lifecycle bootstrap launch is absent from the pinned writer inventory.'}
+            $delegatedWriterSources=[Object[]]@($delegatedWriterSources+'auto_update_control'|Sort-Object -Unique)
+        }
         $delegationToken = [Guid]::NewGuid().ToString('N') + [Guid]::NewGuid().ToString('N')
         [void](Set-ContainerWriterFenceDelegation `
             -SessionId $CurrentSessionId `
@@ -1855,21 +1898,17 @@ function Invoke-ContainerLifecycleRestoreProduct {
         [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID', $CurrentReplacementTransactionId, 'Process')
         Register-ContainerSystemMutationAttempt
         $lifecycleMutationAttempted = $true
-        $lines = @(
-            & $python -I -B $entry '--restore-current-user-lifecycle-after-replacement' `
-                '--app-root' (Join-Path $root 'app') `
-                '--code-root' $root `
-                '--replacement-transaction-id' $CurrentReplacementTransactionId `
-                '--replacement-receipt-path' $ReplacementReceiptPathForBinding `
-                '--replacement-receipt-sha256' $ReplacementReceiptSha256ForBinding `
-                '--writer-contract-sha256' $CurrentContractSha256 `
-                '--report-path' $outputFull `
-                '--session-id' $CurrentSessionId `
-                '--attempt-id' $CurrentAttemptId `
-                '--session-started-at-utc' $CurrentSessionStartedAtUtc `
-                '--orchestrator-sha256' $CurrentOrchestratorSha256 2>&1
-        )
-        $childExit = $LASTEXITCODE
+        $producerArguments = [string[]]@('-I','-B',$entry,'--restore-current-user-lifecycle-after-replacement',
+            '--app-root',(Join-Path $root 'app'),'--code-root',$root,
+            '--replacement-transaction-id',$CurrentReplacementTransactionId,
+            '--replacement-receipt-path',$ReplacementReceiptPathForBinding,
+            '--replacement-receipt-sha256',$ReplacementReceiptSha256ForBinding,
+            '--writer-contract-sha256',$CurrentContractSha256,'--report-path',$outputFull,
+            '--session-id',$CurrentSessionId,'--attempt-id',$CurrentAttemptId,
+            '--session-started-at-utc',$CurrentSessionStartedAtUtc,'--orchestrator-sha256',$CurrentOrchestratorSha256)
+        $producerResult = Invoke-BootstrapNormalFiniteProducer $producer $python $producerArguments ($outputFull+'.producer')
+        $lines = @(($producerResult.Stdout + "`n" + $producerResult.Stderr) -split '\r?\n')
+        $childExit = [int]$producerResult.ExitCode
         if (-not (Test-ContainerRestoredTreesAgainstReceipt $root $replacement $CurrentReplacementTransactionId)) {
             throw 'Container lifecycle code trees drifted during producer execution.'
         }
@@ -1917,7 +1956,8 @@ function Invoke-ContainerLifecycleRestoreProduct {
             }
             finally {
                 foreach ($name in $delegationEnvironmentNames) {
-                    [Environment]::SetEnvironmentVariable($name, $delegationEnvironmentBefore[$name], 'Process')
+                    $restoreValue=if($null -eq $delegationEnvironmentBefore[$name]){[NullString]::Value}else{$delegationEnvironmentBefore[$name]}
+                    [Environment]::SetEnvironmentVariable($name, $restoreValue, 'Process')
                 }
             }
         }
@@ -2054,7 +2094,8 @@ function Invoke-ContainerLifecycleFailureContainment {
             }
             finally {
                 foreach ($name in $delegationEnvironmentNames) {
-                    [Environment]::SetEnvironmentVariable($name, $delegationEnvironmentBefore[$name], 'Process')
+                    $restoreValue=if($null -eq $delegationEnvironmentBefore[$name]){[NullString]::Value}else{$delegationEnvironmentBefore[$name]}
+                    [Environment]::SetEnvironmentVariable($name, $restoreValue, 'Process')
                 }
             }
         }
@@ -2511,12 +2552,7 @@ function Test-ContainerRestoredTreesAgainstReceipt([string]$CanonicalInstallRoot
         ) { return $false }
         Assert-BootstrapNoReparsePoint $parent 'Container install parent'
         $parentAcl = Get-BootstrapAclIdentity $parent
-        if (
-            $Receipt.parent_acl.access_rules_protected -isnot [bool] -or
-            [string]$Receipt.parent_acl.owner_sid -cne [string]$parentAcl.owner_sid -or
-            [bool]$Receipt.parent_acl.access_rules_protected -ne [bool]$parentAcl.access_rules_protected -or
-            [string]$Receipt.parent_acl.sddl_sha256 -cne [string]$parentAcl.sddl_sha256
-        ) { return $false }
+        if (-not (Test-BootstrapAclIdentity $Receipt.parent_acl $parentAcl)) { return $false }
         $currentIdentity = Get-BootstrapReplacementTreeIdentity $root $root
         $failedIdentity = Get-BootstrapReplacementTreeIdentity $failed $root
         if (

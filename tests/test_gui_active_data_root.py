@@ -95,7 +95,7 @@ def test_plain_launcher_and_gui_restart_reopen_registered_dataset(
     )
     assert result.returncode == 0, result.stderr
     arguments = json.loads(receipt.read_text())
-    assert arguments == ['-I', '-B', str(packet / 'app/main.py')]
+    assert arguments == ["-I", "-B", str(packet / "app" / "auto_update.py"), "--bootstrap", "--"]
 
     observed = []
     monkeypatch.setattr(gui, "verify_factory_contract_startup", lambda: None)
@@ -109,7 +109,7 @@ def test_plain_launcher_and_gui_restart_reopen_registered_dataset(
     monkeypatch.setattr(gui, "ContainerAudit", app)
     for _ in range(2):
         monkeypatch.delenv(storage_policy.DATA_ROOT_ENV, raising=False)
-        monkeypatch.setattr(sys, "argv", arguments[2:])
+        monkeypatch.setattr(sys, "argv", [str(packet / "app" / "main.py"), *arguments[5:]])
         portable = runpy.run_path(str(ROOT / 'portable/main.py'))
         assert portable['main']() == 0
     assert [paths.data_root for paths in observed] == [active, active]
