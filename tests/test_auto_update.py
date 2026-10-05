@@ -216,7 +216,13 @@ def test_failed_preparation_defers_but_failed_activation_remains_unknown(monkeyp
     monkeypatch.setattr(updates, "update_lock", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(updates, "read_json", lambda path: {"operator_sid": "operator"} if path.name == "policy.json" else dict(pointer))
     monkeypatch.setattr(updates, "optional_record", lambda _path: state)
-    monkeypatch.setattr(updates, "write_json_durable", lambda path, payload: writes.append((path.name, payload)))
+    actual_write = updates.write_json_durable.__wrapped__
+    def write(path, payload):
+        # Contract 0d references actual saved bytes; a no-file mock is not a
+        # successful protected-evidence publication.
+        writes.append((path.name, payload))
+        actual_write(path, payload)
+    monkeypatch.setattr(updates, "write_json_durable", write)
     def fail(_control):
         raise ValueError("injected verification failure")
     monkeypatch.setattr(updates, "_apply_prepared", fail)

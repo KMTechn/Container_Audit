@@ -26,6 +26,38 @@ def _load_module():
     return module
 
 
+@pytest.mark.parametrize(
+    ("code", "expected_commands"),
+    [
+        ("@{start=$start;end=$end}", []),
+        ("@{end=$end; start = $start}", []),
+        ("start=$value", []),
+        ("@{Start-Process=$value}", []),
+        ("@{ Start-Process = $value }", []),
+        ("start 'fixture.exe'", ["start"]),
+        ("Start-Process -FilePath 'fixture.exe'", ["Start-Process"]),
+        ("$result = Start-Process 'fixture.exe'", ["Start-Process"]),
+        ("@{start=(start 'fixture.exe')}", ["start"]),
+        ("@{Start-Process=(Start-Process 'fixture.exe')}", ["Start-Process"]),
+        ("start = $value", ["start"]),
+        ("Start-Process = $value", ["Start-Process"]),
+    ],
+    ids=[
+        "span-hashtable", "later-hashtable-key", "assignment-key",
+        "cmdlet-hashtable-key", "cmdlet-assignment-key", "real-alias",
+        "real-cmdlet", "assigned-real-cmdlet", "alias-in-hashtable-value",
+        "cmdlet-in-hashtable-value",
+        "alias-equals-argument", "cmdlet-equals-argument",
+    ],
+)
+def test_powershell_execution_detection_distinguishes_assignment_keys(
+    code: str, expected_commands: list[str],
+) -> None:
+    module = _load_module()
+    sites = module._powershell_line_sites([code], 1)
+    assert [row["command"] for row in sites if row["kind"] == "start_process"] == expected_commands
+
+
 def test_byte_exact_inventory_outputs_disable_checkout_eol_conversion() -> None:
     module = _load_module()
     relative_paths = tuple(
@@ -950,6 +982,12 @@ POWERSHELL_UNFENCED_INJECTIONS = (
         "Start-Process -FilePath 'schtasks.exe' -ArgumentList '/Create'\n",
         "start_process",
         id="start-process",
+    ),
+    pytest.param(
+        "start_alias",
+        "start 'fixture-unfenced.cmd'\n",
+        "start_process",
+        id="start-alias",
     ),
     pytest.param(
         "invoke_item",

@@ -267,6 +267,23 @@ with redirect_stdout(capture), redirect_stderr(capture):
         error = str(exc)
         result = 1
 output = capture.getvalue() + error
+# Installer children serialize fixed G guidance inside the approved record.
+# Decode that boundary for the existing refusal observation without accepting
+# arbitrary exception text or weakening the no-read/no-write assertions.
+prefix = 'CONTAINER_AUDIT_INSTALLER_FAILURE='
+for line in capture.getvalue().splitlines():
+    if not line.startswith(prefix):
+        continue
+    try:
+        record = json.loads(line[len(prefix):])
+    except ValueError:
+        continue
+    if (record.get('reason_code') == 'DATA_GENERATION_REFUSED'
+            and record.get('guidance') == generation.REFUSAL_MESSAGE):
+        output += generation.REFUSAL_MESSAGE
+    elif (record.get('reason_code') == 'DATA_GENERATION_UNKNOWN'
+            and record.get('guidance') == generation.UNKNOWN_MESSAGE):
+        output += generation.UNKNOWN_MESSAGE
 # Disable only observation after the entry finished; snapshot is test readback.
 watched.clear()
 after = snapshot()

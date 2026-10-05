@@ -10,7 +10,7 @@ from tests.powershell_contracts import run_functions
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/installation_redaction_vectors.json"
-assert hashlib.sha256(FIXTURE.read_bytes()).hexdigest() == "5eed6e05d842b32b271b1a007c9750efcbc2b6b09c557bac7d32c734534d78a7"
+assert hashlib.sha256(FIXTURE.read_bytes()).hexdigest() == "3106bccafd881396b7bbf1a6b3356ccd41853e4a74bbd7b6918ac2b6a599bfc7"
 VECTORS = json.loads(FIXTURE.read_bytes())["vectors"]
 
 
@@ -24,21 +24,27 @@ def _text(vector):
 
 
 def _check(vector, actual):
+    checks = []
     if "expected_json" in vector:
-        assert json.loads(actual) == vector["expected_json"]
+        try:
+            checks.append(json.loads(actual) == vector["expected_json"])
+        except (ValueError, TypeError):
+            checks.append(False)
     elif "expected" in vector:
-        assert actual == vector["expected"]
+        checks.append(actual == vector["expected"])
     else:
         expected = vector["expected_properties"]
-        assert len(actual.encode()) <= expected.get("max_utf8_bytes", 65536)
+        checks.append(len(actual.encode()) <= expected.get("max_utf8_bytes", 65536))
         if "starts_with" in expected:
-            assert actual.startswith(expected["starts_with"])
+            checks.append(actual.startswith(expected["starts_with"]))
         if "ends_with" in expected:
-            assert actual.endswith(expected["ends_with"])
+            checks.append(actual.endswith(expected["ends_with"]))
         if "contains_regex" in expected:
-            assert re.search(expected["contains_regex"], actual)
-        if "not_contains" in expected and expected["not_contains"] in actual:
-            pytest.fail("Synthetic secret survived sink redaction", pytrace=False)
+            checks.append(bool(re.search(expected["contains_regex"], actual)))
+        if "not_contains" in expected:
+            checks.append(expected["not_contains"] not in actual)
+    if not all(checks):
+        pytest.fail(f"Sink contract mismatches: {checks.count(False)}", pytrace=False)
 
 
 @pytest.mark.parametrize("vector", VECTORS, ids=lambda vector: vector["id"])

@@ -61,13 +61,12 @@ class OwnedRelay:
     def finish(self):
         for root, process in self.children:
             if process.poll() is None:
-                try:
-                    self.stop(root)
-                    self.wait_stopped(root)
-                finally:
-                    if process.poll() is None:
-                        process.terminate()
-                        process.wait(timeout=5)
+                # A first production cycle may still be inside the supported
+                # 45-second child request. Teardown uses the normal stop marker
+                # and absence proof; it must never replace them with terminate.
+                result = request_user_relay_stop(root, timeout_seconds=60)
+                assert result['status'] == 'ABSENT', 'real runtime-instance absence was not proven'
+                self.wait_stopped(root)
 
 
 @pytest.fixture

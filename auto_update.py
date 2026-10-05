@@ -474,6 +474,35 @@ def _sink_policy() -> dict:
             "truncation_marker": "\n[TRUNCATED: {omitted} bytes omitted]\n"}
 
 
+def _structured_value_end(text: str, start: int) -> int:
+    """Consume a bracketed sensitive value; incomplete records fail closed."""
+    stack, quote, escaped = [], None, False
+    index = start
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                if quote == "'" and index + 1 < len(text) and text[index + 1] == quote:
+                    index += 1
+                else:
+                    quote = None
+        elif char in "\"'":
+            quote = char
+        elif char in "{[":
+            stack.append("}" if char == "{" else "]")
+        elif char in "}]":
+            if not stack or char != stack.pop():
+                return len(text)
+            if not stack:
+                return index + 1
+        index += 1
+    return len(text)
+
+
 def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit: int = 65536, _no_truncate: bool = False) -> str:
     policy = _sink_policy()
     text = text.decode("utf-8", errors="replace") if isinstance(text, bytes) else str(text or "")
@@ -504,6 +533,8 @@ def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit
                     else redact_fields(item) for key, item in value.items()}
         if isinstance(value, list):
             return [redact_fields(item) for item in value]
+        if isinstance(value, str):
+            return redact_for_sink(value, {}, _no_truncate=True)
         return value
     try:
         parsed = json.loads(text)
@@ -514,7 +545,7 @@ def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit
         pass
     # Zero-width discovery does not consume an exception/mapping prefix as a
     # non-sensitive assignment and miss a sensitive assignment inside its value.
-    assignments = r'''(?=(?<![\w"'])\b(?P<key>[A-Za-z_][A-Za-z0-9_.-]*)\s*[:=]\s*(?P<value>"(?:\\.|[^"\\])*(?:"|$)|'(?:''|\\.|[^'\\])*(?:'|$)|[^\s,;}\]"']+))'''
+    assignments = r'''(?=(?<![\w"'])(?P<quote>["']?)(?P<key>[A-Za-z_][A-Za-z0-9_.-]*)(?P=quote)\s*[:=]\s*(?P<value>"(?:\\.|[^"\\])*(?:"|$)|'(?:''|\\.|[^'\\])*(?:'|$)|[^\s,;}\]"']+))'''
     spans = []
     for match in re.finditer(assignments, text):
         raw = match.group("value")
@@ -522,16 +553,26 @@ def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit
             continue
         value = {"true": True, "false": False, "null": None}.get(raw, raw)
         if _redact_field(match.group("key"), value, policy):
-            spans.append(match.span("value"))
+            start, end = match.span("value")
+            replacement = policy["field_marker"]
+            if raw[0] in "{[":
+                end = _structured_value_end(text, start)
+                if match.group("quote"):
+                    replacement = json.dumps(replacement)
+            # Quoted mappings retain their value delimiters; the whole value
+            # is still redacted before bounding, including exception prefixes.
+            if match.group("quote") and len(raw) >= 2 and raw[0] in "\"'" and raw[-1] == raw[0]:
+                start, end = start + 1, end - 1
+            spans.append((start, end, replacement))
     # Sensitive values can contain another assignment; redact the outer span.
     merged = []
-    for start, end in sorted(spans):
+    for start, end, replacement in sorted(spans):
         if merged and start < merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end), merged[-1][2])
         else:
-            merged.append((start, end))
-    for start, end in reversed(merged):
-        text = text[:start] + policy["field_marker"] + text[end:]
+            merged.append((start, end, replacement))
+    for start, end, replacement in reversed(merged):
+        text = text[:start] + replacement + text[end:]
     if notes:
         text += "\n" + "\n".join(notes)
     if _no_truncate:
@@ -631,6 +672,73 @@ def serialize_json_for_sink(payload: Mapping[str, Any]) -> str:
         owner[key] = redact_for_sink(value, {}, limit=max(300, len(value.encode("utf-8")) * 3 // 4))
         safe["sink_json_bounded"] = True
     raise ValueError("redacted JSON envelope could not be bounded")
+
+
+def public_record(fields: Mapping[str, Any], allowed_codes, safe_messages) -> dict:
+    """Contract section 0: publish only flat, explicitly typed fields."""
+    patterns = {
+        "key": r"[a-z][a-z0-9_]{0,63}",
+        "identifier": r"[A-Za-z_][A-Za-z0-9_.]{0,127}",
+        "sha256": r"[0-9a-f]{64}",
+        "commit": r"(?:[0-9a-f]{40}|[0-9a-f]{64})",
+        "version": r"v?[0-9]{1,5}(?:\.[0-9]{1,5}){1,3}",
+        "id": r"(?:[0-9A-Fa-f]{32}|[0-9A-Fa-f]{64}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})",
+        "utc": r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,7})?Z",
+        "path": r'(?:[A-Za-z]:\\[^\x00-\x1f"<>|?*]{0,256}|/[^\x00-\x1f]{0,255})',
+    }
+    codes, messages = set(allowed_codes), set(safe_messages)
+
+    def accepts(key, value):
+        if value is None or type(value) is bool:
+            return True
+        # Exact names precede suffixes; notably exit_code is an integer.
+        if key in {"status", "stage", "code"}:
+            return isinstance(value, str) and value in codes
+        if key == "guidance":
+            return isinstance(value, str) and value in messages
+        if key in {"exception_type", "location_module", "location_function"}:
+            kind = "identifier"
+        elif key in {"exit_code", "location_line"}:
+            return type(value) is int
+        elif key in {"version", "utc"}:
+            kind = key
+        elif key.endswith(("_status", "_stage", "_code")):
+            return isinstance(value, str) and value in codes
+        elif key.endswith("_message"):
+            return isinstance(value, str) and value in messages
+        elif key.endswith(("_count", "_bytes", "_ms", "_line")):
+            return type(value) is int
+        elif key.endswith("_sha256"):
+            kind = "sha256"
+        elif key.endswith("_commit"):
+            kind = "commit"
+        elif key.endswith("_version"):
+            kind = "version"
+        elif key.endswith("_id"):
+            kind = "id"
+        elif key.endswith("_utc"):
+            kind = "utc"
+        elif key.endswith(("_path", "_dir", "_root", "_file")):
+            kind = "path"
+        else:
+            return False
+        return isinstance(value, str) and re.fullmatch(patterns[kind], value) is not None
+
+    result, rejected, invalid = {}, [], 0
+    for key, value in fields.items():
+        if not isinstance(key, str) or re.fullmatch(patterns["key"], key) is None:
+            invalid += 1
+        elif accepts(key, value):
+            result[key] = value
+        else:
+            rejected.append(key)
+    if rejected:
+        result["nonconforming_fields"] = rejected
+    if invalid:
+        result["nonconforming_invalid_key_count"] = invalid
+    if rejected or invalid:
+        result["public_record_code"] = "PUBLIC_FIELD_NONCONFORMING"
+    return result
 
 
 def failure_user_line(error: object) -> str:

@@ -108,7 +108,14 @@ if($ui.Length -gt 300 -or -not $ui.StartsWith('ValueError: last cause') -or $ui.
 from pathlib import Path
 import importlib
 import json
+import hashlib
 import pytest
+
+
+def _owned_snapshot(root):
+    return {str(path.relative_to(root)): None if path.is_dir() else hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in root.rglob('*')}
+
 
 @pytest.mark.parametrize('module_name,function_name', (
     ('direct_sync_auto_bootstrap', '_write_json'),
@@ -129,11 +136,21 @@ def test_related_report_sink_redacts_before_temporary_file(tmp_path, monkeypatch
         assert secret.encode() not in raw, 'Known authority bytes reached temporary report sink'
         return publish(source, target)
     monkeypatch.setattr(module.os, publish_name, checked_publish)
-    getattr(module, function_name).__wrapped__(destination, {
+    payload = {
         'status': 'FAILED', 'failure': 'first cause ' + secret,
         'credential': {'opaque': 'synthetic-unknown-field-secret'},
         'token_elevated': False, 'writer_contract_sha256': 'a' * 64,
-    })
+    }
+    if module_name == 'current_user_onboarding':
+        # Contract 1a: these generic writers publish authentication metadata.
+        # Diagnostic redaction belongs to _persist_failure_report instead.
+        before = _owned_snapshot(tmp_path)
+        with pytest.raises(ValueError, match='^MACHINE_METADATA_SECRET_DETECTED$'):
+            getattr(module, function_name).__wrapped__(destination, payload)
+        if observed or _owned_snapshot(tmp_path) != before:
+            pytest.fail('Rejected machine metadata reached a temporary file', pytrace=False)
+        return
+    getattr(module, function_name).__wrapped__(destination, payload)
     assert observed and secret.encode() not in destination.read_bytes()
     payload = json.loads(destination.read_bytes())
     assert payload['credential'] == '[REDACTED:field]'
@@ -156,9 +173,23 @@ def test_related_report_sink_bounds_valid_json_after_redaction(tmp_path, monkeyp
     secret = 'synthetic-utf8-report-secret-273'
     monkeypatch.setenv('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN', secret)
     path = tmp_path / 'failure-report.json'
-    getattr(module, function_name).__wrapped__(path, {
+    payload = {
         'status': 'FAILED', 'failure': 'FIRST ' + ('가"' * 50000) + secret + ' ValueError: LAST',
-    })
+    }
+    if module_name == 'current_user_onboarding':
+        # Contract 1a keeps admitted metadata bytes, including >64 KiB, exact.
+        before = _owned_snapshot(tmp_path)
+        with pytest.raises(ValueError, match='^MACHINE_METADATA_SECRET_DETECTED$'):
+            getattr(module, function_name).__wrapped__(path, payload)
+        if _owned_snapshot(tmp_path) != before:
+            pytest.fail('Rejected large machine metadata reached a file', pytrace=False)
+        payload['failure'] = payload['failure'].replace(secret, '')
+        getattr(module, function_name).__wrapped__(path, payload)
+        expected = (json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2) + '\n').encode('utf-8')
+        if len(expected) <= 65536 or path.read_bytes() != expected:
+            pytest.fail('Machine metadata byte preservation differs', pytrace=False)
+        return
+    getattr(module, function_name).__wrapped__(path, payload)
     raw = path.read_bytes()
     assert len(raw) <= 65536 and secret.encode() not in raw
     payload = json.loads(raw)
@@ -194,7 +225,7 @@ def test_onboarding_failure_report_retains_full_stream_refs_and_temporary_bytes_
         assert len(raw) <= 65536 and secret.encode() not in raw
 
 
-def test_onboarding_report_metadata_uses_contract_names_without_changing_private_comparison(tmp_path):
+def test_onboarding_machine_metadata_preserves_private_comparison_fields(tmp_path):
     import current_user_onboarding as onboarding
     import json
     original = {'status': 'READY', 'owner_artifact_paths': {'credential': 'isolated/credential.json'},
@@ -202,8 +233,8 @@ def test_onboarding_report_metadata_uses_contract_names_without_changing_private
     path = tmp_path / 'metadata.json'
     onboarding._write_json_atomic.__wrapped__(path, original)
     body = json.loads(path.read_bytes())
-    assert body['owner_artifact_paths']['credential_path'] == 'isolated/credential.json'
-    assert body['owner_artifact_fingerprints_before']['credential_sha256'] == 'b' * 64
+    # Contract 1a forbids renaming authentication metadata during serialization.
+    assert body == original
     assert original['owner_artifact_paths'] == {'credential': 'isolated/credential.json'}
     assert original['owner_artifact_fingerprints_before'] == {'credential': 'b' * 64}
 

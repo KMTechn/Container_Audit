@@ -1,6 +1,55 @@
 ﻿$BootstrapIntegrityFileName = "bootstrap-integrity.json"
 $BootstrapIntegritySchema = "container-audit-bootstrap-integrity-v1"
 
+function ConvertTo-KmtechPublicRecord {
+    param([Parameter(Mandatory)][Collections.IDictionary]$Fields,
+          [AllowEmptyCollection()][string[]]$AllowedCodes=@(),
+          [AllowEmptyCollection()][string[]]$SafeMessages=@())
+    # Contract section 0. No environment, exception text, or child output input.
+    $patterns=@{
+        key='^[a-z][a-z0-9_]{0,63}\z'
+        identifier='^[A-Za-z_][A-Za-z0-9_.]{0,127}\z'
+        sha256='^[0-9a-f]{64}\z'
+        commit='^(?:[0-9a-f]{40}|[0-9a-f]{64})\z'
+        version='^v?[0-9]{1,5}(?:\.[0-9]{1,5}){1,3}\z'
+        id='^(?:[0-9A-Fa-f]{32}|[0-9A-Fa-f]{64}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\z'
+        utc='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,7})?Z\z'
+        path='^(?:[A-Za-z]:\\[^\x00-\x1f"<>|?*]{0,256}|/[^\x00-\x1f]{0,255})\z'
+    }
+    function Test-PublicValue([string]$Name,$Value) {
+        if($null -eq $Value -or $Value -is [bool]){return $true}
+        $integer=$Value -is [sbyte] -or $Value -is [byte] -or $Value -is [int16] -or
+            $Value -is [uint16] -or $Value -is [int32] -or $Value -is [uint32] -or
+            $Value -is [int64] -or $Value -is [uint64] -or $Value -is [bigint]
+        if($Name -cin @('status','stage','code')){return $Value -is [string] -and $Value -cin $AllowedCodes}
+        if($Name -ceq 'guidance'){return $Value -is [string] -and $Value -cin $SafeMessages}
+        if($Name -cin @('exception_type','location_module','location_function')){$kind='identifier'}
+        elseif($Name -cin @('exit_code','location_line')){return $integer}
+        elseif($Name -cin @('version','utc')){$kind=$Name}
+        elseif($Name -cmatch '_(status|stage|code)\z'){return $Value -is [string] -and $Value -cin $AllowedCodes}
+        elseif($Name -cmatch '_message\z'){return $Value -is [string] -and $Value -cin $SafeMessages}
+        elseif($Name -cmatch '_(count|bytes|ms|line)\z'){return $integer}
+        elseif($Name.EndsWith('_sha256')){$kind='sha256'}
+        elseif($Name.EndsWith('_commit')){$kind='commit'}
+        elseif($Name.EndsWith('_version')){$kind='version'}
+        elseif($Name.EndsWith('_id')){$kind='id'}
+        elseif($Name.EndsWith('_utc')){$kind='utc'}
+        elseif($Name -cmatch '_(path|dir|root|file)\z'){$kind='path'}
+        else{return $false}
+        return $Value -is [string] -and $Value -cmatch $patterns[$kind]
+    }
+    $result=[ordered]@{};$rejected=[Collections.Generic.List[string]]::new();$invalid=0
+    foreach($key in $Fields.Keys){
+        if($key -isnot [string] -or $key -cnotmatch $patterns.key){$invalid++;continue}
+        if(Test-PublicValue $key $Fields[$key]){$result[$key]=$Fields[$key]}
+        else{$rejected.Add($key)}
+    }
+    if($rejected.Count){$result.nonconforming_fields=@($rejected.ToArray())}
+    if($invalid){$result.nonconforming_invalid_key_count=$invalid}
+    if($rejected.Count -or $invalid){$result.public_record_code='PUBLIC_FIELD_NONCONFORMING'}
+    return $result
+}
+
 function ConvertTo-BootstrapPrincipalSid([string]$Identity) {
     try {
         if ([string]::IsNullOrWhiteSpace($Identity)) { throw 'Empty task identity.' }
@@ -78,6 +127,11 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
             if($Value -is [Collections.IEnumerable] -and $Value -isnot [string]){
                 $items=@(foreach($item in $Value){Convert-RedactedValue $item});return ,$items
             }
+            if($Value -is [string]){
+                $safe=Protect-InstallationText $Value -1 -Environment @{} -CommonOnly:$CommonOnly -NoTruncate
+                if($safe -cne $Value){$redactionState.changed=$true}
+                return $safe
+            }
             return $Value
         }
         try{
@@ -90,6 +144,45 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
                 if($redactionState.changed){$Text=$converted|ConvertTo-Json -Depth 100 -Compress};$jsonProcessed=$true
             }
         }catch{}
+        # Bracketed sensitive values must be removed before scalar compatibility
+        # redaction can discard their opener. An incomplete record fails closed.
+        function Get-StructuredRedactionEnd([string]$Value,[int]$Offset){
+            $closing=[Collections.Generic.List[char]]::new();$quote='';$escaped=$false
+            for($index=$Offset;$index -lt $Value.Length;$index++){
+                $ch=$Value[$index]
+                if($quote){
+                    if($escaped){$escaped=$false}
+                    elseif($ch -ceq '\'){$escaped=$true}
+                    elseif($ch -ceq $quote){
+                        if($quote -ceq "'" -and $index+1 -lt $Value.Length -and $Value[$index+1] -ceq $quote){$index++}
+                        else{$quote=''}
+                    }
+                }elseif($ch -cin @([char]34,[char]39)){$quote=$ch}
+                elseif($ch -ceq '{'){$closing.Add([char]125)}
+                elseif($ch -ceq '['){$closing.Add([char]93)}
+                elseif($ch -cin @([char]125,[char]93)){
+                    if(-not $closing.Count -or $ch -cne $closing[$closing.Count-1]){return $Value.Length}
+                    $closing.RemoveAt($closing.Count-1)
+                    if(-not $closing.Count){return $index+1}
+                }
+            }
+            return $Value.Length
+        }
+        $structuredPattern=@'
+(?=(?<![\w"'])(?<quote>["']?)(?<key>[A-Za-z_][A-Za-z0-9_.-]*)\k<quote>\s*[:=]\s*(?<opening>[{\[]))
+'@
+        $spans=@();$covered=0
+        foreach($match in [regex]::Matches($Text,$structuredPattern)){
+            $offset=$match.Groups['opening'].Index
+            if($offset -lt $covered -or $Text.Substring($offset).StartsWith('[REDACTED:')){continue}
+            if(-not(Test-RedactedField $match.Groups['key'].Value 'structured-value')){continue}
+            $end=Get-StructuredRedactionEnd $Text $offset
+            $replacement=if($match.Groups['quote'].Value){'"'+$policy.field_marker+'"'}else{$policy.field_marker}
+            $spans+=,@{start=$offset;end=$end;replacement=$replacement};$covered=$end
+        }
+        foreach($span in @($spans|Sort-Object start -Descending)){
+            $Text=$Text.Substring(0,$span.start)+$span.replacement+$Text.Substring($span.end)
+        }
         if(-not $CommonOnly -and -not $jsonProcessed){
             $jsonKey='"(?<key>(?:\\.|[^"\\])*)"\s*:\s*'
             $matches=@([regex]::Matches($Text,$jsonKey));$spans=@();$covered=0
@@ -107,9 +200,9 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
                     if($depth -eq 0 -and $ch -cin @(',',"`r","`n")){break}
                 }
                 try{$fieldValue=ConvertFrom-Json -InputObject $Text.Substring($begin,$end-$begin) -ErrorAction Stop;if(-not(Test-RedactedField $key $fieldValue)){continue}}catch{}
-                $spans+=,@{offset=$begin;end=$end};$covered=$end
+                $spans+=,@{start=$begin;end=$end};$covered=$end
             }
-            foreach($span in @($spans|Sort-Object offset -Descending)){$Text=$Text.Substring(0,$span.offset)+'"'+$policy.field_marker+'"'+$Text.Substring($span.end)}
+            foreach($span in @($spans|Sort-Object start -Descending)){$Text=$Text.Substring(0,$span.start)+'"'+$policy.field_marker+'"'+$Text.Substring($span.end)}
 
             # Retain existing non-JSON credential assignments/header protection.
             $Text=[regex]::Replace($Text,'(?i)(\b[A-Za-z0-9_-]*(?:secret|token|signature|password|credential|registration[_-]?(?:value|code)|api[_-]?key)[A-Za-z0-9_-]*\s*[=:]\s*)([^\r\n,;]+)',[Text.RegularExpressions.MatchEvaluator]{param($m) if($m.Groups[2].Value.StartsWith('[REDACTED:')){return $m.Value};return $m.Groups[1].Value+$policy.field_marker})
@@ -120,7 +213,7 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
         # Discover overlapping assignments so a non-sensitive exception prefix
         # cannot consume a later sensitive key/value. Redact before byte bounding.
         $assignmentPattern=@'
-(?=(?<![\w"'])\b(?<key>[A-Za-z_][A-Za-z0-9_.-]*)\s*[:=]\s*(?<value>"(?:\\.|[^"\\])*(?:"|$)|'(?:''|\\.|[^'\\])*(?:'|$)|[^\s,;}\]"']+))
+(?=(?<![\w"'])(?<quote>["']?)(?<key>[A-Za-z_][A-Za-z0-9_.-]*)\k<quote>\s*[:=]\s*(?<value>"(?:\\.|[^"\\])*(?:"|$)|'(?:''|\\.|[^'\\])*(?:'|$)|[^\s,;}\]"']+))
 '@
         $spans=@()
         foreach($match in [regex]::Matches($Text,$assignmentPattern)){
@@ -128,6 +221,10 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
             if($value.StartsWith('[REDACTED:') -or $value -cin @('true','false','null')){continue}
             if(Test-RedactedField $match.Groups['key'].Value $value){
                 $start=$match.Groups['value'].Index;$end=$start+$match.Groups['value'].Length
+                if($match.Groups['quote'].Value -and $value.Length -ge 2 -and
+                    $value[0] -cin @([char]34,[char]39) -and $value[$value.Length-1] -ceq $value[0]){
+                    $start++;$end--
+                }
                 if($spans.Count -and $start -lt $spans[-1].end){$spans[-1].end=[Math]::Max($spans[-1].end,$end)}
                 else{$spans+=,@{start=$start;end=$end}}
             }

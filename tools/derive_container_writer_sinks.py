@@ -1917,10 +1917,31 @@ def _powershell_command_present(code: str, command: str) -> bool:
     )
 
 
+def _powershell_assignment_key(code: str, start: int, end: int) -> bool:
+    if not re.match(r"\s*=(?!=)", code[end:]):
+        return False
+    # An attached '=' belongs to the token; spaced '=' can be a command argument.
+    if code[end:].startswith("="):
+        return True
+    braces: list[tuple[bool, int]] = []
+    for index, character in enumerate(code[:start]):
+        if character == "{":
+            braces.append((index > 0 and code[index - 1] == "@", index))
+        elif character == "}" and braces:
+            braces.pop()
+    if not braces or not braces[-1][0]:
+        return False
+    boundary = max(braces[-1][1], code.rfind(";", 0, start), code.rfind("\n", 0, start))
+    return not code[boundary + 1 : start].strip()
+
+
 def _powershell_statement_command(code: str, command_pattern: str) -> re.Match[str] | None:
-    return re.search(
-        rf"(?i)(?:^|[;{{}}|()]\s*)({command_pattern})(?![A-Za-z0-9_-])",
-        code,
+    return next(
+        (match for match in re.finditer(
+            rf"(?i)(?:^|[;{{}}|()]\s*)({command_pattern})(?![A-Za-z0-9_-])",
+            code,
+        ) if not _powershell_assignment_key(code, match.start(1), match.end(1))),
+        None,
     )
 
 
@@ -2340,9 +2361,13 @@ def _powershell_line_sites(
     if module_import is not None:
         add("dot_source", module_import.group(1), "", False)
 
-    start_process = re.search(r"(?i)(?<![A-Za-z0-9_-])Start-Process\b(.*)", code)
+    start_process = next(
+        (match for match in re.finditer(r"(?i)(?<![A-Za-z0-9_-])Start-Process\b", code)
+         if not _powershell_assignment_key(code, match.start(), match.end())),
+        None,
+    )
     if start_process is not None:
-        arguments = start_process.group(1)
+        arguments = code[start_process.end():]
         file_path = re.search(r"(?i)-FilePath\s+([^\s,;|]+)", arguments)
         positional = re.search(r"^\s*([^\s,;|]+)", arguments)
         target, static = _powershell_target(

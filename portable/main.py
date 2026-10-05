@@ -67,15 +67,23 @@ def _portable_smoke() -> int:
 def main() -> int:
     if "--zero-pe-portable-smoke" in sys.argv[1:]:
         return _portable_smoke()
-    from auto_update import startup_gate
+    arguments = list(sys.argv[1:])
+    try:
+        from auto_update import startup_gate
 
-    gate_result = startup_gate(APP_ROOT, list(sys.argv[1:]))
-    if gate_result is not None:
-        return gate_result
-    from Container_Audit import main as application_main
+        gate_result = startup_gate(APP_ROOT, arguments)
+        if gate_result is not None:
+            return gate_result
+        from Container_Audit import main as application_main
 
-    result = application_main()
-    return 0 if result is None else int(result)
+        result = application_main()
+        return 0 if result is None else int(result)
+    except Exception as error:
+        if arguments[:1] not in (["--onboard-current-user"], ["--remove-current-user-setup"],
+                                 ["--restore-current-user-lifecycle-after-replacement"]):
+            raise
+        from current_user_onboarding import emit_installer_failure
+        return emit_installer_failure(error, "installer_entrypoint")
 
 
 if __name__ == "__main__":

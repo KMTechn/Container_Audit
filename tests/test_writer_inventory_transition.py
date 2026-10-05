@@ -171,8 +171,13 @@ $env:CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID=$s
 $env:CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID=$a
 $env:CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID=$t
 function Child([string]$RootPath, [int]$Expected, [string]$Code) {
-    $output = @(& $env:CA_TEST_PYTHON -I -B (Join-Path $env:CA_TEST_TMP 'child.py') $RootPath)
-    if ($LASTEXITCODE -ne $Expected -or ($Code -and ($output -join "`n") -notmatch $Code)) {
+    $childErrorPreference=$ErrorActionPreference
+    try {
+        $ErrorActionPreference='Continue'
+        $output = @(& $env:CA_TEST_PYTHON -I -B (Join-Path $env:CA_TEST_TMP 'child.py') $RootPath 2>&1)
+        $childExit=$LASTEXITCODE
+    } finally { $ErrorActionPreference=$childErrorPreference }
+    if ($childExit -ne $Expected -or ($Code -and ($output -join "`n") -notmatch $Code)) {
         throw "child mismatch $Expected/$LASTEXITCODE $($output -join ' ')"
     }
 }

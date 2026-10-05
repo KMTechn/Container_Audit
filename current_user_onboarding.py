@@ -5,6 +5,7 @@ from storage_utils import RemoteAttempt
 
 import argparse
 import ctypes
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -15,6 +16,7 @@ import re
 import stat
 import subprocess
 import sys
+import traceback
 from typing import Any, Callable, Mapping, MutableMapping
 import uuid
 from contextlib import nullcontext
@@ -48,7 +50,8 @@ from user_relay import (
     start_user_relay_process,
     user_relay_stop_path,
 )
-from writer_session_fence import writer_admission, writer_sink
+from writer_session_fence import WriterFenceError, writer_admission, writer_sink
+from kmtech_shared import data_generation as generation
 from vendor.kmtech_zero_pe import (
     ADMIN_RECOVERY_ACTION,
     AdminRecoveryRequired as PossessionKeyAdminRecoveryRequired,
@@ -68,6 +71,31 @@ BOOTSTRAP_INTEGRITY_VERSION = "container-audit-bootstrap-integrity-v1"
 LOGISTICS_PROFILE_PATH_ENV = PROFILE_PATH_ENV
 ENROLLMENT_TLS_CA_BUNDLE_PATH_ENV = "CONTAINER_AUDIT_ENROLLMENT_TLS_CA_BUNDLE_PATH"
 ONBOARDING_EXIT_CODE = 4
+WRITER_FENCE_EXIT_CODE = 23
+INSTALLER_FAILURE_PREFIX = "CONTAINER_AUDIT_INSTALLER_FAILURE="
+INSTALLER_WRITER_FENCE_CODES = frozenset({
+    "ACTIVE_WRITER_FENCE", "FENCE_AUTHORITY_NAME_INVALID", "FENCE_BINDING_INVALID",
+    "FENCE_DELEGATION_INVALID", "FENCE_JSON_INVALID", "FENCE_PATH_UNOBSERVABLE",
+    "FENCE_PREPARED_BINDING_INVALID", "FENCE_PREPARED_RECEIPT_INVALID",
+    "FENCE_PREPARED_RECEIPT_MISMATCH", "FENCE_PREPARED_RECEIPT_UNOBSERVABLE",
+    "FENCE_REPARSE_REJECTED", "FENCE_SHAPE_INVALID", "FENCE_SIZE_INVALID",
+    "FENCE_STATE_CHANGED", "FENCE_STATE_UNOBSERVABLE", "FENCE_STATE_UNREADABLE",
+    "LOCALAPPDATA_UNAVAILABLE", "NETWORK_WRITER_ADMISSION_HELD",
+    "WRITER_ADMISSION_DEPTH_UNDERFLOW", "WRITER_FENCE_FAILED", "WRITER_GATE_ABANDONED",
+    "WRITER_GATE_TIMEOUT", "WRITER_MUTEX_CREATE_FAILED", "WRITER_MUTEX_WAIT_FAILED",
+    "WRITER_PROBE_ONLY_SINK_NOT_ALLOWED", "WRITER_SOURCE_MISSING",
+})
+INSTALLER_PUBLIC_CODES = frozenset({
+    "FAILED", "INSTALLER_CHILD_FAILURE", "REPORT_UNAVAILABLE",
+    "DATA_GENERATION_REFUSED", "DATA_GENERATION_UNKNOWN",
+    "onboarding", "onboarding_preflight", "current_user_removal",
+    "replacement_lifecycle_restore", "installer_entrypoint",
+}) | INSTALLER_WRITER_FENCE_CODES
+INSTALLER_SAFE_MESSAGES = ("자료를 보존하고 관리자 지원 복구를 요청하세요.",
+                           generation.REFUSAL_MESSAGE, generation.UNKNOWN_MESSAGE)
+# A fresh CLI context owns references; exception attributes and old report paths
+# are observations, never publication authority for a later attempt.
+_FAILURE_ATTEMPT: ContextVar[dict | None] = ContextVar("installer_failure_attempt", default=None)
 SELF_ENROLLMENT_CONTRACT_VERSION = "producer-self-enrollment-v2"
 REPLACEMENT_RECEIPT_VERSION = "container-audit-verified-replacement-v1"
 PORTABLE_MANIFEST_VERSION = "container-audit-portable-tree-v1"
@@ -274,10 +302,101 @@ def _report_metadata_for_sink(payload: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _exception_chain(error: BaseException):
+    seen = set()
+    while error is not None and id(error) not in seen and len(seen) < 16:
+        seen.add(id(error))
+        yield error
+        error = error.__cause__ or error.__context__
+
+
+def emit_installer_failure(error: BaseException, stage: str) -> int:
+    """Emit one allowlisted record; never serialize an exception message."""
+    from auto_update import public_record
+    attempt = _FAILURE_ATTEMPT.get()
+    chain = list(_exception_chain(error))
+    cause = chain[-1]
+    from data_generation_guard import DataGenerationBlocked
+    reason = "INSTALLER_CHILD_FAILURE"
+    exit_code = ONBOARDING_EXIT_CODE
+    guidance = INSTALLER_SAFE_MESSAGES[0]
+    blocked = next((entry for entry in chain if isinstance(entry, DataGenerationBlocked)), None)
+    writer_error = next((entry for entry in chain if isinstance(entry, WriterFenceError)), None)
+    if writer_error is not None:
+        exit_code = WRITER_FENCE_EXIT_CODE
+        reason = (writer_error.code if type(writer_error.code) is str
+                  and writer_error.code in INSTALLER_WRITER_FENCE_CODES else "WRITER_FENCE_FAILED")
+    elif blocked is not None:
+        refused = blocked.decision.get("status") == "REFUSE"
+        reason = "DATA_GENERATION_REFUSED" if refused else "DATA_GENERATION_UNKNOWN"
+        guidance = generation.REFUSAL_MESSAGE if refused else generation.UNKNOWN_MESSAGE
+    else:
+        # Identity-readback failures already use these two fixed G messages.
+        # Accept only the project exception and exact registered constants;
+        # arbitrary exception sentences remain private.
+        for entry in chain:
+            if isinstance(entry, CurrentUserOnboardingError) and entry.args and type(entry.args[0]) is str:
+                if entry.args[0] in (generation.REFUSAL_MESSAGE, generation.UNKNOWN_MESSAGE):
+                    guidance = entry.args[0]
+                    reason = ("DATA_GENERATION_REFUSED" if guidance == generation.REFUSAL_MESSAGE
+                              else "DATA_GENERATION_UNKNOWN")
+                    break
+    fields = {
+        "status": "FAILED", "stage": stage, "reason_code": reason,
+        "exception_type": type(cause).__module__ + "." + type(cause).__name__,
+        "exit_code": exit_code, "guidance": guidance,
+        "attempt_id": attempt["id"] if attempt else uuid.uuid4().hex,
+    }
+    frame = cause.__traceback__
+    if frame is not None:
+        while frame.tb_next is not None:
+            frame = frame.tb_next
+        fields.update(location_module=frame.tb_frame.f_globals.get("__name__"),
+                      location_function=frame.tb_frame.f_code.co_name,
+                      location_line=frame.tb_lineno)
+    reference = None
+    if attempt:
+        for entry in chain:
+            candidate = attempt["publications"].get(id(entry))
+            if candidate is None:
+                continue
+            try:
+                raw = Path(candidate["path"]).read_bytes()
+                stored = json.loads(raw.decode("utf-8"))
+                if (hashlib.sha256(raw).hexdigest() == candidate["sha256"]
+                        and stored.get("failure_attempt_id") == attempt["id"]):
+                    reference = candidate
+                    break
+            except (OSError, ValueError, UnicodeError, AttributeError):
+                pass
+    if reference:
+        fields.update(report_path=reference["path"], report_sha256=reference["sha256"])
+    else:
+        fields["report_status"] = "REPORT_UNAVAILABLE"
+    print(INSTALLER_FAILURE_PREFIX + json.dumps(
+        public_record(fields, INSTALLER_PUBLIC_CODES, INSTALLER_SAFE_MESSAGES),
+        ensure_ascii=True, separators=(",", ":")), file=sys.stderr)
+    return exit_code
+
+
+def _new_failure_attempt():
+    return _FAILURE_ATTEMPT.set({"id": uuid.uuid4().hex, "publications": {}})
+
+
 def _persist_failure_report(path: Path, report: dict[str, Any], error: BaseException,
                             *, create_new: bool = False) -> None:
-    from auto_update import _failure_text, _failure_details, _write_failure_evidence
-    report["failure"] = _failure_text(getattr(error, "original_failure_text", error), limit=65536)
+    from auto_update import (_failure_details, _write_failure_evidence,
+                             redact_for_sink, redact_json_for_sink)
+    attempt = _FAILURE_ATTEMPT.get()
+    if attempt:
+        attempt["publications"].pop(id(error), None)
+    report["failure_attempt_id"] = attempt["id"] if attempt else uuid.uuid4().hex
+    # Format the entire chain before redaction and UTF-8 head/tail bounding.
+    detail = "".join(traceback.format_exception(error))
+    original = getattr(error, "original_failure_text", None)
+    if isinstance(original, str):
+        detail += "\nOriginal failure:\n" + original
+    report["failure"] = redact_for_sink(detail, limit=65536)
     report["failure_details"] = _failure_details(error)
     try:
         report["failure_evidence_refs"] = _write_failure_evidence(path.parent, error)
@@ -285,14 +404,32 @@ def _persist_failure_report(path: Path, report: dict[str, Any], error: BaseExcep
     except Exception as recording_error:
         report["failure_evidence_status"] = "FAILED"
         report["failure_evidence_error_type"] = type(recording_error).__name__
-    if create_new:
-        _write_json_atomic_create_new(path, report)
-    else:
-        _write_json_atomic(path, report)
+    try:
+        # Only diagnostic fields are transformed; generic metadata writers keep
+        # their original-byte/fail-closed contract for READY and owner records.
+        safe_report = dict(report)
+        for field in ("failure", "failure_details"):
+            safe_report[field] = redact_json_for_sink(report[field])
+        writer = _write_json_atomic_create_new if create_new else _write_json_atomic
+        reference = writer(path, safe_report)
+        if attempt and reference is not None:
+            attempt["publications"][id(error)] = reference
+    except Exception:
+        # Publication refusal must not replace the primary failure or advertise
+        # an old pathname. The public boundary emits REPORT_UNAVAILABLE.
+        report["failure_report_status"] = "REPORT_UNAVAILABLE"
+
+
+def _atomic_report_reference(path: Path, expected: bytes) -> dict[str, str]:
+    raw = path.read_bytes()
+    if raw != expected:
+        raise ValueError("FAILURE_REPORT_PUBLICATION_READBACK_DIFFERS")
+    raw.decode("utf-8", errors="strict")
+    return {"path": str(path.absolute()), "sha256": hashlib.sha256(raw).hexdigest()}
 
 
 @writer_sink("current_user_onboarding_storage")
-def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> dict[str, str]:
     from auto_update import serialize_machine_metadata
     safe_text = serialize_machine_metadata(payload)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -304,12 +441,13 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
+        return _atomic_report_reference(path, (safe_text + "\n").encode("utf-8"))
     finally:
         temporary.unlink(missing_ok=True)
 
 
 @writer_sink("current_user_onboarding_storage")
-def _write_json_atomic_create_new(path: Path, payload: Mapping[str, Any]) -> None:
+def _write_json_atomic_create_new(path: Path, payload: Mapping[str, Any]) -> dict[str, str]:
     """Publish JSON atomically without ever replacing an existing pathname."""
 
     from auto_update import serialize_machine_metadata
@@ -323,6 +461,7 @@ def _write_json_atomic_create_new(path: Path, payload: Mapping[str, Any]) -> Non
             handle.flush()
             os.fsync(handle.fileno())
         os.link(temporary, path)
+        return _atomic_report_reference(path, (safe_text + "\n").encode("utf-8"))
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -2450,6 +2589,7 @@ def replacement_lifecycle_restore_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--session-started-at-utc", required=True)
     parser.add_argument("--orchestrator-sha256", required=True)
     args = parser.parse_args(argv)
+    failure_attempt = _new_failure_attempt()
     try:
         report = restore_current_user_lifecycle_after_replacement(
             args.app_root,
@@ -2464,21 +2604,10 @@ def replacement_lifecycle_restore_main(argv: list[str] | None = None) -> int:
             replacement_receipt_sha256=args.replacement_receipt_sha256,
             writer_contract_sha256=args.writer_contract_sha256,
         )
-    except CurrentUserOnboardingError as exc:
-        print(f"replacement_lifecycle_restore_status={exc.status}")
-        print(str(exc))
-        print(f"replacement_lifecycle_restore_report={exc.report_path}")
-        return ONBOARDING_EXIT_CODE
-    except Exception:
-        fallback_report = (
-            _resolved(args.report_path)
-            if args.report_path
-            else resolve_current_user_onboarding_paths(args.app_root).status_dir
-            / "replacement_lifecycle_restore.json"
-        )
-        print("replacement_lifecycle_restore_status=FAILED")
-        print(f"replacement_lifecycle_restore_report={fallback_report}")
-        return ONBOARDING_EXIT_CODE
+    except Exception as exc:
+        return emit_installer_failure(exc, "replacement_lifecycle_restore")
+    finally:
+        _FAILURE_ATTEMPT.reset(failure_attempt)
     print(f"replacement_lifecycle_restore_status={report['status']}")
     print(f"replacement_lifecycle_restore_action={report['action']}")
     print(
@@ -2501,6 +2630,7 @@ def onboarding_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rollback-preflight-journal-sha256", default="")
     parser.add_argument("--rollback-preflight-fence-sha256", default="")
     args = parser.parse_args(argv)
+    failure_attempt = _new_failure_attempt()
     try:
         if args.preflight_only:
             preflight_options = {'target_release_root': args.target_release_root}
@@ -2518,18 +2648,10 @@ def onboarding_main(argv: list[str] | None = None) -> int:
             require_bootstrap_integrity=bool(getattr(sys, "frozen", False)),
             expected_input_binding=args.expected_input_binding,
         )
-    except CurrentUserOnboardingError as exc:
-        if args.preflight_only:
-            # Native PS5.1 and PS7 transports must not depend on a console code page.
-            from auto_update import redact_for_sink
-            print("onboarding_preflight_error=" + redact_for_sink(json.dumps(
-                {'message': str(exc), 'original_error_type': exc.original_error_type, 'reason_code': exc.reason_code}
-                if hasattr(exc, 'reason_code') else str(exc), ensure_ascii=True)))
-            return ONBOARDING_EXIT_CODE
-        print(f"onboarding_status={exc.status}")
-        print(str(exc))
-        print(f"onboarding_report={exc.report_path}")
-        return ONBOARDING_EXIT_CODE
+    except Exception as exc:
+        return emit_installer_failure(exc, "onboarding_preflight" if args.preflight_only else "onboarding")
+    finally:
+        _FAILURE_ATTEMPT.reset(failure_attempt)
     print(f"onboarding_status={report['status']}")
     print(f"onboarding_action={report['action']}")
     print(f"bootstrap_integrity={report['bootstrap_integrity']}")
@@ -2545,13 +2667,13 @@ def removal_main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--app-root", default=str(_default_app_root()))
     args = parser.parse_args(argv)
+    failure_attempt = _new_failure_attempt()
     try:
         report = remove_current_user_setup(args.app_root)
-    except CurrentUserOnboardingError as exc:
-        print("current_user_removal_status=FAILED")
-        print(str(exc))
-        print(f"current_user_removal_report={exc.report_path}")
-        return ONBOARDING_EXIT_CODE
+    except Exception as exc:
+        return emit_installer_failure(exc, "current_user_removal")
+    finally:
+        _FAILURE_ATTEMPT.reset(failure_attempt)
     paths = resolve_current_user_onboarding_paths(args.app_root)
     print(f"current_user_removal_status={report['status']}")
     print("data_preserved=true")

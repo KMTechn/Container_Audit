@@ -303,7 +303,8 @@ if requested_scenario == "nested-final-target":
         print("onboarding_input_binding=" + binding)
         raise SystemExit(0)
     except onboarding.CurrentUserOnboardingError as exc:
-        print("onboarding_preflight_error=" + json.dumps(str(exc), ensure_ascii=True))
+        # Contract section 0 / coordinator 01:5x: mirror the real child framing.
+        onboarding.emit_installer_failure(exc, "onboarding_preflight")
         raise SystemExit(4)
 
 capture = io.StringIO()

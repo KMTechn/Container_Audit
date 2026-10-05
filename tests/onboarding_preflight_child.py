@@ -134,13 +134,25 @@ function Join-Path {{param($Path,$ChildPath)
  if($ChildPath -ceq 'runtime\\python.exe'){{return $Script:PythonExe}}
  return Microsoft.PowerShell.Management\\Join-Path $Path $ChildPath
 }}
+. {quote(repo/'tools/bootstrap_integrity.ps1')}
 . {quote(repo/'tools/container_writer_fence.ps1')}
 function Read-ContainerWriterFence {{param([switch]$AllowAbsent) return $null}}
 function Abort-ContainerWriterFence {{throw 'unexpected fence mutation'}}
 function Remove-Item {{throw 'unexpected cleanup'}}
 function StartRaw {{throw 'unexpected relay change'}}
-$mainTry=@($ast.FindAll({{param($n) $n -is [Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally -and $n.Finally.Extent.Text -match 'Exit-ContainerWriterSessionAuthority'}},$true))[0]
-$receipt=@($mainTry.Body.Statements|Where-Object {{$_.Extent.Text -match '^\$canonicalWriterFencePreparedReceipt\s*=\s*New-CanonicalWriterFencePreparedReceipt'}})[0]
+$mainCandidates=@($ast.FindAll({{param($n)
+ $n -is [Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally -and
+ $n.Finally.Extent.Text -match 'Exit-ContainerWriterSessionAuthority' -and
+ @($n.Body.Statements|Where-Object {{$_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+   $_.Left.Extent.Text -ceq '$canonicalWriterFencePreparedReceipt' -and
+   $_.Extent.Text -match 'New-CanonicalWriterFencePreparedReceipt'}}).Count -eq 1
+}},$true))
+if($mainCandidates.Count -ne 1){{throw 'TEST_MAIN_PLACEMENT_BLOCK_NOT_UNIQUE'}}
+$mainTry=$mainCandidates[0]
+$receipts=@($mainTry.Body.Statements|Where-Object {{$_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+ $_.Left.Extent.Text -ceq '$canonicalWriterFencePreparedReceipt' -and $_.Extent.Text -match 'New-CanonicalWriterFencePreparedReceipt'}})
+if($receipts.Count -ne 1){{throw 'TEST_PREPARED_RECEIPT_STATEMENT_NOT_UNIQUE'}}
+$receipt=$receipts[0]
 $prefix=(@($mainTry.Body.Statements|Where-Object {{$_.Extent.StartOffset -lt $receipt.Extent.StartOffset}})|ForEach-Object {{$_.Extent.Text}})-join "`n"
 $enteredPlacementTry=$false;$canonicalWriterFenceActive=$false;$audit=$null;$retirementResume=$null;$retirementResumeClaim=$null
 $canonicalWriterFenceAuthority=$null;$canonicalWriterFenceEnvironmentNames=@()

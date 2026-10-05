@@ -1,0 +1,267 @@
+"""Public installer diagnostics contain codes; private reports retain causes."""
+import hashlib
+import json
+from pathlib import Path
+import re
+import secrets
+
+import pytest
+
+import current_user_onboarding as onboarding
+from tests.powershell_contracts import run_functions
+
+PREFIX = 'CONTAINER_AUDIT_INSTALLER_FAILURE='
+MODES = ('onboarding', 'preflight', 'removal', 'restore')
+
+
+def _cli(monkeypatch, tmp_path, mode, operation):
+    arguments = ['--app-root', str(tmp_path / 'app')]
+    if mode in ('onboarding', 'preflight'):
+        target = 'preflight_current_user_onboarding' if mode == 'preflight' else 'onboard_current_user'
+        monkeypatch.setattr(onboarding, target, operation)
+        if mode == 'preflight': arguments.append('--preflight-only')
+        return lambda: onboarding.onboarding_main(arguments)
+    if mode == 'removal':
+        monkeypatch.setattr(onboarding, 'remove_current_user_setup', operation)
+        return lambda: onboarding.removal_main(arguments)
+    monkeypatch.setattr(onboarding, 'restore_current_user_lifecycle_after_replacement', operation)
+    arguments += ['--code-root', str(tmp_path / 'code'), '--replacement-transaction-id', 'synthetic',
+                  '--replacement-receipt-path', str(tmp_path / 'receipt.json'),
+                  '--replacement-receipt-sha256', 'a' * 64, '--writer-contract-sha256', 'b' * 64,
+                  '--session-id', 'synthetic', '--attempt-id', 'synthetic',
+                  '--session-started-at-utc', '2026-10-06T00:00:00Z', '--orchestrator-sha256', 'c' * 64]
+    return lambda: onboarding.replacement_lifecycle_restore_main(arguments)
+
+
+def _invoke(cli, capsys, *, expected_exit=onboarding.ONBOARDING_EXIT_CODE):
+    unhandled = False
+    try:
+        result = cli()
+    except Exception:
+        unhandled = True
+        result = None
+    streams = capsys.readouterr()
+    raw = streams.out + streams.err
+    if unhandled:
+        pytest.fail('Uncaught installer exception count=1', pytrace=False)
+    if result != expected_exit:
+        pytest.fail('Installer failure exit code differed', pytrace=False)
+    return raw
+
+
+def _public(raw, private, *, expected_reason='INSTALLER_CHILD_FAILURE', expected_guidance=None):
+    hits = raw.count(private)
+    lines = raw.splitlines()
+    if hits or len(lines) != 1 or not lines[0].startswith(PREFIX):
+        pytest.fail(f'Public diagnostic: original-count={hits}, line-count={len(lines)}, framed-count={raw.count(PREFIX)}', pytrace=False)
+    try:
+        payload = json.loads(lines[0][len(PREFIX):])
+    except ValueError:
+        pytest.fail('Public diagnostic JSON count=0', pytrace=False)
+    approved = {'status', 'stage', 'reason_code', 'exception_type', 'location_module',
+                'location_function', 'location_line', 'exit_code', 'attempt_id',
+                'report_path', 'report_sha256', 'report_status', 'guidance'}
+    if set(payload) - approved or any(isinstance(v, (dict, list)) for v in payload.values()):
+        pytest.fail('Public diagnostic contains a non-flat or free-text field', pytrace=False)
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]{0,127}', payload['exception_type']):
+        pytest.fail('Public exception format name differs', pytrace=False)
+    if payload['status'] != 'FAILED' or payload['reason_code'] != expected_reason:
+        pytest.fail('Public failure code differs', pytrace=False)
+    if expected_guidance is None:
+        expected_guidance = '자료를 보존하고 관리자 지원 복구를 요청하세요.'
+    if payload.get('guidance') != expected_guidance:
+        pytest.fail('Public fixed guidance differs', pytrace=False)
+    return payload
+
+
+@pytest.mark.parametrize('mode', ('onboarding', 'preflight', 'removal', 'replacement'))
+@pytest.mark.parametrize('code', ('ACTIVE_WRITER_FENCE', 'FENCE_BINDING_INVALID'))
+def test_writer_refusal_preserves_exit_and_cause_in_public_record(tmp_path, monkeypatch, capsys, mode, code):
+    from writer_session_fence import WriterFenceError
+    private = secrets.token_hex(20)
+
+    def operation(*args, **kwargs):
+        raise WriterFenceError(code, private)
+
+    record = _public(_invoke(_cli(monkeypatch, tmp_path, mode, operation), capsys, expected_exit=23),
+                     private, expected_reason=code)
+    if record['exit_code'] != 23 or record.get('report_status') != 'REPORT_UNAVAILABLE':
+        pytest.fail('Writer refusal public exit/report contract differs', pytrace=False)
+
+
+def test_unregistered_writer_code_remains_private_with_original_exit(tmp_path, monkeypatch, capsys):
+    from writer_session_fence import WriterFenceError
+    private = secrets.token_hex(20)
+
+    def operation(*args, **kwargs):
+        raise WriterFenceError(private, private)
+
+    record = _public(_invoke(_cli(monkeypatch, tmp_path, 'preflight', operation), capsys, expected_exit=23),
+                     private, expected_reason='WRITER_FENCE_FAILED')
+    if record['exit_code'] != 23:
+        pytest.fail('Unknown writer refusal exit contract differs', pytrace=False)
+
+
+@pytest.mark.parametrize('kind', ('refuse', 'unknown', 'wrapped_unknown'))
+def test_generation_refusal_keeps_fixed_guidance_in_flat_record(tmp_path, monkeypatch, capsys, kind):
+    from data_generation_guard import DataGenerationBlocked
+    from kmtech_shared import data_generation as generation
+    private = secrets.token_hex(20)
+    unknown = kind != 'refuse'
+    guidance = generation.UNKNOWN_MESSAGE if unknown else generation.REFUSAL_MESSAGE
+    def operation(*args, **kwargs):
+        try:
+            if kind == 'wrapped_unknown':
+                raise ValueError(private)
+            raise DataGenerationBlocked({'status': 'UNKNOWN' if unknown else 'REFUSE'})
+        except Exception as cause:
+            raise onboarding.CurrentUserOnboardingError(guidance, report_path=tmp_path / 'unpublished.json') from cause
+    record = _public(_invoke(_cli(monkeypatch, tmp_path, 'onboarding', operation), capsys), private,
+                     expected_reason='DATA_GENERATION_UNKNOWN' if unknown else 'DATA_GENERATION_REFUSED',
+                     expected_guidance=guidance)
+    if 'report_path' in record or record.get('report_status') != 'REPORT_UNAVAILABLE':
+        pytest.fail('Unpublished generation refusal report reference count=1', pytrace=False)
+
+
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('kind', ('typed', 'unexpected'))
+def test_cli_failure_emits_only_allowlisted_structure(tmp_path, monkeypatch, capsys, mode, kind):
+    private = secrets.token_hex(20)
+    def operation(*args, **kwargs):
+        message = 'PRIVATE-CONTEXT-' + private + ' C:/private/' + private
+        if kind == 'typed':
+            error = onboarding.CurrentUserOnboardingError(message, report_path=tmp_path / 'old-report.json',
+                                                          status='ARBITRARY-' + private)
+            error.reason_code = 'ARBITRARY-' + private
+            raise error
+        raise ValueError(message)
+    failure = _public(_invoke(_cli(monkeypatch, tmp_path, mode, operation), capsys), private)
+    if 'report_path' in failure or failure.get('report_status') != 'REPORT_UNAVAILABLE':
+        pytest.fail('Unpublished report reference count=1', pytrace=False)
+
+
+def _published_failure(monkeypatch, tmp_path, capsys, *, reject=False, tamper=False):
+    private = secrets.token_hex(20)
+    monkeypatch.setenv('CONTAINER_RUNTIME_SECRET', private)
+    path = tmp_path / 'protected' / 'current_user_onboarding.json'
+    path.parent.mkdir()
+    old = b'{"old":"report"}\n'
+    path.write_bytes(old)
+    if reject:
+        monkeypatch.setattr(onboarding.os, 'replace', lambda *args: (_ for _ in ()).throw(OSError('synthetic publication refusal')))
+    saved = []
+    def operation(*args, **kwargs):
+        try:
+            raise ValueError('FIRST-CAUSE ' + private + ' ' + '\uac00' * 50000 + '\nLAST-CAUSE')
+        except ValueError as cause:
+            onboarding._persist_failure_report(path, {'status': 'FAILED'}, cause)
+            if tamper:
+                path.write_bytes(old)
+            failure = onboarding.CurrentUserOnboardingError('private wrapper ' + private, report_path=path)
+            saved.append(failure)
+            raise failure from cause
+    failure = _public(_invoke(_cli(monkeypatch, tmp_path, 'onboarding', operation), capsys), private)
+    return private, path, old, failure, saved
+
+
+def test_report_reference_binds_current_atomic_utf8_publication(tmp_path, monkeypatch, capsys):
+    private, path, _, failure, _ = _published_failure(monkeypatch, tmp_path, capsys)
+    raw = path.read_bytes()
+    if failure.get('report_path') != str(path) or failure.get('report_sha256') != hashlib.sha256(raw).hexdigest():
+        pytest.fail('Current atomic report reference count=0', pytrace=False)
+    report = json.loads(raw)
+    text = report['failure']
+    if private in raw.decode() or 'Traceback' not in text or 'FIRST-CAUSE' not in text or 'LAST-CAUSE' not in text or len(text.encode()) > 65536:
+        pytest.fail('Protected traceback redaction/context/byte-cap mismatch', pytrace=False)
+
+
+def test_failed_publication_has_no_reference_to_preexisting_report(tmp_path, monkeypatch, capsys):
+    _, path, old, failure, _ = _published_failure(monkeypatch, tmp_path, capsys, reject=True)
+    if 'report_path' in failure or failure.get('report_status') != 'REPORT_UNAVAILABLE' or path.read_bytes() != old:
+        pytest.fail('Failed publication reused or modified old report', pytrace=False)
+
+
+def test_report_changed_after_publication_is_not_referenced(tmp_path, monkeypatch, capsys):
+    _, _, _, failure, _ = _published_failure(monkeypatch, tmp_path, capsys, tamper=True)
+    if 'report_path' in failure or failure.get('report_status') != 'REPORT_UNAVAILABLE':
+        pytest.fail('Changed protected report reference count=1', pytrace=False)
+
+
+def test_second_cli_attempt_cannot_reuse_old_exception_report_reference(tmp_path, monkeypatch, capsys):
+    private, _, _, first, saved = _published_failure(monkeypatch, tmp_path, capsys)
+    if 'report_path' not in first:
+        pytest.fail('First atomic publication reference count=0', pytrace=False)
+    def reuse(*args, **kwargs):
+        raise saved[0]
+    second = _public(_invoke(_cli(monkeypatch, tmp_path, 'onboarding', reuse), capsys), private)
+    if 'report_path' in second or second.get('report_status') != 'REPORT_UNAVAILABLE':
+        pytest.fail('Second attempt reused previous report reference', pytrace=False)
+
+
+@pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
+@pytest.mark.parametrize('malformed', (False, True))
+@pytest.mark.parametrize('stream', ('stdout', 'stderr'))
+@pytest.mark.parametrize('reason', ('generic', 'refuse', 'unknown', 'writer'))
+def test_native_installer_reader_consumes_safe_public_failure(tmp_path, engine, malformed, stream, reason):
+    import sys
+    root = tmp_path / 'bundle'
+    (root / 'app').mkdir(parents=True)
+    private = secrets.token_hex(20)
+    record = {'status': 'FAILED', 'stage': 'onboarding_preflight',
+              'reason_code': 'INSTALLER_CHILD_FAILURE', 'exception_type': 'ValueError',
+              'exit_code': 4, 'report_status': 'REPORT_UNAVAILABLE'}
+    if reason == 'writer':
+        record.update(reason_code='ACTIVE_WRITER_FENCE', exit_code=23)
+    elif reason != 'generic':
+        from kmtech_shared import data_generation as generation
+        record.update(reason_code='DATA_GENERATION_REFUSED' if reason == 'refuse' else 'DATA_GENERATION_UNKNOWN',
+                      guidance=generation.REFUSAL_MESSAGE if reason == 'refuse' else generation.UNKNOWN_MESSAGE)
+    if malformed:
+        record['message'] = 'PRIVATE-CONTEXT-' + private
+    (root / 'app' / 'failure.txt').write_text(PREFIX + json.dumps(record, separators=(',', ':')), encoding='utf-8')
+    (root / 'app' / 'main.py').write_text(
+        "from pathlib import Path\nimport sys\nprint(Path(__file__).with_name('failure.txt').read_text(encoding='utf-8'), file=sys."
+        + stream + ")\nsys.exit(" + str(record["exit_code"]) + ")\n",
+        encoding='utf-8')
+    result = run_functions(tmp_path, Path(__file__).resolve().parents[1] / 'INSTALL_CANONICAL_PORTABLE.ps1',
+                           ['Get-CanonicalOnboardingInputBinding'], r'''
+function Join-Path([string]$Path,[string]$ChildPath){
+    if($ChildPath -ceq 'runtime\python.exe'){return $env:CA_OWNED_PYTHON}
+    return Microsoft.PowerShell.Management\Join-Path -Path $Path -ChildPath $ChildPath
+}
+try{Get-CanonicalOnboardingInputBinding $env:CA_OWNED_BUNDLE; 'UNEXPECTED_SUCCESS'}
+catch{[Console]::WriteLine([string]$_.Exception.Message)}
+''', engine=engine, values={'CA_OWNED_PYTHON': sys.executable, 'CA_OWNED_BUNDLE': str(root)})
+    expected = 'PUBLIC_FIELD_NONCONFORMING' if malformed else 'ONBOARDING_PREFLIGHT_FAILED'
+    if result.returncode or result.stdout.strip() != expected or private in result.stdout + result.stderr:
+        pytest.fail('Native installer safe failure reader differs; original-count=' + str((result.stdout + result.stderr).count(private)), pytrace=False)
+
+
+def test_portable_installer_entry_failure_uses_same_public_record(monkeypatch, capsys):
+    import sys
+    import auto_update
+    from portable import main as portable
+    private = secrets.token_hex(20)
+    monkeypatch.setattr(sys, 'argv', ['main.py', '--onboard-current-user'])
+    def rejected_gate(*args, **kwargs):
+        raise ValueError('PRIVATE-ENTRY-' + private)
+    monkeypatch.setattr(auto_update, 'startup_gate', rejected_gate)
+    record = _public(_invoke(portable.main, capsys), private)
+    if record.get('stage') != 'installer_entrypoint' or record.get('report_status') != 'REPORT_UNAVAILABLE':
+        pytest.fail('Portable installer entry failure record differs', pytrace=False)
+
+
+def test_failure_report_preserves_owner_metadata_fields(tmp_path):
+    private = secrets.token_hex(20)
+    report = {'status': 'FAILED',
+              'owner_artifact_paths': {'credential': str(tmp_path / 'owner.json')},
+              'owner_artifact_fingerprints_before': {'credential': 'a' * 64}}
+    path = tmp_path / 'protected-failure.json'
+    onboarding._persist_failure_report(path, report, RuntimeError('password=' + private))
+    raw = path.read_bytes()
+    stored = json.loads(raw)
+    for field in ('owner_artifact_paths', 'owner_artifact_fingerprints_before'):
+        if stored[field] != report[field]:
+            pytest.fail('Failure publication changed owner metadata field names or bytes', pytrace=False)
+    if private.encode() in raw:
+        pytest.fail('Protected report original-count=' + str(raw.count(private.encode())), pytrace=False)

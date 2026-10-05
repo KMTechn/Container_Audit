@@ -57,7 +57,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '3d877ea4e8959f459a1a2591b09d59f8df4017fe494568a1db55d6dcdb44d424'
+$ExpectedBootstrapIntegritySha256 = '7c8cbf7f201d5ad31a02046e993833422c7fb6a2f2765607485c4f950334bf42'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -1373,24 +1373,50 @@ function Get-CanonicalOnboardingInputBinding([string]$Root,[string]$TargetReleas
                 '--rollback-preflight-fence-sha256',(Get-ContainerWriterFenceFileSha256 (Get-ContainerWriterFenceActivePath)))
         }
     }
-    $output=@(& (Join-Path $Root 'runtime\python.exe') @preflightArguments 2>&1)
-    $preflightExitCode=$LASTEXITCODE
+    $preflightErrorPreference=$ErrorActionPreference
+    try {
+        # PS5.1 represents stderr as NativeCommandError. Capture it in memory
+        # before validation; Stop would replay an unvalidated child record.
+        $ErrorActionPreference='Continue'
+        $PSNativeCommandUseErrorActionPreference=$false
+        $output=@(& (Join-Path $Root 'runtime\python.exe') @preflightArguments 2>&1)
+        $preflightExitCode=$LASTEXITCODE
+    } finally { $ErrorActionPreference=$preflightErrorPreference }
     if ($preflightExitCode -ne 0) {
-        $diagnostic=@($output | Where-Object { [string]$_ -clike 'onboarding_preflight_error=*' })
-        if ($diagnostic.Count -eq 1) {
-            try { $message=([string]$diagnostic[0]).Substring('onboarding_preflight_error='.Length) | ConvertFrom-Json }
-            catch { $message='' }
-            if ($message -is [string] -and $message) { throw (ConvertTo-CanonicalSafeDiagnostic $message) }
-            if ($null -ne $message -and (Test-ExactPropertySet $message @('message','original_error_type','reason_code')) -and
-                $message.message -is [string] -and $message.original_error_type -is [string] -and $message.reason_code -is [string] -and
-                $message.original_error_type -cmatch '^[A-Za-z][A-Za-z0-9]{0,79}$' -and $message.reason_code -cmatch '^[A-Z][A-Z0-9_]{0,79}$') {
-                $preflightFailure=[InvalidOperationException]::new((ConvertTo-CanonicalSafeDiagnostic ([string]$message.message)))
-                $preflightFailure.Data['original_error_type']=[string]$message.original_error_type
-                $preflightFailure.Data['reason_code']=[string]$message.reason_code
-                throw $preflightFailure
-            }
+        $prefix='CONTAINER_AUDIT_INSTALLER_FAILURE='
+        if($output.Count -ne 1 -or -not ([string]$output[0]).StartsWith($prefix,[StringComparison]::Ordinal)){
+            throw 'INSTALLER_PUBLIC_FAILURE_RECORD_INVALID'
         }
-        throw '설치 전 자격 설정 경로를 확인하지 못했습니다. 자료와 확인 기록을 보존하고 관리자 지원 복구를 요청하세요.'
+        try{$payload=([string]$output[0]).Substring($prefix.Length)|ConvertFrom-ContainerWriterFenceJson}
+        catch{throw 'INSTALLER_PUBLIC_FAILURE_RECORD_INVALID'}
+        if($payload -isnot [pscustomobject]){throw 'PUBLIC_FIELD_NONCONFORMING'}
+        $fields=[ordered]@{}
+        foreach($property in $payload.PSObject.Properties){$fields[$property.Name]=$property.Value}
+        $writerFailureCodes=@(
+            'ACTIVE_WRITER_FENCE','FENCE_AUTHORITY_NAME_INVALID','FENCE_BINDING_INVALID',
+            'FENCE_DELEGATION_INVALID','FENCE_JSON_INVALID','FENCE_PATH_UNOBSERVABLE',
+            'FENCE_PREPARED_BINDING_INVALID','FENCE_PREPARED_RECEIPT_INVALID','FENCE_PREPARED_RECEIPT_MISMATCH',
+            'FENCE_PREPARED_RECEIPT_UNOBSERVABLE','FENCE_REPARSE_REJECTED','FENCE_SHAPE_INVALID',
+            'FENCE_SIZE_INVALID','FENCE_STATE_CHANGED','FENCE_STATE_UNOBSERVABLE',
+            'FENCE_STATE_UNREADABLE','LOCALAPPDATA_UNAVAILABLE','NETWORK_WRITER_ADMISSION_HELD',
+            'WRITER_ADMISSION_DEPTH_UNDERFLOW','WRITER_FENCE_FAILED','WRITER_GATE_ABANDONED',
+            'WRITER_GATE_TIMEOUT','WRITER_MUTEX_CREATE_FAILED','WRITER_MUTEX_WAIT_FAILED',
+            'WRITER_PROBE_ONLY_SINK_NOT_ALLOWED','WRITER_SOURCE_MISSING'
+        )
+        $record=ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes (@(
+            'FAILED','onboarding_preflight','INSTALLER_CHILD_FAILURE','REPORT_UNAVAILABLE',
+            'DATA_GENERATION_REFUSED','DATA_GENERATION_UNKNOWN') + $writerFailureCodes) `
+            -SafeMessages @('자료를 보존하고 관리자 지원 복구를 요청하세요.','이 PC의 자료가 새 판으로 이미 열려 옛 판으로 되돌릴 수 없습니다. 같은 새 판을 다시 시작하거나 고친 판으로 지원 업데이트하세요. 관리자 지원 복구는 설치 전 백업과 옛 판을 함께 복원해야 합니다.','이 PC의 자료 판을 확인할 수 없어 옛 판으로 되돌릴 수 없습니다. 자료와 확인 기록을 보존하고 관리자 지원 복구를 요청하세요.')
+        if($record.Contains('public_record_code')){throw 'PUBLIC_FIELD_NONCONFORMING'}
+        $expectedFailureExit=if($record.reason_code -cin $writerFailureCodes){23}else{4}
+        if($record.status -cne 'FAILED' -or $record.stage -cne 'onboarding_preflight' -or
+            ($record.reason_code -cnotin @('INSTALLER_CHILD_FAILURE','DATA_GENERATION_REFUSED','DATA_GENERATION_UNKNOWN') -and
+             $record.reason_code -cnotin $writerFailureCodes) -or
+            $record.exit_code -ne $expectedFailureExit -or $record.exit_code -ne $preflightExitCode){
+            throw 'INSTALLER_PUBLIC_FAILURE_RECORD_INVALID'
+        }
+        # The parent aborts with a fixed code; no child message is replayed.
+        throw 'ONBOARDING_PREFLIGHT_FAILED'
     }
     $bindingPattern=if ($TargetReleaseRoot) { '^onboarding_input_binding=([0-9a-f]{64}:[0-9a-f]{64})$' }
         else { '^onboarding_input_binding=([0-9a-f]{64})$' }
