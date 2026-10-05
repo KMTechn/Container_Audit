@@ -4740,22 +4740,22 @@ catch {
     if (-not [string]::IsNullOrWhiteSpace($codeRollbackFailure)) {
         $audit.status='CODE_ROLLBACK_FAILED'
         Record-CanonicalRollbackStep 'completion' 'FAILED' $codeRollbackFailure
-        throw (ConvertTo-CanonicalSafeDiagnostic "CODE_ROLLBACK_FAILED: $codeRollbackFailure")
+        throw [InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text "CODE_ROLLBACK_FAILED: $codeRollbackFailure" -UserLine),$original.Exception)
     }
     if (-not [string]::IsNullOrWhiteSpace($writerRollbackFailure)) {
         $audit.status='CANONICAL_WRITER_RESTORE_FAILED'
         Record-CanonicalRollbackStep 'completion' 'FAILED' $writerRollbackFailure
-        throw (ConvertTo-CanonicalSafeDiagnostic "CANONICAL_WRITER_RESTORE_FAILED: $writerRollbackFailure")
+        throw [InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text "CANONICAL_WRITER_RESTORE_FAILED: $writerRollbackFailure" -UserLine),$original.Exception)
     }
     if (-not [string]::IsNullOrWhiteSpace($autostartRollbackFailure)) {
         $audit.status='AUTOSTART_ROLLBACK_FAILED'
         Record-CanonicalRollbackStep 'completion' 'FAILED' $autostartRollbackFailure
-        throw (ConvertTo-CanonicalSafeDiagnostic "AUTOSTART_ROLLBACK_FAILED: $autostartRollbackFailure")
+        throw [InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text "AUTOSTART_ROLLBACK_FAILED: $autostartRollbackFailure" -UserLine),$original.Exception)
     }
     if (-not [string]::IsNullOrWhiteSpace($fenceReleaseFailure)) {
         $audit.status='CANONICAL_WRITER_FENCE_RELEASE_FAILED'
         Record-CanonicalRollbackStep 'completion' 'FAILED' $fenceReleaseFailure
-        throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("CANONICAL_WRITER_FENCE_RELEASE_FAILED: $fenceReleaseFailure")) -UserLine)
+        throw [InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text "CANONICAL_WRITER_FENCE_RELEASE_FAILED: $fenceReleaseFailure" -UserLine),$original.Exception)
     }
     $audit.status=if ($RestoreVerifiedReplacement) {
         'FAILED_RESTORE_RUNTIME_RECOVERED'

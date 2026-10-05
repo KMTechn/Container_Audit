@@ -144,9 +144,13 @@ $outer=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.CatchCla
 if($outer.Count -gt 1){throw 'Public output boundary duplicated.'}
 if($outer.Count -eq 1){$executeText='try {'+$executeText+'} catch '+$outer[0].Body.Extent.Text}
 $script:finalError=$null
-$console=(& {try{. ([ScriptBlock]::Create($executeText))}catch{$script:finalError=$_;Write-Output ([string]$_.Exception.Message)}} *>&1|Out-String)
+$script:originalPreserved=$false
+$console=(& {
+ try{. ([ScriptBlock]::Create($executeText))}catch{$script:finalError=$_;Write-Output ([string]$_.Exception.Message)}
+ $script:originalPreserved=$null -ne $original -and [object]::ReferenceEquals($original.Exception,$script:forwardException)
+} *>&1|Out-String)
 $finalMessage=if($null -ne $script:finalError){[string]$script:finalError.Exception.Message}else{''}
-$originalPreserved=$null -ne $original -and [object]::ReferenceEquals($original.Exception,$script:forwardException)
+$originalPreserved=$script:originalPreserved
 $chainPreserved=$false
 $exception=if($null -ne $script:finalError){$script:finalError.Exception}else{$null}
 for($depth=0;$null -ne $exception -and $depth -lt 12;$depth++){
