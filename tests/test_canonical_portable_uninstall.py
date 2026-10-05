@@ -206,15 +206,59 @@ function StartRaw([string]$Line) {
 }
 '''
 
-HELPER_OS = r'''
+HELPER_OS = r"""
 function Test-CurrentUserRelayPersistencePresent { return [bool](Get-Content (Join-Path $env:CA_UNINSTALL_ROOT 'registry.json') -Raw | ConvertFrom-Json).exists }
 function Get-CimInstance {
     if ($env:CA_UNINSTALL_INTERACTIVE -ceq '1') {
         return [pscustomobject]@{ ProcessId=1; ExecutablePath=(Join-Path $InstallRoot 'runtime\pythonw.exe'); CommandLine='interactive fixture' }
     }
-    return @()
+    $ownedRows=@(); $selectedPid=$PID
+    for ($depth=0; $selectedPid -gt 0 -and $depth -lt 8; $depth++) {
+        $actual=CimCmdlets\Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId='+$selectedPid) -ErrorAction Stop
+        if ($null -eq $actual) { throw 'owned helper process disappeared' }
+        if ($depth -gt 0 -and ([string]$actual.CommandLine).IndexOf($env:CA_UNINSTALL_ROOT,[StringComparison]::OrdinalIgnoreCase) -lt 0) { break }
+        $ownedRows += $actual
+        $selectedPid=[int]$actual.ParentProcessId
+    }
+    if ($ownedRows.Count -lt 2) { throw 'owned helper parent chain was not exercised' }
+    Add-Content -LiteralPath (Join-Path $env:CA_UNINSTALL_ROOT 'helper-boundary-phases.txt') -Value 'owned_process_ancestry'
+    return $ownedRows
 }
-'''
+
+Add-Type -TypeDefinition @'
+using System; using System.Collections.Generic; using System.Runtime.InteropServices;
+public class RemovalTask {
+ public string Name="fixture"; public string Xml="<Task><Fixture/></Task>";
+ public string GetSecurityDescriptor(int flags){return "fixture-sddl";} public void Stop(int flags){}
+}
+public class RemovalFolder {
+ public HashSet<string> Tasks=new HashSet<string>{"direct-sync-relay-container-audit","container-audit-isolated-qualification-authority"};
+ public object[] GetTasks(int flags){return new object[0];}
+ public RemovalTask GetTask(string name){if(!Tasks.Contains(name))throw new COMException("absent",unchecked((int)0x80070002)); return new RemovalTask();}
+ public void DeleteTask(string name,int flags){Tasks.Remove(name);}
+}
+'@
+
+# The empty task folder is the same implementation as test_convergent_removal.
+$script:CAUninstallTaskFolder=[RemovalFolder]::new()
+$script:CAUninstallTaskFolder.Tasks.Clear()
+$script:CAUninstallTaskService=[pscustomobject]@{Folder=$script:CAUninstallTaskFolder}
+$script:CAUninstallTaskService | Add-Member ScriptMethod Connect {}
+$script:CAUninstallTaskService | Add-Member ScriptMethod GetFolder {
+    param($Path)
+    if ($Path -cne '\') { throw 'unexpected task folder' }
+    Add-Content -LiteralPath (Join-Path $env:CA_UNINSTALL_ROOT 'helper-boundary-phases.txt') -Value 'isolated_task_folder'
+    return $this.Folder
+}
+function New-Object {
+    param([string]$TypeName,[object[]]$ArgumentList,[string]$ComObject)
+    if ($ComObject) {
+        if ($ComObject -cne 'Schedule.Service') { throw 'unexpected COM consumer' }
+        return $script:CAUninstallTaskService
+    }
+    return Microsoft.PowerShell.Utility\New-Object @PSBoundParameters
+}
+"""
 
 
 def _ps(path, env, *args):
@@ -264,7 +308,7 @@ def _setup(tmp_path, fault=''):
     helper = source / 'INSTALL_THIS_PC.ps1'
     text = helper.read_text(encoding='utf-8-sig').replace('$testOverride = (', HELPER_OS + '\n$testOverride = (')
     if fault in {'partial', 'restore_failure'}:
-        target = '        Remove-Item -LiteralPath $installRootFull -Recurse -Force -ErrorAction Stop'
+        target = '        $removed = Invoke-ContainerConvergentRemoval -InstallRoot $installRootFull -TaskFolder $folder -ExcludeProcessIds $excluded'
         assert text.count(target) == 1
         text = text.replace(target, "        Remove-Item -LiteralPath (Join-Path $installRootFull 'app\\main.py') -Force\n        throw 'PARTIAL_REMOVAL_INJECTED_FAILURE'")
         if fault == 'restore_failure':
