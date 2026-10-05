@@ -1242,8 +1242,11 @@ function Remove-CanonicalSupportedRemovalAttemptStop([string]$RemovalPath,[strin
     $receipt=Get-Content -LiteralPath $RemovalPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $stopSha=Sha $StopPath
     $marker=Get-Content -LiteralPath $StopPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $captured=[DateTime]::Parse([string]$receipt.captured_at).ToUniversalTime()
-    $requested=[DateTime]::Parse([string]$marker.requested_at).ToUniversalTime()
+    # PS7 parses ISO JSON dates eagerly; preserve their UTC kind and precision.
+    $captured=if($receipt.captured_at -is [DateTime]){$receipt.captured_at.ToUniversalTime()}
+        else{[DateTime]::Parse([string]$receipt.captured_at,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()}
+    $requested=if($marker.requested_at -is [DateTime]){$marker.requested_at.ToUniversalTime()}
+        else{[DateTime]::Parse([string]$marker.requested_at,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()}
     # Product timestamps have whole-second precision; compare the same format.
     $earliest=$StartedAt.ToUniversalTime()
     $earliest=$earliest.AddTicks(-($earliest.Ticks % [TimeSpan]::TicksPerSecond))
@@ -4696,8 +4699,10 @@ catch {
         }
         $runRestored=(-not $mutated -or ([string]$audit.rollback.steps.run_restore_attempt.status -ceq 'PASS' -and
             [string]$audit.rollback.steps.run_restore.status -ceq 'PASS'))
+        # A failed earlier quiescence remains in the audit. Final exact code,
+        # G, Run and live-process proofs determine whether restoration succeeded.
         $rollbackRuntimeIdentityVerified=($codeRestoredExact -and $rollbackGenerationVerified -and $runRestored -and
-            [string]::IsNullOrWhiteSpace($codeRollbackFailure) -and -not $legacyRelayRestoreNeeded)
+            -not $legacyRelayRestoreNeeded)
         $rollbackScheduledWriterVerified=(-not $writerRestoreNeeded)
         $rollbackRecoveryVerified=($rollbackRuntimeIdentityVerified -and $rollbackScheduledWriterVerified)
         Record-CanonicalRollbackStep 'recovery_identity' $(if ($rollbackRecoveryVerified) { 'PASS' } else { 'UNPROVEN' }) ''

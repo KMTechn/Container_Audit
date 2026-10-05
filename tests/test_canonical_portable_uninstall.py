@@ -134,7 +134,8 @@ else:
             raise
     def relay_launcher(selected_app, *, environ=None):
         result = user_relay.start_user_relay_process(selected_app, environ=environ, launcher=launch)
-        result['process_id'] = result.pop('launcher_result')
+        if result['status'] != 'DEFERRED_CANONICAL_RELEASE':
+            result['process_id'] = result.pop('launcher_result')
         return result
     defaults = onboarding.onboard_current_user.__wrapped__.__kwdefaults__
     defaults.update(
