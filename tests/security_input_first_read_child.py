@@ -100,6 +100,15 @@ elif scenario in {"pin_deferred_tls", "runtime_deferred_tls", "transfer_deferred
         client = LogisticsTransferClient("https://qualification.invalid", uuid.uuid4().hex,
             uuid.uuid4().hex, session=session, tls_ca_bundle_path=str(ca))
         action = lambda: client._request("GET", "/logistics/api/v1/capabilities")
+elif scenario == "registration_tls":
+    owner = tls_owner
+    from tools.register_container_audit_worker_pc import _post_enrollment_request
+    action = lambda: _post_enrollment_request("https://qualification.invalid", json={}, headers={},
+        timeout=1, allow_redirects=False, verify=str(ca))
+elif scenario == "installer_tls":
+    owner = tls_owner
+    from tools.install_logistics_runtime_profile import _resolve_tls_ca_bundle
+    action = lambda: _resolve_tls_ca_bundle(ca, data / "runtime-profile.json")
 elif scenario != "allowed":
     assert scenario in {"prepared_locator", "prepared_secret"}
 

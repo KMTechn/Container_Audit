@@ -170,6 +170,8 @@ def _resolve_tls_ca_bundle(
     source = assert_path_has_no_reparse_components(
         source_text, label="TLS CA bundle source"
     )
+    from data_generation_guard import probe_before_owner_paths
+    probe_before_owner_paths(Path(profile_path).parent, file_paths=(source,))
     if not source.is_file():
         raise LogisticsRuntimeConfigurationError("TLS CA bundle source is unavailable")
     try:

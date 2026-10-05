@@ -1171,6 +1171,9 @@ def _registration_artifact_versions(args):
 
 
 def _check_registration_artifacts(args):
+    prepared = getattr(args, "prepared_credential", None)
+    if prepared is not None:
+        prepared.admit_security_inputs()
     attempt = getattr(args, "_registration_attempt", None)
     if attempt is not None and not attempt.is_current():
         raise EnrollmentAdminRecoveryRequired("a newer registration attempt superseded this response", error_code="registration_attempt_superseded")
@@ -1326,6 +1329,10 @@ def _post_enrollment_request(
     verify: str | bool,
     attempt: RemoteAttempt | None = None,
 ):
+    if isinstance(verify, str) and verify:
+        from data_generation_guard import probe_before_owner_paths
+        ca_path = Path(verify)
+        probe_before_owner_paths(ca_path.parent, file_paths=(ca_path,))
     with requests.Session() as session:
         # Enrollment trust is an explicit application input.  Environment CA
         # overrides must not silently replace the configured/private CA.

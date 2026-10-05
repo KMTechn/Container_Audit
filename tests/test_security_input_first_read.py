@@ -8,7 +8,8 @@ import pytest
 
 SCENARIOS = ("prepared_locator", "prepared_secret", "prepared_tls", "raw_locator",
              "gui_pin_secret", "profile_owner", "protected_admin_owner",
-             "pin_deferred_tls", "runtime_deferred_tls", "transfer_deferred_tls")
+             "pin_deferred_tls", "runtime_deferred_tls", "transfer_deferred_tls",
+             "registration_tls", "installer_tls")
 
 @pytest.mark.parametrize("scenario", SCENARIOS)
 def test_owner_upgrade_after_startup_refuses_first_security_read(tmp_path, scenario):
