@@ -2248,7 +2248,7 @@ function Get-CanonicalOfficialLegacyRelayPreimage {
     if($tasks.Count -eq 0){return $null}
     $task=$tasks[0]
     $actions=@($task.Actions)
-    if($actions.Count -ne 1 -or [IO.Path]::GetFileName(([string]$actions[0].Execute).Trim('"')) -inotin @('wscript.exe','cmd.exe')){return $null}
+    if($actions.Count -ne 1 -or [IO.Path]::GetFileName(([string]$actions[0].Execute).Trim('"')) -inotin @('wscript.exe','cmd.exe')){throw 'NONCANONICAL_WRITER_ENABLED'}
     $xml=Export-ScheduledTask -TaskName ([string]$task.TaskName) -TaskPath ([string]$task.TaskPath) -ErrorAction Stop
     $identity=Get-BootstrapOfficialLegacyRelayIdentity $task $xml
     if(-not $identity.matched){throw 'NONCANONICAL_WRITER_ENABLED'}
@@ -2260,6 +2260,7 @@ function Get-CanonicalOfficialLegacyRelayPreimage {
         $launcherPath=[Environment]::ExpandEnvironmentVariables($launcher.Groups['path'].Value)
         $path=[IO.Path]::ChangeExtension($launcherPath,$leaf)
         Assert-BootstrapNoReparsePoint $path 'official legacy launcher' -PathOnly
+        if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw 'OFFICIAL_LEGACY_LAUNCHER_UNPROVEN'}
         $observation=FileObservation $path;$files+=,@{name=$leaf;exists=$observation.exists;bytes=$observation.bytes;sha256=$observation.sha256}
         if($leaf -ceq 'cmd' -and $observation.exists -and $observation.bytes -le 65536){
             $content=Get-Content -LiteralPath $path -Raw -Encoding UTF8
@@ -2271,6 +2272,35 @@ function Get-CanonicalOfficialLegacyRelayPreimage {
         }
     }
     return [pscustomobject]@{xml=[string]$xml;xml_sha256=(ShaText $xml);identity=$identity;enabled=[bool]$task.Settings.Enabled;task_name=[string]$task.TaskName;task_path=[string]$task.TaskPath;old_code_root=$oldRoot;files=$files}
+}
+function Get-CanonicalOfficialLegacyRelayAdmission([string]$ReportPath='') {
+    # Read-only admission precedes protected-base preparation. An absent task
+    # has no launcher requirement; a present task retains the exact identity
+    # and existing launcher leaf/reparse/old-code-root observations.
+    try { return (Get-CanonicalOfficialLegacyRelayPreimage) }
+    catch {
+        $originalFailure=$_
+        $message=ConvertTo-KmtechRedactedSinkText -Text '옛 전송 예약 작업의 실행 연결을 확인하지 못해 설치를 변경하지 않았습니다. 작업과 실행 파일을 보존하고 관리자에게 지원 복구를 요청하세요.' -UserLine
+        $failure=[InvalidOperationException]::new($message,$originalFailure.Exception)
+        $failure.Data['original_error_record']=$originalFailure
+        if($originalFailure.Exception.Message -ceq 'NONCANONICAL_WRITER_ENABLED') {
+            $failure.Data['canonical_code']='NONCANONICAL_WRITER_ENABLED'
+        } else {
+            $failure.Data['canonical_code']='OFFICIAL_LEGACY_LAUNCHER_UNPROVEN'
+        }
+        if($ReportPath) {
+            try {
+                $reportFull=Full $ReportPath 'legacy admission report'
+                Assert-BootstrapNoReparsePoint (Split-Path -Parent $reportFull) 'legacy admission report parent' -PathOnly
+                if(Test-Path -LiteralPath $reportFull){Assert-BootstrapNoReparsePoint $reportFull 'legacy admission report' -PathOnly}
+                $reportJson=ConvertTo-CanonicalAuditJson ([ordered]@{status='REJECTED_BEFORE_PREPARATION';code=[string]$failure.Data['canonical_code'];message=$message})
+                [IO.File]::WriteAllText($reportFull,$reportJson,[Text.UTF8Encoding]::new($false))
+            } catch {
+                $failure.Data['report_failure']=ConvertTo-KmtechRedactedSinkText -Text $_.Exception.Message -UserLine
+            }
+        }
+        throw $failure
+    }
 }
 function Save-CanonicalOfficialLegacyRelayPreimage($Before,[string]$Root) {
     Assert-InstallationEvidenceWriteRoot $Root
@@ -3232,6 +3262,7 @@ foreach ($name in $canonicalWriterFenceEnvironmentNames) {
     $canonicalWriterFenceEnvironmentBefore[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 $canonicalWriterFenceAuthority = $null
+$legacyRelayBefore=if($testMode -or $Uninstall -or $RestoreVerifiedReplacement){$null}else{Get-CanonicalOfficialLegacyRelayAdmission -ReportPath $EvidencePath}
 $installationEvidenceRoot=if($null -eq $abandonedPending){Initialize-InstallationEvidence $auditPath $operatorSid @($Script:CanonicalWriterFenceDelegationToken)}else{''}
 Set-InstallationEvidenceStage 'canonical.writer_fence_preflight'
 $canonicalWriterFenceActive = $false
@@ -3353,7 +3384,6 @@ elseif($null -eq $abandonedPending) {
         -ExpectedRoot $install `
         -StopMarkerExists (Test-Path -LiteralPath $stop)
 }
-$legacyRelayBefore=if($testMode -or $Uninstall -or $RestoreVerifiedReplacement){$null}else{Get-CanonicalOfficialLegacyRelayPreimage}
 $legacyRelayPreimage=$null;$legacyRelayRestoreNeeded=$false;$legacyRelayRestoreAttempted=$false
 $writerBefore = if ($testMode -or ($Uninstall -and -not $CompleteRetiredRemoval)) {
     [ordered]@{ present=$false; classification='TEST_BYPASS'; restore_required=$false }

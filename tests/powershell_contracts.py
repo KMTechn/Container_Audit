@@ -86,4 +86,4 @@ foreach ($name in $env:CA_CONTRACT_NAMES.Split(',')) {
                      CA_CONTRACT_NAMES=','.join(names),CA_CONTRACT_ROOT=str(tmp_path))
     environment.update(values or {})
     return run_powershell([powershell,'-NoLogo','-NoProfile','-NonInteractive','-File',str(driver)],
-                          env=environment,capture_output=True,text=True,timeout=30)
+                          env=environment,capture_output=True,text=True)

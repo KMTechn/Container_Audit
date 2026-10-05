@@ -250,6 +250,11 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 <a id="ca-startup-update"></a>
 ## 로그온 자동 갱신 운영
 
+첫 설치는 자료 판 검증 뒤 옛 relay의 작업과 실행 연결을 확인하고 보호 바탕을 준비한다.
+옛 relay 작업이 없으면 launcher를 요구하지 않는다. 작업이 있으면 공식 정체성의 정확한
+launcher 경로와 실제 파일·재분석 여부를 확인한다. 연결이 맞지 않으면 변경 전에 거절하고
+작업과 실행 파일을 보존해 관리자 지원 복구를 요청하도록 안내한다.
+
 지원 `-Uninstall`은 외부 stock 지원 소스를 실행 호스트로 사용한다. 각 current/versions 및
 보호 packet의 해시 일치 파일을 `removal-evidence/<UUID>`로 개별 보존 이동한다. 고정 legacy
 작업과 실제 경로/SID 및 고정 SYSTEM action이 맞는 StartupUpdate 작업만 제거/부재 확인한다.
