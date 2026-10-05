@@ -13,7 +13,7 @@ REPO=Path(__file__).resolve().parents[1]
 @pytest.mark.parametrize('shell',['powershell.exe','pwsh.exe'])
 @pytest.mark.parametrize('kind,case',[
     ('allowed','normal'), ('refusal','normal'),
-    ('refusal','code-mismatch'), ('refusal','g-unknown'),
+    ('refusal','code-mismatch'), ('refusal','g-unknown'),('refusal','nested-high'),
 ])
 def test_canonical_rollback_attempts_remaining_recovery_with_actual_g(tmp_path,shell,kind,case):
     executable=shutil.which(shell)

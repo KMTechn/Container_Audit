@@ -17,6 +17,7 @@ native 설치·복원과 최종 수용은 coordinator 독립 확인 범위로 �
 사용한다. 실제 first reader는 다시 시작하는 old relay이며 lifecycle-restore child 호출은 없다.
 sub-270 removal 거절의 일반 rollback도 독립 복원 시도와 finally release/restart로 교정한다.
 exact code·실제 G·runtime 증명 실패는 fenced 유지·한국어 화면/감사 안내이며 G를 거절한 code 복원은 0이다.
+최종 G에는 옛 판의 읽기 전용 locator/nested 판정도 포함하며, 설치 중 nested marker drift는 fence 유지로 처리한다. 설치 실패 안내·child 출력 감사의 알려진 비밀 환경 값은 고정 표식으로 치환하고 byte 검색으로 확인한다.
 지원 절차는 [운영 문서](operations.md#canonical-rollback-support-recovery)에 두고 retained-fence 랩 1회 PROVEN은 coordinator 예행 범위로 남긴다.
 Uninstall/retirement/refence 이전 실패의 안내·지원 복구 경로는 자리 지도에 별도로 남긴다.
 

@@ -819,10 +819,12 @@ Registration retains string profile-path arguments after shared resolution. Inva
 <a id="canonical-rollback-support-recovery"></a>
 ## Canonical rollback 중단과 관리자 지원 복구
 
-설치·검증된 코드 교체의 rollback은 removal 실패를 기록한 뒤에도 코드 복원, Run 복원, 중지 표시 복원, 예약 writer 복원을 각각 시도한다. 옛 코드의 정확한 복원 근거, 실제 G의 허용 결과, Run·중지 표시·남은 relay의 일치가 모두 확인된 경우에만 해당 설치 시도의 fence 해제와 옛 relay 재시작을 반드시 시도한다. 단계별 성공·실패는 `rollback.steps`에 남으며 앞선 오류 코드와 실패 기록을 지우지 않는다. G가 거절한 코드 복원은 실행하지 않는다.
+설치·검증된 코드 교체의 rollback은 removal 실패를 기록한 뒤에도 코드 복원, Run 복원, 중지 표시 복원, 예약 writer 복원을 각각 시도한다. 옛 코드의 정확한 복원 근거, 실제 G의 허용 결과, Run·중지 표시·남은 relay의 일치가 모두 확인된 경우에만 해당 설치 시도의 fence 해제와 옛 relay 재시작을 반드시 시도한다. 최종 G는 기존 PS old-target 검사와 기존 product의 읽기 전용 `--target-release-root` 판정을 함께 사용하여 옛 relay가 처음 읽는 locator·nested owner까지 확인한다. 초기 검사 뒤 설치 중 marker가 바뀐 경우에도 이 확인 없이 실행을 재개하지 않는다. 단계별 성공·실패는 `rollback.steps`에 남으며 앞선 오류 코드와 실패 기록을 지우지 않는다. G가 거절한 코드 복원은 실행하지 않는다.
 
 확인에 실패한 관리자 설치 화면과 설치 감사 로그의 `rollback.operator_message`에는 다음 문구를 표시한다: “이 PC의 코드, 자료 호환 여부 또는 실행 상태를 확인하지 못해 작업을 안전하게 멈췄습니다. 자료와 설치 기록을 보존하고 관리자 지원 복구를 요청하세요. 확인 없이 중지 표시를 지우거나 앱을 다시 실행하지 마세요.” 이때 fence와 relay 정지를 유지한다. 로그의 `rollback.support_recovery_procedure`는 이 절을 가리킨다.
 
 지원 담당자는 기존 설치 감사 기록, replacement receipt·restore evidence, code integrity record와 자료를 먼저 보존한다. `rollback.steps`에서 실패한 단계와 실제 G의 REFUSE/UNKNOWN을 구분하고, 검증된 code·receipt의 원래 경로/해시 및 runtime preimage를 대조한다. 자료 호환 확인 실패에는 기록을 수정하거나 낮은 판으로 강행하지 않고 호환되는 검증 코드와 기존 지원 복원 진입점을 사용한다. 공개 코드 복원 진입점은 `INSTALL_CANONICAL_PORTABLE.ps1 -RestoreVerifiedReplacement`이며 기존 receipt·정확한 old code·사용자/경로·live session authority 검사를 그대로 적용한다. 다른 설치 시도의 active fence를 이 명령이 임의로 회수하지 않는다.
 
 원 설치 시도의 authority가 사라진 채 fence가 남은 경우에는 현장에서 fence 파일을 지우거나 delegation/receipt를 만들어 진행하지 않는다. coordinator에게 보존한 기록과 실패 단계만 전달하고 지원 authority 회수 및 검증된 복구 실행을 요청한다. 종료 조건은 코드 신원·G·runtime 일치, 권한이 확인된 fence 해제, 옛 relay readback 및 업무 수량·소속 보존이다. 이 retained-fence 지원 절차의 실제 랩 1회 PROVEN은 1차 coordinator의 예행 범위이며 이 가지의 headless 격리 시험으로 대체하지 않는다; 아직 실제 랩 수용은 UNPROVEN이다.
+
+실패 안내와 감사에는 writer delegation token·설치 bearer 환경 값의 원문을 남기지 않는다. canonical 오류 안내와 audit/evidence의 JSON 저장, relay 설치기의 child stdout/stderr 및 감사 저장은 알려진 비밀 환경 값을 `[REDACTED]`로 치환한다. profile 설치기의 예외 안내는 예외 종류만 표시한다. 제어 프로토콜의 정상 delegation·receipt 값과 권한 검증은 그대로이며, 비밀 값이 없어도 원 실패 코드와 단계 결과는 유지한다. 실제 값이나 child 출력 전문을 운영 문서에 복사하지 않는다.

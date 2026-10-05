@@ -975,7 +975,7 @@ def main(argv: list[str] | None = None) -> int:
             credential_scope=args.credential_scope,
         )
     except Exception as exc:
-        print(f"BLOCKED: {exc.__class__.__name__}: {exc}", file=sys.stderr)
+        print(f"BLOCKED: {exc.__class__.__name__}", file=sys.stderr)
         return 2
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
     return 0

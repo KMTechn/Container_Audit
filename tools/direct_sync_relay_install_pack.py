@@ -371,13 +371,31 @@ def _apply_container_audit_storage_defaults(args: argparse.Namespace) -> dict:
     }
 
 
+def _redact_install_diagnostic(value):
+    """Remove known process-secret values before storing child diagnostics."""
+    secrets = tuple(value for name in (
+        "CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN", "KM_LOGISTICS_INSTALL_BEARER_TOKEN",
+    ) if (value := os.environ.get(name)))
+    def scrub(item):
+        if isinstance(item, str):
+            for secret in secrets:
+                item = item.replace(secret, "[REDACTED]")
+            return item
+        if isinstance(item, dict):
+            return {key: scrub(child) for key, child in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [scrub(child) for child in item]
+        return item
+    return scrub(value)
+
+
 @writer_sink("direct_sync_install_pack")
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
         with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            json.dump(_redact_install_diagnostic(payload), handle, ensure_ascii=False, indent=2, sort_keys=True)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -1223,8 +1241,8 @@ def _run_command(command: Sequence[str]) -> dict:
         }
     return {
         "returncode": completed.returncode,
-        "stdout": completed.stdout,
-        "stderr": completed.stderr,
+        "stdout": _redact_install_diagnostic(completed.stdout),
+        "stderr": _redact_install_diagnostic(completed.stderr),
     }
 
 

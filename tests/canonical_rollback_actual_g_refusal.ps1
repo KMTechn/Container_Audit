@@ -5,6 +5,31 @@ $ast=[Management.Automation.Language.Parser]::ParseFile($Source,[ref]$tokens,[re
 if($errors.Count){throw 'parse errors'}
 $clauses=$ast.FindAll({param($n) $n -is [Management.Automation.Language.CatchClauseAst] -and $n.Body.Extent.Text.Contains('if (-not $enteredPlacementTry)')},$true)
 if($clauses.Count -ne 1){throw 'exact catch not found'}
+
+$script:RollbackPython=$Python
+$script:RollbackChild=$Child
+$script:RollbackSource=$processSource
+$script:RollbackRoot=$Root
+$script:RollbackGeneration=$readerGeneration
+$readerDefinitions=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic')},$true)
+foreach($definition in $readerDefinitions) {
+    $readerBody=$definition.Extent.Text
+    if($definition.Name -ceq 'Get-CanonicalOnboardingInputBinding') {
+        $originalArguments=@'
+    $preflightArguments=@('-I','-B',(Join-Path $Root 'app\main.py'),
+        '--onboard-current-user','--app-root',(Join-Path $Root 'app'),'--preflight-only')
+'@
+        $fixtureArguments=@'
+    $preflightArguments=@('-B',$script:RollbackChild,$script:RollbackSource,'nested-final-target',
+        $script:RollbackRoot,$script:RollbackGeneration,'absolute')
+'@
+        if(-not $readerBody.Contains($originalArguments)){throw 'readonly fixture argv adapter differs'}
+        $readerBody=$readerBody.Replace($originalArguments,$fixtureArguments)
+        $readerBody=$readerBody.Replace("(Join-Path `$Root 'runtime\python.exe')",'$script:RollbackPython')
+    }
+    Invoke-Expression $readerBody
+}
+
 $body=$clauses[0].Body.Extent.Text
 $script:state=@{code='before';data='before';run='before';task='before';relay='before'}
 $script:observed=[ordered]@{product_removal=0;code_restore=0;run_restore=0;task_restore=0;relay_start=0;fence_release=0;audit=0}
@@ -62,14 +87,16 @@ $activeDataRoot = Join-Path $Root 'actual-g-data'
 # These are lifecycle doubles: the original catch is executed, not a native install.
 $script:state.code='changed';$script:state.run='changed';$script:state.task='changed';$script:state.relay='absent'
 $processSource=Split-Path -Parent $Source
-$raw=@(& $Python -B $Child $processSource 'nested-onboard-secret-explicit' (Join-Path $Root 'child') 'newer' 'absolute')
+$readerScenario=if($RecoveryCase -ceq 'nested-high'){'nested-onboard-secret-explicit'}else{'nested-readonly'}
+$readerGeneration=if($RecoveryCase -ceq 'nested-high'){'newer'}else{'missing'}
+$raw=@(& $Python -B $Child $processSource $readerScenario (Join-Path $Root 'child') $readerGeneration 'absolute')
 if($LASTEXITCODE -ne 0){throw 'isolated onboarding child failed'}
 $childResult=($raw[-1]|ConvertFrom-Json)
 if($childResult.status -cne 'REFUSE'){throw 'nested child did not refuse'}
 if ($RecoveryCase -ceq 'code-mismatch') {
     function ReadReplacementRestoreEvidence { throw 'ISOLATED_CODE_RESTORE_EVIDENCE_MISMATCH' }
 }
-if ($RecoveryCase -ceq 'g-unknown') {
+if ($RecoveryCase -ceq 'g-unknown','nested-high') {
     [IO.Directory]::CreateDirectory((Join-Path $activeDataRoot 'control')) | Out-Null
     [IO.File]::WriteAllText((Join-Path $activeDataRoot 'data-generation.json'), 'invalid isolated generation marker')
 }

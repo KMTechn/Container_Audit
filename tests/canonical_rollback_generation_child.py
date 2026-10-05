@@ -10,6 +10,9 @@ import sys
 from types import SimpleNamespace
 
 source, scenario, root, generation_case, spelling = sys.argv[1:]
+requested_scenario = scenario
+if scenario in {"nested-readonly", "nested-final-target"}:
+    scenario = "nested-onboard-secret-explicit"
 source, root = Path(source), Path(root)
 sys.path.insert(0, str(source))
 def reject_host_api(event, args):
@@ -174,6 +177,8 @@ def audit(event, args):
 sys.addaudithook(audit)
 
 def execute():
+    if requested_scenario == "nested-readonly":
+        return {"status": "READONLY_ALLOWED", "binding": onboarding.preflight_current_user_onboarding(source)}
     if scenario.startswith('nested-'):
         def load(prepared=None):
             value = runtime.load_credentials_from_json(credential_locator, prepared_config=prepared) if prepared is not None else runtime.load_credentials_from_json(credential_locator)
@@ -286,6 +291,20 @@ def execute():
         registration.build_registration_payloads = payloads
         return registration.main(['--app-root', str(source), option, argument(selected)])
     raise AssertionError('unsupported scenario')
+
+if requested_scenario == "nested-final-target":
+    # The PS recovery reproduction already doubles exact code/receipt proof.
+    # Only that identity reader is doubled here; locator/nested G stays real.
+    target_release = dict(release, aggregate_sha256="a" * 64, manifest_sha256="b" * 64)
+    onboarding._verified_onboarding_target_release = lambda _target: target_release
+    try:
+        target_arg = sys.argv[sys.argv.index("--target-release-root") + 1]
+        binding = onboarding.preflight_current_user_onboarding(source, target_release_root=target_arg)
+        print("onboarding_input_binding=" + binding)
+        raise SystemExit(0)
+    except onboarding.CurrentUserOnboardingError as exc:
+        print("onboarding_preflight_error=" + json.dumps(str(exc), ensure_ascii=True))
+        raise SystemExit(4)
 
 capture = io.StringIO()
 result, failure, failure_type = None, '', ''
