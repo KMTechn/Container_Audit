@@ -146,7 +146,7 @@ $canonicalWriterFenceAuthority=$null;$canonicalWriterFenceEnvironmentNames=@()
 $canonicalWriterFencePreparedPath={quote(root/'no-receipt.json')}
 $source={quote(packet)};$install={quote(root/'existing-code')};$old=@()
 $Uninstall=$false;$CompleteRetiredRemoval=$false;$RestoreVerifiedReplacement={'$true' if target_root is not None else '$false'}
-$publicRestore=@{{state='PENDING';receipt=@{{rollback_root={quote(target_root or root/'unused')};old=@{{source_commit='1'*40;aggregate_sha256={quote(('0'*64 if case=='restore-code-binding-wrong' else aggregate) if target_root is not None else '')};manifest_sha256={quote(hashlib.sha256(json.dumps(manifest).encode()).hexdigest() if target_root is not None else '')}}}}}}
+$publicRestore=@{{state='PENDING';receipt=@{{rollback_root={quote(target_root or root/'unused')};old=@{{source_commit='1'*40;aggregate_sha256={quote(('0'*64 if case=='restore-code-binding-wrong' else aggregate) if target_root is not None else '')};manifest_sha256={quote(hashlib.sha256(json.dumps(manifest).encode()).hexdigest() if target_root is not None else '')}}}}}}}
 $Script:CanonicalWriterFenceSessionId='a'*32;$Script:CanonicalWriterFenceAttemptId='b'*32
 $canonicalWriterFenceOrchestratorSha256='c'*64;$Script:CanonicalWriterFenceTransactionId='d'*32
 $canonicalWriterFenceContractSha256='e'*64

@@ -70,7 +70,8 @@ if ($RecoveryCase -ceq 'code-mismatch') {
     function ReadReplacementRestoreEvidence { throw 'ISOLATED_CODE_RESTORE_EVIDENCE_MISMATCH' }
 }
 if ($RecoveryCase -ceq 'g-unknown') {
-    [IO.File]::WriteAllText((Join-Path $Root 'app/Container_Audit.py'), 'invalid isolated release metadata')
+    [IO.Directory]::CreateDirectory((Join-Path $activeDataRoot 'control')) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $activeDataRoot 'control/data-generation.json'), 'invalid isolated generation marker')
 }
 $errorType=''
 try {. ([ScriptBlock]::Create("try {throw 'Product mode failed: --onboard-current-user/2'} catch "+$body))}
