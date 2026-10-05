@@ -1488,6 +1488,11 @@ def test_portable_preflight_failure_removes_prepared_writer_session(tmp_path):
         env=environment,
     )
 
+    from tools.direct_sync_relay_install_pack import _redact_install_diagnostic
+    (tmp_path / "prepared-fixture.stdout.txt").write_text(
+        _redact_install_diagnostic(completed.stdout), encoding="utf-8")
+    (tmp_path / "prepared-fixture.stderr.txt").write_text(
+        _redact_install_diagnostic(completed.stderr), encoding="utf-8")
     assert completed.returncode != 0
     assert "TEST_INJECTED_PREFLIGHT_FAILURE" in (completed.stderr + completed.stdout)
     control_root = (
