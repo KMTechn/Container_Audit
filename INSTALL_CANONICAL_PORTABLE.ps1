@@ -3040,6 +3040,9 @@ $enteredPlacementTry = $true
         $args=@('-NoLogo','-NoProfile','-NonInteractive','-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
             '-Uninstall','-SourceRoot',$source,'-InstallRoot',$install,'-OperatorLocalAppDataRoot',$lad,'-OperatorSid',$operatorSid,
             '-QuiesceReceiptPath',$removalPath,'-ExpectedQuiesceReceiptSha256',(Sha $removalPath),
+            '-RemovalControllerProcessId',[string]$PID,
+            '-RemovalControllerStartedAtUtc',(Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o'),
+            '-RemovalControllerCanonicalPath',$PSCommandPath,
             '-UninstallAuditPath',$auditPath,'-UninstallAuditSha256',(Sha $auditPath),
             '-WriterFenceHelperPath',(Join-Path $source 'tools\container_writer_fence.ps1'),
             '-ExpectedWriterFenceHelperSha256',([string]$sourceManifest.writer_fence_helper_sha256),
@@ -3123,6 +3126,7 @@ $enteredPlacementTry = $true
             '-WriterFenceDelegationToken',$Script:CanonicalWriterFenceDelegationToken
         )
         $retiredHelperSupportsOperatorBinding = $true
+        $retiredHelperSupportsControllerBinding = $true
         if ($CompleteRetiredRemoval) {
             $helperTokens = $null; $helperErrors = $null
             $helperAst = [Management.Automation.Language.Parser]::ParseFile(
@@ -3133,12 +3137,23 @@ $enteredPlacementTry = $true
             $supportedCount = @($operatorParameterNames | Where-Object { $_ -in $helperParameterNames }).Count
             if ($supportedCount -notin @(0,3)) { throw 'Retired helper operator binding is incomplete.' }
             $retiredHelperSupportsOperatorBinding = ($supportedCount -eq 3)
+            $controllerParameterNames = @('RemovalControllerProcessId','RemovalControllerStartedAtUtc','RemovalControllerCanonicalPath')
+            $controllerCount = @($controllerParameterNames | Where-Object { $_ -in $helperParameterNames }).Count
+            if ($controllerCount -notin @(0,3)) { throw 'RETIREMENT_CONTROLLER_BINDING_INTERFACE_PARTIAL' }
+            $retiredHelperSupportsControllerBinding = ($controllerCount -eq 3)
         }
         if ($retiredHelperSupportsOperatorBinding) {
             $uninstallArguments += @(
                 '-OperatorSid',$operatorSid,
                 '-WriterFencePreparedReceiptPath',([string]$canonicalWriterFencePreparedReceipt.path),
                 '-WriterFencePreparedReceiptSha256',([string]$canonicalWriterFencePreparedReceipt.sha256)
+            )
+        }
+        if ($retiredHelperSupportsControllerBinding) {
+            $uninstallArguments += @(
+                '-RemovalControllerProcessId',[string]$PID,
+                '-RemovalControllerStartedAtUtc',(Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o'),
+                '-RemovalControllerCanonicalPath',$PSCommandPath
             )
         }
         if ($testMode) { $uninstallArguments += '-AllowNoncanonicalLayoutForTest' }

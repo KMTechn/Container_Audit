@@ -238,7 +238,7 @@ def test_install_helper_rejects_inexact_restore_result_before_pass_evidence(
         transaction, evidence,
     )
     assert result.returncode != 0
-    assert "Replacement restore result Boolean evidence is invalid" in _helper_failure_message(result, 1496)
+    assert "Replacement restore result Boolean evidence is invalid" in _helper_failure_message(result, 1499)
     assert json.loads(evidence.read_text(encoding="utf-8"))["status"] == "ROLLBACK_FAILED"
     assert (install / "app" / "main.py").read_text(encoding="utf-8") == "# old\n"
     failed = install.parent / f".current.failed.{transaction}"
@@ -257,5 +257,5 @@ def test_installer_rejects_numeric_string_manifest_before_placement(tmp_path, fi
     install = tmp_path / "apps" / "current"
     result = _run_installer(release, install)
     assert result.returncode != 0
-    assert "manifest" in _helper_failure_message(result, 732).lower()
+    assert "manifest" in _helper_failure_message(result, 735).lower()
     assert not install.exists()

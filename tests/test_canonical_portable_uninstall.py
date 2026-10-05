@@ -158,7 +158,8 @@ function Relays {
     }
     return @()
 }
-function Product([string]$Root, [string]$Mode) {
+function Product([string]$Root, [string]$Mode, [string]$AppRoot='') {
+    if (-not $AppRoot) { $AppRoot = Join-Path $Root 'app' }
     $expectedPreimagePath = Join-Path $env:CA_UNINSTALL_ROOT 'expected-registry-preimage.json'
     if (Test-Path -LiteralPath $expectedPreimagePath) {
         $persistedAudit = Get-Content -LiteralPath $auditPath -Raw | ConvertFrom-Json
@@ -176,7 +177,7 @@ function Product([string]$Root, [string]$Mode) {
         '--onboard-current-user' { 'onboard' }
         default { throw 'Unexpected product mode' }
     }
-    & $env:CA_UNINSTALL_PYTHON -I -B $env:CA_UNINSTALL_HOST $operation (Join-Path $Root 'app')
+    & $env:CA_UNINSTALL_PYTHON -I -B $env:CA_UNINSTALL_HOST $operation $AppRoot
     if ($LASTEXITCODE -ne 0) {
         if ($operation -ceq 'remove') { throw "Real current-user removal failed: $LASTEXITCODE" }
         throw "Real current-user onboarding failed: $LASTEXITCODE"
@@ -257,6 +258,59 @@ function New-Object {
         return $script:CAUninstallTaskService
     }
     return Microsoft.PowerShell.Utility\New-Object @PSBoundParameters
+}
+
+# Only OS protection is simulated; journal bytes, tuple and process are real.
+$Script:CAUninstallOriginalProtectionFunctions=@{}
+foreach($name in @('Test-InstallationEvidencePrivileged','Get-InstallationEvidenceControlRoot','Assert-InstallationEvidenceProtectedPath','New-InstallationProtectedDirectory','Set-InstallationEvidenceAcl','Assert-BootstrapProtectedRelayPath')) {
+    $Script:CAUninstallOriginalProtectionFunctions[$name]=(Get-Command $name -CommandType Function -ErrorAction Stop).ScriptBlock
+}
+function Test-UninstallFixtureRootPath([string]$Path) {
+    if([string]::IsNullOrWhiteSpace($env:CA_UNINSTALL_ROOT) -or [string]::IsNullOrWhiteSpace($Path)){return $false}
+    $root=[IO.Path]::GetFullPath($env:CA_UNINSTALL_ROOT).TrimEnd('\')
+    $full=[IO.Path]::GetFullPath($Path)
+    return $full.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)
+}
+function Test-UninstallFixtureProtectedPath([string]$Path) {
+    return (Test-UninstallFixtureRootPath $Path)
+}
+function Test-InstallationEvidencePrivileged {
+    if(Test-UninstallFixtureRootPath $UninstallAuditPath){return $true}
+    return (& $Script:CAUninstallOriginalProtectionFunctions['Test-InstallationEvidencePrivileged'])
+}
+function Get-InstallationEvidenceControlRoot {
+    if(-not [string]::IsNullOrWhiteSpace($env:CA_UNINSTALL_ROOT)){return (Join-Path $env:CA_UNINSTALL_ROOT 'protected-removal')}
+    return (& $Script:CAUninstallOriginalProtectionFunctions['Get-InstallationEvidenceControlRoot'])
+}
+function Assert-InstallationEvidenceProtectedPath([string]$Path,[switch]$AllowSupportedPreparation) {
+    if(Test-UninstallFixtureProtectedPath $Path){
+        if(-not(Test-Path -LiteralPath $Path)){throw 'FIXTURE_PROTECTED_PATH_MISSING'}
+        Assert-BootstrapNoReparsePoint $Path 'fixture protected boundary' -PathOnly
+        return
+    }
+    & $Script:CAUninstallOriginalProtectionFunctions['Assert-InstallationEvidenceProtectedPath'] $Path -AllowSupportedPreparation:$AllowSupportedPreparation
+}
+function New-InstallationProtectedDirectory([string]$Path,[string]$Sid,[switch]$RecoverAbandoned) {
+    if(Test-UninstallFixtureProtectedPath $Path){
+        Assert-BootstrapNoReparsePoint $Path 'fixture protected directory' -PathOnly
+        [void][IO.Directory]::CreateDirectory($Path)
+        Assert-InstallationEvidenceProtectedPath $Path
+        return
+    }
+    & $Script:CAUninstallOriginalProtectionFunctions['New-InstallationProtectedDirectory'] $Path $Sid -RecoverAbandoned:$RecoverAbandoned
+}
+function Set-InstallationEvidenceAcl([string]$Path,[string]$Sid,[switch]$Directory,[switch]$PrepareOnly) {
+    if(Test-UninstallFixtureProtectedPath $Path){Assert-InstallationEvidenceProtectedPath $Path;return}
+    & $Script:CAUninstallOriginalProtectionFunctions['Set-InstallationEvidenceAcl'] $Path $Sid -Directory:$Directory -PrepareOnly:$PrepareOnly
+}
+
+function Assert-BootstrapProtectedRelayPath([string]$Path,[switch]$AllowSupportedPreparation) {
+    if(Test-UninstallFixtureProtectedPath $Path){
+        if(-not(Test-Path -LiteralPath $Path)){throw 'FIXTURE_PROTECTED_PATH_MISSING'}
+        Assert-BootstrapNoReparsePoint $Path 'fixture protected relay boundary' -PathOnly
+        return
+    }
+    & $Script:CAUninstallOriginalProtectionFunctions['Assert-BootstrapProtectedRelayPath'] $Path -AllowSupportedPreparation:$AllowSupportedPreparation
 }
 """
 

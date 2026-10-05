@@ -549,3 +549,6 @@ legacy receipt self-path 규칙은 그대로이고, 새 journal로 검증된 사
 ### sub-189 P2-2: 보호 완료와 ordinary writer 해제
 
 relay READY 뒤 복구 완료 기록은 새 INSTALLING fence를 열지 않는다. privileged helper는 원 보호 journal/receipt·exact restored tree/Run/task·runtime audit·실제 protected RELEASED receipt와 authorization SHA·같은 살아 있는 controller PID/시작 시각 및 이미 잡힌 authority mutex를 확인하고 CreateNew 보호 완료를 기록한다. 실제 fence/stop 부재를 요구하며 relay를 재기동하지 않는다. controller는 helper 뒤 같은 resident PID와 READY를 다시 관측한다.
+
+
+**제거 제어자 결속 (sub-248):** 현재 INSTALL_THIS_PC의 수렴 제거는 delegated lease 및 살아 있는 canonical session authority, active/prepared의 session·attempt·transaction·orchestrator·writer 계약과 prepared 파일 SHA를 검증한다. canonical은 RemovalControllerProcessId/RemovalControllerStartedAtUtc/RemovalControllerCanonicalPath를 함께 전달한다. helper는 준비된 source manifest 및 canonical 바이트 해시, 실제 WinPS 조상 PID와 시작 시각을 확인한 단일 controller만 process quiescence 제외에 넣는다. 같은 경로 문자열을 가진 다른 PID, PID 재사용/시각 불일치, 부분 입력, manifest/canonical 변조 및 authority 부재는 거절한다. OldSourceRoot와 관리 SourceRoot가 달라도 동일한 결속을 적용하며 일반 uninstall도 이 계약을 사용한다. historical helper는 세 매개변수가 모두 있을 때만 전달하고 부분 인터페이스는 거절한다. 역사 packet은 수정하지 않는다.

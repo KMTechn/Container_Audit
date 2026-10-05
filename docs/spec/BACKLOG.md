@@ -1,3 +1,5 @@
+sub-248 제거 P2: 별도 관리 SourceRoot의 실제 canonical을 oldSource 문자열로 찾던 parent 제외를 제거하고, 준비된 source 해시·살아 있는 session authority·실제 PID/조상/시작 시각에 결속한다. 첫 현장 신규 설치 절차는 제거 quiescence에 도달하지 않는다. isolated PS5.1 positive/negative 및 모든 도달 caller 표의 결과·버전·한계는 sub-248 REPORT/COVERAGE-FIX에 기록하며, VM 현장 제거·역사 packet의 변경 없는 지원 및 독립 검토는 별도 남는다.
+
 ﻿# 남은 요구·검증·문서·추가 제안
 
 sub-172 새 미완 rollback 계약은 보호 불변 journal/receipt 사본으로 일반 재진입을

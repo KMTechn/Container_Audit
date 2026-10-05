@@ -22,6 +22,9 @@ param(
     [string]$ExpectedInstalledAggregateSha256 = "",
     [string]$QuiesceReceiptPath = "",
     [string]$ExpectedQuiesceReceiptSha256 = "",
+    [int]$RemovalControllerProcessId = 0,
+    [string]$RemovalControllerStartedAtUtc = "",
+    [string]$RemovalControllerCanonicalPath = "",
     [string]$UninstallAuditPath = "",
     [string]$UninstallAuditSha256 = "",
     [string]$RestoreUninstallRecordPath = "",
@@ -1563,6 +1566,76 @@ function Assert-ContainerRemovalBoundary([string]$Path) {
     }
 }
 
+function Get-ContainerRemovalControllerProcessId([object[]]$ProcessRows) {
+    # A delegated helper may exclude only its verified canonical controller.
+    # The caller already holds the placement admission; retain that admission
+    # and recheck the existing session authority before reading its binding.
+    if ($null -eq $placementWriterFenceLease -or $RemovalControllerProcessId -le 0 -or
+        [string]::IsNullOrWhiteSpace($RemovalControllerStartedAtUtc) -or
+        [string]::IsNullOrWhiteSpace($RemovalControllerCanonicalPath)) {
+        throw 'REMOVAL_CONTROLLER_BINDING_REQUIRED'
+    }
+    $active = Read-ContainerWriterFence -ControlRoot $Script:ContainerWriterFenceAdmissionProductionRoot
+    Assert-ContainerWriterSessionAuthority $active
+    if ([string]$active.owner_kind -cne 'canonical_installer' -or
+        [string]$active.session_id -cne $WriterFenceSessionId -or
+        [string]$active.attempt_id -cne $WriterFenceAttemptId -or
+        [string]$active.replacement_transaction_id -cne $WriterFenceReplacementTransactionId -or
+        -not (Test-SamePath ([string]$active.prepared_receipt_path) $WriterFencePreparedReceiptPath) -or
+        [string]$active.prepared_receipt_sha256 -cne $WriterFencePreparedReceiptSha256 -or
+        (Get-ContainerWriterFenceFileSha256 $WriterFencePreparedReceiptPath 65536) -cne $WriterFencePreparedReceiptSha256) {
+        throw 'REMOVAL_CONTROLLER_AUTHORITY_BINDING_INVALID'
+    }
+    $prepared = Get-Content -LiteralPath $WriterFencePreparedReceiptPath -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson
+    if ([string]$prepared.session_id -cne [string]$active.session_id -or
+        [string]$prepared.attempt_id -cne [string]$active.attempt_id -or
+        [string]$prepared.replacement_transaction_id -cne [string]$active.replacement_transaction_id -or
+        [string]$prepared.orchestrator_sha256 -cne [string]$active.orchestrator_sha256 -or
+        [string]$prepared.writer_contract_sha256 -cne [string]$active.writer_contract_sha256) {
+        throw 'REMOVAL_CONTROLLER_PREPARED_BINDING_INVALID'
+    }
+    $canonical = Get-StrictFullPath $RemovalControllerCanonicalPath 'removal controller canonical'
+    $managerRoot = Split-Path -Parent $canonical
+    $applicationRoot = Split-Path -Parent $installRootFull
+    if (-not (Test-SamePath $canonical (Join-Path $managerRoot 'INSTALL_CANONICAL_PORTABLE.ps1')) -or
+        (Test-SamePath $managerRoot $applicationRoot) -or (Test-PathWithin $managerRoot $applicationRoot) -or
+        (Test-PathWithin $applicationRoot $managerRoot)) {
+        throw 'REMOVAL_CONTROLLER_EXTERNAL_CANONICAL_REQUIRED'
+    }
+    Assert-NoReparsePoint $canonical 'removal controller canonical'
+    $managerManifest = Join-Path $managerRoot 'portable-manifest.json'
+    Assert-NoReparsePoint $managerManifest 'removal controller manifest'
+    if ((Get-FileSha256 $canonical) -cne [string]$active.orchestrator_sha256 -or
+        (Get-ContainerWriterFenceFileSha256 $managerManifest 1048576) -cne [string]$prepared.source_manifest_sha256) {
+        throw 'REMOVAL_CONTROLLER_SOURCE_BINDING_INVALID'
+    }
+    $ownRows = @($ProcessRows | Where-Object { [int]$_.ProcessId -eq $PID })
+    if ($ownRows.Count -ne 1) { throw 'REMOVAL_CONTROLLER_ANCESTRY_INVALID' }
+    $parentPid = [int]$ownRows[0].ParentProcessId
+    $seen = @{}
+    $controller = $null
+    for ($depth = 0; $parentPid -gt 0 -and $depth -lt 8; $depth++) {
+        if ($seen.ContainsKey($parentPid)) { throw 'REMOVAL_CONTROLLER_ANCESTRY_INVALID' }
+        $seen[$parentPid] = $true
+        $ancestors = @($ProcessRows | Where-Object { [int]$_.ProcessId -eq $parentPid })
+        if ($ancestors.Count -ne 1) { throw 'REMOVAL_CONTROLLER_ANCESTRY_INVALID' }
+        if ($parentPid -eq $RemovalControllerProcessId) { $controller = $ancestors[0]; break }
+        $parentPid = [int]$ancestors[0].ParentProcessId
+    }
+    if ($null -eq $controller -or
+        -not (Test-SamePath ([string]$controller.ExecutablePath) (Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe')) -or
+        ([string]$controller.CommandLine).IndexOf($canonical,[StringComparison]::OrdinalIgnoreCase) -lt 0) {
+        throw 'REMOVAL_CONTROLLER_NOT_VERIFIED_ANCESTOR'
+    }
+    $started = ConvertTo-ContainerWriterFenceUtc $RemovalControllerStartedAtUtc
+    $process = Get-Process -Id $RemovalControllerProcessId -ErrorAction Stop
+    if ($started.ToString('o') -cne $RemovalControllerStartedAtUtc -or
+        $process.StartTime.ToUniversalTime().ToString('o') -cne $RemovalControllerStartedAtUtc) {
+        throw 'REMOVAL_CONTROLLER_PROCESS_IDENTITY_CHANGED'
+    }
+    return [int]$RemovalControllerProcessId
+}
+
 function Assert-ContainerRemovalQuiescent([string]$ApplicationRoot, [int[]]$ExcludeProcessIds = @()) {
     $prefix = (Get-StrictFullPath $ApplicationRoot 'removal process root') + '\'
     $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop)
@@ -1885,16 +1958,8 @@ if ($Uninstall.IsPresent) {
     }
     # Only actual ancestors running the admitted external canonical source can
     # be excluded. Installed code and unrelated processes cannot claim this.
-    $excluded = @(); $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop)
-    $parentPid = [int](@($rows | Where-Object { [int]$_.ProcessId -eq $PID })[0].ParentProcessId)
-    for ($depth=0; $parentPid -gt 0 -and $depth -lt 16; $depth++) {
-        $ancestor = @($rows | Where-Object { [int]$_.ProcessId -eq $parentPid })
-        if ($ancestor.Count -ne 1) { break }
-        $canonical = Join-Path $uninstallSource 'INSTALL_CANONICAL_PORTABLE.ps1'
-        if ((Test-SamePath ([string]$ancestor[0].ExecutablePath) (Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe')) -and
-            ([string]$ancestor[0].CommandLine).IndexOf($canonical,[StringComparison]::OrdinalIgnoreCase) -ge 0) { $excluded += $parentPid }
-        $parentPid = [int]$ancestor[0].ParentProcessId
-    }
+    $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+    $excluded = @(Get-ContainerRemovalControllerProcessId $rows)
     $scheduler = New-Object -ComObject 'Schedule.Service'; $scheduler.Connect(); $folder = $scheduler.GetFolder('\')
     $control = Join-Path $application 'update-control'
     $identity = Get-ContainerWriterFenceStringSha256 $control.ToLowerInvariant()
