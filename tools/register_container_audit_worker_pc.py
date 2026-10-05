@@ -1148,6 +1148,13 @@ def _write_registration_json(path, payload, *, indent=2):
     atomic_write_json(path, payload, indent=indent)
 
 
+def _write_registration_report(path, payload, *, indent=2):
+    # Registration consumers compare status/identity/recovery bindings, never
+    # diagnostic sentences. Keep every key/type and all machine metadata.
+    from auto_update import mixed_status_record
+    _write_registration_json(path, mixed_status_record(payload), indent=indent)
+
+
 def _registration_artifact_versions(args):
     versions = {}
     for path in getattr(args, "_registration_artifact_paths", ()):
@@ -3116,7 +3123,8 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
 
 @writer_sink("worker_pc_registration", probe_only=True)
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Register local Container_Audit producer identity for this PC")
+    from auto_update import SupportArgumentParser, emit_support_record
+    parser = SupportArgumentParser(description="Register local Container_Audit producer identity for this PC")
     parser.add_argument("--app-root", default=_default_app_root())
     parser.add_argument("--endpoint-url", default=DEFAULT_ENDPOINT_URL)
     parser.add_argument("--hostname", default="")
@@ -3238,13 +3246,13 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 with writer_admission("worker_pc_registration"):
                     probe_before_owner_paths(fallback_path.parent, file_paths=(fallback_path,))
-                    _write_registration_json(str(fallback_path), blocked_report, indent=2)
+                    _write_registration_report(str(fallback_path), blocked_report, indent=2)
             except DataGenerationBlocked as blocked:
                 print(blocked.user_message)
                 return 2
-            print(f"registration_report={fallback_path}")
+            emit_support_record({'status_file_path': str(fallback_path)}, stage='registration')
         else:
-            print(json.dumps(blocked_report, ensure_ascii=False, sort_keys=True))
+            emit_support_record(blocked_report, stage='registration')
         return 2
 
     if output_path_policy["status"] != "PASS":
@@ -3258,10 +3266,10 @@ def main(argv: list[str] | None = None) -> int:
         report_path_blocked = any(item["field"] == "report_path" for item in output_path_policy["unsafe_paths"])
         if args.report_path and not report_path_blocked:
             fallback_path = Path(args.report_path).expanduser()
-            _write_registration_json(str(fallback_path), blocked_report, indent=2)
-            print(f"registration_report={fallback_path.resolve()}")
+            _write_registration_report(str(fallback_path), blocked_report, indent=2)
+            emit_support_record({'status_file_path': str(fallback_path.resolve())}, stage='registration')
         else:
-            print(json.dumps(blocked_report, ensure_ascii=False, sort_keys=True))
+            emit_support_record(blocked_report, stage='registration')
         return 2
 
     if args.verify_manifest_hash:
@@ -3323,11 +3331,11 @@ def main(argv: list[str] | None = None) -> int:
                 with writer_admission("worker_pc_registration"):
                     completed_report["recovery_two_phase_state"] = STATE_COMPLETE
                     completed_report["recovery_two_phase_complete"] = True
-                    _write_registration_json(
+                    _write_registration_report(
                         str(completed_report_path), completed_report, indent=2
                     )
                     resume_journal.remove_sealed_package_after_complete()
-                    print(f"registration_report={completed_report_path.resolve()}")
+                    emit_support_record({'status_file_path': str(completed_report_path.resolve())}, stage='registration')
                     return 0
 
     try:
@@ -3353,10 +3361,10 @@ def main(argv: list[str] | None = None) -> int:
                 if attempt is not None and not attempt.is_current():
                     print("registration_response=superseded")
                     return 2
-                _write_registration_json(str(fallback_path), blocked_report, indent=2)
-                print(f"registration_report={fallback_path.resolve()}")
+                _write_registration_report(str(fallback_path), blocked_report, indent=2)
+                emit_support_record({'status_file_path': str(fallback_path.resolve())}, stage='registration')
         else:
-            print(json.dumps(blocked_report, ensure_ascii=False, sort_keys=True))
+            emit_support_record(blocked_report, stage='registration')
         return 2
 
     storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
@@ -3402,8 +3410,8 @@ def main(argv: list[str] | None = None) -> int:
                     else None,
                 }
             )
-            _write_registration_json(str(report_path), report, indent=2)
-            print(f"registration_report={report_path.resolve()}")
+            _write_registration_report(str(report_path), report, indent=2)
+            emit_support_record({'status_file_path': str(report_path.resolve())}, stage='registration')
             return 3 if two_phase_journal is not None else 2
         report["persisted_credential_verified"] = True
         persisted_manifest_hash = manifest_hash(
@@ -3419,8 +3427,8 @@ def main(argv: list[str] | None = None) -> int:
                         "persisted_manifest_hash_verified": False,
                     }
                 )
-                _write_registration_json(str(report_path), report, indent=2)
-                print(f"registration_report={report_path.resolve()}")
+                _write_registration_report(str(report_path), report, indent=2)
+                emit_support_record({'status_file_path': str(report_path.resolve())}, stage='registration')
                 return 2
             report["persisted_manifest_hash_verified"] = True
         if two_phase_journal is not None:
@@ -3467,17 +3475,17 @@ def main(argv: list[str] | None = None) -> int:
                         "admin_recovery_secret_file_deleted": False,
                     }
                 )
-                _write_registration_json(str(report_path), report, indent=2)
-                print(f"registration_report={report_path.resolve()}")
+                _write_registration_report(str(report_path), report, indent=2)
+                emit_support_record({'status_file_path': str(report_path.resolve())}, stage='registration')
                 return 2
             report["admin_recovery_secret_file_deleted"] = (
                 not recovery_secret_path.exists()
             )
             report["admin_recovery_secret_cleanup_required"] = False
         if two_phase_journal is None:
-            _write_registration_json(str(report_path), report, indent=2)
+            _write_registration_report(str(report_path), report, indent=2)
         else:
-            _write_registration_json(str(report_path), report, indent=2)
+            _write_registration_report(str(report_path), report, indent=2)
             journal_payload = two_phase_journal.load() or {}
             if journal_payload.get("state") == STATE_CLEANUP_INTENT_DURABLE:
                 journal_payload = two_phase_journal.mark_complete()
@@ -3488,11 +3496,12 @@ def main(argv: list[str] | None = None) -> int:
             _recovery_two_phase_cut_point("AFTER_COMPLETE_JOURNAL")
             report["recovery_two_phase_state"] = journal_payload["state"]
             report["recovery_two_phase_complete"] = True
-            _write_registration_json(str(report_path), report, indent=2)
+            _write_registration_report(str(report_path), report, indent=2)
             two_phase_journal.remove_sealed_package_after_complete()
-        print(f"registration_report={report_path.resolve()}")
+        emit_support_record({'status_file_path': str(report_path.resolve())}, stage='registration')
         return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from auto_update import run_support_main
+    raise SystemExit(run_support_main(main, stage='registration'))

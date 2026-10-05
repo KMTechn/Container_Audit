@@ -104,7 +104,17 @@ def test_persistent_relay_reports_child_refusal_without_launch_time_marker(tmp_p
     assert calls == [True]
     assert not (data / "data-generation.json").exists()
     assert not (data / "direct_sync/status/container_audit_user_relay.json").exists()
-    assert "옛 판으로 되돌릴 수 없습니다" in capsys.readouterr().out
+    # Five-source child-output decision: the public diagnostic is a fixed
+    # record; refusal, exit code, invocation count and no-marker checks stay.
+    line = capsys.readouterr().out.strip()
+    assert line.startswith('CONTAINER_AUDIT_SUPPORT=')
+    public = json.loads(line.split('=', 1)[1])
+    assert public['status'] == 'runtime_error' and public['stage'] == 'user_relay'
+    assert public['reason_code'] == 'SUPPORT_RESULT'
+    child_status = json.loads((data / 'direct_sync/status/direct_sync_relay_status.json').read_bytes())
+    assert child_status['error_code'] == 'data_generation_downgrade_refused'
+    assert public['guidance'] == '자료를 보존하고 관리자 지원 복구를 요청하세요.'
+    assert public['report_status'] == 'REPORT_UNAVAILABLE'
 
 
 def test_raw_relay_refusal_prevents_queue_open(tmp_path, monkeypatch, capsys):

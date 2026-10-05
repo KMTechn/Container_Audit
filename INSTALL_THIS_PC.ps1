@@ -58,6 +58,69 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+function Write-InstallationHelperPublicRecord([Collections.IDictionary]$Fields) {
+    $permitted=@('status','code','reason_code','error_code','exit_code','exception_type','location_module','location_function','location_line')
+    $publicFields=[ordered]@{}
+    foreach($name in $permitted){if($Fields.Contains($name)){$publicFields[$name]=$Fields[$name]}}
+    $Fields=$publicFields
+    $Fields.stage='installer_helper'
+    $Fields.report_status='REPORT_UNAVAILABLE'
+    $messages=@('설정 파일과 설치 경로를 확인하고 다시 실행하세요.',
+        '빠른 시작이 켜져 있습니다. 설치 후 Windows를 다시 시작하세요.',
+        '빠른 시작이 꺼져 있습니다. 설치 절차를 계속하세요.',
+        '빠른 시작 설정을 확인하지 못했습니다. 관리자 권한으로 설정을 확인하고 다시 실행하세요.')
+    $reasonCode=if($Fields.Contains('reason_code')){[string]$Fields.reason_code}else{''}
+    $Fields.guidance=switch($reasonCode){
+        'HIBERBOOT_ENABLED'{$messages[1]}
+        'HIBERBOOT_DISABLED'{$messages[2]}
+        'HIBERBOOT_UNKNOWN'{$messages[3]}
+        default{$messages[0]}
+    }
+    $public=ConvertTo-KmtechPublicRecord -Fields $Fields -AllowedCodes @('PASS','FAILED','installer_helper','REPORT_UNAVAILABLE','HIBERBOOT_ENABLED','HIBERBOOT_DISABLED','HIBERBOOT_UNKNOWN') -SafeMessages $messages
+    Write-Output ('CONTAINER_AUDIT_INSTALL_HELPER='+($public|ConvertTo-Json -Depth 4 -Compress))
+}
+function Get-InstallationHelperPublicFailure($Failure, [int]$ExitCode) {
+    $exception=if($Failure -is [Exception]){$Failure}else{$Failure.Exception}
+    $fields=[ordered]@{status='FAILED';stage='installer_helper';reason_code='INSTALLER_HELPER_FAILURE';
+        exit_code=$ExitCode;exception_type=$exception.GetType().FullName;
+        guidance='자료를 보존하고 관리자 지원 복구를 요청하세요.';report_status='REPORT_UNAVAILABLE'}
+    $contextCodes=@('lifecycle_operation_invalid','lifecycle_owned_namespace_collision','lifecycle_namespace_parent_unavailable',
+        'lifecycle_data_namespace_collision','lifecycle_removed_control_remains','lifecycle_register_requires_installed_code',
+        'lifecycle_removed_tasks_remain_or_unknown','lifecycle_stock_protection_invalid','lifecycle_stock_layout_invalid',
+        'lifecycle_stock_manifest_invalid','lifecycle_control_incomplete','lifecycle_transition_requires_recovery',
+        'lifecycle_confirmed_pointer_mismatch','lifecycle_rolled_back_pointer_mismatch','lifecycle_pointer_mismatch',
+        'lifecycle_active_manifest_mismatch','lifecycle_active_trust_key_mismatch','lifecycle_task_absence_or_unknown',
+        'lifecycle_state_changed_during_verification','lifecycle_from_commit_mismatch',
+        'WRITER_GATE_TIMEOUT','ACTIVE_WRITER_FENCE','FENCE_REPARSE_REJECTED','FENCE_PATH_UNOBSERVABLE')
+    $context=Get-Variable -Name ContainerLifecycleContextFailure -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if($context){
+        foreach($detail in @($context.failure_details)){
+            if([string]$detail.message -cin $contextCodes){
+                $fields.reason_code=[string]$detail.message
+                $fields.guidance='기존 설치 상태와 예약 작업을 확인하고 관리자 지원 복구를 요청하세요.'
+                break
+            }
+        }
+    }
+    if($Failure -is [Management.Automation.ErrorRecord]){$fields.location_line=[int]$Failure.InvocationInfo.ScriptLineNumber}
+    # The original is retained by the existing installation evidence writer.
+    # A reference is published only by its verified atomic publication contract.
+    $reference=$exception.Data['installation_original_failure_reference']
+    $published=Get-Variable -Name InstallationMostRecentOriginalFailureReference -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    $root=Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if($root -and $reference -and [object]::ReferenceEquals($reference,$published) -and $reference.Contains('atomic_published') -and $reference.atomic_published -eq $true){
+        try {
+            Assert-InstallationEvidenceWriteRoot $root
+            $path=[IO.Path]::GetFullPath([string]$reference.path)
+            if(-not [IO.Path]::GetDirectoryName($path).Equals([IO.Path]::GetFullPath($root),[StringComparison]::OrdinalIgnoreCase)){throw 'Report attempt differs.'}
+            if(Test-InstallationEvidencePrivileged){Assert-InstallationEvidenceProtectedPath $path}
+            $digest=Get-FileSha256 $path
+            if($digest -cne [string]$reference.sha256){throw 'Report readback differs.'}
+            $fields.Remove('report_status');$fields.report_path=$path;$fields.report_sha256=$digest
+        } catch { }
+    }
+    return ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes (@('FAILED','installer_helper','INSTALLER_HELPER_FAILURE','REPORT_UNAVAILABLE')+$contextCodes) -SafeMessages @('자료를 보존하고 관리자 지원 복구를 요청하세요.','기존 설치 상태와 예약 작업을 확인하고 관리자 지원 복구를 요청하세요.')
+}
 $ExpectedInstallRoot = "C:\KMTech\Apps\Container_Audit\current"
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot "tools\bootstrap_integrity.ps1"
 if (-not (Test-Path -LiteralPath $BootstrapIntegrityFunctions -PathType Leaf)) {
@@ -206,7 +269,7 @@ function Invoke-SelfElevated {
         Complete-InstallationEvidenceStage 'forward' $_
         $summary=Complete-InstallationEvidence
         Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_status='+[string]$summary.status))))
-        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_summary_path='+[string]$summary.summary_path))))
+        Write-InstallationHelperPublicRecord @{status='FAILED';summary_path=$summary.summary_path}
         exit 1
     }
     if ($process.ExitCode -ne 0) {
@@ -239,7 +302,7 @@ function Invoke-SelfElevated {
     Complete-InstallationEvidenceStage 'forward' $childFailure
     $summary=Complete-InstallationEvidence
     Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_status='+[string]$summary.status))))
-    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_summary_path='+[string]$summary.summary_path))))
+    Write-InstallationHelperPublicRecord @{status='FAILED';summary_path=$summary.summary_path}
     exit $process.ExitCode
 }
 
@@ -1305,7 +1368,8 @@ function Initialize-ContainerStartupUpdate([string]$Root) {
     Complete-InstallationEvidenceStage 'startup'
     Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('startup_update_status=REGISTERED_LOGON_SYSTEM_CODE_ONLY')))
     Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('startup_update_task=' + $spec.name))))
-    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('hiberboot_enabled=' + $hiberboot))))
+    $hiberbootCode=if($hiberboot -eq 1){'HIBERBOOT_ENABLED'}elseif($hiberboot -eq 0){'HIBERBOOT_DISABLED'}else{'HIBERBOOT_UNKNOWN'}
+    Write-InstallationHelperPublicRecord @{status='PASS';reason_code=$hiberbootCode}
     Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('hiberboot_read_status=' + $hiberbootReadStatus))))
 }
 
@@ -1537,7 +1601,7 @@ if ($RestoreVerifiedReplacement.IsPresent) {
         Write-InstallationEvidenceEvent ([ordered]@{event='RESTORE_EVIDENCE_READY';path=$restoreEvidenceFull;sha256=Get-FileSha256 $restoreEvidenceFull})
         if (-not $testOverride) { Write-ElevationLog 'PASS' 'Elevated Container verified replacement restore completed.' }
         Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_restore_status=$($result.status)")))
-        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_restore_evidence=$restoreEvidenceFull")))
+        Write-InstallationHelperPublicRecord @{restore_evidence_path=$restoreEvidenceFull}
         Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_restore_evidence_sha256=$(Get-FileSha256 $restoreEvidenceFull)")))
         exit 0
     }
@@ -1559,7 +1623,7 @@ if ($RestoreVerifiedReplacement.IsPresent) {
 }
         if (-not $testOverride) { Write-ElevationLog 'FAILED' 'Elevated Container verified replacement restore failed.' }
         Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('replacement_restore_status=ROLLBACK_FAILED')))
-        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_restore_evidence=$restoreEvidenceFull")))
+        Write-InstallationHelperPublicRecord @{restore_evidence_path=$restoreEvidenceFull}
         throw
     }
 }
@@ -2159,7 +2223,7 @@ if ($RestoreUninstallRecordPath) {
 }
 if ($DryRun.IsPresent) {
     Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("bootstrap_status=DRY_RUN")))
-    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("code_root=$installRootFull")))
+    Write-InstallationHelperPublicRecord @{code_root=$installRootFull}
     Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("release_layout=$releaseLayout")))
     Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("file_count=$($sourceInventory.Count)")))
     Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("aggregate_sha256=$sourceAggregate")))
@@ -2457,24 +2521,24 @@ try {
         Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("acl_owner_sid=S-1-5-32-544")))
         Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("dacl_normalized=true")))
     }
-    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("code_root=$installRootFull")))
+    Write-InstallationHelperPublicRecord @{code_root=$installRootFull}
     Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("release_layout=$releaseLayout")))
-    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("integrity_record=$(Join-Path $installRootFull $IntegrityFileName)")))
+    Write-InstallationHelperPublicRecord @{integrity_record_path=(Join-Path $installRootFull $IntegrityFileName)}
     Set-InstallationEvidenceStage 'placement.startup_update'
     Initialize-ContainerStartupUpdate $installRootFull
     Set-InstallationEvidenceStage 'placement.tls_bootstrap'
     $tlsCaBootstrap = Install-CurrentUserTlsCaBootstrap $TlsCaBundlePath $OperatorLocalAppDataRoot
     if ($null -eq $tlsCaBootstrap) { Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("tls_ca_bootstrap_status=ABSENT"))) }
-    else { Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("tls_ca_bootstrap_status=PASS"))); Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("tls_ca_bootstrap_path=$tlsCaBootstrap"))) }
+    else { Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("tls_ca_bootstrap_status=PASS"))); Write-InstallationHelperPublicRecord @{tls_ca_bootstrap_path=$tlsCaBootstrap} }
     Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("file_count=$($sourceInventory.Count)")))
     Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("aggregate_sha256=$sourceAggregate")))
     Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("identity_profile_created=false")))
     Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("elevation_points=1:code_placement")))
     if ($replacementApplied) {
         Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('replacement_rollback_status=PRESERVED')))
-        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_rollback_root=$replacementRollbackRoot")))
+        Write-InstallationHelperPublicRecord @{replacement_rollback_root=$replacementRollbackRoot}
         Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('replacement_receipt_status=OLD_PRESERVED_NEW_VERIFIED')))
-        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_receipt_path=$($replacementReceipt.path)")))
+        Write-InstallationHelperPublicRecord @{replacement_receipt_path=$replacementReceipt.path}
         Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_receipt_sha256=$($replacementReceipt.sha256)")))
         Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]("replacement_transaction_id=$ReplacementTransactionId")))
     }
@@ -2568,7 +2632,8 @@ catch {
     if($null -ne $contextFailure){$diagnostic.lifecycle_context_failure=$contextFailure}
     $rollbackSteps=Get-Variable -Name PlacementRollbackSteps -Scope Script -ValueOnly -ErrorAction SilentlyContinue
     if($null -ne $rollbackSteps){$diagnostic.rollback_steps=@($rollbackSteps|ForEach-Object {@{step=$_.step;status=$_.status}})}
-    [Console]::Out.WriteLine('installation_failure_summary='+(ConvertTo-KmtechRedactedSinkText -Text ($diagnostic | ConvertTo-Json -Depth 10 -Compress)))
+    $publicFailure=Get-InstallationHelperPublicFailure $originalHelperFailure $diagnostic.exit_code
+    [Console]::Out.WriteLine('installation_failure_summary='+($publicFailure | ConvertTo-Json -Depth 4 -Compress))
     exit $diagnostic.exit_code
 }
 finally {
@@ -2579,5 +2644,5 @@ finally {
     Complete-InstallationEvidenceStage 'rollback'
     $helperEvidenceSummary=Complete-InstallationEvidence
     Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_status='+[string]$helperEvidenceSummary.status))))
-    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_summary_path='+[string]$helperEvidenceSummary.summary_path))))
+    Write-InstallationHelperPublicRecord @{summary_path=$helperEvidenceSummary.summary_path}
 }

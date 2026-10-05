@@ -349,7 +349,8 @@ def run_persistent_relay_loop(
             }
         last_cycle = cycle
         if cycle.get("error_code") in {"data_generation_unknown", "data_generation_downgrade_refused"}:
-            print(str(cycle.get("error_message") or generation.UNKNOWN_MESSAGE))
+            from auto_update import emit_support_record
+            emit_support_record({'status': 'runtime_error'}, stage='user_relay')
             return {"status": "runtime_error", "last_cycle": cycle}
         report = {
             "report_version": "container-audit-user-relay-v1",
@@ -361,6 +362,8 @@ def run_persistent_relay_loop(
             "last_cycle": cycle,
             "updated_at": _now(),
         }
+        from auto_update import mixed_status_record
+        report = mixed_status_record(report)
         from auto_update import relay_ready_metadata
 
         report.update(relay_ready_metadata(Path(__file__).resolve().parent))
@@ -510,7 +513,8 @@ def request_user_relay_stop(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Container_Audit current-user persistent relay")
+    from auto_update import SupportArgumentParser
+    parser = SupportArgumentParser(description="Container_Audit current-user persistent relay")
     parser.add_argument("--app-root", default="")
     parser.add_argument("--data-root", default="")
     parser.add_argument("--direct-sync-root", default="")
@@ -621,4 +625,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from auto_update import run_support_main
+    raise SystemExit(run_support_main(main, stage='user_relay'))

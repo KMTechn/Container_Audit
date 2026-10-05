@@ -742,7 +742,8 @@ def _build_config(args: argparse.Namespace) -> DirectSyncRuntimeConfig:
 
 @writer_sink("raw_relay_runner", probe_only=True)
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Container_Audit direct-sync relay runner")
+    from auto_update import SupportArgumentParser, emit_support_record
+    parser = SupportArgumentParser(description="Container_Audit direct-sync relay runner")
     parser.add_argument("--db-path", required=True)
     parser.add_argument("--spool-dir", required=True)
     parser.add_argument("--producer-manifest-path", required=True)
@@ -985,7 +986,8 @@ def main(argv: list[str] | None = None) -> int:
     if "scan_terminal_blocked_count" in status:
         print(f"direct_sync_scan_terminal_blocked_count={status['scan_terminal_blocked_count']}")
     if status.get("scan_failed_source_file"):
-        print(f"direct_sync_scan_failed_source_file={status['scan_failed_source_file']}")
+        emit_support_record({'failed_source_file_path': status['scan_failed_source_file']},
+                            stage='relay_runtime')
     if status["status"] in {
         "blocked_disk_pressure",
         "blocked_operator_control",
@@ -1001,4 +1003,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from auto_update import run_support_main
+    raise SystemExit(run_support_main(main, stage='relay_runtime'))

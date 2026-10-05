@@ -1,6 +1,7 @@
 """Lifecycle classification stays inside the helper's existing admission lease."""
 from pathlib import Path
 import json
+import os
 import sys
 
 import pytest
@@ -72,6 +73,7 @@ def test_original_guarded_python_query_refuses_parent_owned_mutex(tmp_path, engi
 from pathlib import Path
 import auto_update as update
 import writer_session_fence as fence
+assert getattr(fence, '__kmtech_test_ca_writer_isolated__', False), 'child isolation hook missing'
 fixture=Path(sys.argv[1])
 import subprocess
 subprocess.run=lambda *a, **kw: subprocess.CompletedProcess(a[0],0,b'',b'')
@@ -86,15 +88,35 @@ except ValueError as error:
 $placementWriterFenceLease=Enter-ContainerWriterAdmission (Join-Path $env:CA_CONTRACT_ROOT 'isolated-fence')
 $env:KMTECH_TEST_CA_WRITER_ROOT=Join-Path $env:CA_CONTRACT_ROOT 'isolated-fence'
 $env:KMTECH_TEST_CA_WRITER_MUTEX=$placementWriterFenceLease.name
+function Invoke-ContractContextProbe {
+    $info=New-Object Diagnostics.ProcessStartInfo
+    $info.FileName=$env:CA_CONTEXT_PYTHON
+    $info.Arguments='"'+$env:CA_CONTEXT_PROBE+'" "'+$env:CA_CONTRACT_ROOT+'"'
+    $info.UseShellExecute=$false
+    $info.CreateNoWindow=$true
+    $info.RedirectStandardOutput=$true
+    $info.RedirectStandardError=$true
+    $process=New-Object Diagnostics.Process
+    $process.StartInfo=$info
+    try {
+        [void]$process.Start()
+        $output=$process.StandardOutput.ReadToEnd().Trim()
+        $errorText=$process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        if($process.ExitCode -ne 0 -or $errorText.Length -ne 0){throw 'Isolated context probe failed.'}
+        return $output
+    } finally {$process.Dispose()}
+}
 try{
-    $observed=& $env:CA_CONTEXT_PYTHON $env:CA_CONTEXT_PROBE $env:CA_CONTRACT_ROOT
-    if($LASTEXITCODE -ne 0 -or $observed -cne 'WRITER_GATE_TIMEOUT'){throw ('Original nested child classification: '+$(if($observed -cmatch '^[A-Z_]+$'){$observed}else{'UNCLASSIFIED'}))}
+    $observed=Invoke-ContractContextProbe
+    if($observed -cne 'WRITER_GATE_TIMEOUT'){throw ('Original nested child classification: '+$(if($observed -cmatch '^[A-Z_]+$'){$observed}else{'UNCLASSIFIED'}))}
 }finally{Exit-ContainerWriterAdmission $placementWriterFenceLease}
-$observed=& $env:CA_CONTEXT_PYTHON $env:CA_CONTEXT_PROBE $env:CA_CONTRACT_ROOT
-if($LASTEXITCODE -ne 0 -or $observed -cne 'REMOVED'){throw 'Same isolated query did not pass after lease release.'}
+$observed=Invoke-ContractContextProbe
+if($observed -cne 'REMOVED'){throw 'Same isolated query did not pass after lease release.'}
 'PASS'
 ''', engine=engine, values={"CA_CONTEXT_PYTHON": sys.executable, "CA_CONTEXT_PROBE": str(probe),
-                           "PYTHONPATH": str(ROOT)})
+                           "PYTHONPATH": os.pathsep.join(filter(None, (
+                               os.environ.get('PYTHONPATH', ''), str(ROOT / 'tests'), str(ROOT))))})
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -131,7 +153,7 @@ if($Script:events.Count -ne 1 -or $Script:events[0].event -cne 'LIFECYCLE_CONTEX
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 def test_helper_final_summary_retains_context_reason(tmp_path, engine):
-    result = run_functions(tmp_path, HELPER, ["Set-ContainerLifecycleContextFailure"], r'''
+    result = run_functions(tmp_path, HELPER, ["Set-ContainerLifecycleContextFailure", "Get-InstallationHelperPublicFailure"], r'''
 . (Join-Path (Split-Path -Parent $env:CA_CONTRACT_SOURCE) 'tools/bootstrap_integrity.ps1')
 function Write-InstallationEvidenceEvent {param($Event)}
 function Fail-InstallationEvidenceStages {param($Failure)}
@@ -152,4 +174,8 @@ try{throw 'Supported lifecycle context is unhealthy.'}catch{Invoke-Expression $b
     assert len(lines) == 1
     assert len((prefix + lines[0]).encode("utf-8")) <= 4096
     diagnostic = json.loads(lines[0])
-    assert diagnostic["lifecycle_context_failure"]["failure_details"][0]["message"] == "lifecycle_removed_tasks_remain_or_unknown"
+    # Coordinator 04:0x: public diagnostics are flat codes; the protected event
+    # retains the bounded classifications (verified by the preceding test).
+    assert diagnostic["reason_code"] == "lifecycle_removed_tasks_remain_or_unknown"
+    assert diagnostic["report_status"] == "REPORT_UNAVAILABLE"
+    assert "lifecycle_context_failure" not in diagnostic

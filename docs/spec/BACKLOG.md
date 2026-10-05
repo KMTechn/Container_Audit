@@ -728,3 +728,7 @@ NOT TESTED이며 coordinator의 랩 예행과 독립 확인에 남긴다.
 - sub-272 추가: startup 뒤 credential/profile/DPAPI/TLS 첫 판독의 G 재확인과
   catch 감사 저장 실패 격리 구현. 실제 G·PS5.1/PS7·집중 기준선 증거는 해당
   REPORT 최종 커밋에 결합하며, 증거 확정 전 UNPROVEN으로 유지한다.
+
+- sub-393 컷 뒤 — **지원 도구 보호 보고서 위치**: relay operator/runner·등록 일반 status·logistics profile check/install·archive check·protected-admin·portable entrypoint/dependency guard의 원문 보관에 쓸 읽기 보호 ACL 위치를 별도 작업으로 증명한다. 이번 전환은 새 ACL 위치/증명 함수를 만들지 않고 공개 고정 코드·안내와 `REPORT_UNAVAILABLE`을 사용한다. 인증·제품 상태 필드는 보존하고 혼합 파일의 자유 진단 값만 같은 키·타입의 고정 코드로 제한한다.
+- sub-393 컷 뒤 — 개발/검증 CLI의 공개 출력 전환: active-work probe·review-case report·release/build/qualification 도구 등은 현장 설치·업데이트·지원 경계 이후에 처리한다. 전수 목록과 source별 근거는 `w9scanonly/sub-393/logs/POSTCUT-BACKLOG.csv`에 둔다.
+- sub-393 P2 컷 뒤 — 구조화 값 4부류의 보호 보고서 가림: PS5.1/PS7 실제 private writer 8사례에서 보호 파일에만 조각 128개가 남았고 공개 stdout/stderr·caller audit은 0이었다. 가림 멈춤 규칙 0f에 따라 보호 보고서만 남는 모양은 이번에 고치지 않는다. 파일별 조각 수·크기와 실제 reader ACL 검사 근거는 `w9scanonly/sub-393/logs/STRUCTURED-NATIVE-MEASUREMENTS.json`에 둔다.

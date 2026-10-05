@@ -14,6 +14,7 @@ NON_DEPLOYED=(
     'tools/active_work_probe.py', 'tools/build_operator_review_case_report.py',
     'tools/build_portable_release_candidate.py', 'tools/check_logistics_runtime_profile.py',
     'tools/direct_sync_relay_install_pack.py', 'tools/install_protected_admin.py',
+    'tools/check_update_archive.py', 'tools/provision_protected_admin_acl.ps1',
 )
 EA='ea566d131f37db3ee74468e1645c6b57ac45b6fa'
 INSTALLED='8928228c0c85109bd5d184f9507d6d9b670c93fd'
@@ -34,18 +35,19 @@ def test_installed_release_exact_pair_binds_complete_preimages(tmp_path, engine,
     declaration=json.loads((ROOT/'tools/container_data_generation_transition.json').read_bytes())
     releases={row['source_commit']:row for row in declaration['installed_release_preimages']}
     assert set(releases)=={EA,INSTALLED}
-    assert all(len(row['files'])==21 for row in releases.values())
+    assert all(len(row['files'])==24 for row in releases.values())
     before=tmp_path/'before';after=tmp_path/'after'
     before.mkdir();after.mkdir()
     selected=EA if mutation in ('ea','ea-absent') else INSTALLED
     source_map={f['path']:e['path'] for e in declaration['source_replacements'] for f in declaration['files']
-                if f['path'] in (e['path'],'app/'+e['path'])}
-    assert len(source_map)==21
+                if f['path'] in (e['path'],'app/'+e['path']) or
+                   (e['path']=='portable/main.py' and f['path']=='app/main.py')}
+    assert len(source_map)==24
     for entry in releases[selected]['files']:
         relative=entry['path']; target=before/relative
         if 'absent' not in entry:
             contents=subprocess.check_output(['git','show',selected+':'+source_map[relative]],cwd=ROOT,
-                creationflags=subprocess.CREATE_NO_WINDOW)
+                creationflags=0x08000000)
             assert b'\r\n' not in contents
             if hashlib.sha256(contents).hexdigest()!=entry['sha256']:
                 # EA's real stock was CRLF. Reconstruct only the one declared
@@ -65,7 +67,7 @@ def test_installed_release_exact_pair_binds_complete_preimages(tmp_path, engine,
     if mutation=='byte': (before/changed).write_bytes((before/changed).read_bytes()+b'!')
     elif mutation=='mixed':
         contents=subprocess.check_output(['git','show',EA+':'+source_map[changed]],cwd=ROOT,
-            creationflags=subprocess.CREATE_NO_WINDOW)
+            creationflags=0x08000000)
         expected=next(e['sha256'] for e in releases[EA]['files'] if e['path']==changed)
         if hashlib.sha256(contents).hexdigest()!=expected:contents=contents.replace(b'\n',b'\r\n')
         assert hashlib.sha256(contents).hexdigest()==expected
@@ -74,7 +76,7 @@ def test_installed_release_exact_pair_binds_complete_preimages(tmp_path, engine,
     elif mutation=='892-present': (before/guard).write_bytes((after/guard).read_bytes())
     elif mutation=='after-byte': (after/changed).write_bytes((after/changed).read_bytes()+b'!')
     final_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,
-        creationflags=subprocess.CREATE_NO_WINDOW).decode().strip()
+        creationflags=0x08000000).decode().strip()
     old={'source_commit':selected,'writer_sink_inventory_contract_sha256':releases[selected]['writer_inventory_sha256']}
     new={'source_commit':final_commit,'writer_sink_inventory_contract_sha256':declaration['after_inventory_sha256']}
     pin={'from_commit':old['source_commit'],'to_commit':new['source_commit'],

@@ -211,6 +211,8 @@ def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any])
 
 @writer_sink("relay_runtime_storage")
 def _append_jsonl(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
+    from auto_update import support_record
+    payload = support_record(payload, stage='relay_runtime')
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("a", encoding="utf-8", newline="\n") as handle:
@@ -828,6 +830,8 @@ def _write_runtime_status(
 
 
 def _write_runtime_payload(config: DirectSyncRuntimeConfig, payload: dict[str, Any]) -> dict[str, Any]:
+    from auto_update import mixed_status_record
+    payload = mixed_status_record(payload)
     attempt = _RELAY_ATTEMPT.get()
     with writer_admission("direct_sync_runtime_status"):
         if attempt is not None and not attempt.is_current():

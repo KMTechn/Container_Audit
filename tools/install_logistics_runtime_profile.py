@@ -900,7 +900,8 @@ def ensure_runtime_profile_from_enrollment_bundle(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Install the Container_Audit current-user logistics profile.")
+    from auto_update import SupportArgumentParser
+    parser = SupportArgumentParser(description="Install the Container_Audit current-user logistics profile.")
     parser.add_argument("--profile-path", default=str(default_profile_path()))
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--authority-scope", required=True)
@@ -979,9 +980,11 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"BLOCKED: {exc.__class__.__name__}", file=sys.stderr)
         return 2
-    print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+    from auto_update import emit_support_record
+    emit_support_record(report, stage='runtime_profile_install')
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from auto_update import run_support_main
+    raise SystemExit(run_support_main(main, stage='runtime_profile_install'))

@@ -167,12 +167,15 @@ def _published_failure(monkeypatch, tmp_path, capsys, *, reject=False, tamper=Fa
 def test_report_reference_binds_current_atomic_utf8_publication(tmp_path, monkeypatch, capsys):
     private, path, _, failure, _ = _published_failure(monkeypatch, tmp_path, capsys)
     raw = path.read_bytes()
-    if failure.get('report_path') != str(path) or failure.get('report_sha256') != hashlib.sha256(raw).hexdigest():
-        pytest.fail('Current atomic report reference count=0', pytrace=False)
+    # No reader ACL is proven at this caller-selected/current-user path.
+    assert 'report_path' not in failure and 'report_sha256' not in failure
+    assert failure['report_status'] == 'REPORT_UNAVAILABLE'
     report = json.loads(raw)
-    text = report['failure']
-    if private in raw.decode() or 'Traceback' not in text or 'FIRST-CAUSE' not in text or 'LAST-CAUSE' not in text or len(text.encode()) > 65536:
-        pytest.fail('Protected traceback redaction/context/byte-cap mismatch', pytrace=False)
+    assert report['failure'] == 'SUPPORT_FAILURE'
+    assert report['failure_evidence_refs'] == []
+    assert report['failure_evidence_status'] == 'REPORT_UNAVAILABLE'
+    assert private not in raw.decode() and 'FIRST-CAUSE' not in raw.decode() and 'LAST-CAUSE' not in raw.decode()
+    assert not list(path.parent.glob('failure-text-*.json'))
 
 
 def test_failed_publication_has_no_reference_to_preexisting_report(tmp_path, monkeypatch, capsys):
@@ -189,8 +192,7 @@ def test_report_changed_after_publication_is_not_referenced(tmp_path, monkeypatc
 
 def test_second_cli_attempt_cannot_reuse_old_exception_report_reference(tmp_path, monkeypatch, capsys):
     private, _, _, first, saved = _published_failure(monkeypatch, tmp_path, capsys)
-    if 'report_path' not in first:
-        pytest.fail('First atomic publication reference count=0', pytrace=False)
+    assert 'report_path' not in first and first['report_status'] == 'REPORT_UNAVAILABLE'
     def reuse(*args, **kwargs):
         raise saved[0]
     second = _public(_invoke(_cli(monkeypatch, tmp_path, 'onboarding', reuse), capsys), private)

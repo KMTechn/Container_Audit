@@ -498,7 +498,8 @@ def install_protected_admin_profile(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    from auto_update import SupportArgumentParser
+    parser = SupportArgumentParser(
         description="Install a machine-local offline administrator verifier.",
         allow_abbrev=False,
     )
@@ -543,7 +544,8 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(f"BLOCKED: {exc.__class__.__name__}", file=sys.stderr)
             return 2
-        print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+        from auto_update import emit_support_record
+        emit_support_record(report, stage='protected_admin_install')
         return 0
     if not args.dry_run and not str(args.reader_principal or "").strip():
         print("BLOCKED: --reader-principal is required for an actual install", file=sys.stderr)
@@ -575,9 +577,11 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         first = ""
         second = ""
-    print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+    from auto_update import emit_support_record
+    emit_support_record(report, stage='protected_admin_install')
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from auto_update import run_support_main
+    raise SystemExit(run_support_main(main, stage='protected_admin_install'))

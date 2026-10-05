@@ -1313,7 +1313,7 @@ Registration retains string profile-path arguments after shared resolution. Inva
 
 공식 옛 relay 전환은 기존 `status/current_user_onboarding.json` 설치 결과의 `official_legacy_relay_transition` 필드에 보호 preimage 경로·SHA256·정체성·설치 경로·작업자 SID를 남긴다. 설치 완료 전 새 READY 결과에도 같은 포인터를 기록하며, 이후 onboarding 결과 갱신은 이 필드를 보존한다. 별도 퇴역 시도의 새 증거 폴더에서 이전 preimage를 찾지 않는다. 퇴역 admission은 이 포인터로만 보호 JSON·XML의 SHA256과 정체성을 검증하고 live 작업이 disabled인지 확인한다. 포인터 없음·변조·enabled·unknown은 거절한다.
 
-조립 진단의 가림은 공통 계약 a8708fd307dd55ae309f5f18a0b3dac603302862a6d269a9c815862112f137e7의 1–3절과 벡터 18개(3106bccafd881396b7bbf1a6b3356ccd41853e4a74bbd7b6918ac2b6a599bfc7)를 따른다. 이름이 _TRANSACTION_ID/_SESSION_ID/_ATTEMPT_ID로 끝나는 env 값은 엄격 UUID/32·64 hex인 경우에만 비밀 판정에서 제외한다. _PID는 양의 1–10자리 숫자, _START는 windows-filetime/linux-startticks와 양의 1–25자리 숫자, _MUTEX는 Local/Global 및 제한된 mutex 이름인 경우에만 제외하며 명시 비밀 이름에는 예외를 적용하지 않는다. 같은 예외는 원 바이트를 유지하는 machine metadata의 쓰기 전 비밀 검사에도 적용한다. Save의 필드별 예외는 없다. 지원 제거 child의 최초 원인은 공통 가림된 removal_child_failure와 독립 stage evidence에 보존한다. 계약 5절의 text_generator는 head + fill_char × fill_bytes + tail로 구성하며 긴 assignment 두 개는 83,200바이트 입력을 사용한다.
+조립 진단의 가림은 공통 계약 c82c9bdccd16bb0caa0e423fb7578278646ba0e40ac18bd58291c00e70946ccf의 1–3절과 벡터 18개(3106bccafd881396b7bbf1a6b3356ccd41853e4a74bbd7b6918ac2b6a599bfc7)를 따른다. 이름이 _TRANSACTION_ID/_SESSION_ID/_ATTEMPT_ID로 끝나는 env 값은 엄격 UUID/32·64 hex인 경우에만 비밀 판정에서 제외한다. _PID는 양의 1–10자리 숫자, _START는 windows-filetime/linux-startticks와 양의 1–25자리 숫자, _MUTEX는 Local/Global 및 제한된 mutex 이름인 경우에만 제외하며 명시 비밀 이름에는 예외를 적용하지 않는다. 같은 예외는 원 바이트를 유지하는 machine metadata의 쓰기 전 비밀 검사에도 적용한다. Save의 필드별 예외는 없다. 지원 제거 child의 최초 원인은 공통 가림된 removal_child_failure와 독립 stage evidence에 보존한다. 계약 5절의 text_generator는 head + fill_char × fill_bytes + tail로 구성하며 긴 assignment 두 개는 83,200바이트 입력을 사용한다.
 
 무결성·replacement receipt·writer release/prepared·옛 relay preimage/transition pointer·update-control·current-user READY/lifecycle 기록은 인증 metadata다. 원 JSON/LF를 잘라내거나 가리지 않으며 공통 정책이 고른 알려진 비밀 값이 있으면 temp를 열기 전에 거절한다. failure-* evidence, 설치 pack report, audit의 진단 필드와 최종 출력은 공통 가림과 바이트 상한을 적용한다.
 
@@ -1328,7 +1328,20 @@ Registration retains string profile-path arguments after shared resolution. Inva
 
 공통 계약 0절의 `public_record`/`ConvertTo-KmtechPublicRecord`와 공개 벡터 6개(767ece42ad23dbbcacee4bb98509b35749655017664476ae3d05d852784eb5a5)를 따른다. onboarding·읽기 전용 preflight·제거·교체 lifecycle 복구의 실패는 `CONTAINER_AUDIT_INSTALLER_FAILURE=` 뒤 compact JSON 레코드 하나다. 고정 코드·단계·안내, 예외 형식 이름, 모듈·함수·줄과 허용된 식별자만 공개한다. 데이터 세대의 거부·미확인도 기존 고정 안내를 각각 `DATA_GENERATION_REFUSED`·`DATA_GENERATION_UNKNOWN`으로 전달하여 읽기·변경 차단을 유지한다. 예외 문장·child 출력·자유 문장·중첩 원인 객체는 공개하지 않는다. 형식에 맞지 않는 값은 빼고 `nonconforming_fields`와 `PUBLIC_FIELD_NONCONFORMING`을 남긴다.
 
-가린 전체 traceback은 UTF-8 64 KiB 안에서 앞·뒤 맥락을 보존하여 같은 시도의 기존 보호 onboarding/removal/lifecycle 보고서에 둔다. 공개 `report_path`와 `report_sha256`은 이번 CLI 시도의 원자 게시와 저장된 UTF-8 바이트의 SHA256 및 시도 식별자가 모두 맞을 때만 포함한다. 게시 실패·옛 보고서·게시 뒤 변조는 `REPORT_UNAVAILABLE`로 표시한다. preflight는 보고서를 만들려고 자료를 변경하지 않는다. 설치기 수신부는 새 레코드를 검사하고 고정 코드로 중단한다. 다른 설치기·업데이트 적용기·지원 도구 출력은 sub-379 보고서의 `허용 목록 전환 후보` 표에 남기며 후속 가지에서 전환한다.
+onboarding/removal/lifecycle의 사용자 경로와 update-control에는 작업 사용자·관리자만 읽는다는 기존 ACL 증명이 없다. 공개 실패 줄은 `REPORT_UNAVAILABLE`을 표시하고 원문을 새 파일에 쓰지 않는다. 혼합 상태 보고서는 같은 키·타입을 유지하며 자유 진단 필드만 `SUPPORT_FAILURE`로 저장한다. identity/profile/credential/receipt/queue/lease/status와 설치기 인증·재개 bindings는 원 값을 보존한다. 알려진 비밀 값이 machine metadata에 섞이면 기존 공통 검사로 temp를 열기 전에 거절한다. preflight는 진단 보고서를 만들려고 자료를 변경하지 않는다.
+
+설치기 private evidence는 기존 `Initialize-InstallationEvidence`/`Set-InstallationEvidenceAcl`의 보호 root를 같은 프로세스와 같은 시도에서 재사용한다. 원문은 공통 가림과 UTF-8 64 KiB 상한 뒤 임시 파일에 쓰고 flush·기존 ACL 검증·원자 이름 변경·실제 바이트 SHA256 readback을 마친다. 해당 writer가 만든 객체와 같은 참조일 때만 공개 `report_path`/`report_sha256`을 포함한다. caller가 예외 Data에 넣은 경로·옛 참조·게시 실패에는 `REPORT_UNAVAILABLE`을 표시한다. 새 ACL 위치나 새 ACL 증명 함수는 만들지 않는다.
+
+현장 지원 도구의 (가) 출력은 `CONTAINER_AUDIT_SUPPORT=`, lower helper는 `CONTAINER_AUDIT_INSTALL_HELPER=`, canonical 설치기는 `CONTAINER_AUDIT_INSTALL_CANONICAL=`, 적용기는 `CONTAINER_AUDIT_UPDATE=` 뒤 compact JSON으로 내보낸다. 같은 보호 writer가 없는 도구의 원문은 버린다. 기존 고정 문구와 우리 코드가 계산한 개수·상태 코드·ID·시각·버전·SHA는 safe_messages/allowed_codes에 등록하며 그 출력 형식은 유지한다. authenticated task-spec/lifecycle/onboarding-input/Observe 프로토콜은 기존 수신·검증 계약을 유지한다.
+
+| 코드/단계 | 고정 안내 |
+| --- | --- |
+| ARGUMENT_INVALID / argument_parse | 입력 항목을 확인하고 다시 실행하세요. |
+| SUPPORT_FAILURE / runtime_profile_check, runtime_profile_install, protected_admin_install, update_archive_check, registration, relay_install | 설정 파일과 설치 경로를 확인하고 다시 실행하세요. |
+| SUPPORT_FAILURE / relay, bootstrap, portable, onboarding/removal | 자료를 보존하고 관리자 지원 복구를 요청하세요. |
+| lifecycle 고정 분류 / STARTUP_UPDATE_FAILURE | 기존 설치 상태와 예약 작업을 확인하고 관리자 지원 복구를 요청하세요. |
+
+구조화 값 부류 4개(556c1826975f0c73f1a945be802ce761715274dce83cecdba02cd0093f77438c)는 필수 가림 벡터 18개와 별도다. 새 조각이 공개 sink에 남으면 P1로 고치고, 기존 보호 보고서에만 남으면 P2 BACKLOG에 기록한다.
 
 Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종료 코드 23과 등록된 원인 코드(`ACTIVE_WRITER_FENCE`, `FENCE_BINDING_INVALID` 등)를 보존한다. 그 밖의 설치 실패는 기존 종료 코드 4를 유지한다. 예외 문장은 공개하지 않으며 미등록 writer 코드 문구는 보호 전문에만 남기고 공개 고정 코드 `WRITER_FENCE_FAILED`를 쓴다. 설치기 reader는 등록된 원인 코드와 4/23 조합 및 실제 자식 종료 코드가 일치하는지 확인한 뒤 고정 코드로 중단한다.
 

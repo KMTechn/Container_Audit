@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from writer_session_fence import writer_admission, writer_sink  # noqa: E402
+from auto_update import SupportArgumentParser, support_record
 
 from direct_sync_operator import (  # noqa: E402
     operator_status,
@@ -43,13 +44,18 @@ def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any])
 
 
 def _emit(report: Mapping[str, Any], report_path: str = "") -> int:
+    from auto_update import mixed_status_record
     mutable_report = dict(report)
+    public_report = support_record(report, stage='relay_operator')
+    operation = report.get('operation', '')
+    if operation in {'pause', 'resume', 'status', 'retry-dead', 'resolve-review', 'restore-spool'}:
+        public_report['operation_code'] = operation
     report_status = "SKIPPED"
     report_error_code = ""
     report_error_message = ""
     if report_path:
         try:
-            _write_json_atomic(report_path, mutable_report)
+            _write_json_atomic(report_path, mixed_status_record(mutable_report))
             report_status = "PASS"
         except OSError as exc:
             report_status = "FAIL"
@@ -58,16 +64,16 @@ def _emit(report: Mapping[str, Any], report_path: str = "") -> int:
             mutable_report["report_write_status"] = report_status
             mutable_report["report_write_error_code"] = report_error_code
             mutable_report["report_write_error_message"] = report_error_message
-    print(f"direct_sync_operator_status={mutable_report.get('status', 'FAIL')}")
-    print(f"direct_sync_operator_operation={mutable_report.get('operation', '')}")
+    print(f"direct_sync_operator_status={public_report.get('status', 'FAIL')}")
+    print(f"direct_sync_operator_operation={public_report.get('operation_code', '')}")
     print(f"direct_sync_operator_report_status={report_status}")
-    audit_write_status = str(mutable_report.get("audit_write_status") or "")
+    audit_write_status = str(public_report.get("audit_write_status") or "")
     if audit_write_status:
         print(f"direct_sync_operator_audit_write_status={audit_write_status}")
-    if mutable_report.get("audit_write_error_code"):
+    if public_report.get("audit_write_error_code"):
         print(
             "direct_sync_operator_audit_write_error_code="
-            f"{mutable_report['audit_write_error_code']}"
+            f"{public_report['audit_write_error_code']}"
         )
     if report_error_code:
         print(f"direct_sync_operator_report_error_code={report_error_code}")
@@ -84,7 +90,7 @@ def _emit(report: Mapping[str, Any], report_path: str = "") -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Container_Audit direct-sync relay operator control")
+    parser = SupportArgumentParser(description="Container_Audit direct-sync relay operator control")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     status_parser = subparsers.add_parser("status", help="Report local relay queue and pause state")
@@ -265,4 +271,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from auto_update import run_support_main
+    raise SystemExit(run_support_main(main, stage='relay_operator'))

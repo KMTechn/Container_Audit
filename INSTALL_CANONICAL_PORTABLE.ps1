@@ -128,6 +128,35 @@ function Get-WriterContractSessionMutexName(
     finally { $algorithm.Dispose() }
     return 'Local\KMTech.ContainerAudit.DeploymentSession.' + $digest
 }
+function Write-CanonicalInstallationPublicRecord($Failure=$null,[int]$ExitCode=0) {
+    $guidance='자료를 보존하고 관리자 지원 복구를 요청하세요.'
+    $fields=[ordered]@{status=if($ExitCode){'FAILED'}else{'PASS'};stage='canonical_install';
+        reason_code=if($ExitCode){'INSTALLER_CANONICAL_FAILURE'}else{'INSTALLER_CHILD_RESULT'};
+        exit_code=$ExitCode;guidance=$guidance;report_status='REPORT_UNAVAILABLE'}
+    if($Failure){
+        $exception=if($Failure -is [Exception]){$Failure}else{$Failure.Exception}
+        $fields.exception_type=$exception.GetType().FullName
+        if($Failure -is [Management.Automation.ErrorRecord]){$fields.location_line=[int]$Failure.InvocationInfo.ScriptLineNumber}
+        $reference=$exception.Data['installation_original_failure_reference']
+        $published=Get-Variable -Name InstallationMostRecentOriginalFailureReference -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        $root=Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if($root -and $reference -and [object]::ReferenceEquals($reference,$published) -and $reference.Contains('atomic_published') -and $reference.atomic_published -eq $true){
+            try{
+                Assert-InstallationEvidenceWriteRoot $root
+                $path=[IO.Path]::GetFullPath([string]$reference.path)
+                if(-not [IO.Path]::GetDirectoryName($path).Equals([IO.Path]::GetFullPath($root),[StringComparison]::OrdinalIgnoreCase)){throw 'Report attempt differs.'}
+                if(Test-InstallationEvidencePrivileged){Assert-InstallationEvidenceProtectedPath $path}
+                $digest=Get-FileSha256 $path
+                if($digest -cne [string]$reference.sha256){throw 'Report readback differs.'}
+                $fields.Remove('report_status');$fields.report_path=$path;$fields.report_sha256=$digest
+            }catch{}
+        }
+    }
+    if(Get-Command ConvertTo-KmtechPublicRecord -ErrorAction SilentlyContinue){
+        $fields=ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes @('PASS','FAILED','canonical_install','INSTALLER_CANONICAL_FAILURE','INSTALLER_CHILD_RESULT','REPORT_UNAVAILABLE') -SafeMessages @($guidance)
+    }
+    Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+($fields|ConvertTo-Json -Depth 4 -Compress))
+}
 function Assert-WriterSessionPublicContract(
     [string]$Path,
     [string]$ExpectedSha256,
@@ -452,14 +481,16 @@ function Test-InstalledReleasePreimages($Old,$New,[string]$BeforeRoot,[string]$A
         $expected=@{}
         $nonDeployed=@('tools/active_work_probe.py','tools/build_operator_review_case_report.py',
             'tools/build_portable_release_candidate.py','tools/check_logistics_runtime_profile.py',
-            'tools/direct_sync_relay_install_pack.py','tools/install_protected_admin.py')
+            'tools/direct_sync_relay_install_pack.py','tools/install_protected_admin.py',
+            'tools/check_update_archive.py','tools/provision_protected_admin_acl.ps1')
         $sourceSeen=@{}
-        if (@($declaration.source_replacements).Count -ne 27) { return $false }
+        if (@($declaration.source_replacements).Count -ne 32) { return $false }
         foreach($entry in @($declaration.source_replacements)) {
             $sourcePath=[string]$entry.path
             if (-not (Test-ExactPropertySet $entry @('path','before','after')) -or $sourceSeen.ContainsKey($sourcePath)) { return $false }
             $sourceSeen[$sourcePath]=$true
-            $packetRows=@($declaration.files|Where-Object {[string]$_.path -ceq $sourcePath -or [string]$_.path -ceq ('app/'+$sourcePath)})
+            $packetPath=if($sourcePath -ceq 'portable/main.py'){'app/main.py'}else{'app/'+$sourcePath}
+            $packetRows=@($declaration.files|Where-Object {[string]$_.path -ceq $sourcePath -or [string]$_.path -ceq $packetPath})
             if ($sourcePath -cin $nonDeployed) {
                 # These developer tools are deliberately outside the stock.
                 if ($packetRows.Count -ne 0) { return $false }
@@ -473,7 +504,7 @@ function Test-InstalledReleasePreimages($Old,$New,[string]$BeforeRoot,[string]$A
                 [string]$packetRows[0].after -cne [string]$entry.after) { return $false }
             $expected[$relative]=[string]$entry.after
         }
-        if ($expected.Count -ne 21 -or @($selected.files).Count -ne $expected.Count) { return $false }
+        if ($expected.Count -ne 24 -or @($selected.files).Count -ne $expected.Count) { return $false }
         $seen=@{}
         foreach($entry in @($selected.files)) {
             $relative=[string]$entry.path
@@ -895,7 +926,49 @@ function Restore($Before) {
 function ConvertTo-CanonicalSafeDiagnostic([string]$Text) {
     return (ConvertTo-KmtechRedactedSinkText -Text $Text)
 }
-function ConvertTo-CanonicalAuditJson($Value) {
+function ConvertTo-CanonicalAuditJson($Value,[switch]$PrivateDiagnostics) {
+    if(-not $PrivateDiagnostics){
+        # Caller-selected audit files have no reader-ACL proof. Preserve the
+        # machine schema and replace only free diagnostic leaves before Save.
+        $copy=($Value|ConvertTo-Json -Depth 40)|ConvertFrom-Json
+        $diagnostics=[Collections.Generic.List[object]]::new()
+        function Limit-CanonicalPublicDiagnostics($Node,[bool]$InsideDiagnostic=$false){
+            if($Node -is [Management.Automation.PSCustomObject]){
+                foreach($property in $Node.PSObject.Properties){
+                    $name=$property.Name
+                    if(-not $InsideDiagnostic -and $name -cin @('identity','source_identity','credential','profile','manifest','metadata','receipt','server_receipt','preimage')){continue}
+                    # These fields are assigned literal codes or calculated
+                    # type/location/hash values by the canonical producers.
+                    if($name -match '(?i)(?:^type$|exception_type$|failure_type$|_code$|_status$|_path$|_sha256$|_sha256s$|_bytes$|_count$|_hresult$|_win32_error$|^hresult$|^win32_error$|^script_line$|^script_file$)'){continue}
+                    $diagnostic=$InsideDiagnostic -or $name -match '(?i)failure|message|stdout|stderr|traceback|blocked_reason|command_line|^argv$'
+                    if($diagnostic -and $property.Value -is [string]){
+                        if($property.Value -and $property.Value -cne 'SUPPORT_FAILURE'){
+                            $diagnostics.Add(@{field=$name;diagnostic=$property.Value})
+                            $property.Value='SUPPORT_FAILURE'
+                        }
+                    }else{Limit-CanonicalPublicDiagnostics $property.Value $diagnostic}
+                }
+            }elseif($Node -is [Array]){
+                for($i=0;$i -lt $Node.Count;$i++){
+                    if($InsideDiagnostic -and $Node[$i] -is [string]){
+                        if($Node[$i] -and $Node[$i] -cne 'SUPPORT_FAILURE'){
+                            $diagnostics.Add(@{field='array';diagnostic=$Node[$i]})
+                            $Node[$i]='SUPPORT_FAILURE'
+                        }
+                    }else{Limit-CanonicalPublicDiagnostics $Node[$i] $InsideDiagnostic}
+                }
+            }
+        }
+        Limit-CanonicalPublicDiagnostics $copy
+        if($diagnostics.Count -and (Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue)){
+            # This existing writer checks the current attempt's admitted root.
+            # A failed private write never promotes caller-selected audit files.
+            try{Write-InstallationEvidenceEvent @{event='CANONICAL_DIAGNOSTIC_REPORT';diagnostics=$diagnostics.ToArray()}}catch{}
+        }
+        $json=($copy|ConvertTo-Json -Depth 40 -Compress)+"`n"
+        Assert-InstallationMachineMetadataNoSecrets $json
+        return $json
+    }
     # Redact a valid in-memory envelope first. Budget diagnostic strings before
     # serializing, so authenticated tuple/path fields and JSON syntax survive.
     $safe=Protect-InstallationText ($Value|ConvertTo-Json -Depth 40) -1 -NoTruncate
@@ -924,9 +997,15 @@ function ConvertTo-CanonicalAuditJson($Value) {
     }while($true)
 }
 function Save([string]$Path, $Value, [bool]$SanitizeDiagnostics=$false) {
+    $privateDiagnostics=$false
+    $evidenceRoot=Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if($evidenceRoot -and [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Path)).Equals([IO.Path]::GetFullPath($evidenceRoot),[StringComparison]::OrdinalIgnoreCase)){
+        Assert-InstallationEvidenceWriteRoot $evidenceRoot
+        $privateDiagnostics=$true
+    }
+    $json = ConvertTo-CanonicalAuditJson $Value -PrivateDiagnostics:$privateDiagnostics
     New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
     $temp = "$Path.tmp.$PID"
-    $json = ConvertTo-CanonicalAuditJson $Value
     if (Get-Variable -Name CompleteRetiredRemoval -ValueOnly -ErrorAction SilentlyContinue) {
         $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($json)
         $stream = New-Object IO.FileStream($temp, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
@@ -3783,7 +3862,7 @@ $enteredPlacementTry = $true
         }
         $capturedChild = Invoke-InstallationEvidenceChild 'public-code-restore' $winps $publicRestoreArguments
             $global:LASTEXITCODE=$capturedChild.ExitCode
-            if($capturedChild.ExitCode -ne 0){Write-Output (ConvertTo-KmtechRedactedSinkText -Text $capturedChild.Stdout -UserLine)}else{Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]($capturedChild.Stdout)))}
+            Write-CanonicalInstallationPublicRecord -ExitCode $capturedChild.ExitCode
         if ($LASTEXITCODE -ne 0) { throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Canonical code restore failed: $LASTEXITCODE")) -UserLine) }
         if (-not $testMode) {
             $restoreBinding=Read-InstallationHelperEvidenceBinding @($capturedChild.Stdout -split "`r?`n") $elevationLogPath $capturedChild.ProcessId $sourceHelperSha256
@@ -3879,8 +3958,7 @@ $enteredPlacementTry = $true
         $child=Invoke-InstallationEvidenceChild 'supported-content-removal' $winps $args
         if($child.ExitCode -ne 0){
             $audit['removal_child_failure']=Get-CanonicalRetirementChildFailure $child
-            if($audit.removal_child_failure.stdout){Write-Output (ConvertTo-KmtechRedactedSinkText -Text $audit.removal_child_failure.stdout)}
-            if($audit.removal_child_failure.stderr){Write-Output (ConvertTo-KmtechRedactedSinkText -Text $audit.removal_child_failure.stderr)}
+            Write-CanonicalInstallationPublicRecord -ExitCode $child.ExitCode
             throw '지원 제거를 마치지 못했습니다. 자료를 보존하고 같은 제거를 다시 실행하세요.'
         }
         $removed=Get-Content -LiteralPath (Join-Path (Split-Path -Parent $install) 'removed.json') -Raw -Encoding UTF8|ConvertFrom-Json
@@ -3990,11 +4068,11 @@ $enteredPlacementTry = $true
         if (-not $resumeCodeAbsent) {
             $capturedChild = Invoke-InstallationEvidenceChild 'uninstall-helper' $winps $uninstallArguments
             $global:LASTEXITCODE=$capturedChild.ExitCode
-            if($capturedChild.ExitCode -ne 0){Write-Output (ConvertTo-KmtechRedactedSinkText -Text $capturedChild.Stdout -UserLine)}else{Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]($capturedChild.Stdout)))}
+            Write-CanonicalInstallationPublicRecord -ExitCode $capturedChild.ExitCode
             if ($LASTEXITCODE -ne 0) {
                 if ($CompleteRetiredRemoval) {
                     $audit['retirement_child_failure']=Get-CanonicalRetirementChildFailure $capturedChild
-                    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('retirement_failure_summary='+($audit.retirement_child_failure | ConvertTo-Json -Depth 12 -Compress)))))
+                    Write-CanonicalInstallationPublicRecord -ExitCode $capturedChild.ExitCode
                 }
                 throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Code removal failed: $LASTEXITCODE")) -UserLine)
             }
@@ -4565,10 +4643,10 @@ catch {
                         '-ExpectedUninstallRecordSha256',$uninstallRecordSha256)
                     $capturedChild = Invoke-InstallationEvidenceChild 'uninstall-code-recovery' $winps $recoverCodeArguments
                     $global:LASTEXITCODE=$capturedChild.ExitCode
-                    if($capturedChild.ExitCode -ne 0){Write-Output (ConvertTo-KmtechRedactedSinkText -Text $capturedChild.Stdout -UserLine)}else{Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]($capturedChild.Stdout)))}
+                    Write-CanonicalInstallationPublicRecord -ExitCode $capturedChild.ExitCode
                     if ($LASTEXITCODE -ne 0) {
                         $audit['retirement_recovery_child_failure']=Get-CanonicalRetirementChildFailure $capturedChild
-                        Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('retirement_recovery_failure_summary='+($audit.retirement_recovery_child_failure | ConvertTo-Json -Depth 12 -Compress)))))
+                        Write-CanonicalInstallationPublicRecord -ExitCode $capturedChild.ExitCode
                         throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Uninstall exact code recovery failed: $LASTEXITCODE")) -UserLine)
                     }
                 }
@@ -5051,7 +5129,7 @@ catch {
         catch {Write-InstallationCaughtFailure $_;$audit.rollback['continuation_completion_failure']=Get-CanonicalFailureDetails $_ 'ROLLBACK_COMPLETION';Save-CanonicalRecoveryDiagnostics 'rollback.continuation_completion'}
     }
     if ($placement -ceq 'PASS_NEW_VERIFIED') {
-        Write-Warning (ConvertTo-KmtechRedactedSinkText -Text ([string]("Current-user runtime restored. New verified code remains at $install")) -UserLine)
+        Write-CanonicalInstallationPublicRecord
     }
     $publicFailure=[InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text $original.Exception.Message -UserLine),$original.Exception);$publicFailure.Data['original_type']=$original.Exception.GetType().FullName;$publicRecord=[Management.Automation.ErrorRecord]::new($publicFailure,'CanonicalInstallationFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null);throw $publicRecord
 }
@@ -5083,7 +5161,7 @@ finally {
         }
     }
     Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_status='+[string]$finalEvidence.status))))
-    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_summary_path='+[string]$finalEvidence.summary_path))))
+    Write-CanonicalInstallationPublicRecord
     $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''
     foreach ($name in $canonicalWriterFenceEnvironmentNames) {
         [Environment]::SetEnvironmentVariable($name, $canonicalWriterFenceEnvironmentBefore[$name], 'Process')
@@ -5097,8 +5175,7 @@ finally {
 
 } catch {
     $outputFailure=$_
-    $publicMessage=ConvertTo-KmtechRedactedSinkText -Text $outputFailure.Exception.Message -UserLine
-    $publicException=[InvalidOperationException]::new($publicMessage,$outputFailure.Exception)
-    $publicException.Data['original_type']=$outputFailure.Exception.GetType().FullName
-    throw [Management.Automation.ErrorRecord]::new($publicException,'CanonicalInstallationOutputFailure',[Management.Automation.ErrorCategory]::InvalidOperation,$null)
+    if(Get-Command Write-InstallationCaughtFailure -ErrorAction SilentlyContinue){Write-InstallationCaughtFailure $outputFailure}
+    Write-CanonicalInstallationPublicRecord -Failure $outputFailure -ExitCode 1
+    exit 1
 }

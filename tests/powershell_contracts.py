@@ -35,7 +35,7 @@ def run_powershell(arguments, *, check=False, capture_output=True, text=True, **
         command += '; if (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }; exit 0'
     completed = subprocess.run(
         [*argv[:mode], '-Command', prefix + command],
-        capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), **kwargs,
+        capture_output=True, creationflags=0x08000000, **kwargs,
     )
     def decode(data):
         with io.TextIOWrapper(io.BytesIO(data), encoding='utf-8', errors='strict') as stream:

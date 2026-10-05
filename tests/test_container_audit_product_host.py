@@ -82,8 +82,11 @@ def test_relay_mode_converts_unhandled_exception_to_bounded_durable_diagnostics(
     assert status["status"] == "runtime_error"
     assert status["error_code"] == "hosted_relay_unhandled_exception"
     assert status["worker_id"] == "relay-worker"
-    assert event["event"] == "hosted_relay_unhandled_exception"
-    assert event["error_type"] == "RuntimeError"
+    # Contract 0e: public diagnostics expose fixed codes and exception type.
+    assert event["reason_code"] == "SUPPORT_FAILURE"
+    assert event["exception_type"] == "builtins.RuntimeError"
+    assert event["stage"] == "relay_host"
+    assert event["report_status"] == "REPORT_UNAVAILABLE"
     assert secret_text not in runtime_status_path.read_text(encoding="utf-8")
     assert secret_text not in log_path.read_text(encoding="utf-8")
     assert runtime_status_path.stat().st_size < 16 * 1024

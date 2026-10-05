@@ -585,7 +585,7 @@ def test_operator_status_cli_redacts_sensitive_runtime_status_payload(tmp_path, 
     assert persisted["runtime"]["payload"]["last_result"]["headers"]["X-Producer-Signature"] == "[redacted]"
     assert persisted["runtime"]["payload"]["last_result"]["receipt_json"] == "[redacted]"
     assert persisted["runtime"]["payload"]["raw_payload"] == "[redacted]"
-    assert persisted["runtime"]["payload"]["nested"][0]["token"] == "[redacted]"
+    assert persisted["runtime"]["payload"]["nested"][0]["token"] == "SUPPORT_FAILURE"
     assert persisted["runtime"]["payload"]["content_sha256"] == "a" * 64
 
 

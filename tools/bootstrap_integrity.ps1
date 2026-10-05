@@ -601,6 +601,7 @@ function Initialize-InstallationEvidence([string]$BasePath,[string]$OperatorSid,
     $Script:InstallationFirstFailedChildEvidenceFailure=$null
     $Script:InstallationFirstFailedChildStreams=$null
     $Script:InstallationOriginalFailure=$null
+    $Script:InstallationMostRecentOriginalFailureReference=$null
     $Script:InstallationEvidenceFailed = $false
     $Script:InstallationEvidenceFailureCodes = [Collections.Generic.List[string]]::new()
     Write-InstallationEvidenceEvent ([ordered]@{event='INITIALIZED';process_id=$PID;byte_cap_per_stream=(Protect-InstallationText -Configuration).full_byte_cap;journal_cap_bytes=1048576;raw_command_recorded=$false})
@@ -1202,7 +1203,8 @@ function Write-InstallationOriginalFailure($Failure) {
     $cacheKey='installation_original_failure_reference'
     if($exception.Data.Contains($cacheKey)){
         $cached=$exception.Data[$cacheKey]
-        if([string]$cached.path -and ([string]$cached.path).StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)){return $cached}
+        $published=Get-Variable -Name InstallationMostRecentOriginalFailureReference -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if([object]::ReferenceEquals($cached,$published) -and $cached.Contains('atomic_published') -and $cached.atomic_published -eq $true){return $cached}
     }
     $detail=Get-InstallationFailureDetails $Failure
     $detail.exception_chain=@();$observed=0;$complete=$true
@@ -1222,9 +1224,11 @@ function Write-InstallationOriginalFailure($Failure) {
     if($null -ne $exception){$complete=$false}
     $payload=[ordered]@{schema='container-audit-original-installation-failure-v1';complete=$complete;
         byte_cap=$cap;depth_cap=64;observed_detail_bytes=$observed;truncated=(-not $complete);truncation_marker=if($complete){''}else{'[TRUNCATED: bounded original failure]'};failure=$detail}
+    $temporary=$null
     try{
         Assert-InstallationEvidenceWriteRoot $root
         $path=Join-Path $root ('original-failure-'+[guid]::NewGuid().ToString('N')+'.json')
+        $temporary=$path+'.tmp'
         $text=Protect-InstallationText ($payload|ConvertTo-Json -Depth 12 -Compress) -1 -NoTruncate
         while([Text.Encoding]::UTF8.GetByteCount($text) -gt $cap){
             $largest=@($payload.failure.exception_chain|Sort-Object @{Expression={[Text.Encoding]::UTF8.GetByteCount($_.message)};Descending=$true})[0]
@@ -1236,16 +1240,25 @@ function Write-InstallationOriginalFailure($Failure) {
         }
         $bytes=[Text.Encoding]::UTF8.GetBytes($text)
         if($bytes.Length -gt $cap){throw 'Original failure envelope exceeded its byte bound.'}
-        $stream=[IO.FileStream]::new($path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::Read)
+        $stream=[IO.FileStream]::new($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
         try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
-        Set-InstallationEvidenceAcl $path $Script:InstallationEvidenceSid
+        Set-InstallationEvidenceAcl $temporary $Script:InstallationEvidenceSid
+        if(Test-InstallationEvidencePrivileged){Assert-InstallationEvidenceProtectedPath $temporary}
+        [IO.File]::Move($temporary,$path)
+        if(Test-InstallationEvidencePrivileged){Assert-InstallationEvidenceProtectedPath $path}
+        $hasher=[Security.Cryptography.SHA256]::Create()
+        try{$expectedDigest=[BitConverter]::ToString($hasher.ComputeHash($bytes)).Replace('-','').ToLowerInvariant()}finally{$hasher.Dispose()}
+        $digest=Get-FileSha256 $path
+        if($digest -cne $expectedDigest -or (Get-Item -LiteralPath $path).Length -ne $bytes.Length){throw 'Original failure readback differs.'}
         $record.status=if($complete){'PRESERVED'}else{'INCOMPLETE_SIZE_OR_DEPTH_BOUND'}
-        $record.path=$path;$record.sha256=Get-FileSha256 $path;$record.saved_bytes=$bytes.Length;$record.complete=$complete
+        $record.path=$path;$record.sha256=$digest;$record.saved_bytes=$bytes.Length;$record.complete=$complete
+        $record.atomic_published=$true
+        $Script:InstallationMostRecentOriginalFailureReference=$record
     }catch{
         $record.status='IO_OR_ACL_FAILED';$Script:InstallationEvidenceFailed=$true
         $codes=Get-Variable -Name InstallationEvidenceFailureCodes -Scope Script -ValueOnly -ErrorAction SilentlyContinue
         if($null -ne $codes -and -not $codes.Contains('ORIGINAL_FAILURE_IO_OR_ACL_FAILURE')){$codes.Add('ORIGINAL_FAILURE_IO_OR_ACL_FAILURE')}
-    }
+    }finally{if($temporary -and (Test-Path -LiteralPath $temporary)){Remove-Item -LiteralPath $temporary}}
     $outerException=if($Failure -is [Exception]){$Failure}else{$Failure.Exception}
     $outerException.Data[$cacheKey]=$record
     if(-not(Get-Variable -Name InstallationOriginalFailure -Scope Script -ValueOnly -ErrorAction SilentlyContinue)){$Script:InstallationOriginalFailure=$record}

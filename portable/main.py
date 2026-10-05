@@ -80,8 +80,10 @@ def main() -> int:
         return 0 if result is None else int(result)
     except Exception as error:
         if arguments[:1] not in (["--onboard-current-user"], ["--remove-current-user-setup"],
-                                 ["--restore-current-user-lifecycle-after-replacement"]):
-            raise
+                                  ["--restore-current-user-lifecycle-after-replacement"]):
+            from auto_update import emit_support_record
+            emit_support_record(stage='portable_entrypoint', error=error, file=sys.stderr)
+            return 1
         from current_user_onboarding import emit_installer_failure
         return emit_installer_failure(error, "installer_entrypoint")
 

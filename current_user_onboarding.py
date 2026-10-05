@@ -16,7 +16,6 @@ import re
 import stat
 import subprocess
 import sys
-import traceback
 from typing import Any, Callable, Mapping, MutableMapping
 import uuid
 from contextlib import nullcontext
@@ -354,25 +353,9 @@ def emit_installer_failure(error: BaseException, stage: str) -> int:
         fields.update(location_module=frame.tb_frame.f_globals.get("__name__"),
                       location_function=frame.tb_frame.f_code.co_name,
                       location_line=frame.tb_lineno)
-    reference = None
-    if attempt:
-        for entry in chain:
-            candidate = attempt["publications"].get(id(entry))
-            if candidate is None:
-                continue
-            try:
-                raw = Path(candidate["path"]).read_bytes()
-                stored = json.loads(raw.decode("utf-8"))
-                if (hashlib.sha256(raw).hexdigest() == candidate["sha256"]
-                        and stored.get("failure_attempt_id") == attempt["id"]):
-                    reference = candidate
-                    break
-            except (OSError, ValueError, UnicodeError, AttributeError):
-                pass
-    if reference:
-        fields.update(report_path=reference["path"], report_sha256=reference["sha256"])
-    else:
-        fields["report_status"] = "REPORT_UNAVAILABLE"
+    # These caller-selected/current-user report roots have no proven reader ACL.
+    # An atomic JSON write alone does not authorize publishing original text.
+    fields["report_status"] = "REPORT_UNAVAILABLE"
     print(INSTALLER_FAILURE_PREFIX + json.dumps(
         public_record(fields, INSTALLER_PUBLIC_CODES, INSTALLER_SAFE_MESSAGES),
         ensure_ascii=True, separators=(",", ":")), file=sys.stderr)
@@ -385,35 +368,21 @@ def _new_failure_attempt():
 
 def _persist_failure_report(path: Path, report: dict[str, Any], error: BaseException,
                             *, create_new: bool = False) -> None:
-    from auto_update import (_failure_details, _write_failure_evidence,
-                             redact_for_sink, redact_json_for_sink)
+    from auto_update import _failure_details, mixed_status_record
     attempt = _FAILURE_ATTEMPT.get()
     if attempt:
         attempt["publications"].pop(id(error), None)
     report["failure_attempt_id"] = attempt["id"] if attempt else uuid.uuid4().hex
-    # Format the entire chain before redaction and UTF-8 head/tail bounding.
-    detail = "".join(traceback.format_exception(error))
-    original = getattr(error, "original_failure_text", None)
-    if isinstance(original, str):
-        detail += "\nOriginal failure:\n" + original
-    report["failure"] = redact_for_sink(detail, limit=65536)
-    report["failure_details"] = _failure_details(error)
-    try:
-        report["failure_evidence_refs"] = _write_failure_evidence(path.parent, error)
-        report["failure_evidence_status"] = "RECORDED"
-    except Exception as recording_error:
-        report["failure_evidence_status"] = "FAILED"
-        report["failure_evidence_error_type"] = type(recording_error).__name__
+    report["failure"] = "SUPPORT_FAILURE"
+    report["failure_details"] = mixed_status_record({"failure_details": _failure_details(error)})["failure_details"]
+    report["failure_evidence_refs"] = []
+    report["failure_evidence_status"] = "REPORT_UNAVAILABLE"
     try:
         # Only diagnostic fields are transformed; generic metadata writers keep
         # their original-byte/fail-closed contract for READY and owner records.
-        safe_report = dict(report)
-        for field in ("failure", "failure_details"):
-            safe_report[field] = redact_json_for_sink(report[field])
+        safe_report = mixed_status_record(report)
         writer = _write_json_atomic_create_new if create_new else _write_json_atomic
-        reference = writer(path, safe_report)
-        if attempt and reference is not None:
-            attempt["publications"][id(error)] = reference
+        writer(path, safe_report)
     except Exception:
         # Publication refusal must not replace the primary failure or advertise
         # an old pathname. The public boundary emits REPORT_UNAVAILABLE.
@@ -2571,7 +2540,8 @@ def _default_app_root() -> Path:
 
 
 def replacement_lifecycle_restore_main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
+    from auto_update import SupportArgumentParser, emit_support_record
+    parser = SupportArgumentParser(
         description=(
             "Restore an exact READY Container_Audit current-user lifecycle after "
             "verified replacement rollback."
@@ -2610,15 +2580,13 @@ def replacement_lifecycle_restore_main(argv: list[str] | None = None) -> int:
         _FAILURE_ATTEMPT.reset(failure_attempt)
     print(f"replacement_lifecycle_restore_status={report['status']}")
     print(f"replacement_lifecycle_restore_action={report['action']}")
-    print(
-        "replacement_lifecycle_restore_report="
-        f"{_resolved(args.report_path) if args.report_path else resolve_current_user_onboarding_paths(args.app_root).status_dir / 'replacement_lifecycle_restore.json'}"
-    )
+    emit_support_record({'status': report['status']}, stage='replacement_lifecycle_restore')
     return 0
 
 
 def onboarding_main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
+    from auto_update import SupportArgumentParser, emit_support_record
+    parser = SupportArgumentParser(
         description="Onboard Container_Audit for the current user"
     )
     parser.add_argument("--app-root", default=str(_default_app_root()))
@@ -2655,14 +2623,13 @@ def onboarding_main(argv: list[str] | None = None) -> int:
     print(f"onboarding_status={report['status']}")
     print(f"onboarding_action={report['action']}")
     print(f"bootstrap_integrity={report['bootstrap_integrity']}")
-    print(
-        f"onboarding_report={resolve_current_user_onboarding_paths(args.app_root).onboarding_report_path}"
-    )
+    emit_support_record({'status': report['status']}, stage='onboarding')
     return 0
 
 
 def removal_main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
+    from auto_update import SupportArgumentParser, emit_support_record
+    parser = SupportArgumentParser(
         description="Remove Container_Audit current-user setup"
     )
     parser.add_argument("--app-root", default=str(_default_app_root()))
@@ -2677,6 +2644,6 @@ def removal_main(argv: list[str] | None = None) -> int:
     paths = resolve_current_user_onboarding_paths(args.app_root)
     print(f"current_user_removal_status={report['status']}")
     print("data_preserved=true")
-    print(f"current_user_removal_report={paths.removal_report_path}")
+    emit_support_record({'status': report['status']}, stage='current_user_removal')
     print("machine_code_removal_command=INSTALL_CANONICAL_PORTABLE.ps1 -Uninstall")
     return 0

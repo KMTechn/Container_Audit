@@ -43,8 +43,8 @@ def _now() -> str:
 
 @writer_sink("bootstrap_status")
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    from auto_update import serialize_json_for_sink
-    safe_text = serialize_json_for_sink(payload)
+    from auto_update import mixed_status_record, serialize_mixed_status_record
+    safe_text = serialize_mixed_status_record(mixed_status_record(payload))
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:

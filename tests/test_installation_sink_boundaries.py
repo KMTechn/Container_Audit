@@ -60,12 +60,9 @@ def test_updater_failure_full_record_has_no_opaque_authority_bytes(tmp_path,monk
     monkeypatch.setenv('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN',secret)
     error=RuntimeError(('가"'*50000)+secret+' ValueError: update final exception')
     refs=update._write_failure_evidence(tmp_path,error)
-    assert refs and refs[0]['streams']['message']['complete'] is False
-    for path in tmp_path.glob('failure-text-*.json'):
-        raw=path.read_bytes()
-        assert len(raw)<=65536
-        assert secret.encode() not in raw
-        assert b'update final exception' in raw
+    # No existing reader ACL is proven for update-control diagnostics.
+    assert refs == []
+    assert not list(tmp_path.glob('failure-text-*.json'))
 
 def test_fixed_helper_failure_retains_child_cause_and_bootstrap_keeps_first_and_last(monkeypatch,tmp_path):
     import auto_update as update
@@ -152,8 +149,10 @@ def test_related_report_sink_redacts_before_temporary_file(tmp_path, monkeypatch
         return
     getattr(module, function_name).__wrapped__(destination, payload)
     assert observed and secret.encode() not in destination.read_bytes()
+    original_credential = payload['credential']
     payload = json.loads(destination.read_bytes())
-    assert payload['credential'] == '[REDACTED:field]'
+    # Contract 1a preserves authenticated containers; only diagnostics change.
+    assert payload['credential'] == original_credential
     assert payload['token_elevated'] is False
     assert payload['writer_contract_sha256'] == 'a' * 64
 
@@ -193,9 +192,7 @@ def test_related_report_sink_bounds_valid_json_after_redaction(tmp_path, monkeyp
     raw = path.read_bytes()
     assert len(raw) <= 65536 and secret.encode() not in raw
     payload = json.loads(raw)
-    assert payload['failure'].startswith('FIRST ')
-    assert payload['failure'].endswith('ValueError: LAST')
-    assert '[TRUNCATED:' in payload['failure']
+    assert payload['failure'] == 'SUPPORT_FAILURE'
 
 
 def test_onboarding_failure_report_retains_full_stream_refs_and_temporary_bytes_are_safe(tmp_path, monkeypatch):
@@ -214,12 +211,11 @@ def test_onboarding_failure_report_retains_full_stream_refs_and_temporary_bytes_
     path = tmp_path / 'onboarding.json'
     onboarding._persist_failure_report(path, report, error)
     body = json.loads(path.read_bytes())
-    assert body['failure_evidence_status'] == 'RECORDED'
-    ref = body['failure_evidence_refs'][0]['streams']['stderr']
-    full = Path(ref['path']).read_bytes()
-    assert hashlib.sha256(full).hexdigest() == ref['sha256']
-    assert b'FIRST CHILD CONTEXT' in full and b'LAST CHILD CAUSE' in full
-    assert ref['complete'] is False
+    assert body['failure_evidence_status'] == 'REPORT_UNAVAILABLE'
+    assert body['failure_evidence_refs'] == []
+    assert body['failure_details'][0]['stderr'] == 'SUPPORT_FAILURE'
+    assert body['failure_details'][0]['exit_code'] == 73
+    assert list(tmp_path.glob('*.json')) == [path]
     for saved in tmp_path.glob('*.json'):
         raw = saved.read_bytes()
         assert len(raw) <= 65536 and secret.encode() not in raw

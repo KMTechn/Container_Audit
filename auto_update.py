@@ -6,6 +6,7 @@ switching a code pointer; business data is never copied or restored here.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import argparse
 import ast
 import hashlib
 import json
@@ -421,8 +422,10 @@ def write_json_durable(path: Path, payload: Mapping[str, Any]) -> None:
 
     _assert_no_reparse_components(path)
     temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
-    # These fixed control records are read back for authentication. Failure
-    # evidence has its own filename family and remains a diagnostic sink.
+    # Policy/prepared/readiness bytes remain machine metadata. Only the mixed
+    # transition and failure records contain free diagnostic fields.
+    if path.name == "transition.json" or path.name.startswith("failure-"):
+        payload = mixed_status_record(payload)
     text = (serialize_json_for_sink(payload) if path.name.startswith("failure-")
             else serialize_machine_metadata(payload))
     with temporary.open("x", encoding="utf-8", newline="\n") as output:
@@ -741,6 +744,289 @@ def public_record(fields: Mapping[str, Any], allowed_codes, safe_messages) -> di
     return result
 
 
+PUBLIC_CODES = frozenset({
+    'PASS', 'FAIL', 'FAILED', 'BLOCKED', 'UNKNOWN', 'SKIPPED', 'READY', 'ABSENT',
+    'MISMATCH', 'NOT_CONFIGURED', 'START_REQUESTED', 'ALREADY_RUNNING',
+    'REPORT_UNAVAILABLE', 'SUPPORT_FAILURE', 'SUPPORT_RESULT', 'ARGUMENT_INVALID',
+    'runtime_error', 'ready', 'optional-not-configured', 'paused', 'running',
+    'stopped', 'idle', 'acked', 'pending', 'failed_permanent', 'operator_review',
+    'relay_operator', 'relay_runtime', 'relay_host', 'relay_bootstrap',
+    'registration', 'runtime_profile_check', 'runtime_profile_install',
+    'protected_admin_install', 'update_archive_check', 'relay_install',
+    'argument_parse', 'portable_entrypoint', 'user_relay',
+    'update_apply', 'onboarding', 'current_user_removal', 'replacement_lifecycle_restore',
+    'lifecycle_operation_invalid', 'lifecycle_owned_namespace_collision',
+    'lifecycle_namespace_parent_unavailable', 'lifecycle_data_namespace_collision',
+    'lifecycle_removed_control_remains', 'lifecycle_register_requires_installed_code',
+    'lifecycle_removed_tasks_remain_or_unknown', 'lifecycle_stock_protection_invalid',
+    'lifecycle_stock_layout_invalid', 'lifecycle_stock_manifest_invalid',
+    'lifecycle_control_incomplete', 'lifecycle_transition_requires_recovery',
+    'lifecycle_confirmed_pointer_mismatch', 'lifecycle_rolled_back_pointer_mismatch',
+    'lifecycle_pointer_mismatch', 'lifecycle_active_manifest_mismatch',
+    'lifecycle_active_trust_key_mismatch', 'lifecycle_task_absence_or_unknown',
+    'lifecycle_state_changed_during_verification', 'lifecycle_from_commit_mismatch',
+    'WRITER_GATE_TIMEOUT', 'ACTIVE_WRITER_FENCE', 'FENCE_REPARSE_REJECTED',
+    'FENCE_PATH_UNOBSERVABLE',
+    'invalid_operator_input', 'unknown_command', 'operator_report_write_failed',
+    'operator_audit_write_failed', 'hosted_relay_unhandled_exception',
+    'data_generation_downgrade_refused', 'data_generation_unknown',
+    'pause', 'resume', 'status', 'retry-dead', 'resolve-review', 'restore-spool',
+})
+SAFE_MESSAGES = (
+    '입력 항목을 확인하고 다시 실행하세요.',
+    '자료를 보존하고 관리자 지원 복구를 요청하세요.',
+    '설정 파일과 설치 경로를 확인하고 다시 실행하세요.',
+)
+_CONFIGURATION_STAGES = frozenset({
+    'runtime_profile_check', 'runtime_profile_install', 'protected_admin_install',
+    'update_archive_check', 'registration', 'relay_install',
+})
+
+
+def support_record(fields=None, *, stage, error=None):
+    # Caller-selected paths and diagnostic payloads confer no publication
+    # authority. Preserve only code/location fields at this public boundary.
+    permitted = {'status', 'code', 'reason_code', 'error_code', 'operation_code',
+                 'exit_code', 'exception_type', 'location_module',
+                 'location_function', 'location_line', 'audit_write_status',
+                 'audit_write_error_code'}
+    values = {name: value for name, value in dict(fields or {}).items()
+              if name in permitted}
+    values.update(stage=stage, report_status='REPORT_UNAVAILABLE')
+    if error is not None:
+        values.setdefault('status', 'FAILED')
+        values.update(reason_code='SUPPORT_FAILURE',
+                      exception_type=type(error).__module__ + '.' + type(error).__name__)
+        frame = error.__traceback__
+        if frame is not None:
+            while frame.tb_next is not None:
+                frame = frame.tb_next
+            values.update(location_module=frame.tb_frame.f_globals.get('__name__'),
+                          location_function=frame.tb_frame.f_code.co_name,
+                          location_line=frame.tb_lineno)
+    else:
+        values.setdefault('reason_code', 'SUPPORT_RESULT')
+    values['guidance'] = (SAFE_MESSAGES[0] if stage == 'argument_parse'
+                          else SAFE_MESSAGES[2] if stage in _CONFIGURATION_STAGES
+                          else SAFE_MESSAGES[1])
+    return public_record(values, PUBLIC_CODES, SAFE_MESSAGES)
+
+
+def emit_support_record(fields=None, *, stage, error=None, file=None):
+    print('CONTAINER_AUDIT_SUPPORT=' + json.dumps(
+        support_record(fields, stage=stage, error=error),
+        ensure_ascii=True, separators=(',', ':')), file=file or sys.stdout)
+
+
+def run_support_main(main, *, stage):
+    try:
+        return main()
+    except Exception as error:
+        emit_support_record(stage=stage, error=error, file=sys.stderr)
+        return 1
+
+
+class SupportArgumentParser(argparse.ArgumentParser):
+    """Argument failures must not echo user input or parser-generated sentences."""
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault('prog', 'Container_Audit support')
+        super().__init__(*args, **kwargs)
+
+    def error(self, message):
+        emit_support_record({'status': 'FAILED', 'reason_code': 'ARGUMENT_INVALID',
+                             'exit_code': 2}, stage='argument_parse', file=sys.stderr)
+        self.exit(2)
+
+
+# Registration only: these diagnostic sentences are literals in product code.
+REGISTERED_DIAGNOSTIC_MESSAGES = frozenset({
+    ' must not point at the legacy Syncthing folder',
+    '; ',
+    'admin recovery succeeded but the consumed protected authorization file could not be deleted: ',
+    'blocked_reason',
+    'data_generation_unknown',
+    'destination_path already exists',
+    'direct-sync relay is paused by local operator control',
+    'direct-sync relay operator pause marker is invalid',
+    'direct-sync relay paused before upload',
+    'direct-sync upload failed before returning a result: ',
+    'disk pressure check failed: ',
+    'free space is below configured direct-sync relay minimum',
+    'hosted DirectSync relay failed unexpectedly: ',
+    'legacy exact replay was explicitly not committed',
+    'message',
+    'persisted credential exact readback differs from the prepared credential',
+    'persisted manifest hash differs from the server-authorized manifest hash',
+    'producer ingest error response is not valid JSON',
+    'producer ingest redirected; redirects are not allowed',
+    'producer ingest response receipt is missing or invalid',
+    'producer ingest transport error: ',
+    'producer manifest identity is incomplete',
+    'producer manifest invalid: ',
+    'producer manifest is unavailable',
+    'producer manifest must be a JSON object',
+    'producer manifest stream does not match Container_Audit legacy CSV',
+    'raw artifact restore body does not match requested artifact',
+    'raw artifact restore could not write destination: ',
+    'raw artifact restore redirected; redirects are not allowed',
+    'raw artifact restore response headers do not match requested artifact',
+    'raw artifact restore returned HTTP ',
+    'raw artifact restore transport error: ',
+    'relay lease changed before final status update',
+    'relay queue database error: ',
+    'source file cannot be read before upload: ',
+    'source file changed after upload plan was built; rebuild the direct sync upload plan',
+    'spooled file cannot be read: ',
+    'spooled file content does not match queued content hash/byte length',
+    'upload metadata identity is incomplete',
+})
+
+_DIAGNOSTIC_KEYS = frozenset({
+    "blocked_reason", "error_message", "runtime_status_write_error_message",
+    "runtime_log_write_error_message", "stdout", "stderr", "stdout_tail", "stderr_tail", "command_line", "argv",
+    "message", "detail", "command",
+})
+_AUTHENTICATED_CONTAINER_KEYS = frozenset({
+    'identity', 'source_identity', 'credential', 'profile', 'manifest',
+    'metadata', 'receipt', 'server_receipt', 'credential_ref',
+})
+_FAILURE_DETAIL_KEYS = frozenset({'failure', 'failure_details', 'failure_evidence',
+                                'failure_evidence_refs', 'original_failure_text', 'traceback'})
+
+
+def mixed_status_record(value):
+    """Keep the existing schema and machine values; replace diagnostic leaves only.
+
+    No publication fields are added to an authenticated or status record.
+    This is called only for unprotected mixed status, never credentials or journals.
+    """
+    def diagnostic(item):
+        if isinstance(item, str):
+            return item if not item or item in REGISTERED_DIAGNOSTIC_MESSAGES or item in PUBLIC_CODES else "SUPPORT_FAILURE"
+        if isinstance(item, dict):
+            return {key: diagnostic(child) for key, child in item.items()}
+        if isinstance(item, list):
+            return [diagnostic(child) for child in item]
+        return item
+
+    def failure_detail(item):
+        if isinstance(item, dict):
+            return {key: child if key in {'type', 'exception_type', 'hresult',
+                                          'win32_error', 'winerror', 'errno'}
+                    else failure_detail(child) for key, child in item.items()}
+        if isinstance(item, list):
+            return [failure_detail(child) for child in item]
+        return diagnostic(item)
+
+    if isinstance(value, dict):
+        return {key: child if key in _AUTHENTICATED_CONTAINER_KEYS else
+                failure_detail(child) if key in _FAILURE_DETAIL_KEYS else
+                diagnostic(child) if key in _DIAGNOSTIC_KEYS or
+                _redact_field(str(key), child, _sink_policy()) or
+                (key == 'last_result' and isinstance(child, str))
+                else mixed_status_record(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [mixed_status_record(child) for child in value]
+    return value
+
+
+def serialize_mixed_status_record(value):
+    """Preserve machine fields and the existing compact report representation."""
+    projected = mixed_status_record(value)
+    # Reuse metadata admission before opening a temporary file. Applying the
+    # diagnostic redactor again would replace authenticated containers/types.
+    serialize_machine_metadata(projected)
+    return json.dumps(projected, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+
+
+# Fixed public wording and computed-field prefixes registered without changing
+# their existing emitters (contract 0e / coordinator five-source criterion).
+REGISTERED_PUBLIC_LITERALS = (
+    'BLOCKED: ',
+    'BLOCKED: --reader-principal is required for an actual install',
+    'BLOCKED: bearer token environment value is missing',
+    'BLOCKED: credential entries do not match',
+    'BLOCKED: protected administrator hidden input failed',
+    'BLOCKED: unsupported command-line argument',
+    'bootstrap_integrity=',
+    'current_user_removal_report=',
+    'current_user_removal_status=',
+    'data_preserved=true',
+    'direct_sync_operator_audit_write_error_code=',
+    'direct_sync_operator_audit_write_status=',
+    'direct_sync_operator_operation=',
+    'direct_sync_operator_report_error_code=',
+    'direct_sync_operator_report_status=',
+    'direct_sync_operator_status=',
+    'direct_sync_relay_status=',
+    'direct_sync_scan_attempted_count=',
+    'direct_sync_scan_enqueued_count=',
+    'direct_sync_scan_no_new_count=',
+    'direct_sync_scan_status=',
+    'direct_sync_scan_terminal_blocked_count=',
+    'machine_code_removal_command=INSTALL_CANONICAL_PORTABLE.ps1 -Uninstall',
+    'manifest_hash_verification=FAIL',
+    'manifest_hash_verification=PASS',
+    'onboarding_action=',
+    'onboarding_input_binding=',
+    'onboarding_report=',
+    'onboarding_status=',
+    'registration_response=superseded',
+    'replacement_lifecycle_restore_action=',
+    'replacement_lifecycle_restore_report=',
+    'replacement_lifecycle_restore_status=',
+)
+SAFE_MESSAGES += REGISTERED_PUBLIC_LITERALS + tuple(sorted(REGISTERED_DIAGNOSTIC_MESSAGES))
+PUBLIC_CODES |= frozenset({
+    'ABSENT',
+    'ABSENT_RETRYABLE',
+    'BLOCKED',
+    'DEFERRED_CANONICAL_RELEASE',
+    'FAIL',
+    'FAILED',
+    'FAILED_VERSION_PRESERVED',
+    'LOCAL_REGISTRATION_WRITTEN_PENDING_SECRET',
+    'NOT_REGISTERED',
+    'NOT_TESTED',
+    'NO_UPDATE',
+    'OFF',
+    'PASS',
+    'PASS_DATA_PRESERVED',
+    'PREPARED',
+    'READY',
+    'RECOVERY_REQUIRED',
+    'RESUME_TWO_PHASE_RECOVERY',
+    'RUNNING',
+    'SKIPPED',
+    'START_REQUESTED',
+    'STOP_REQUESTED',
+    'UNKNOWN',
+    'existing_terminal_blocked',
+    'existing_terminal_delta_blocked',
+    'hosted_relay_unhandled_exception',
+    'invalid_operator_input',
+    'operator_supplied_uncontacted',
+    'optional-not-configured',
+    'reattached',
+    'recorded',
+    'recorded_from_acked_target',
+    'recovered',
+    'reused',
+    'rotated',
+    'runtime_error',
+    'scheduled_task_command_start_failed',
+    'unknown_command',
+    'upgraded',
+})
+
+# Source-derived fixed code registration; existing emitters remain unchanged.
+PUBLIC_CODES |= frozenset(['ABSENT', 'ABSENT_RETRYABLE', 'BLOCKED', 'DEFERRED_CANONICAL_RELEASE', 'FAIL', 'FAILED', 'FAILED_VERSION_PRESERVED', 'INSTALLER_CHILD_FAILURE', 'LOCAL_REGISTRATION_WRITTEN_PENDING_SECRET', 'NOT_REGISTERED', 'NOT_TESTED', 'NO_UPDATE', 'OFF', 'PASS', 'PASS_DATA_PRESERVED', 'PREPARED', 'READY', 'RECOVERY_REQUIRED', 'RESUME_TWO_PHASE_RECOVERY', 'RUNNING', 'SKIPPED', 'START_REQUESTED', 'STOP_REQUESTED', 'UNKNOWN', 'blocked', 'disk_pressure_check_failed', 'existing_terminal_blocked', 'existing_terminal_delta_blocked', 'hosted_relay_unhandled_exception', 'invalid', 'invalid_operator_input', 'not_applicable', 'not_checked', 'not_found', 'not_initialized', 'operator_pause_resume_failed', 'operator_pause_write_failed', 'operator_review', 'operator_review_committed_receipt_not_retryable', 'operator_review_receipt_invalid', 'operator_supplied_uncontacted', 'optional-not-configured', 'pass', 'paused', 'producer_manifest_identity_incomplete', 'producer_manifest_invalid', 'producer_manifest_stream_mismatch', 'producer_manifest_unavailable', 'reattached', 'recorded', 'recorded_from_acked_target', 'recovered', 'relay_db_not_initialized', 'relay_db_open_failed', 'relay_db_schema_unavailable', 'relay_db_unavailable', 'relay_failure_cause_not_approved_for_retry', 'relay_metadata_invalid', 'relay_not_found', 'relay_queue_db_error', 'relay_status_changed', 'relay_status_not_retryable_by_operator', 'reused', 'rotated', 'runtime_error', 'runtime_status_invalid', 'runtime_status_not_found', 'runtime_status_unreadable', 'scheduled_task_command_start_failed', 'spooled_file_digest_mismatch', 'spooled_file_missing', 'unavailable', 'unknown_command', 'upgraded'])
+REGISTERED_POWERSHELL_PUBLIC_LITERALS = ('CONTAINER_AUDIT_INSTALL_HELPER=', 'CONTAINER_AUDIT_SUPPORT=', 'ConvertTo-Json', 'ConvertTo-KmtechRedactedSinkText', 'Count', 'Current-user runtime restored. New verified code remains at ', 'Data', 'Get-FileSha256', 'HelperStageEvidenceRoot', 'INSTALLATION_EVIDENCE_FINAL_AUDIT_SAVE_FAILED', 'INSTALLATION_EVIDENCE_FINAL_EVIDENCE_SAVE_FAILED', 'IsNullOrWhiteSpace', 'ResultPath', 'Stdout', 'acl_owner_sid=S-1-5-32-544', 'acl_readback_status=', 'acl_readback_status=UNKNOWN', 'aggregate_sha256=', 'ancestor_trust_failure', 'ancestor_trust_failure=', 'bootstrap_status=', 'bootstrap_status=DRY_RUN', 'code_placement_preflight_failure=', 'code_placement_preflight_failure=CONTAINER_PLACEMENT_ELEVATION_FAILED', 'code_placement_preflight_failure=CONTAINER_PLACEMENT_LOG_WRITE_FAILED', 'container_recovery_receipt=', 'container_recovery_receipt_sha256=', 'container_recovery_status=', 'dacl_normalized=true', 'elevation_points=1:code_placement', 'failure_code', 'file_count=', 'hiberboot_enabled=', 'hiberboot_read_status=', 'identity_profile_created=false', 'installation_elevation_result_path=', 'installation_evidence_status=', 'installation_evidence_summary_path=', 'installation_stage_evidence_root=', 'name', 'operator_message', 'path', 'protected_admin_provision=PASS mode=', 'record', 'release_layout=', 'removal_child_failure', 'replacement_receipt_sha256=', 'replacement_receipt_status=OLD_PRESERVED_NEW_VERIFIED', 'replacement_receipt_validation_evidence=', 'replacement_receipt_validation_evidence_sha256=', 'replacement_receipt_validation_status=', 'replacement_restore_evidence_sha256=', 'replacement_restore_receipt_required_at_apply=true', 'replacement_restore_schema=container-audit-verified-replacement-v1', 'replacement_restore_status=', 'replacement_restore_status=DRY_RUN', 'replacement_restore_status=ROLLBACK_FAILED', 'replacement_rollback_status=PRESERVED', 'replacement_transaction_id=', 'retirement_child_failure', 'retirement_failure_summary=', 'retirement_recovery_child_failure', 'retirement_recovery_failure_summary=', 'rollback', 'rollback_audit_status=UNAVAILABLE', 'rollback_evidence_failure_record_status=UNAVAILABLE', 'rollback_evidence_status=UNAVAILABLE', 'sha256', 'startup_update_status=NOT_TESTED_HOST', 'startup_update_status=REGISTERED_LOGON_SYSTEM_CODE_ONLY', 'startup_update_task=', 'status', 'stderr', 'stdout', 'summary_path', 'tls_ca_bootstrap_configured=', 'tls_ca_bootstrap_status=ABSENT', 'tls_ca_bootstrap_status=PASS', 'writer_restore_receipt=', 'writer_restore_receipt_sha256=', 'writer_restore_status=', 'writer_session_receipt=', 'writer_session_receipt_sha256=', 'writer_session_status=', 'writer_session_validation_failure_code=', 'writer_session_validation_status=', '관리자 암호를 입력한 다음 같은 암호를 다시 입력하세요.', '자료 판이 옛 판의 실행을 허용하지 않아 옛 전송 예약 작업을 되살리지 않았습니다. 자료와 복구 기록을 보존하고 관리자 지원 복구를 요청하세요.')
+SAFE_MESSAGES += REGISTERED_POWERSHELL_PUBLIC_LITERALS
+
+
+
+
 def failure_user_line(error: object) -> str:
     safe = _failure_text(error, limit=65536)
     lines = [line.strip() for line in safe.splitlines() if line.strip()
@@ -805,26 +1091,8 @@ def _failure_details(error: BaseException) -> list[dict]:
 
 
 def _write_failure_evidence(control: Path, error: BaseException) -> list[dict]:
-    refs, seen = [], set()
-    while error is not None and id(error) not in seen and len(refs) < 64:
-        seen.add(id(error))
-        entry = {"type": type(error).__module__ + "." + type(error).__name__, "streams": {}}
-        for name, value in (("message", getattr(error, "original_failure_text", str(error))), ("stdout", getattr(error, "stdout", None)), ("stderr", getattr(error, "stderr", None))):
-            if not isinstance(value, (str, bytes)):
-                continue
-            # JSON escaping and envelope bytes are budgeted before writing;
-            # the text has already been redacted in memory.
-            safe = _failure_text(value, limit=57344)
-            payload = {"schema": "container-audit-redacted-failure-text-v1", "text": safe}
-            while len(json.dumps(payload, ensure_ascii=True).encode()) > 65535:
-                safe = _failure_text(safe, limit=max(128, len(safe.encode()) // 2))
-                payload["text"] = safe
-            path = control / ("failure-text-" + uuid.uuid4().hex + ".json")
-            write_json_durable(path, payload)
-            entry["streams"][name] = {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "complete": "[TRUNCATED:" not in safe}
-        refs.append(entry)
-        error = error.__cause__ or error.__context__
-    return refs
+    """No original files: update-control has no verified reader protection."""
+    return []
 
 
 def installation_root(app_root: Path) -> Path | None:
@@ -1217,7 +1485,8 @@ def apply_prepared(control: Path) -> int:
             not_applied = pointer == before and (not state or state.get("phase") in {"CONFIRMED", "ROLLED_BACK", "DEFERRED", "PREPARED"})
             failure = {**(state or {}), "schema": SCHEMA,
                        "phase": "DEFERRED" if not_applied else "UNKNOWN",
-                       "deferred_at": now_utc(), "reason": type(error).__name__, "failure_details": _failure_details(error), "failure_evidence": _write_failure_evidence(control, error)}
+                       "deferred_at": now_utc(), "reason": type(error).__name__, "failure_details": _failure_details(error), "failure_evidence": []}
+            failure = mixed_status_record(failure)
             write_json_durable(control / ("failure-" + uuid.uuid4().hex + ".json"), failure)
             write_json_durable(control / "transition.json", failure)
         return 0 if not_applied else 20
@@ -1931,7 +2200,7 @@ def main(arguments: list[str] | None = None) -> int:
     import argparse
     import sys
 
-    parser = argparse.ArgumentParser()
+    parser = SupportArgumentParser()
     parser.add_argument("--bootstrap", action="store_true")
     parser.add_argument("--apply-prepared", action="store_true")
     parser.add_argument("--control-root", type=Path)
@@ -1951,7 +2220,7 @@ def main(arguments: list[str] | None = None) -> int:
             print(json.dumps(context, ensure_ascii=True))
             return 0
         except (OSError, ValueError, RuntimeError) as error:
-            print(json.dumps(dict(status='FAILED', message=LIFECYCLE_RECOVERY, error_type=type(error).__name__, failure_details=_failure_details(error)), ensure_ascii=True))
+            print(json.dumps(mixed_status_record(dict(status='FAILED', message=LIFECYCLE_RECOVERY, error_type=type(error).__name__, failure_details=_failure_details(error))), ensure_ascii=True))
             return 20
     if options.print_logon_task:
         if options.apply_prepared or options.bootstrap or options.arguments or options.install_root is None:
@@ -1979,4 +2248,4 @@ def main(arguments: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_support_main(main, stage='update_apply'))

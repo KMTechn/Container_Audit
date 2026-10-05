@@ -660,6 +660,7 @@ def _admission_available_in_other_process(mutex_name: str) -> bool:
         capture_output=True,
         text=True,
         timeout=10,
+        creationflags=0x08000000,
     )
     assert result.returncode in {0, 7}, result.stderr
     return result.returncode == 0

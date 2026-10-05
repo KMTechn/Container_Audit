@@ -424,7 +424,8 @@ def _append_operator_audit(audit_log_path: str | os.PathLike[str], *, action: st
         "tool_version": OPERATOR_TOOL_VERSION,
         "generated_at": utc_now_text(),
     }
-    entry.update(dict(report))
+    from auto_update import support_record
+    entry.update(support_record(report, stage='relay_operator'))
     _append_jsonl(audit_log_path, entry)
 
 

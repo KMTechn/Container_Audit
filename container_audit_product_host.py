@@ -93,6 +93,9 @@ def _record_hosted_relay_failure(arguments: Sequence[str], error: Exception) -> 
     if isinstance(error, DataGenerationBlocked):
         print(error.user_message)
         return
+    from auto_update import support_record
+    # Identity/status metadata is consumed by health and onboarding. The error
+    # sentence above contains only a fixed prefix and the computed type name.
     status_path = _option_value(arguments, "--runtime-status-path")
     if not status_path and USER_RELAY_MODE in arguments:
         try:
@@ -125,14 +128,14 @@ def _record_hosted_relay_failure(arguments: Sequence[str], error: Exception) -> 
         try:
             _append_jsonl(
                 Path(log_path),
-                {
+                support_record({
                     "event": "hosted_relay_unhandled_exception",
                     "app": "Container_Audit",
                     "worker_id": worker_id,
                     "error_code": diagnostic["error_code"],
                     "error_type": error_type,
                     "generated_at": captured_at,
-                },
+                }, stage='relay_host', error=error),
             )
         except Exception:
             pass

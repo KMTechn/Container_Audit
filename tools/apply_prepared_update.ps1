@@ -236,6 +236,16 @@ function Assert-StartupUpdateVersion([string]$Root, [string]$Candidate) {
     } else { throw 'STARTUP_UPDATE_PREVIOUS_RECORD_MISSING' }
 }
 
+function Get-StartupUpdatePublicFailure($Failure,[int]$ExitCode=1) {
+    $exception=if($Failure -is [Exception]){$Failure}else{$Failure.Exception}
+    $fields=[ordered]@{status='FAILED';stage='startup_update';reason_code='STARTUP_UPDATE_FAILURE';
+        exit_code=$ExitCode;exception_type=$exception.GetType().FullName;
+        report_status='REPORT_UNAVAILABLE';guidance='기존 설치 상태와 예약 작업을 확인하고 관리자 지원 복구를 요청하세요.'}
+    if($Failure -is [Management.Automation.ErrorRecord]){$fields.location_line=[int]$Failure.InvocationInfo.ScriptLineNumber}
+    return ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes @('FAILED','startup_update','STARTUP_UPDATE_FAILURE','REPORT_UNAVAILABLE') -SafeMessages @('기존 설치 상태와 예약 작업을 확인하고 관리자 지원 복구를 요청하세요.')
+}
+
+try {
 $authority = Enter-ContainerStartupUpdateAuthority
 if ($Mode -ceq 'Authority') { exit 0 }
 if ($Mode -ceq 'Observe') {
@@ -250,5 +260,24 @@ if ($Mode -ceq 'Verify') {
 if ($CodeRoot) { throw 'STARTUP_UPDATE_APPLY_HAS_NO_USER_CODE_ARGUMENT' }
 $runtime = Join-Path $authority.root 'runtime\python.exe'
 $implementation = Join-Path $authority.root 'app\auto_update.py'
-& $runtime -I -B $implementation --apply-prepared --control-root (Join-Path (Split-Path -Parent $authority.root) 'update-control')
-exit $LASTEXITCODE
+$childOutput=@(& $runtime -I -B $implementation --apply-prepared --control-root (Join-Path (Split-Path -Parent $authority.root) 'update-control') 2>&1)
+$childExitCode=$LASTEXITCODE
+# Apply has no machine-output protocol. Native streams are diagnostic inputs;
+# there is no proven private writer in this invocation, so discard originals.
+if($childExitCode -ne 0){
+    $failure=[InvalidOperationException]::new('STARTUP_UPDATE_FAILURE')
+    $public=Get-StartupUpdatePublicFailure $failure $childExitCode
+    [Console]::Out.WriteLine('CONTAINER_AUDIT_UPDATE='+($public|ConvertTo-Json -Depth 4 -Compress))
+}
+exit $childExitCode
+} catch {
+    if($script:StartupUpdateBootstrapLoaded){
+        $public=Get-StartupUpdatePublicFailure $_ 1
+        [Console]::Out.WriteLine('CONTAINER_AUDIT_UPDATE='+($public|ConvertTo-Json -Depth 4 -Compress))
+    } else {
+        # Before the pinned policy can be loaded, only a fully fixed record is
+        # emitted; this is not a second validation/redaction implementation.
+        [Console]::Out.WriteLine('CONTAINER_AUDIT_UPDATE={"status":"FAILED","stage":"startup_update","reason_code":"STARTUP_UPDATE_FAILURE","exit_code":1,"report_status":"REPORT_UNAVAILABLE","guidance":"기존 설치 상태와 예약 작업을 확인하고 관리자 지원 복구를 요청하세요."}')
+    }
+    exit 1
+}

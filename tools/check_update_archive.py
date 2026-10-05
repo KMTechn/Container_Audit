@@ -105,7 +105,8 @@ def compare_staged_and_extracted(package_root: Path, extracted_root: Path) -> di
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Validate and extract a Container_Audit update archive")
+    from auto_update import SupportArgumentParser, emit_support_record
+    parser = SupportArgumentParser(description="Validate and extract a Container_Audit update archive")
     parser.add_argument("--zip-path", required=True)
     parser.add_argument("--destination", required=True)
     parser.add_argument("--package-root", required=True)
@@ -114,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     destination = Path(args.destination).resolve()
     if destination.exists():
         if not destination.is_dir() or any(destination.iterdir()):
-            print(f"destination must be an empty directory or absent: {destination}", file=sys.stderr)
+            emit_support_record({'status': 'BLOCKED'}, stage='update_archive_check', file=sys.stderr)
             return 2
     try:
         safe_extract_update_zip(args.zip_path, destination)
@@ -122,15 +123,13 @@ def main(argv: list[str] | None = None) -> int:
         extracted_root = destination / package_root.name
         report = compare_staged_and_extracted(package_root, extracted_root)
     except ValueError as exc:
-        message = str(exc)
-        if "runtime-local" in message and "현장 런타임/민감 상태 파일" not in message:
-            message = "업데이트 ZIP에 현장 런타임/민감 상태 파일이 포함되어 있습니다: " + message
-        print(message, file=sys.stderr)
+        emit_support_record(stage='update_archive_check', error=exc, file=sys.stderr)
         return 1
     report["update_archive_smoke_dir"] = str(destination)
-    print(json.dumps(report, sort_keys=True))
+    emit_support_record(report, stage='update_archive_check')
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from auto_update import run_support_main
+    raise SystemExit(run_support_main(main, stage='update_archive_check'))

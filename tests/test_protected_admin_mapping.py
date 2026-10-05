@@ -747,6 +747,7 @@ def test_windows_empty_temp_file_acl_readback_is_exact(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         timeout=10,
+        creationflags=0x08000000,
     )
     assert identity.returncode == 0 and identity.stdout.strip(), 'elevated Windows identity lookup failed'
     reader_sid = installer._resolve_reader_sid(identity.stdout.strip())
@@ -775,6 +776,7 @@ def test_windows_temp_profile_acl_integration(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         timeout=10,
+        creationflags=0x08000000,
     )
     assert identity.returncode == 0 and identity.stdout.strip(), 'elevated Windows identity lookup failed'
     target = tmp_path / "acl-integration" / "protected_admin.json"

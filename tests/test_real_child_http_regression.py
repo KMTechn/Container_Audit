@@ -507,6 +507,7 @@ def test_real_child_relay_drains_csv_over_loopback_https(
             capture_output=True,
             text=True,
             timeout=45,
+            creationflags=0x08000000,
         )
         assert bundle["marker_path"].is_file(), (
             "relay child did not load tests/sitecustomize.py; writer isolation is unproven"
@@ -624,4 +625,5 @@ def test_start_user_relay_process_spawns_real_child(
                 check=False,
                 capture_output=True,
                 timeout=10,
+                creationflags=0x08000000,
             )

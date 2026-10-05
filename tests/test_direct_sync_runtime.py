@@ -492,9 +492,8 @@ def test_runtime_credential_error_redacts_sensitive_assignments(monkeypatch, tmp
     for status in (enqueue_status, run_status):
         assert "DO_NOT_EXPOSE" not in status["error_message"]
         assert "\n" not in status["error_message"]
-        assert "secret=[redacted]" in status["error_message"]
-        assert "token=[redacted]" in status["error_message"]
-        assert "signature=[redacted]" in status["error_message"]
+        # Unprotected mixed status keeps the key/type, but codes diagnostics.
+        assert status["error_message"] == "SUPPORT_FAILURE"
     combined_text = (
         Path(config.runtime_status_path).read_text(encoding="utf-8")
         + Path(config.log_path).read_text(encoding="utf-8")
@@ -705,9 +704,12 @@ def test_runtime_status_and_log_bind_manifest_source_identity(tmp_path):
     ).hexdigest()
     assert persisted["source_identity"]["source_scope_key"] == expected_source_scope
     assert persisted["producer_manifest_sha256"] == manifest_sha256
-    assert log_entry["source_identity"]["source_scope_key"] == expected_source_scope
-    assert log_entry["producer_manifest_sha256"] == manifest_sha256
-    assert log_entry["manifest_hash"] == expected_manifest_hash
+    # Mixed-status decision keeps authenticated identity/manifest bytes above;
+    # the standalone public event drops nested/external diagnostic context.
+    assert log_entry['stage'] == 'relay_runtime'
+    assert log_entry['report_status'] == 'REPORT_UNAVAILABLE'
+    assert 'source_identity' not in log_entry
+    assert expected_source_scope not in json.dumps(log_entry)
 
 
 @pytest.mark.parametrize(

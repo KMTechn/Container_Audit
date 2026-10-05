@@ -479,6 +479,7 @@ def test_install_pack_dry_run_writes_redacted_scheduled_task_plan(tmp_path):
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     assert completed.returncode == 0
@@ -600,6 +601,7 @@ def test_system_task_launcher_pins_environment_without_comspec_and_records_sanit
         check=False,
         capture_output=True,
         text=True,
+        creationflags=0x08000000,
     )
 
     assert completed.returncode == 23
@@ -968,6 +970,7 @@ def test_install_pack_source_scan_defaults_to_file_age_grace_period(tmp_path):
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     assert completed.returncode == 0
@@ -1009,6 +1012,7 @@ def test_install_pack_blocks_negative_safety_limits(tmp_path, option, report_sec
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     assert completed.returncode == 2
@@ -1040,6 +1044,7 @@ def test_install_pack_blocks_missing_scan_source_dir(tmp_path):
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     assert completed.returncode == 2
@@ -1075,6 +1080,7 @@ def test_install_pack_blocks_recursive_scan_source_glob(tmp_path):
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     assert completed.returncode == 2
@@ -1107,6 +1113,7 @@ def test_install_pack_blocks_missing_app_root_runtime_dependencies(tmp_path):
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     assert completed.returncode == 2
@@ -1139,6 +1146,7 @@ def test_install_pack_blocks_missing_python_executable(tmp_path):
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     assert completed.returncode == 2
@@ -1180,6 +1188,7 @@ def test_install_pack_dry_run_skips_python_runtime_import_probe_by_default(tmp_p
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     report = _plan_before_sink(report_path)
@@ -1245,6 +1254,7 @@ def test_install_pack_blocks_python_that_cannot_import_runtime_modules_when_prob
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     report = _plan_before_sink(report_path)
@@ -1275,6 +1285,7 @@ def test_install_pack_blocks_missing_manifest_file(tmp_path):
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     assert completed.returncode == 2
@@ -1307,6 +1318,7 @@ def test_install_pack_blocks_manifest_without_container_stream(tmp_path):
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     assert completed.returncode == 2
@@ -1339,6 +1351,7 @@ def test_install_pack_blocks_manifest_with_wrong_producer_role(tmp_path):
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     assert completed.returncode == 2
@@ -1370,6 +1383,7 @@ def test_install_pack_blocks_malformed_credential_without_leaking_secret(tmp_pat
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     report_text = report_path.read_text(encoding="utf-8-sig")
@@ -1407,6 +1421,7 @@ def test_install_pack_blocks_duplicate_json_keys_without_shadowing_values(tmp_pa
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     report_text = report_path.read_text(encoding="utf-8-sig")
@@ -1444,6 +1459,7 @@ def test_install_pack_blocks_non_string_or_blank_raw_secret_without_leaking_valu
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     report_text = report_path.read_text(encoding="utf-8-sig")
@@ -1478,6 +1494,7 @@ def test_install_pack_blocks_credential_with_invalid_endpoint(tmp_path):
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     report = _plan_before_sink(report_path)
@@ -1511,6 +1528,7 @@ def test_install_pack_blocks_credential_with_private_endpoint_literal(tmp_path):
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     report = _plan_before_sink(report_path)
@@ -1678,6 +1696,7 @@ def test_install_pack_apply_without_confirm_is_blocked(tmp_path):
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     assert completed.returncode == 2
@@ -2264,6 +2283,7 @@ def test_install_pack_blocks_relative_program_data_root(tmp_path):
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     assert completed.returncode == 2
@@ -2295,6 +2315,7 @@ def test_install_pack_blocks_program_data_root_that_is_existing_file(tmp_path):
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        creationflags=0x08000000,
     )
 
     assert completed.returncode == 2

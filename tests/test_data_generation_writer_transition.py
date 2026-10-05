@@ -23,7 +23,7 @@ def test_forward_generation_exception_is_exact_and_closed(tmp_path, mutation):
     (before/'main.py').write_bytes(b'# baseline entry\n')
     (after/'main.py').write_bytes(b'# guarded entry\n')
     (before/'portable-manifest.json').write_text(json.dumps({'source_commit':'ea566d131f37db3ee74468e1645c6b57ac45b6fa'}))
-    old = json.loads(subprocess.check_output(['git','show','ea566d1:tools/container_writer_sink_inventory.json'],cwd=ROOT))
+    old = json.loads(subprocess.check_output(['git','show','ea566d1:tools/container_writer_sink_inventory.json'],cwd=ROOT, creationflags=0x08000000))
     # This predicate authorizes only the two original route changes.  The whole
     # assembly is admitted separately through exact approved release pairs.
     new = copy.deepcopy(old)
@@ -92,6 +92,6 @@ Test-ContainerDataGenerationForwardTransition -BeforeRoot $args[1] -AfterRoot $a
     completed=subprocess.run([str(executable),'-NoProfile','-NonInteractive','-File',str(script),
         str(ROOT/'INSTALL_CANONICAL_PORTABLE.ps1'),
         str(before),str(after),str(old_path),str(new_path)],capture_output=True,text=True,
-        creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        creationflags=0x08000000)
     assert completed.returncode==0, completed.stderr[-1200:]
     assert completed.stdout.strip()==('True' if mutation=='none' else 'False')

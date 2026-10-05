@@ -110,7 +110,7 @@ def test_install_pack_json_sink_redacts_and_bounds_the_whole_envelope(tmp_path, 
     assert len(data) <= 65536
     assert synthetic.encode() not in data
     assert b'synthetic-only-pin' not in data
-    assert json.loads(data)['nested']['admin_pin'] == '[REDACTED:field]'
+    assert json.loads(data)['nested']['admin_pin'] == 'SUPPORT_FAILURE'
 
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
