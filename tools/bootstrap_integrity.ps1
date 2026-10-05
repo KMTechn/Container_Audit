@@ -97,9 +97,9 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
                     if($depth -eq 0 -and $ch -cin @(',',"`r","`n")){break}
                 }
                 try{$fieldValue=ConvertFrom-Json -InputObject $Text.Substring($begin,$end-$begin) -ErrorAction Stop;if(-not(Test-RedactedField $key $fieldValue)){continue}}catch{}
-                $spans+=,@{start=$begin;end=$end};$covered=$end
+                $spans+=,@{offset=$begin;end=$end};$covered=$end
             }
-            foreach($span in @($spans|Sort-Object start -Descending)){$Text=$Text.Substring(0,$span.start)+'"'+$policy.field_marker+'"'+$Text.Substring($span.end)}
+            foreach($span in @($spans|Sort-Object offset -Descending)){$Text=$Text.Substring(0,$span.offset)+'"'+$policy.field_marker+'"'+$Text.Substring($span.end)}
 
             # Retain existing non-JSON credential assignments/header protection.
             $Text=[regex]::Replace($Text,'(?i)(\b[A-Za-z0-9_-]*(?:secret|token|signature|password|credential|registration[_-]?(?:value|code)|api[_-]?key)[A-Za-z0-9_-]*\s*[=:]\s*)([^\r\n,;]+)',[Text.RegularExpressions.MatchEvaluator]{param($m) if($m.Groups[2].Value.StartsWith('[REDACTED:')){return $m.Value};return $m.Groups[1].Value+$policy.field_marker})

@@ -6909,7 +6909,7 @@
     "closure_module_count": 108,
     "external_process_mutation_site_count": 18,
     "powershell_direct_mutation_site_count": 91,
-    "powershell_execution_site_count": 64,
+    "powershell_execution_site_count": 63,
     "powershell_execution_site_counts_by_kind": {
       "call_operator": 16,
       "com_wmi_process_create": 5,
@@ -6919,9 +6919,9 @@
       "native_process_api": 4,
       "reflective_invocation": 6,
       "scheduler_com": 5,
-      "start_process": 3
+      "start_process": 2
     },
-    "powershell_mutation_scope_count": 62,
+    "powershell_mutation_scope_count": 61,
     "powershell_sink_count": 2,
     "python_external_control_literal_site_count": 5,
     "scheduled_task_mutation_site_count": 12,
@@ -7549,7 +7549,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "4dbee950d1c1047a2e61763de245c1ccbf7473b0d08e9f02fd84cdc8f0f8b96b",
+  "inventory_sha256": "66143ad5a338426c59593d9ca91b68aaee321ca5c9542c62da0dba6f44ada133",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -8959,18 +8959,6 @@
         "kind": "call_operator",
         "line": 253,
         "target": "$runtime",
-        "target_static": false
-      },
-      {
-        "command": "start",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "Protect-InstallationText",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "start_process",
-        "line": 100,
-        "target": "",
         "target_static": false
       },
       {
@@ -11329,18 +11317,6 @@
         "target_static": false
       },
       {
-        "command": "start",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "Protect-InstallationText",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "start_process",
-        "line": 100,
-        "target": "",
-        "target_static": false
-      },
-      {
         "command": "&",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "New-InstallationMemoryTransport",
@@ -12775,18 +12751,6 @@
         },
         "file": "tools/bootstrap_integrity.ps1",
         "sites": [
-          {
-            "command": "start",
-            "file": "tools/bootstrap_integrity.ps1",
-            "function": "Protect-InstallationText",
-            "guard_line": null,
-            "guard_name": "",
-            "guarded": false,
-            "kind": "start_process",
-            "line": 100,
-            "target": "",
-            "target_static": false
-          },
           {
             "command": "Set-Acl",
             "file": "tools/bootstrap_integrity.ps1",
@@ -15229,194 +15193,6 @@
       {
         "call_sites": [
           {
-            "caller": "ConvertTo-KmtechRedactedSinkText",
-            "guarded_top_level": false,
-            "line": 137,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Get-InstallationFailureDetails",
-            "guarded_top_level": false,
-            "line": 160,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "New-InstallationProtectedEvidenceRun",
-            "guarded_top_level": false,
-            "line": 433,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Initialize-InstallationEvidence",
-            "guarded_top_level": false,
-            "line": 481,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Write-InstallationEvidenceEvent",
-            "guarded_top_level": false,
-            "line": 497,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Write-InstallationEvidenceEvent",
-            "guarded_top_level": false,
-            "line": 499,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Write-InstallationEvidenceEvent",
-            "guarded_top_level": false,
-            "line": 500,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Complete-InstallationEvidence",
-            "guarded_top_level": false,
-            "line": 539,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Complete-InstallationEvidence",
-            "guarded_top_level": false,
-            "line": 546,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Get-InstallationElevationWrapperSource",
-            "guarded_top_level": false,
-            "line": 853,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Get-InstallationNormalProducerWrapperSource",
-            "guarded_top_level": false,
-            "line": 982,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Write-InstallationCaughtFailure",
-            "guarded_top_level": false,
-            "line": 1072,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Write-InstallationCaughtFailure",
-            "guarded_top_level": false,
-            "line": 1086,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Write-InstallationCaughtFailure",
-            "guarded_top_level": false,
-            "line": 1093,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Write-InstallationCaughtFailure",
-            "guarded_top_level": false,
-            "line": 1103,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Write-InstallationCaughtFailure",
-            "guarded_top_level": false,
-            "line": 1108,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Write-InstallationCaughtFailure",
-            "guarded_top_level": false,
-            "line": 1110,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "ConvertTo-SafeInstallationOutput",
-            "guarded_top_level": false,
-            "line": 1202,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "ConvertTo-SafeInstallationOutput",
-            "guarded_top_level": false,
-            "line": 1207,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Invoke-InstallationEvidenceChild",
-            "guarded_top_level": false,
-            "line": 1214,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Invoke-InstallationEvidenceChild",
-            "guarded_top_level": false,
-            "line": 1225,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Get-InstallationFallbackDiagnostic",
-            "guarded_top_level": false,
-            "line": 1274,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Get-InstallationFallbackDiagnostic",
-            "guarded_top_level": false,
-            "line": 1276,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Get-InstallationFallbackDiagnostic",
-            "guarded_top_level": false,
-            "line": 1283,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Get-InstallationFallbackDiagnostic",
-            "guarded_top_level": false,
-            "line": 1284,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Get-InstallationFallbackDiagnostic",
-            "guarded_top_level": false,
-            "line": 1285,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Get-InstallationFallbackDiagnostic",
-            "guarded_top_level": false,
-            "line": 1289,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Get-InstallationFallbackDiagnostic",
-            "guarded_top_level": false,
-            "line": 1291,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Write-Utf8Json",
-            "guarded_top_level": false,
-            "line": 1577,
-            "non_production_mode": ""
-          }
-        ],
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "Protect-InstallationText",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "non_production_only": false,
-        "non_production_reachable": false,
-        "production_reachable": false,
-        "safe_reachable": false,
-        "unsafe_reachable": false
-      },
-      {
-        "call_sites": [
-          {
             "caller": "Initialize-InstallationProtectedBase",
             "guarded_top_level": false,
             "line": 382,
@@ -16240,20 +16016,7 @@
         "unsafe_reachable": false
       }
     ],
-    "guard_failures": [
-      {
-        "command": "start",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "Protect-InstallationText",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "start_process",
-        "line": 100,
-        "target": "",
-        "target_static": false
-      }
-    ],
+    "guard_failures": [],
     "installer_delegated_sources": [
       "__INVENTORY_ALL_SOURCES__"
     ],
@@ -16613,15 +16376,6 @@
         "site_count": 1,
         "site_kinds": [
           "filesystem_mutation"
-        ]
-      },
-      {
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "Protect-InstallationText",
-        "guarded": false,
-        "site_count": 1,
-        "site_kinds": [
-          "start_process"
         ]
       },
       {
@@ -17048,7 +16802,7 @@
       "reflective_invocation": 6,
       "scheduled_task_cmdlet": 12,
       "scheduler_com": 5,
-      "start_process": 3
+      "start_process": 2
     },
     "writer_sinks": [
       {
@@ -17085,20 +16839,7 @@
       }
     ]
   },
-  "powershell_guard_failures": [
-    {
-      "command": "start",
-      "file": "tools/bootstrap_integrity.ps1",
-      "function": "Protect-InstallationText",
-      "guard_line": null,
-      "guard_name": "",
-      "guarded": false,
-      "kind": "start_process",
-      "line": 100,
-      "target": "",
-      "target_static": false
-    }
-  ],
+  "powershell_guard_failures": [],
   "powershell_writer_sinks": [
     {
       "file": "INSTALL_THIS_PC.ps1",
