@@ -30,6 +30,7 @@ $Script:CanonicalWriterFenceAttemptId = ''
 $Script:CanonicalWriterFenceTransactionId = ''
 $Script:CanonicalWriterFenceDelegationToken = ''
 $retirementAuditSealed = $false
+$audit = $null
 $testMode = $AllowNoncanonicalLayoutForTest -and
     [string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -ceq '1'
 if ($SkipSignatureValidationForTest -and -not $testMode) {
