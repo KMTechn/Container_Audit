@@ -1,3 +1,4 @@
+import sys
 import hashlib
 import json
 import os
@@ -414,90 +415,17 @@ exit 0
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
-def test_portable_rollback_product_failure_records_explicit_failure_without_restore():
-    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
-    initialization = text.index("$audit.rollback.runtime_restored = (-not $mutated)")
-    product = text.index("Product $install '--remove-current-user-setup'", initialization)
-    success = text.index("$audit.rollback.runtime_restored = $true", product)
-    assert initialization < product < success
-    assert "try{Product $install '--remove-current-user-setup'}catch{}" not in text
-
-    environment = dict(os.environ)
-    environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
-    command = r"""
-$tokens = $null
-$errors = $null
-$ast = [Management.Automation.Language.Parser]::ParseFile(
-    $env:KMTECH_TEST_INSTALLER_PATH,
-    [ref]$tokens,
-    [ref]$errors
-)
-if ($errors.Count -ne 0) { exit 20 }
-$candidates = @($ast.FindAll({
-    param($node)
-    $node -is [Management.Automation.Language.TryStatementAst] -and
-        $node.Extent.Text.Contains("Product `$install '--remove-current-user-setup'") -and
-        $node.Extent.Text.Contains("`$audit.status = 'AUTOSTART_ROLLBACK_FAILED'") -and
-        -not $node.Extent.Text.Contains('Enable-CanonicalWriter')
-}, $true))
-if ($candidates.Count -ne 1) { exit 21 }
-$script:productCalls = 0
-$script:restoreCalls = 0
-$script:startCalls = 0
-$script:saveCalls = 0
-$script:syncCalls = 0
-function Sync-CanonicalWriterFenceInventory { $script:syncCalls += 1 }
-function Product {
-    param($Root, $Mode)
-    $script:productCalls += 1
-    throw [InvalidOperationException]::new('injected rollback removal failure')
-}
-function Restore { $script:restoreCalls += 1 }
-function StartRaw { $script:startCalls += 1; return 1234 }
-function Save { $script:saveCalls += 1 }
-$mutated = $true
-$codeRollbackFailure = ''
-$install = 'C:\unused'
-$before = [pscustomobject]@{ exists=$false; kind=''; data='' }
-$stop = 'C:\unused\stop.json'
-$old = @()
-$auditPath = 'C:\unused\audit.json'
-$evidenceFull = ''
-$autostartRollbackFailure = ''
-$audit = [ordered]@{
-    status = ''
-    failure_type = ''
-    rollback = [ordered]@{ applied=$true; runtime_restored=$false }
-}
-try { throw [ApplicationException]::new('original failure') }
-catch { $original = $_ }
-Invoke-Expression $candidates[0].Extent.Text
-if ($script:productCalls -ne 1) { exit 22 }
-if ($script:syncCalls -ne 1) { exit 28 }
-if ($script:restoreCalls -ne 0 -or $script:startCalls -ne 0) { exit 23 }
-if ([bool]$audit.rollback.runtime_restored) { exit 24 }
-if ([string]$audit.status -cne 'AUTOSTART_ROLLBACK_FAILED') { exit 25 }
-if ([string]::IsNullOrWhiteSpace($autostartRollbackFailure)) { exit 26 }
-if ($script:saveCalls -ne 1) { exit 27 }
-exit 0
-"""
-    completed = run_powershell(
-        [
-            _powershell(),
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            command,
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env=environment,
+def test_portable_rollback_product_failure_records_failure_and_finishes_independent_recovery(tmp_path):
+    # Product refusal remains a recorded failure; recovery follows the approved
+    # code/G/runtime proof instead of aborting before independent steps.
+    from tests.test_canonical_rollback_recovery import (
+        test_canonical_rollback_attempts_remaining_recovery_with_actual_g as verify,
     )
-
-    assert completed.returncode == 0, completed.stderr or completed.stdout
+    for kind, case in (("allowed", "normal"), ("refusal", "code-mismatch"),
+                       ("refusal", "nested-high")):
+        isolated = tmp_path / (kind + "-" + case)
+        isolated.mkdir()
+        verify(isolated, "powershell.exe", kind, case)
 
 
 def test_portable_installer_validates_runtime_binding_before_preimage_acceptance():
@@ -1472,6 +1400,24 @@ def test_portable_preflight_failure_removes_prepared_writer_session(tmp_path):
     source = _portable_release_fixture(tmp_path)
     installer_path = source / "INSTALL_CANONICAL_PORTABLE.ps1"
     installer = installer_path.read_text(encoding="utf-8")
+    # Supply the real read-only Product preparation input before the intended
+    # prepared-session failure; its G remains the unchanged Python guard.
+    import ast
+    child_source = (Path(__file__).with_name("onboarding_preflight_child.py")).read_text(encoding="utf-8")
+    child_tree = ast.parse(child_source)
+    wrapper_expression = next(n.value for n in ast.walk(child_tree)
+        if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "wrapper" for t in n.targets))
+    wrapper = eval(compile(ast.Expression(wrapper_expression), "<readonly-packet-fixture>", "eval"),
+                   {"repo": Path(__file__).resolve().parents[1], "repr": repr, "str": str})
+    (source / "app" / "main.py").write_text(wrapper, encoding="utf-8")
+    python_exe = str(Path(sys.executable)).replace("'", "''")
+    interpreter_adapter = (
+        "$Script:ReadonlyFixturePythonExe='" + python_exe + "'\n"
+        "function Join-Path { param($Path,$ChildPath)\n"
+        " if($ChildPath -ceq 'runtime\\python.exe'){return $Script:ReadonlyFixturePythonExe}\n"
+        " return Microsoft.PowerShell.Management\\Join-Path $Path $ChildPath\n}\n"
+    )
+    installer = installer.replace("function Product {", interpreter_adapter + "function Product {", 1)
     # The preimage is now captured before activating the fence. Model a fresh
     # target explicitly instead of reading this test runner's real HKCU state.
     installer = installer.replace(

@@ -213,6 +213,11 @@ try:
     if engine:
         result=subprocess.run([engine,'-NoProfile','-NonInteractive','-File',str(ps_script)],
             capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
+        from tools.direct_sync_relay_install_pack import _redact_install_diagnostic
+        (root/'powershell.stdout.txt').write_text(
+            _redact_install_diagnostic(result.stdout),encoding='utf-8')
+        (root/'powershell.stderr.txt').write_text(
+            _redact_install_diagnostic(result.stderr),encoding='utf-8')
         status='PASS' if result.returncode==0 and 'preflight_status=PASS' in result.stdout else 'REFUSED'
         code=(0 if status=='PASS' else 4) if result.returncode==0 else None
         authority_released='preflight_authority_released=true' in result.stdout
