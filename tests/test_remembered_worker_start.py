@@ -230,7 +230,7 @@ def test_existing_worker_change_remembers_new_name_for_restart(flow, windows, tm
     app._cancel_all_jobs = lambda: None
     app._invalidate_pending_scan_callbacks = lambda: None
     app._reset_master_label_replacement_state = lambda: None
-    app.change_worker()
+    app.change_worker(_confirmed=True)
     assert screen["value"] == "selection"
     selected["name"] = "next"
     app.start_work()

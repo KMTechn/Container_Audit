@@ -1450,10 +1450,10 @@ def test_supervisor_quarantine_is_audited_and_restorable_by_original_worker(
                 raise KeyboardInterrupt("owned restore interruption")
             interrupted.setattr(_PreflightScanHoldStore, "restore_quarantined", after_move)
             with pytest.raises(KeyboardInterrupt):
-                app.restore_quarantined_preflight_hold(str(quarantined[0].path))
+                app.restore_quarantined_preflight_hold(str(quarantined[0].path), _confirmed=True)
         app._preflight_hold_snapshot = None
         app._preflight_hold_store_instance = None
-    assert app.restore_quarantined_preflight_hold(str(quarantined[0].path)) is True
+    assert app.restore_quarantined_preflight_hold(str(quarantined[0].path), _confirmed=True) is True
     assert store.exists() is True
     assert store.load().state == module.HOLD_LOOKUP_FAILED
     assert store.load().worker == "tester"
@@ -1509,7 +1509,7 @@ def test_restore_mark_failed_error_keeps_durable_hold_inside_mutation_gate(
 
     monkeypatch.setattr(store, "mark_failed", fail_mark_failed)
 
-    assert app.restore_quarantined_preflight_hold(str(quarantined.path)) is False
+    assert app.restore_quarantined_preflight_hold(str(quarantined.path), _confirmed=True) is False
     assert store.exists() is True
     assert quarantined.path.exists() is False
     assert store.snapshot_hash(store.load()) == quarantined.snapshot_hash
@@ -1538,7 +1538,7 @@ def test_restore_audit_rollback_error_keeps_durable_hold_inside_mutation_gate(
 
     monkeypatch.setattr(store, "quarantine", fail_quarantine)
 
-    assert app.restore_quarantined_preflight_hold(str(quarantined.path)) is False
+    assert app.restore_quarantined_preflight_hold(str(quarantined.path), _confirmed=True) is False
     assert store.exists() is True
     assert quarantined.path.exists() is False
     assert store.snapshot_hash(store.load()) == quarantined.snapshot_hash

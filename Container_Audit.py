@@ -2119,7 +2119,7 @@ class ContainerAudit:
         self._schedule_startup_transfer_recovery()
         return True
 
-    def restore_quarantined_preflight_hold(self, filepath: str, *, confirm: bool = True) -> bool:
+    def restore_quarantined_preflight_hold(self, filepath: str, *, confirm: bool = True, _confirmed: bool = False) -> bool:
         if not self._is_preflight_hold_quarantine_path(filepath):
             messagebox.showwarning(
                 "보류 묶음 복원 실패",
@@ -2197,12 +2197,15 @@ class ContainerAudit:
                 parent=getattr(self, "root", None),
             )
             return False
-        if confirm and not messagebox.askyesno(
-            "보류 묶음 복원 확인",
-            f"격리된 중앙 조회 보류 {len(snapshot.items)}건을 활성 보류 상태로 "
-            "되돌리시겠습니까?",
-            parent=getattr(self, "root", None),
-        ):
+        if confirm and not _confirmed:
+            self._request_inline_choice(
+                "보류 묶음 복원 확인",
+                f"격리된 중앙 조회 보류 {len(snapshot.items)}건을 복원하려면 "
+                "'보류 묶음 복원'을 누르세요. 다음 스캔은 복원하지 않고 계속합니다.",
+                [("보류 묶음 복원", lambda: self.restore_quarantined_preflight_hold(filepath, _confirmed=True)),
+                 ("작업 계속", lambda: True)],
+                on_scan=lambda: True,
+            )
             return False
         try:
             for row in intents:
@@ -3492,9 +3495,9 @@ class ContainerAudit:
             self.show_validation_screen()
         self._refresh_transfer_post_review_state()
 
-    def change_worker(self, *, _short_settled=False):
+    def change_worker(self, *, _short_settled=False, _confirmed=False):
         if getattr(self, "_short_confirmation_undo", None) and not _short_settled:
-            self._commit_short_confirmation(on_settled=lambda: self.change_worker(_short_settled=True))
+            self._commit_short_confirmation(on_settled=lambda: self.change_worker(_short_settled=True, _confirmed=_confirmed))
             return
         if self._preflight_context_blocks_mutation():
             self.show_status_message(
@@ -3513,48 +3516,56 @@ class ContainerAudit:
         msg = "작업자를 변경하시겠습니까?"
         if self.current_tray.master_label_code:
             msg += "\n\n진행 중인 작업은 다음 로그인 시 복구할 수 있도록 저장됩니다."
-        if messagebox.askyesno("작업자 변경", msg):
-            if not self._disable_remembered_worker_start():
+        if not _confirmed:
+            self._request_inline_choice(
+                "작업자 변경",
+                msg + "\n변경하려면 '작업자 변경'을 누르세요. 다음 스캔은 현재 작업자로 계속합니다.",
+                [("작업자 변경", lambda: self.change_worker(_confirmed=True)),
+                 ("작업 계속", lambda: True)],
+                on_scan=lambda: True,
+            )
+            return
+        if not self._disable_remembered_worker_start():
+            return
+        if self.current_tray.master_label_code:
+            if not self._save_current_tray_state():
+                messagebox.showerror("작업 저장 실패", "진행 중인 트레이 상태를 저장하지 못해 작업자를 변경하지 않습니다.")
                 return
-            if self.current_tray.master_label_code:
-                if not self._save_current_tray_state():
-                    messagebox.showerror("작업 저장 실패", "진행 중인 트레이 상태를 저장하지 못해 작업자를 변경하지 않습니다.")
-                    return
-                if not self._log_event(
-                    'WORK_PAUSE',
-                    detail={
-                        'message': (
-                            f"Worker '{persistent_operator_name(self.worker_name)}' changed."
-                        )
-                    },
-                    synchronous=True,
-                ):
-                    messagebox.showerror("작업 중지 기록 실패", "진행 중인 트레이의 중지 기록을 남기지 못해 작업자를 변경하지 않습니다.")
-                    return
-            if self.master_label_replace_state:
-                if not self._log_master_label_replacement_cancel(reason="worker_change"):
-                    messagebox.showerror("교체 취소 기록 실패", "현품표 교체 취소 기록을 남기지 못해 작업자를 변경하지 않습니다.")
-                    return
-            exchange_session = getattr(self, "current_exchange_session", ProductExchangeSession())
-            if exchange_session.defective_barcodes or exchange_session.good_barcodes:
-                if not self._cancel_exchange(reason="worker_change"):
-                    messagebox.showerror("교환 취소 기록 실패", "제품 교환 취소 기록을 남기지 못해 작업자를 변경하지 않습니다.")
-                    return
-            if not self._end_work_session(reason="worker_change"):
-                messagebox.showerror(
-                    "작업 종료 기록 대기",
-                    "작업 세션 종료 상태와 감사 outbox를 함께 저장하거나 투영하지 "
-                    "못해 작업자를 변경하지 않습니다.",
-                )
+            if not self._log_event(
+                'WORK_PAUSE',
+                detail={
+                    'message': (
+                        f"Worker '{persistent_operator_name(self.worker_name)}' changed."
+                    )
+                },
+                synchronous=True,
+            ):
+                messagebox.showerror("작업 중지 기록 실패", "진행 중인 트레이의 중지 기록을 남기지 못해 작업자를 변경하지 않습니다.")
                 return
-            self._cancel_all_jobs()
-            self.worker_name = ""
-            self.worker_role = ""
-            self._authenticated_protected_admin = False
-            self.current_tray = TraySession()
-            self._invalidate_pending_scan_callbacks()
-            self._reset_master_label_replacement_state()
-            self.show_worker_input_screen()
+        if self.master_label_replace_state:
+            if not self._log_master_label_replacement_cancel(reason="worker_change"):
+                messagebox.showerror("교체 취소 기록 실패", "현품표 교체 취소 기록을 남기지 못해 작업자를 변경하지 않습니다.")
+                return
+        exchange_session = getattr(self, "current_exchange_session", ProductExchangeSession())
+        if exchange_session.defective_barcodes or exchange_session.good_barcodes:
+            if not self._cancel_exchange(reason="worker_change"):
+                messagebox.showerror("교환 취소 기록 실패", "제품 교환 취소 기록을 남기지 못해 작업자를 변경하지 않습니다.")
+                return
+        if not self._end_work_session(reason="worker_change"):
+            messagebox.showerror(
+                "작업 종료 기록 대기",
+                "작업 세션 종료 상태와 감사 outbox를 함께 저장하거나 투영하지 "
+                "못해 작업자를 변경하지 않습니다.",
+            )
+            return
+        self._cancel_all_jobs()
+        self.worker_name = ""
+        self.worker_role = ""
+        self._authenticated_protected_admin = False
+        self.current_tray = TraySession()
+        self._invalidate_pending_scan_callbacks()
+        self._reset_master_label_replacement_state()
+        self.show_worker_input_screen()
 
     def _load_session_state(self):
         history = load_session_history(
@@ -7531,6 +7542,7 @@ class ContainerAudit:
         self,
         *,
         already_confirmed: bool,
+        on_confirm,
     ) -> Optional[bool]:
         if already_confirmed:
             return True
@@ -7566,32 +7578,7 @@ class ContainerAudit:
             != "LOCAL_PRINT_STARTING"
         ):
             return False
-        try:
-            approved = bool(
-                messagebox.askyesno(
-                    "실물 현품표 재출력 확인",
-                    "이전 실행이 실제 프린터 제출 중 종료되어 출력 여부가 "
-                    "불확실합니다.\n\n실물 라벨을 확인했습니다. 같은 target "
-                    "현품표를 재출력할까요?\n\n"
-                    "키보드: Y 승인 / N 취소",
-                    parent=self.root,
-                    default=messagebox.NO,
-                )
-            )
-        except (tk.TclError, AttributeError) as exc:
-            print(
-                "현품표 재출력 확인 창 표시 실패: "
-                f"{exc.__class__.__name__}: {exc}"
-            )
-            self.show_status_message(
-                "현품표 재출력 확인 창을 열지 못했습니다. 다시 시도하거나 "
-                "관리자에게 문의하세요.",
-                self.COLOR_DANGER,
-                duration=10000,
-            )
-            self._schedule_focus_return()
-            return None
-        if not approved:
+        def keep_pending():
             self.show_status_message(
                 "미완료 현품표 교체를 보존했습니다. 실물 라벨을 확인한 뒤 "
                 "F8로 다시 복구할 수 있습니다.",
@@ -7599,17 +7586,42 @@ class ContainerAudit:
                 duration=8000,
             )
             self._schedule_focus_return()
-            return None
-        try:
-            self.phs_label_reprint_confirm_var.set(True)
-        except (tk.TclError, AttributeError):
-            pass
-        return True
+            return True
+
+        recovery = copy.deepcopy(recovery)
+
+        def approve_current_reprint():
+            try:
+                unchanged = (
+                    getattr(getattr(self, "phs_label_exchange_coordinator", None), "journal", None) is journal
+                    and journal.load() == recovery
+                )
+            except Exception:
+                unchanged = False
+            if not unchanged:
+                self.show_status_message(
+                    "현품표 복구 정보가 바뀌었거나 확인되지 않았습니다. F8로 다시 확인하세요.",
+                    self.COLOR_DANGER, duration=8000,
+                )
+                self._schedule_focus_return()
+                return
+            on_confirm()
+
+        self._request_inline_choice(
+            "실물 현품표 재출력 확인",
+            "이전 실행이 프린터 제출 중 종료되어 출력 여부가 불확실합니다. "
+            "실물 라벨을 확인한 뒤 '실물 확인 후 재출력'을 누르세요. "
+            "다음 스캔은 재출력하지 않고 계속합니다.",
+            [("실물 확인 후 재출력", approve_current_reprint), ("작업 계속", keep_pending)],
+            on_scan=keep_pending,
+        )
+        return None
 
     def _execute_phs_reconciliation_exchange(
         self,
         *,
         recovery_only: bool = False,
+        _confirmed_reprint: bool = False,
     ) -> None:
         if self._reject_mutation_during_preflight_hold():
             return
@@ -7639,7 +7651,7 @@ class ContainerAudit:
             )
             self._schedule_focus_return()
             return
-        confirm_reprint = bool(
+        confirm_reprint = _confirmed_reprint or bool(
             getattr(
                 getattr(self, "phs_label_reprint_confirm_var", None),
                 "get",
@@ -7649,6 +7661,8 @@ class ContainerAudit:
         confirm_reprint_result = (
             self._confirm_phs_reconciliation_ambiguous_reprint(
                 already_confirmed=confirm_reprint,
+                on_confirm=lambda: self._execute_phs_reconciliation_exchange(
+                    recovery_only=recovery_only, _confirmed_reprint=True),
             )
         )
         if confirm_reprint_result is None:
@@ -14053,6 +14067,13 @@ class ContainerAudit:
         self._inline_scan_choices = list(choices)
         self._inline_choice_on_scan = on_scan
         self.show_fullscreen_warning(title, message, getattr(self, "COLOR_PRIMARY", "#2563EB"))
+        # Scanner characters and Return belong to the entry, never a choice button.
+        entry = getattr(self, "scan_entry", None)
+        if entry is not None:
+            try:
+                entry.focus_set()
+            except (AttributeError, tk.TclError):
+                pass
         frame = getattr(self, "notice_frame", None)
         if frame is None:
             return
@@ -14071,7 +14092,8 @@ class ContainerAudit:
             callback()
             self._schedule_focus_return()
         for column, (text, callback) in enumerate(choices):
-            tk.Button(buttons, text=text, command=lambda cb=callback: choose(cb)).grid(row=0,column=column,padx=5)
+            tk.Button(buttons, text=text, takefocus=False,
+                      command=lambda cb=callback: choose(cb)).grid(row=0,column=column,padx=5)
 
     def _continue_after_inline_choice(self):
         callback = getattr(self, "_inline_choice_on_scan", None)

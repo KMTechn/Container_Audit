@@ -118,6 +118,14 @@ def test_install_registration_manifest_authorization_and_first_clean_receipt(tmp
         "provision_initial",
         classmethod(lambda _cls, *args, **kwargs: _FakePossessionKey()),
     )
+    # Response admission now reopens the persisted key. Provision and readback
+    # must model the same key; the suite's independent OS default models another.
+    reopened = []
+    def reopen_fixture_key(_cls, *args, **kwargs):
+        reopened.append(kwargs.get("scope"))
+        return _FakePossessionKey()
+    monkeypatch.setattr(registration.PersistentPossessionKey, "open_existing",
+                        classmethod(reopen_fixture_key))
     monkeypatch.setattr(registration, "_write_dpapi_secret", write_dpapi_secret)
     monkeypatch.setattr(
         direct_sync_push,
@@ -175,6 +183,7 @@ def test_install_registration_manifest_authorization_and_first_clean_receipt(tmp
     registration_report = json.loads(report_path.read_text(encoding="utf-8"))
     persisted_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert registration_exit == 0
+    assert reopened == [registration.SCOPE_CURRENT_USER]
     assert registration_report["manifest_hash_verified"] is True
     assert registration_report["persisted_manifest_hash_verified"] is True
     assert registration_report["manifest_hash"] == manifest_hash(persisted_manifest)

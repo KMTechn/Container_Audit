@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "eb090f444ac84c6aadc8035db098ed43012e9cf635ff07557702a8d80e8e8c23",
+  "after_inventory_sha256": "a9f147d8bdbcbe62c2c16a2d4de0c1f99018fddc52c9e87006fc1e03f2c5e512",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -166,7 +166,7 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "7019701b21322d57a5db01a5ed962920d4b549a3fdc3c4aeca5b8574566dc655"
+      "after": "8c2abd869ce546b7413fa5caadc3ee4c05ef9869423fc72a87aba222dbea1f5a"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -176,7 +176,7 @@
     {
       "path": "app/Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "19230bed4557a1e5eb24f831a237a8eb6409a1d883aca0f8e8ca66e997ada808"
+      "after": "f67d10ba90464e2fefab42b04a23bda6c1171a8a805ca81c455677cc58c6fa96"
     },
     {
       "path": "app/best_time_records.py",
@@ -1451,7 +1451,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "c49fd1f299b8aa8f0cc6daf0a6cfe40fae4918ea68411787e76a189f9cca4777"
+      "after": "119a61460b4c7eb16597be9e2339f020f4996c44433bc50e25bf31c6f960a342"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4501,7 +4501,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "edd3d05b79777d0ebe244a1341c134ab79d2ff38b2a6bb2d8ed0f5ab5d4164d2"
+      "after": "6ba8777b2ea3db73197ae637f59c2184829e1a52bae277c733ecf1a7577e4167"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4511,24 +4511,24 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "362bdc77952923153446e1900ec373f39742ea776b9fb522bb09b17ea2bd490f"
+      "after": "16397bcacf516018c261a06a4f3469566f0365b67f7dd77988853098ec59cde5"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "6e95db4370d271d42895f12a37e7216d671462298f731edf1dd1908e6dbc3993"
+      "after": "2cabd765fca1e1f3a22be80a8a3e3e8e5a4d81c62ac83479e2f5cc3be06ddec6"
     }
   ],
   "source_replacements": [
     {
       "path": "Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "19230bed4557a1e5eb24f831a237a8eb6409a1d883aca0f8e8ca66e997ada808"
+      "after": "f67d10ba90464e2fefab42b04a23bda6c1171a8a805ca81c455677cc58c6fa96"
     },
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "7019701b21322d57a5db01a5ed962920d4b549a3fdc3c4aeca5b8574566dc655"
+      "after": "8c2abd869ce546b7413fa5caadc3ee4c05ef9869423fc72a87aba222dbea1f5a"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -4608,7 +4608,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "edd3d05b79777d0ebe244a1341c134ab79d2ff38b2a6bb2d8ed0f5ab5d4164d2"
+      "after": "6ba8777b2ea3db73197ae637f59c2184829e1a52bae277c733ecf1a7577e4167"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4653,14 +4653,14 @@
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "c49fd1f299b8aa8f0cc6daf0a6cfe40fae4918ea68411787e76a189f9cca4777"
+      "after": "119a61460b4c7eb16597be9e2339f020f4996c44433bc50e25bf31c6f960a342"
     }
   ],
   "hash_provenance": {
     "before": "clean baseline stock-baseline-latest at ea566d1, Python 3.12.10",
     "after": "Exact LF application bytes of sub-350 assembly; unchanged runtime bindings preserved from sub-272 and verified against the final clean stock.",
     "domain": "all .py/.ps1/.sql plus the two writer JSON artifacts; generated release metadata retains existing package integrity",
-    "installed_release_preimages": "Committed LF bytes of installed EA lineage and TEST1 v2.0.99/8928228 (sub-327 TEST1-FACTS.md); one complete release tuple, no per-file mixing; exact data_generation_guard.py absence belongs only to 8928228."
+    "installed_release_preimages": "Actual deployed bytes only: EA stock before scalar preserved (13 CRLF source files); TEST1 E3 CA-8928228.zip SHA256 3f70a102c0e321a00708ee41921e66bfb93f8ffdfecfdc3ce0125c0043ef4886 / installed manifest dd07bd13d9f989ccfe184628a870b1a3e3f6473fb7ddb6b70c3a2203dcac95be (w9test1v3/exec/raw/{packet-pins,verify-CA,final-ca}.json); whole commit/inventory/21-file tuple, no line-ending alternatives or mixing."
   },
   "installed_release_preimages": [
     {
@@ -4669,87 +4669,87 @@
       "files": [
         {
           "path": "app/Container_Audit.py",
-          "sha256": "6131d7716b154b1e1ee39e8762c7e5936cbc17e2ffcade2cf7e64442a348381e"
+          "sha256": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151"
         },
         {
           "path": "INSTALL_CANONICAL_PORTABLE.ps1",
-          "sha256": "748f5eb6e6cc5fd2374949afce674ae1d38b7caed17de8c53b94ce4c59df7d30"
+          "sha256": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49"
         },
         {
           "path": "INSTALL_THIS_PC.ps1",
-          "sha256": "08f1bb2c468e24998460192d25b546788417d2ed1dd09d3e0ee601e826d9c909"
+          "sha256": "95bb11b9fb4ed0035f229d7b6c6ca2abba17760caef15837734b7a809c52fc4c"
         },
         {
           "path": "app/container_admin_pin.py",
-          "sha256": "98f138dec74285ffd1359b9cf934d3ff67dc12a5a15892e035c4228858d55659"
+          "sha256": "c5ee1c1b40ff61c3144d3a2778458760a6eebc588f7c12cbbe7426b4c877b9cf"
         },
         {
           "path": "app/container_audit_product_host.py",
-          "sha256": "0c83b17893b0db9f2e24a494f5ad94a661d907736a182b5f8d87ef81c9404343"
+          "sha256": "38557fd5eaf3716d2bdf925be0ed8e7e18aec53809413c1ffd14fdc8e09460fb"
         },
         {
           "path": "app/current_user_onboarding.py",
-          "sha256": "4f185235cd5a2d5b69b919f7cc04e6a32a8bd13f3ac826b5fc3d8d973996d83a"
+          "sha256": "3781e04e185b139c0bacb8b8c3bd2c69f42cc3735760d45191d851d4d98914aa"
         },
         {
           "path": "app/data_generation_guard.py",
-          "sha256": "38b441b38baa27c2313143da32b8d397aca44ff8f627675cf7e185ac770509cf"
+          "sha256": "e16d1f3c75c5897d9fa3a9c51ee00a1d6bc94b7d47b49c4ca994f81d6778da27"
         },
         {
           "path": "app/direct_sync_push.py",
-          "sha256": "2bc3aa2af3140e63177e0e81ba4adb81f9f01f190e3f9815815e6ab9bc4d55d4"
+          "sha256": "f1f02e07fe892d9beb2f69e15ddd172d01c564e79700ef1d19b7e7423c11c06c"
         },
         {
           "path": "app/direct_sync_runtime.py",
-          "sha256": "8626c0873e3bf1586af93187bc60f429f65036f92c4f2fd14ce2841f8b12eca6"
+          "sha256": "ceccf8e265feaf0280cdb8640810aa4d04e78e61e76fd2c3368d0efcc547acb7"
         },
         {
           "path": "app/item_catalog_sync.py",
-          "sha256": "58f20ae6eb8dce66f33b539f7d362c73132e49164eb81a0ea0a18427d46a28da"
+          "sha256": "732e3bf81c11115fb62d7690379164a25a528fd0e7695bfea75fde9e05fdf431"
         },
         {
           "path": "app/logistics_runtime_profile.py",
-          "sha256": "2232a293855d7e7f37b09ce007d413bc6662b7ca6dadbea42e672b63a11cb8fd"
+          "sha256": "f3168358c9eadc0297c2c255e2b182924664f65505bf4d3a9e22d2c8b4a87b32"
         },
         {
           "path": "app/producer_runtime_client.py",
-          "sha256": "1938e8457e941d4f6d6085ad49c7e3686a19cfbb9fa9eabf0e680fb8a89e998a"
+          "sha256": "5b5a62d8ffaa6693ed0233668f253751b01849164916b257a9a1d08932a8aa3b"
         },
         {
           "path": "app/protected_admin.py",
-          "sha256": "e794b2ad313790fc86f6597d6da97def2773d76d2e833d3d158aadbbaeda8e3d"
+          "sha256": "6b743e662c3f8120f91286ebd456fbc2be6f4cf73c4466fe900fd799295eb19c"
         },
         {
           "path": "tools/container_writer_fence.ps1",
-          "sha256": "8a2d9dc41a5f094518e2f45b6ece8ca7947c0d63f58bfd306553420b978e3d91"
+          "sha256": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229"
         },
         {
           "path": "app/tools/direct_sync_relay_operator.py",
-          "sha256": "f324ccf7bc5c418d3a7dbbf116c3a2db238e19704e01bfa3001a1e21ccbd5545"
+          "sha256": "612693ad066ae90c6283dbaec408543a436faf20ed437809c42904faed989d7f"
         },
         {
           "path": "app/tools/direct_sync_relay_runner.py",
-          "sha256": "6b1cba9f21801b4f39157534b1273c4ebd6e3da474add36cecf62e0c971338a9"
+          "sha256": "9cdb6db20d6750dbebbcee0eabc960bcfd41dfccc819e5a75fba94045ff0e9be"
         },
         {
           "path": "app/tools/install_logistics_runtime_profile.py",
-          "sha256": "5f9e0a91de3ce9d39616bf41349c30cad7d7e96b0aaa246d79fd326508ceadda"
+          "sha256": "5534e816ac205009b80a09cb7cfe06f25b61ce5572e2ab6ccc037af90cb4a705"
         },
         {
           "path": "app/tools/register_container_audit_worker_pc.py",
-          "sha256": "d11a9ff9fd66d2c4603c7ec73e1c29e0f9ba430fb4897e48bdfadf5ca53e06ed"
+          "sha256": "8a23f4996bfbc8eec571c3b1c7f6aa2c6a1d76cd4a765f229bff30e480a2aa87"
         },
         {
           "path": "app/transfer_client.py",
-          "sha256": "ff697029a137b55506b05683216cf5c7a2034df683b2e186407991d3bd27332b"
+          "sha256": "579b2450bd19777a349331ec3315ff6314151b1a85e812f95346db646f1833bb"
         },
         {
           "path": "app/user_relay.py",
-          "sha256": "07da589a6c3a2e25f2e40a45c1c74c6bb5fab7cd135da2d8f230944d88a9e78d"
+          "sha256": "3d9be9672556e284cfd62d7bfa28c1bcbd8c90688a9f13bc08c5894bfd1750fd"
         },
         {
           "path": "app/writer_session_fence.py",
-          "sha256": "cf5d9043cb03d36e89134790b6a069efeb4c0f00c95fcdf71d43376ad6d6802a"
+          "sha256": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0"
         }
       ]
     },

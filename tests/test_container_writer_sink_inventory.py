@@ -282,16 +282,16 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         path.as_posix() for path in module._discover_shipped_powershell_paths(ROOT)
     ]
     assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
-        "call_operator": 16,
-        "com_wmi_process_create": 5,
-        "dot_source": 24,  # Admitted manager parser plus retirement independent action invocation.
-        "dotnet_process_start": 2,
-        "invoke_expression": 1,
-        "native_process_api": 4,
-        "reflective_invocation": 6,
-        "scheduler_com": 5,
-        "start_process": 2,
-    }
+    "call_operator": 17,
+    "com_wmi_process_create": 5,
+    "dot_source": 24,
+    "dotnet_process_start": 2,
+    "invoke_expression": 1,
+    "native_process_api": 4,
+    "reflective_invocation": 6,
+    "scheduler_com": 5,
+    "start_process": 2
+}
     preflight_calls = [
         row for row in payload["powershell_execution_inventory"]["execution_sites"]
         if row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1"

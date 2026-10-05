@@ -66,9 +66,9 @@ def test_worker_change_interruption_cannot_record_previous_worker(flow, windows,
         monkeypatch.setattr(app, "_save_work_session_state", interrupt_close)
     if point in {"disabled", "closed"}:
         with pytest.raises(Interrupted):
-            app.change_worker()
+            app.change_worker(_confirmed=True)
     else:
-        app.change_worker()
+        app.change_worker(_confirmed=True)
         selected["name"] = "next"
         if point == "session_saved":
             save = app._save_work_session_state
@@ -118,7 +118,7 @@ def test_disable_write_failure_aborts_change_before_session_close(flow, windows,
         raise OSError("simulated disk failure")
 
     monkeypatch.setattr(registry, "_write_payload", failed_write)
-    app.change_worker()
+    app.change_worker(_confirmed=True)
     assert app.worker_name == "previous" and app._work_session_identity_bound
     assert app._load_work_session_state()["phase"] == "ACTIVE"
     if not replaced:
@@ -200,7 +200,7 @@ def test_confirmed_change_disables_start_before_session_end(flow, windows, tmp_p
 
     app._end_work_session = before_close
     with pytest.raises(Interrupted):
-        app.change_worker()
+        app.change_worker(_confirmed=True)
     fresh, screen = _restart(flow, tmp_path)
     assert fresh.worker_name == "" and screen["value"] == "selection"
 

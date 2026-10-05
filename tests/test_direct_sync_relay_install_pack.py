@@ -1,4 +1,5 @@
 import argparse
+import copy
 import json
 import base64
 import os
@@ -22,6 +23,64 @@ from storage_policy import DATA_ROOT_ENV
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_PACK_SCRIPT = REPO_ROOT / "tools" / "direct_sync_relay_install_pack.py"
+
+_PRE_SINK_PLANS = {}
+_FIELD_MARKER = "[REDACTED:field]"
+
+
+@pytest.fixture(autouse=True)
+def _observe_plan_before_diagnostic_sink(monkeypatch):
+    """Keep preflight assertions on the original object and exercise the real sink."""
+    _PRE_SINK_PLANS.clear()
+    original_write = install_pack._write_json
+    original_run = subprocess.run
+
+    def observe_write(path, payload):
+        _PRE_SINK_PLANS[str(Path(path).resolve())] = copy.deepcopy(payload)
+        return original_write(path, payload)
+
+    def observe_cli(command, *args, **kwargs):
+        if (isinstance(command, (list, tuple)) and len(command) > 1
+                and str(command[1]) == str(INSTALL_PACK_SCRIPT)):
+            command = [command[0], str(REPO_ROOT / "tests" / "install_pack_cli_fixture.py"), *command[2:]]
+        return original_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(install_pack, "_write_json", observe_write)
+    monkeypatch.setattr(subprocess, "run", observe_cli)
+    yield
+    _PRE_SINK_PLANS.clear()
+
+
+def _plan_before_sink(path):
+    """File assertions accompany every unchanged semantic plan assertion."""
+    path = Path(path)
+    plan = _PRE_SINK_PLANS.get(str(path.resolve()))
+    if plan is None:
+        plan = json.loads(path.with_name(path.name + ".before-sink-fixture.json").read_bytes())
+    sink = json.loads(path.read_bytes())
+    for name in ("credential", "credential_preflight", "task_password_context"):
+        if isinstance(plan.get(name), (dict, str)) and plan.get(name):
+            assert sink[name] == _FIELD_MARKER, "diagnostic field marker missing"
+    return plan
+
+
+def test_actual_plan_file_masks_fields_and_preserves_2b_metadata(tmp_path, monkeypatch):
+    import uuid
+    secret = "synthetic-" + uuid.uuid4().hex
+    monkeypatch.setenv("KMTECH_PLAN_TEST_SECRET", secret)
+    path = tmp_path / "plan.json"
+    payload = {"credential": {"value": secret}, "secret": None,
+               "secret_present": True, "password_supplied": False,
+               "token_sha256": "a" * 64, "credential_path": str(tmp_path / "credential.json")}
+    install_pack._write_json(path, payload)
+    written = path.read_bytes()
+    assert secret.encode() not in written, "raw synthetic secret in plan sink"
+    actual = json.loads(written)
+    assert actual["credential"] == _FIELD_MARKER
+    assert actual["secret"] is None
+    assert actual["secret_present"] is True and actual["password_supplied"] is False
+    assert actual["token_sha256"] == payload["token_sha256"]
+    assert actual["credential_path"] == payload["credential_path"]
 
 
 @pytest.fixture(autouse=True)
@@ -230,7 +289,7 @@ def test_retired_install_pack_defaults_to_current_user_storage_and_not_field_lay
     )
 
     assert exit_code == 0
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     expected_root = (local_app_data / "KMTech" / "ContainerAudit").resolve()
     assert report["status"] == "DRY_RUN"
     assert report["field_layout_contract"]["expected_install_root"] == (
@@ -287,7 +346,7 @@ def test_install_pack_blocks_syncthing_data_root_with_report(tmp_path, monkeypat
     )
 
     assert exit_code == 2
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "BLOCKED"
     assert report["container_audit_storage"]["status"] == "FAIL"
     assert "legacy Syncthing folder" in report["blocked_reason"]
@@ -311,7 +370,7 @@ def test_install_pack_blocks_explicit_syncthing_program_data_root(tmp_path, monk
         ]
     )
 
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert exit_code == 2
     assert report["status"] == "BLOCKED"
     assert report["runtime_path_boundary"]["status"] == "FAIL"
@@ -336,7 +395,7 @@ def test_install_pack_blocks_explicit_syncthing_scan_source_dir(tmp_path, monkey
         ]
     )
 
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert exit_code == 2
     assert report["status"] == "BLOCKED"
     assert report["source_scan_validation"]["status"] == "FAIL"
@@ -360,7 +419,7 @@ def test_install_pack_blocks_explicit_syncthing_manifest_and_credential_paths(tm
         ]
     )
 
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert manifest_path.is_file()
     assert credential_path.is_file()
     assert exit_code == 2
@@ -423,7 +482,7 @@ def test_install_pack_dry_run_writes_redacted_scheduled_task_plan(tmp_path):
     )
 
     assert completed.returncode == 0
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     report_text = report_path.read_text(encoding="utf-8-sig")
     assert report["status"] == "DRY_RUN"
     assert report["task_name"] == "direct-sync-relay-container-audit"
@@ -582,7 +641,7 @@ def test_isolated_qualification_system_task_preflights_runtime_lease_before_scan
         ]
     ) == 0
 
-    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report = _plan_before_sink(report_path)
     command = report["runner_command"]
     assert report["credential"]["isolated_qualification"] is True
     assert report["task_principal"] == {
@@ -640,7 +699,7 @@ def test_install_pack_apply_blocks_raw_secret_without_production_env(tmp_path, m
         ]
     )
 
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     report_text = report_path.read_text(encoding="utf-8-sig")
     assert exit_code == 2
     assert commands == []
@@ -679,7 +738,7 @@ def test_install_pack_apply_blocks_noncanonical_field_layout_before_mutation(tmp
         ]
     )
 
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert exit_code == 2
     assert commands == []
     assert report["status"] == "BLOCKED"
@@ -719,7 +778,7 @@ def test_noncanonical_layout_flag_requires_dedicated_test_marker(tmp_path, monke
         ]
     )
 
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert exit_code == 2
     assert commands == []
     assert report["field_layout_contract"]["local_test_override_requested"] is True
@@ -754,7 +813,7 @@ def test_install_pack_prefers_main_executable_relay_host_without_python_dependen
         ]
     )
 
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert exit_code == 0
     assert report["status"] == "DRY_RUN"
     assert report["use_bundled_relay_executable"] is True
@@ -804,7 +863,7 @@ def test_install_pack_honors_explicit_python_exe_even_when_main_relay_host_exist
         ]
     )
 
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert exit_code == 0
     assert report["use_bundled_relay_executable"] is False
     assert report["relay_execution_mode"] == "source_script"
@@ -847,7 +906,7 @@ def test_install_pack_blocks_invalid_scheduled_task_name_before_apply(tmp_path, 
         ]
     )
 
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert result == 2
     assert commands == []
     assert report["status"] == "BLOCKED"
@@ -877,7 +936,7 @@ def test_install_pack_blocks_invalid_scheduled_task_name_for_uninstall_before_de
         ]
     )
 
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert result == 2
     assert commands == []
     assert report["status"] == "BLOCKED"
@@ -912,7 +971,7 @@ def test_install_pack_source_scan_defaults_to_file_age_grace_period(tmp_path):
     )
 
     assert completed.returncode == 0
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["source_scan"]["min_source_file_age_seconds"] == 30
     assert "--min-source-file-age-seconds" in report["runner_command"]
     assert "30" in report["runner_command"]
@@ -953,7 +1012,7 @@ def test_install_pack_blocks_negative_safety_limits(tmp_path, option, report_sec
     )
 
     assert completed.returncode == 2
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "BLOCKED"
     assert report[report_section]["status"] == "FAIL"
     assert field_name in report["blocked_reason"]
@@ -984,7 +1043,7 @@ def test_install_pack_blocks_missing_scan_source_dir(tmp_path):
     )
 
     assert completed.returncode == 2
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "BLOCKED"
     assert report["source_scan_validation"]["status"] == "FAIL"
     assert report["source_scan_validation"]["scan_source_dir_exists"] is False
@@ -1019,7 +1078,7 @@ def test_install_pack_blocks_recursive_scan_source_glob(tmp_path):
     )
 
     assert completed.returncode == 2
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "BLOCKED"
     assert report["source_scan_validation"]["status"] == "FAIL"
     assert report["source_scan_validation"]["source_globs_valid"] is False
@@ -1051,7 +1110,7 @@ def test_install_pack_blocks_missing_app_root_runtime_dependencies(tmp_path):
     )
 
     assert completed.returncode == 2
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "BLOCKED"
     assert report["blocked_reason"] == "app_root missing direct-sync runtime dependencies"
     assert report["app_root_dependencies"]["status"] == "FAIL"
@@ -1083,7 +1142,7 @@ def test_install_pack_blocks_missing_python_executable(tmp_path):
     )
 
     assert completed.returncode == 2
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "BLOCKED"
     assert report["blocked_reason"] == "python_exe does not exist"
     assert report["python_executable"]["status"] == "FAIL"
@@ -1123,7 +1182,7 @@ def test_install_pack_dry_run_skips_python_runtime_import_probe_by_default(tmp_p
         cwd=REPO_ROOT,
     )
 
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert completed.returncode == 0
     assert report["status"] == "DRY_RUN"
     assert report["python_runtime_imports"]["status"] == "SKIPPED"
@@ -1188,7 +1247,7 @@ def test_install_pack_blocks_python_that_cannot_import_runtime_modules_when_prob
         cwd=REPO_ROOT,
     )
 
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert completed.returncode == 2
     assert report["status"] == "BLOCKED"
     assert report["blocked_reason"] == "python_exe cannot import direct-sync runtime modules"
@@ -1219,7 +1278,7 @@ def test_install_pack_blocks_missing_manifest_file(tmp_path):
     )
 
     assert completed.returncode == 2
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "BLOCKED"
     assert report["producer_manifest"]["status"] == "FAIL"
     assert report["blocked_reason"] == "producer_manifest file does not exist"
@@ -1251,7 +1310,7 @@ def test_install_pack_blocks_manifest_without_container_stream(tmp_path):
     )
 
     assert completed.returncode == 2
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "BLOCKED"
     assert report["producer_manifest"]["container_audit_stream_present"] is False
     assert "stream does not match" in report["blocked_reason"]
@@ -1283,7 +1342,7 @@ def test_install_pack_blocks_manifest_with_wrong_producer_role(tmp_path):
     )
 
     assert completed.returncode == 2
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "BLOCKED"
     assert report["producer_manifest"]["container_audit_stream_present"] is True
     assert report["producer_manifest"]["container_audit_stream_valid"] is False
@@ -1314,7 +1373,7 @@ def test_install_pack_blocks_malformed_credential_without_leaking_secret(tmp_pat
     )
 
     report_text = report_path.read_text(encoding="utf-8-sig")
-    report = json.loads(report_text)
+    report = _plan_before_sink(report_path)
     assert completed.returncode == 2
     assert report["status"] == "BLOCKED"
     assert report["credential"]["status"] == "FAIL"
@@ -1351,7 +1410,7 @@ def test_install_pack_blocks_duplicate_json_keys_without_shadowing_values(tmp_pa
     )
 
     report_text = report_path.read_text(encoding="utf-8-sig")
-    report = json.loads(report_text)
+    report = _plan_before_sink(report_path)
     assert completed.returncode == 2
     assert report["status"] == "BLOCKED"
     assert report["credential"]["status"] == "FAIL"
@@ -1388,7 +1447,7 @@ def test_install_pack_blocks_non_string_or_blank_raw_secret_without_leaking_valu
     )
 
     report_text = report_path.read_text(encoding="utf-8-sig")
-    report = json.loads(report_text)
+    report = _plan_before_sink(report_path)
     assert completed.returncode == 2
     assert report["status"] == "BLOCKED"
     assert report["credential"]["status"] == "FAIL"
@@ -1421,7 +1480,7 @@ def test_install_pack_blocks_credential_with_invalid_endpoint(tmp_path):
         cwd=REPO_ROOT,
     )
 
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert completed.returncode == 2
     assert report["status"] == "BLOCKED"
     assert report["credential"]["status"] == "FAIL"
@@ -1454,7 +1513,7 @@ def test_install_pack_blocks_credential_with_private_endpoint_literal(tmp_path):
         cwd=REPO_ROOT,
     )
 
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert completed.returncode == 2
     assert report["status"] == "BLOCKED"
     assert report["credential"]["status"] == "FAIL"
@@ -1622,7 +1681,7 @@ def test_install_pack_apply_without_confirm_is_blocked(tmp_path):
     )
 
     assert completed.returncode == 2
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "BLOCKED"
     assert report["blocked_reason"] == "apply requires --confirm-production-install"
     assert report["production_apply_guard"]["requires_confirm_production_install"] is True
@@ -1638,7 +1697,7 @@ def test_install_pack_apply_writes_applying_report_before_running_command(tmp_pa
     observed_statuses = []
 
     def fake_run_command(command):
-        observed_statuses.append(json.loads(report_path.read_text(encoding="utf-8-sig"))["status"])
+        observed_statuses.append(_plan_before_sink(report_path)["status"])
         return {"returncode": 0, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(install_pack, "_run_command", fake_run_command)
@@ -1662,7 +1721,7 @@ def test_install_pack_apply_writes_applying_report_before_running_command(tmp_pa
 
     assert exit_code == 0
     assert observed_statuses == ["APPLYING"]
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "PASS"
     assert report["field_layout_contract"]["local_test_override_enabled"] is True
     assert report["field_layout_contract"]["production_apply_allowed"] is False
@@ -1730,7 +1789,7 @@ def test_install_pack_apply_supports_stored_password_task_without_leaking_passwo
     assert "wscript" not in command_script.lower()
     assert "TASK_PASSWORD_FOR_TEST" in command_script
     assert "stored-task-password" not in command_script
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     report_text = report_path.read_text(encoding="utf-8-sig")
     assert report["task_principal"]["mode"] == "stored_password"
     assert report["task_principal"]["password_source"] == "env:TASK_PASSWORD_FOR_TEST"
@@ -1798,7 +1857,7 @@ def test_install_pack_apply_supports_password_file_without_leaking_password(tmp_
     assert "wscript" not in command_script.lower()
     assert str(password_file.resolve()) in command_script
     assert "file-task-password" not in command_script
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     report_text = report_path.read_text(encoding="utf-8-sig")
     assert report["status"] == "PASS"
     assert report["task_principal"]["mode"] == "stored_password"
@@ -1831,7 +1890,7 @@ def test_install_pack_blocks_task_user_without_password_source(tmp_path):
     )
 
     assert exit_code == 2
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "BLOCKED"
     assert report["task_principal"]["status"] == "FAIL"
     assert "requires --task-run-password" in report["blocked_reason"]
@@ -1869,7 +1928,7 @@ def test_install_pack_apply_defaults_to_system_task_without_password(tmp_path, m
     )
 
     assert exit_code == 0
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "PASS"
     assert report["task_principal"]["status"] == "PASS"
     assert report["task_principal"]["mode"] == "system_service_account"
@@ -1918,7 +1977,7 @@ def test_install_pack_local_test_flag_keeps_interactive_task_mode(tmp_path):
     )
 
     assert exit_code == 0
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "DRY_RUN"
     assert report["task_principal"]["mode"] == "interactive_token_default"
     assert "/RU" not in report["scheduled_task_create_command"]
@@ -1970,7 +2029,7 @@ def test_install_pack_blocks_invalid_task_password_sources(tmp_path, monkeypatch
         )
 
         assert result == 2
-        report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+        report = _plan_before_sink(report_path)
         assert report["status"] == "BLOCKED"
         assert expected_reason in report["blocked_reason"]
 
@@ -1999,7 +2058,7 @@ def test_install_pack_uninstall_skips_create_only_preflight_without_manifest_or_
     )
 
     assert exit_code == 0
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "PASS"
     assert report["uninstall"] is True
     assert report["task_principal"]["status"] == "SKIPPED"
@@ -2036,7 +2095,7 @@ def test_install_pack_uninstall_missing_scheduled_task_is_already_absent(tmp_pat
     )
 
     assert exit_code == 0
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "PASS"
     assert report["uninstall"] is True
     assert report["command_result"]["returncode"] == 1
@@ -2072,7 +2131,7 @@ def test_install_pack_uninstall_missing_scheduled_task_english_file_not_found_is
     )
 
     assert exit_code == 0
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "PASS"
     assert report["command_result"]["already_absent"] is True
     assert observed_commands == [["schtasks.exe", "/Delete", "/TN", "direct-sync-relay-container-audit", "/F"]]
@@ -2098,7 +2157,7 @@ def test_install_pack_uninstall_other_schtasks_error_still_fails(tmp_path, monke
     )
 
     assert exit_code == 1
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "FAIL"
     assert report["command_result"].get("already_absent") is not True
 
@@ -2208,7 +2267,7 @@ def test_install_pack_blocks_relative_program_data_root(tmp_path):
     )
 
     assert completed.returncode == 2
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "BLOCKED"
     assert report["blocked_reason"] == "program_data_root must be an absolute path"
     assert report["runtime_path_boundary"]["status"] == "FAIL"
@@ -2239,7 +2298,7 @@ def test_install_pack_blocks_program_data_root_that_is_existing_file(tmp_path):
     )
 
     assert completed.returncode == 2
-    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report = _plan_before_sink(report_path)
     assert report["status"] == "BLOCKED"
     assert report["blocked_reason"] == "program_data_root exists and is not a directory"
     assert report["runtime_path_boundary"]["status"] == "FAIL"

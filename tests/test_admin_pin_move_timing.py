@@ -417,17 +417,23 @@ def test_precheck_restore_releases_only_its_original_fifo(monkeypatch, tmp_path,
             crash.setattr(app, "_log_event", lambda event, **kwargs:
                           False if event == "PHS2_PREFLIGHT_HOLD_RESTORED" else audit(event, **kwargs))
         if boundary == "normal":
-            assert app.restore_quarantined_preflight_hold(str(held)) is True
+            assert app.restore_quarantined_preflight_hold(str(held), _confirmed=True) is True
         elif boundary == "audit_failed":
-            assert app.restore_quarantined_preflight_hold(str(held)) is False
+            assert app.restore_quarantined_preflight_hold(str(held), _confirmed=True) is False
             assert held.exists() and not original.exists()
         else:
             with pytest.raises(KeyboardInterrupt):
-                app.restore_quarantined_preflight_hold(str(held))
+                app.restore_quarantined_preflight_hold(str(held), _confirmed=True)
     if boundary != "normal":
         assert app._paired_preflight_blocks_label(label)
         app._admin_pin_login_epoch = uuid.uuid4().hex
         app._recheck_admin_pin_intents()
+        # DESIGN §1: the recovered request also awaits explicit mouse approval.
+        if getattr(app, "_inline_scan_choices", None):
+            callback = dict(app._inline_scan_choices)["보류 묶음 복원"]
+            app._inline_scan_choices = []
+            app._inline_choice_on_scan = None
+            callback()
     saved = app._admin_pin_store().read(intent["operation_key"])
     assert saved["state"] == "APPLIED"
     assert saved["restoration"]["state"] == "RESTORED"
@@ -745,7 +751,7 @@ def test_directory_listing_failure_does_not_revive_restored_precheck(monkeypatch
     pin_path = next(pin_store.directory.glob("*.json"))
     intent = pin_store.read(str(uuid.UUID(hex=pin_path.stem[-32:])))
     held = Path(intent["moving"][0]["target"])
-    assert app.restore_quarantined_preflight_hold(str(held)) is True
+    assert app.restore_quarantined_preflight_hold(str(held), _confirmed=True) is True
     denied = {held.parent.resolve(), app._admin_pin_store().directory.resolve()}
     scandir = os.scandir
 

@@ -27,10 +27,25 @@ def _expected_evidence_tree(root, before, result, *, claimant=False):
     assert directory.resolve().is_relative_to(root.resolve())
     stages = directory / 'stages.jsonl'
     expected_paths = {stages}
+    rows = [json.loads(line) for line in stages.read_text(encoding='utf-8-sig').splitlines()]
+    originals = {row['original_failure']['path']: row['original_failure']
+                 for row in rows if row.get('event') == 'CAUGHT_FAILURE'}
+    assert len(originals) == int(claimant)
+    for name, record in originals.items():
+        path = Path(name)
+        assert path.parent == directory
+        assert path.name.startswith('original-failure-') and path.suffix == '.json'
+        assert len(path.stem.removeprefix('original-failure-')) == 32
+        assert record['status'] == 'PRESERVED' and record['complete'] is True
+        assert _sha(path) == record['sha256']
+        assert path.stat().st_size == record['saved_bytes'] <= record['byte_cap']
+        payload = json.loads(path.read_bytes())
+        assert payload['schema'] == 'container-audit-original-installation-failure-v1'
+        assert payload['complete'] is True and payload['truncated'] is False
+        expected_paths.add(path)
     if claimant:
         expected_paths.add(directory / 'evidence-status.json')
     assert {p for p in directory.rglob('*') if p.is_file()} == expected_paths
-    rows = [json.loads(line) for line in stages.read_text(encoding='utf-8-sig').splitlines()]
     assert rows and all(isinstance(row, dict) for row in rows)
     assert rows[0]['event'] == 'INITIALIZED'
     assert rows[0]['process_id'] == observation['process_id']
@@ -509,7 +524,15 @@ if($env:CA_ENDING -ceq 'failure'){
  if(@($rows|Where-Object{$_.event -ceq 'FIXTURE_CONTROLLER_EXIT' -and $_.exit_code -eq 97}).Count -ne 1){throw 'exit absent'}
  if(@($rows|Where-Object{$_.event -ceq 'END' -and $_.stage -ceq 'retirement.release_authorized'}).Count -ne 1){throw 'exit stage absent'}
 }
-if(@(Get-ChildItem -LiteralPath $root -File).Count -ne 2){throw 'evidence count differs'}
+$expectedCount=2
+if($env:CA_ENDING -ceq 'failure'){
+ $originalFiles=@(Get-ChildItem -LiteralPath $root -File -Filter 'original-failure-*.json')
+ if($originalFiles.Count -ne 1){throw 'original evidence not unique'}
+ $reference=@($rows|Where-Object{$_.event -ceq 'CAUGHT_FAILURE'})[0].original_failure
+ if($reference.path -cne $originalFiles[0].FullName -or $reference.sha256 -cne (Sha $originalFiles[0].FullName) -or -not $reference.complete){throw 'original evidence binding differs'}
+ $expectedCount=3
+}
+if(@(Get-ChildItem -LiteralPath $root -File).Count -ne $expectedCount){throw 'evidence count differs'}
 'PASS'
 ''',values={'CA_ENDING':ending})
     assert result.returncode==0 and result.stdout.strip()=='PASS','sealed finally/evidence consumer failed'
@@ -558,7 +581,16 @@ $audit=@{rollback=@{runtime_restored=$false}};$enteredPlacementTry=$true
 function Save($Path,$Value){[IO.File]::WriteAllText($Path,($Value|ConvertTo-Json -Depth 12))}
 try{throw 'POST_SEAL_CAUGHT_FAILURE'}catch{
  $initial=$_
- foreach($statement in @($statements|Select-Object -First 4)){. ([scriptblock]::Create($statement.Extent.Text))}
+ # Execute the real catch prefix through rollback.entry; output hardening added
+ # statements before the evidence calls, so positional slices are obsolete.
+ $prefix=@()
+ foreach($statement in $statements){
+  if([object]::ReferenceEquals($statement,$placement[0])){break}
+  $prefix+=,$statement
+ }
+ if(@($prefix|Where-Object{$_.Extent.Text -ceq 'Fail-InstallationEvidenceStages $original'}).Count -ne 1){throw 'failure evidence call not unique'}
+ if(@($prefix|Where-Object{$_.Extent.Text -ceq "Set-InstallationEvidenceStage 'rollback.entry' 'rollback'"}).Count -ne 1){throw 'rollback stage call not unique'}
+ foreach($statement in $prefix){. ([scriptblock]::Create($statement.Extent.Text))}
  foreach($statement in @($placement[0].Clauses[0].Item2.Statements|Select-Object -First 3)){. ([scriptblock]::Create($statement.Extent.Text))}
  if(-not [object]::ReferenceEquals($original,$initial)){throw 'original exception replaced'}
 }

@@ -89,10 +89,11 @@ $originalAggregate=(Assert-BootstrapIntegrityRecord $install).aggregate_sha256
 
 # Execute the actual preflight statement, including its integrity and writer
 # semantics checks, before any fence or lifecycle mutation can be reached.
-$preflight=@($ast.EndBlock.Statements | Where-Object {
-    $_ -is [Management.Automation.Language.IfStatementAst] -and
-    $_.Extent.Text.Contains('$preflightCandidate = InstalledManifest')
-})
+$preflight=@($ast.FindAll({param($node)
+    $node -is [Management.Automation.Language.IfStatementAst] -and
+    $node.Clauses[0].Item2.Statements.Count -gt 0 -and
+    $node.Clauses[0].Item2.Statements[0].Extent.Text.StartsWith('$preflightCandidate = InstalledManifest')
+},$true))
 if ($preflight.Count -ne 1) { throw 'expected the actual installed-tree preflight' }
 $compatibleInventory=$sourceWriterInventory
 $currentManifest=Manifest $env:CA_UPGRADE_CURRENT_SOURCE $true

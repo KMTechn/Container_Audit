@@ -481,12 +481,17 @@ function Test-InstalledReleasePreimages($Old,$New,[string]$BeforeRoot,[string]$A
             $seen[$relative]=$true
             $beforePath=Join-Path $BeforeRoot $relative
             $afterPath=Join-Path $AfterRoot $relative
-            Assert-BootstrapNoReparsePoint $beforePath 'installed exact preimage' -PathOnly
             Assert-BootstrapNoReparsePoint $afterPath 'assembly exact after' -PathOnly
             if ($null -ne $entry.PSObject.Properties['absent']) {
                 if (-not (Test-ExactPropertySet $entry @('path','absent')) -or
                     $entry.absent -isnot [bool] -or -not $entry.absent -or (Test-Path -LiteralPath $beforePath)) { return $false }
+                # An exact absence is admitted only below a verified existing
+                # parent, and only a literal ItemNotFound result proves it.
+                Assert-BootstrapNoReparsePoint (Split-Path -Parent $beforePath) 'installed absent preimage parent' -PathOnly
+                try { [void](Get-Item -LiteralPath $beforePath -Force -ErrorAction Stop); return $false }
+                catch [Management.Automation.ItemNotFoundException] { }
             } else {
+                Assert-BootstrapNoReparsePoint $beforePath 'installed exact preimage' -PathOnly
                 if (-not (Test-ExactPropertySet $entry @('path','sha256')) -or
                     $entry.sha256 -isnot [string] -or $entry.sha256 -cnotmatch '^[0-9a-f]{64}$' -or
                     -not (Test-Path -LiteralPath $beforePath -PathType Leaf) -or (Sha $beforePath) -cne $entry.sha256) { return $false }

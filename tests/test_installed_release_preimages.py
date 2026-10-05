@@ -47,6 +47,11 @@ def test_installed_release_exact_pair_binds_complete_preimages(tmp_path, engine,
             contents=subprocess.check_output(['git','show',selected+':'+source_map[relative]],cwd=ROOT,
                 creationflags=subprocess.CREATE_NO_WINDOW)
             assert b'\r\n' not in contents
+            if hashlib.sha256(contents).hexdigest()!=entry['sha256']:
+                # EA's real stock was CRLF. Reconstruct only the one declared
+                # exact preimage; admission accepts no line-ending alternative.
+                assert selected==EA
+                contents=contents.replace(b'\n',b'\r\n')
             assert hashlib.sha256(contents).hexdigest()==entry['sha256']
             target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(contents)
         target=after/relative;target.parent.mkdir(parents=True,exist_ok=True)
@@ -59,8 +64,12 @@ def test_installed_release_exact_pair_binds_complete_preimages(tmp_path, engine,
     guard='app/data_generation_guard.py'
     if mutation=='byte': (before/changed).write_bytes((before/changed).read_bytes()+b'!')
     elif mutation=='mixed':
-        (before/changed).write_bytes(subprocess.check_output(['git','show',EA+':'+source_map[changed]],cwd=ROOT,
-            creationflags=subprocess.CREATE_NO_WINDOW))
+        contents=subprocess.check_output(['git','show',EA+':'+source_map[changed]],cwd=ROOT,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+        expected=next(e['sha256'] for e in releases[EA]['files'] if e['path']==changed)
+        if hashlib.sha256(contents).hexdigest()!=expected:contents=contents.replace(b'\n',b'\r\n')
+        assert hashlib.sha256(contents).hexdigest()==expected
+        (before/changed).write_bytes(contents)
     elif mutation=='ea-absent': (before/guard).unlink()
     elif mutation=='892-present': (before/guard).write_bytes((after/guard).read_bytes())
     elif mutation=='after-byte': (after/changed).write_bytes((after/changed).read_bytes()+b'!')
