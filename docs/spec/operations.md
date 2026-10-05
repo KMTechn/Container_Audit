@@ -1274,3 +1274,5 @@ Registration retains string profile-path arguments after shared resolution. Inva
 다시 쓰지 않는다. 코드·G·runtime 정합이 증명되어야 fence와 relay를 복귀한다.
 
 공식 옛 relay 되돌림은 보호 preimage XML의 SHA256을 먼저 검증한 뒤, live 작업의 정체성 지문과 enabled를 원 상태와 대조한다. 스케줄러의 기록용 XML 필드 변화는 복원 실패로 판정하지 않는다.
+
+공식 옛 relay 탐색은 빈 결과와 단일 작업을 평탄한 항목으로 반환한다. 같은 이름의 작업이 둘 이상이면 퇴역 admission이 정체성을 추측하지 않고 거절한다.

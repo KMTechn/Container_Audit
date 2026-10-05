@@ -2218,7 +2218,7 @@ function Get-CanonicalOfficialLegacyRelayWriters {
     foreach($task in $tasks){$xml=Export-ScheduledTask -TaskName ([string]$task.TaskName) -TaskPath ([string]$task.TaskPath) -ErrorAction Stop;$writers+=,[pscustomobject]@{mechanism='scheduled_task';task_path=[string]$task.TaskPath;task_name=[string]$task.TaskName;xml=[string]$xml;observed_enabled=$task.Settings.Enabled;transition_record=$null}}
     # No official public release creates HKCU Run relay persistence.
     # Existing canonical Run belongs to the canonical lifecycle, outside this set.
-    return ,$writers
+    return $writers
 }
 function Get-CanonicalOfficialLegacyRelayState {
     param($Writer,[object[]]$ExpectedIdentitySet,[string]$EvidenceRoot)
