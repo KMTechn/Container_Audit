@@ -14,8 +14,11 @@ TLS CA와 qualification context를 같은 snapshot으로 검사한다. 정상 lo
 해석할 수 없으면 UNKNOWN으로 끝내며 report를 쓰지 않는다. 깨진 JSON·중복 키는 경로
 판정 실패로 바꾸지 않고, 승인된 report owner에 기존 BLOCKED 진단을 남긴다.
 Canonical의 첫 일반 G 거절은 fence·mutated 표시 앞에서 끝나므로 removal/Run/relay를
-호출하지 않는다. PS 설치 뒤 Python child에서 발견하는 credential nested 거절은 기존
-rollback과 fence 해제를 사용한다. 이 경계의 실제 native 복원은 아직 NOT TESTED다.
+호출하지 않는다. Canonical 설치는 변경 전에 `--onboard-current-user --preflight-only`로
+locator와 nested owner를 기존 Python reader로 검사한다. 보안 입력이나 설치 상태를 쓰지
+않으며, 결과 digest를 실제 onboarding의 `--expected-input-binding`으로 넘겨 같은 입력인지
+최초 기록 전에 비교한다. 깨진 locator·중복 키는 기존 credential BLOCKED 오류 코드로
+종료한다. old-target rollback G는 유지하며 실제 native 설치·복원은 아직 NOT TESTED다.
 
 직접 등록(검증·2PC 복구 포함), relay 운영 명령, 사용자 profile 설치/확인,
 앱의 active-work wrapper·review report, lifecycle 복구·제거도 기존 admission 아래

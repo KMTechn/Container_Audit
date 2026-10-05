@@ -1222,6 +1222,59 @@ def apply_current_user_runtime_environment(
     values[REQUIRED_ENV] = "1"
 
 
+def _prepare_onboarding_inputs(paths, tls_ca_source, environ, credential_loader):
+    """Read-only admission shared by canonical preflight and onboarding."""
+    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, resolve_owner_path
+    from protected_admin import default_protected_admin_profile_path
+    from logistics_runtime_profile import assert_path_has_no_reparse_components
+
+    try:
+        if tls_ca_source:
+            tls_ca_source = str(assert_path_has_no_reparse_components(
+                tls_ca_source, label="TLS CA bundle source",
+            ))
+        admin_profile = resolve_owner_path(default_protected_admin_profile_path(environ=environ))
+    except (OSError, ValueError) as exc:
+        raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False}) from exc
+    owner_paths = _owner_artifact_paths(paths)
+    probe_before_owner_paths(paths.data_root, file_paths=(
+        *owner_paths.values(), tls_ca_source, admin_profile,
+    ))
+    prepared_credential = None
+    if credential_loader is load_credentials_from_json and paths.credential_path.is_file():
+        prepared_credential = prepare_credential_config(paths.credential_path, data_root=paths.data_root)
+    # Only the digest crosses the process boundary; credentials are never emitted.
+    binding = hashlib.sha256(json.dumps({
+        "owner_paths": {name: str(path) for name, path in owner_paths.items()},
+        "tls_ca_source": tls_ca_source,
+        "admin_profile": str(admin_profile),
+        "credential": dict(prepared_credential.payload) if prepared_credential is not None else None,
+        "protected_secret_path": str(prepared_credential.protected_secret_path) if prepared_credential is not None else None,
+    }, sort_keys=True, ensure_ascii=True).encode("utf-8")).hexdigest()
+    return tls_ca_source, prepared_credential, binding
+
+
+def preflight_current_user_onboarding(app_root, *, environ=None):
+    """Admit locator and nested owners without changing installation or user state."""
+    from data_generation_guard import DataGenerationBlocked
+
+    paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
+    try:
+        inputs = _prepare_onboarding_inputs(
+            paths, _configured_tls_ca_bundle_source(paths, environ), environ,
+            load_credentials_from_json,
+        )
+    except DataGenerationBlocked as exc:
+        raise CurrentUserOnboardingError(
+            exc.user_message, report_path=paths.onboarding_report_path, status="FAILED",
+        ) from exc
+    if inputs[1] is not None and inputs[1].credential_error is not None:
+        raise CurrentUserOnboardingError(
+            str(inputs[1].credential_error), report_path=paths.onboarding_report_path, status="BLOCKED",
+        ) from inputs[1].credential_error
+    return inputs[2]
+
+
 @writer_sink("current_user_onboarding", probe_only=True)
 def onboard_current_user(
     app_root: str | os.PathLike[str],
@@ -1235,9 +1288,24 @@ def onboard_current_user(
     ledger_factory: Callable[[Path], None] = _create_ledger,
     autostart_installer: Callable[..., Mapping[str, Any]] = install_user_relay_autostart,
     relay_launcher: Callable[..., Mapping[str, Any]] = start_user_relay_process,
+    expected_input_binding: str = "",
 ) -> dict[str, Any]:
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
     tls_ca_source = _configured_tls_ca_bundle_source(paths, environ)
+    prepared_inputs = None
+    if expected_input_binding:
+        from data_generation_guard import DataGenerationBlocked
+        try:
+            prepared_inputs = _prepare_onboarding_inputs(paths, tls_ca_source, environ, credential_loader)
+        except DataGenerationBlocked as exc:
+            raise CurrentUserOnboardingError(
+                exc.user_message, report_path=paths.onboarding_report_path, status="FAILED",
+            ) from exc
+        if prepared_inputs[2] != expected_input_binding:
+            raise CurrentUserOnboardingError(
+                "설치 전 확인한 자격 설정 경로가 바뀌었습니다. 자료를 보존하고 설치를 다시 확인하세요.",
+                report_path=paths.onboarding_report_path, status="BLOCKED",
+            )
     attempt = None
     require_integrity = (
         bool(getattr(sys, "frozen", False))
@@ -1270,23 +1338,9 @@ def onboard_current_user(
                 bootstrap_integrity_detail.get("status") or "UNKNOWN"
             ).lower()
             report["bootstrap_integrity_detail"] = bootstrap_integrity_detail
-            from data_generation_guard import probe_before_owner_paths, record_before_owner_paths
-            from protected_admin import default_protected_admin_profile_path
-            from logistics_runtime_profile import assert_path_has_no_reparse_components
-            try:
-                if tls_ca_source:
-                    tls_ca_source = str(assert_path_has_no_reparse_components(
-                        tls_ca_source, label="TLS CA bundle source",
-                    ))
-            except (OSError, ValueError) as exc:
-                raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False}) from exc
-            probe_before_owner_paths(paths.data_root, file_paths=(
-                *_owner_artifact_paths(paths).values(), tls_ca_source,
-                default_protected_admin_profile_path(environ=environ),
-            ))
-            prepared_credential = None
-            if credential_loader is load_credentials_from_json and paths.credential_path.is_file():
-                prepared_credential = prepare_credential_config(paths.credential_path, data_root=paths.data_root)
+            from data_generation_guard import record_before_owner_paths
+            tls_ca_source, prepared_credential, _ = (prepared_inputs if prepared_inputs is not None
+                else _prepare_onboarding_inputs(paths, tls_ca_source, environ, credential_loader))
             record_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values())
             attempt = RemoteAttempt.begin(paths.onboarding_report_path, "current_user_onboarding")
             for directory in (
@@ -2024,12 +2078,19 @@ def onboarding_main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--app-root", default=str(_default_app_root()))
     parser.add_argument("--server-base-url", default=DEFAULT_SERVER_BASE_URL)
+    parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument("--expected-input-binding", default="")
     args = parser.parse_args(argv)
     try:
+        if args.preflight_only:
+            binding = preflight_current_user_onboarding(args.app_root)
+            print(f"onboarding_input_binding={binding}")
+            return 0
         report = onboard_current_user(
             args.app_root,
             server_base_url=args.server_base_url,
             require_bootstrap_integrity=bool(getattr(sys, "frozen", False)),
+            expected_input_binding=args.expected_input_binding,
         )
     except CurrentUserOnboardingError as exc:
         print(f"onboarding_status={exc.status}")

@@ -842,10 +842,39 @@ function Product([string]$Root,[string]$Mode) {
     if ($Mode -ceq '--onboard-current-user' -and $onboardingServerBaseUrl) {
         $args += ' --server-base-url ' + (Arg $onboardingServerBaseUrl)
     }
+    if ($Mode -ceq '--onboard-current-user' -and $canonicalOnboardingInputBinding) {
+        $args += ' --expected-input-binding ' + (Arg $canonicalOnboardingInputBinding)
+    }
     $process = Start-Process (Join-Path $Root 'runtime\pythonw.exe') -ArgumentList $args -WindowStyle Hidden -PassThru
     # Start-Process -Wait includes the persistent relay child; this waits only for the host.
     $process.WaitForExit()
     if ($process.ExitCode -ne 0) { throw "Product mode failed: $Mode/$($process.ExitCode)" }
+}
+function Get-CanonicalOnboardingInputBinding([string]$Root) {
+    # The existing product reader owns locator/nested resolution. This call
+    # performs only admission/readback and runs before any installer mutation.
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = Join-Path $Root 'runtime\pythonw.exe'
+    $start.Arguments = '-I -B {0} --onboard-current-user --app-root {1} --preflight-only' -f
+        (Arg (Join-Path $Root 'app\main.py')),(Arg (Join-Path $Root 'app'))
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $start.EnvironmentVariables['PYTHONIOENCODING'] = 'utf-8'
+    $process = [Diagnostics.Process]::Start($start)
+    try {
+        $output = $process.StandardOutput.ReadToEnd()
+        [void]$process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) { throw $output.Trim() }
+        if ($output.Trim() -cnotmatch '^onboarding_input_binding=([0-9a-f]{64})$') {
+            throw '설치 전 자격 설정 경로 확인 결과가 올바르지 않습니다. 자료를 보존하고 설치를 다시 확인하세요.'
+        }
+        return $Matches[1]
+    }
+    finally { $process.Dispose() }
 }
 function Read-CanonicalRetiredRemoval {
     # These are observations, never authority. The caller still acquires the
@@ -1879,6 +1908,7 @@ if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRet
     }
 }
 $statusRoot = Join-Path $activeRelayRoot 'status'
+$canonicalOnboardingInputBinding = ''
 if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
     Assert-ContainerDataGenerationTarget -CandidateRoot $source -TargetSid $operatorSid `
         -LocalAppDataRoot $lad -DataRoot $activeDataRoot -HelperRoot $source
@@ -2039,6 +2069,9 @@ $canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority `
     -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
     -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
     -WriterContractSha256 $canonicalWriterFenceContractSha256
+if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
+    $canonicalOnboardingInputBinding = Get-CanonicalOnboardingInputBinding $source
+}
 $canonicalWriterFencePreparedReceipt = New-CanonicalWriterFencePreparedReceipt `
     -Path $canonicalWriterFencePreparedPath `
     -SessionId $Script:CanonicalWriterFenceSessionId `
