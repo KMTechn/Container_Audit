@@ -22,6 +22,7 @@ sys.path.insert(0, source)
 import data_generation_guard as guard
 import direct_sync_runtime as runtime
 from kmtech_shared import data_generation as generation
+from direct_sync_push import DEFAULT_ENDPOINT_PATH
 from tools.register_container_audit_worker_pc import _current_user_sid
 
 data = root / "data"
@@ -37,7 +38,7 @@ protected.write_bytes(uuid.uuid4().bytes)
 ca.write_bytes(uuid.uuid4().hex.encode("ascii"))
 credential.write_text(json.dumps(dict(producer_id=uuid.uuid4().hex,
     key_id=uuid.uuid4().hex, secret_ref="dpapi:credential", secret_data_dir=str(secret_owner),
-    endpoint_url="https://qualification.invalid/api/raw", tls_ca_bundle_path=str(ca))), encoding="utf-8")
+    endpoint_url="https://qualification.invalid" + DEFAULT_ENDPOINT_PATH, tls_ca_bundle_path=str(ca))), encoding="utf-8")
 
 counts = dict(locator_reads=0, secret_reads=0, tls_reads=0, decryptions=0, requests=0)
 original_open = Path.open
