@@ -142,7 +142,7 @@ function StartRaw {{throw 'unexpected relay change'}}
 $mainTry=@($ast.FindAll({{param($n) $n -is [Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally -and $n.Finally.Extent.Text -match 'Exit-ContainerWriterSessionAuthority'}},$true))[0]
 $receipt=@($mainTry.Body.Statements|Where-Object {{$_.Extent.Text -match '^\$canonicalWriterFencePreparedReceipt\s*=\s*New-CanonicalWriterFencePreparedReceipt'}})[0]
 $prefix=(@($mainTry.Body.Statements|Where-Object {{$_.Extent.StartOffset -lt $receipt.Extent.StartOffset}})|ForEach-Object {{$_.Extent.Text}})-join "`n"
-$enteredPlacementTry=$false;$canonicalWriterFenceActive=$false;$retirementResume=$null;$retirementResumeClaim=$null
+$enteredPlacementTry=$false;$canonicalWriterFenceActive=$false;$audit=$null;$retirementResume=$null;$retirementResumeClaim=$null
 $canonicalWriterFenceAuthority=$null;$canonicalWriterFenceEnvironmentNames=@()
 $canonicalWriterFencePreparedPath={quote(root/'no-receipt.json')}
 $source={quote(packet)};$install={quote(root/'existing-code')};$old=@()
