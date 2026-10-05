@@ -75,8 +75,9 @@ $ErrorActionPreference='Stop'
 $tokens=$null; $errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile($env:CA_CONTRACT_SOURCE,[ref]$tokens,[ref]$errors)
 if ($errors.Count) { throw 'product PowerShell parse failed' }
+$definition_nodes=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$true))
 foreach ($name in $env:CA_CONTRACT_NAMES.Split(',')) {
-    $functions=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name},$true))
+    $functions=@($definition_nodes | Where-Object {$_.Name -ceq $name})
     if ($functions.Count -ne 1) { throw ('expected one actual product function: '+$name) }
     Invoke-Expression $functions[0].Extent.Text
 }
