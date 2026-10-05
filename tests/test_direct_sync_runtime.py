@@ -382,7 +382,15 @@ def test_load_credentials_blocks_env_secret_ref_in_production_profile(monkeypatc
         load_credentials_from_json(path)
 
 
-def test_load_credentials_blocks_dpapi_secret_data_dir_in_legacy_syncthing_folder(tmp_path):
+def test_load_credentials_blocks_dpapi_secret_data_dir_in_legacy_syncthing_folder(tmp_path, monkeypatch):
+    import direct_sync_runtime as runtime
+    legacy_directory = tmp_path / "Sync" / "producer-secrets"
+    original_policy = runtime.is_legacy_syncthing_path
+    assert original_policy(r"C:\Sync\producer-secrets")
+    # Model the known legacy folder inside the owned fixture, after real G
+    # admission, without reading or creating the operational C:\Sync tree.
+    monkeypatch.setattr(runtime, "is_legacy_syncthing_path", lambda candidate:
+        Path(candidate).resolve() == legacy_directory.resolve() or original_policy(candidate))
     path = tmp_path / "credential-dpapi-syncthing.json"
     path.write_text(
         json.dumps(
@@ -1510,7 +1518,14 @@ def test_runtime_lost_ack_retry_reuses_same_batch_and_idempotency_after_stale_le
     assert persisted == (claimed.relay_id, claimed.spooled_file_path, 2)
 
 
-def test_runtime_twenty_container_audit_pcs_same_korean_filename_lost_ack_replay_preserves_https_identity_scope(tmp_path):
+def test_runtime_twenty_container_audit_pcs_same_korean_filename_lost_ack_replay_preserves_https_identity_scope(tmp_path, monkeypatch):
+    import data_generation_guard as generation_guard
+    # Twenty PCs run one immutable installed release. Capture its actual clean
+    # source identity once; repeated Git discovery is a source-development seam,
+    # whereas the installed runtime reads its fixed portable manifest.
+    release = generation_guard._runtime_release()
+    assert release["version"] and len(release["build_id"]) == 40
+    monkeypatch.setattr(generation_guard, "_runtime_release", lambda: dict(release))
     session = ReplayAwareAcceptedSession()
     pc_roots = [tmp_path / f"pc_{index:03d}" for index in range(1, 21)]
     file_name = "이적작업이벤트로그_홍길동_20260624.csv"
