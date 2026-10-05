@@ -5,6 +5,7 @@ import uuid
 
 import pytest
 from tests.powershell_contracts import run_functions
+from tests.test_zero_touch_installer import _portable_release_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,18 +44,25 @@ def test_python_machine_writers_leave_no_secret_temp(tmp_path, monkeypatch, writ
 
 @pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
 def test_large_machine_integrity_roundtrip_and_one_byte_mutation(tmp_path, engine):
+    packet = _portable_release_fixture(tmp_path, directory='packet')
+    for i in range(600):
+        (packet/f'owned-{i:04d}-long-identity-name.txt').write_bytes(b'exact owned bytes')
+    manifest_path=packet/'portable-manifest.json'
+    manifest=json.loads(manifest_path.read_text())
+    files=[path for path in packet.rglob('*') if path.is_file() and path != manifest_path]
+    manifest['file_count_before_manifest']=len(files)
+    manifest['byte_count_before_manifest']=sum(path.stat().st_size for path in files)
+    manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
     result = run_functions(tmp_path, ROOT/'tools/bootstrap_integrity.ps1', ['Get-StrictFullPath'], r'''
 . $env:CA_CONTRACT_SOURCE
 $root=Join-Path $env:CA_CONTRACT_ROOT 'packet'
-[void][IO.Directory]::CreateDirectory($root)
-for($i=0;$i -lt 420;$i++){[IO.File]::WriteAllText((Join-Path $root ('owned-'+$i+'.txt')),'exact owned bytes',[Text.UTF8Encoding]::new($false))}
 [void](Write-BootstrapIntegrityRecord -Root $root -CodeRootIdentity $root)
 $path=Join-Path $root 'bootstrap-integrity.json'
 if((Get-Item $path).Length -le 65536){throw 'large machine fixture was too small'}
 $bytes=[IO.File]::ReadAllBytes($path)
 if($bytes -contains 13 -or [Text.Encoding]::UTF8.GetString($bytes).Contains('[TRUNCATED:')){throw 'machine JSON bytes changed'}
 [void](Assert-BootstrapIntegrityRecord $root)
-[IO.File]::WriteAllText((Join-Path $root 'owned-0.txt'),'Exact owned bytes',[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $root 'owned-0000-long-identity-name.txt'),'Exact owned bytes',[Text.UTF8Encoding]::new($false))
 $rejected=$false
 try{[void](Assert-BootstrapIntegrityRecord $root)}catch{$rejected=$true}
 if(-not $rejected){throw 'one-byte mutation was admitted'}

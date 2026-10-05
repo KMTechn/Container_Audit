@@ -22,7 +22,7 @@ import pytest
 
 from tests.test_zero_touch_installer import _portable_release_fixture, _powershell
 from tests.native_process_fixtures import native_python_environment, native_python_executable
-from tests.powershell_contracts import run_powershell
+from tests.powershell_contracts import run_powershell, run_functions
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -74,7 +74,8 @@ if sys.argv[1] == 'relay':
         lease.release()
         (root / 'relay.ready').unlink(missing_ok=True)
 elif sys.argv[1] == 'preflight':
-    raise SystemExit(onboarding.onboarding_main(sys.argv[2:]))
+    assert sys.argv[2] == '--onboard-current-user'
+    raise SystemExit(onboarding.onboarding_main(sys.argv[3:]))
 elif sys.argv[1] == 'prepare-ready':
     from tests.test_current_user_onboarding import _ready_state
     paths = onboarding.resolve_current_user_onboarding_paths(sys.argv[2])
@@ -897,3 +898,38 @@ def test_uninstall_plan_is_read_only_and_does_not_claim_installed_identity(tmp_p
     assert 'uninstall_identity_status=NOT_CHECKED_PLAN_ONLY' in result.stdout
     assert 'registry_changed=false' in result.stdout
     assert {k: v for k, v in _tree(tmp_path).items() if k not in {'stdout.log', 'stderr.log'}} == original
+
+@pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
+@pytest.mark.parametrize('case', ('exact', 'request', 'preexisting_time', 'path', 'byte_mutation'))
+def test_supported_removal_cleans_only_exact_current_attempt_stop(tmp_path, engine, case):
+    result = run_functions(tmp_path, ROOT/'INSTALL_CANONICAL_PORTABLE.ps1',
+        ['Remove-CanonicalSupportedRemovalAttemptStop','Sha','Same','Full','Test-ExactPropertySet'], r'''
+function Snapshot { return @{exists=$false} }
+function Assert-ContainerWriterFenceNoReparse([string]$Path) { Assert-BootstrapNoReparsePoint $Path 'owned stop fixture' -PathOnly }
+$root=$env:CA_CONTRACT_ROOT
+$stop=Join-Path $root 'stop.json';$receiptPath=Join-Path $root 'removal.json';$app=Join-Path $root 'app'
+$started=[DateTime]::UtcNow;$at=$started.ToString('o');$request='a'*32
+$marker=@{schema_version='container-audit-user-relay-stop-v1';request_id=$request;requested_at=$at}
+$receipt=@{report_version='container-audit-current-user-removal-v1';state_scope='current_user';data_preserved=$true;
+ machine_code_root=$app;captured_at=$at;relay_autostart=@{status='ABSENT'};
+ relay_process=@{status='UNKNOWN';request_id=$request;stop_request_path=$stop}}
+Write-Utf8Json $stop $marker
+$expected=Sha $stop
+switch($env:CA_STOP_CASE){
+ request {$receipt.relay_process.request_id='b'*32}
+ preexisting_time {$receipt.captured_at=$started.AddSeconds(-2).ToString('o')}
+ path {$receipt.relay_process.stop_request_path=Join-Path $root 'foreign.json'}
+ byte_mutation {$marker.request_id='b'*32;$receipt.relay_process.request_id='b'*32;Write-Utf8Json $stop $marker}
+}
+Write-Utf8Json $receiptPath $receipt
+$before=Sha $stop;$refused=$false
+try{$answer=Remove-CanonicalSupportedRemovalAttemptStop $receiptPath $stop $started $app $expected}catch{$refused=$true}
+if($env:CA_STOP_CASE -ceq 'exact'){
+ if($refused -or $answer -cne 'REMOVED_EXACT_CURRENT_ATTEMPT' -or (Test-Path $stop)){throw 'owned cleanup failed'}
+}else{
+ if(-not $refused -or (Sha $stop) -cne $before){throw 'foreign or altered marker changed'}
+}
+'PASS'
+''', engine=engine, values={'CA_STOP_CASE':case})
+    assert result.returncode == 0, 'exact stop ownership contract failed; diagnostics retained privately'
+    assert result.stdout.strip() == 'PASS'

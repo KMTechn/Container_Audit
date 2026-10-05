@@ -1233,6 +1233,38 @@ function Get-CanonicalRetirementChildFailure($Child, [Collections.IDictionary]$E
     }
     return $detail
 }
+function Remove-CanonicalSupportedRemovalAttemptStop([string]$RemovalPath,[string]$StopPath,
+    [DateTime]$StartedAt,[string]$ExpectedAppRoot,[string]$ExpectedStopSha256='') {
+    if (-not (Test-Path -LiteralPath $StopPath)) { return 'ABSENT' }
+    Assert-ContainerWriterFenceNoReparse $StopPath
+    Assert-ContainerWriterFenceNoReparse $RemovalPath
+    $receiptSha=Sha $RemovalPath
+    $receipt=Get-Content -LiteralPath $RemovalPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $stopSha=Sha $StopPath
+    $marker=Get-Content -LiteralPath $StopPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $captured=[DateTime]::Parse([string]$receipt.captured_at).ToUniversalTime()
+    $requested=[DateTime]::Parse([string]$marker.requested_at).ToUniversalTime()
+    # Product timestamps have whole-second precision; compare the same format.
+    $earliest=$StartedAt.ToUniversalTime()
+    $earliest=$earliest.AddTicks(-($earliest.Ticks % [TimeSpan]::TicksPerSecond))
+    if ([string]$receipt.report_version -cne 'container-audit-current-user-removal-v1' -or
+        [string]$receipt.state_scope -cne 'current_user' -or $receipt.data_preserved -isnot [bool] -or -not $receipt.data_preserved -or
+        -not (Same ([string]$receipt.machine_code_root) $ExpectedAppRoot) -or
+        [string]$receipt.relay_autostart.status -cne 'ABSENT' -or
+        [string]$receipt.relay_process.status -cnotin @('ABSENT','UNKNOWN') -or
+        -not (Same ([string]$receipt.relay_process.stop_request_path) $StopPath) -or
+        -not (Test-ExactPropertySet $marker @('schema_version','request_id','requested_at')) -or
+        [string]$marker.schema_version -cne 'container-audit-user-relay-stop-v1' -or
+        [string]$marker.request_id -cnotmatch '^[0-9a-f]{32}$' -or
+        [string]$marker.request_id -cne [string]$receipt.relay_process.request_id -or
+        $captured -lt $earliest -or $requested -lt $captured -or $requested -gt [DateTime]::UtcNow -or
+        (Snapshot).exists -or ($ExpectedStopSha256 -and $stopSha -cne $ExpectedStopSha256)) {
+        throw 'REMOVAL_ATTEMPT_STOP_OWNERSHIP_UNPROVEN'
+    }
+    if ((Sha $RemovalPath) -cne $receiptSha -or (Sha $StopPath) -cne $stopSha) { throw 'REMOVAL_ATTEMPT_STOP_CHANGED' }
+    Remove-Item -LiteralPath $StopPath -ErrorAction Stop
+    return 'REMOVED_EXACT_CURRENT_ATTEMPT'
+}
 function Get-CanonicalOnboardingInputBinding([string]$Root,[string]$TargetReleaseRoot = '') {
     # The existing product reader owns locator/nested resolution. This call
     # performs only admission/readback and runs before any installer mutation.
@@ -3250,6 +3282,7 @@ if ($CompleteRetiredRemoval) {
 }
 $uninstallCodeStarted = $false
 $uninstallStopSha256 = ''
+$supportedRemovalProductStartedAt=$null
 $uninstallRecordPreimagePath = Join-Path $auditRoot "canonical-portable-$runId-integrity-preimage.json"
 $retirementResumeClaim = $null
 $continuationOldClaim = $null
@@ -3653,6 +3686,7 @@ $enteredPlacementTry = $true
         # Execute only the externally verified support host. Damaged installed
         # code and update-control records are not prerequisites or authorities.
         $mutated=$true
+        $supportedRemovalProductStartedAt=[DateTime]::UtcNow
         Product $source '--remove-current-user-setup' (Join-Path $install 'app')
         $removal=Get-Content -LiteralPath $removalPath -Raw -Encoding UTF8|ConvertFrom-Json
         [void](Confirm-CanonicalRuntimeQuiescence -Removal $removal -ExpectedRelays $old -StopRequestPath $stop)
@@ -4298,6 +4332,17 @@ catch {
     }
     if ($Uninstall -and -not $CompleteRetiredRemoval) {
         # Removal converges on removal; never resurrect moved code, tasks or Run.
+        if ($null -ne $supportedRemovalProductStartedAt) {
+            try {
+                $audit['removal_attempt_stop_cleanup']=Remove-CanonicalSupportedRemovalAttemptStop `
+                    -RemovalPath $removalPath -StopPath $stop -StartedAt $supportedRemovalProductStartedAt `
+                    -ExpectedAppRoot (Join-Path $install 'app') -ExpectedStopSha256 $uninstallStopSha256
+            } catch {
+                $audit['removal_attempt_stop_cleanup']='FAILED_OWNERSHIP_UNPROVEN'
+                $audit['removal_attempt_stop_cleanup_failure']=Get-CanonicalFailureDetails $_
+                Write-InstallationCaughtFailure $_
+            }
+        }
         if($canonicalWriterFenceActive){
             [void](Abort-ContainerWriterFence -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
                 -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId -AuthorityLease $canonicalWriterFenceAuthority)
