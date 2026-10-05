@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "6414175f93c6a7c5a556a1016e11d6587b1e24175c9f49c260fe74671a8317f7",
+  "after_inventory_sha256": "b86f9bf674d8e5f90b7cd873ff1ceea22780e1c2d145190943a4e30e6309aaed",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -166,7 +166,7 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "0633825b738f150786b7a9276413b787ba06e08ab711fb047fb6ffcb1dbb1092"
+      "after": "2601df811be8178ea4b445a00f210c4ba4d525a45ecd4c2b0008ab3372fd297a"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -176,7 +176,7 @@
     {
       "path": "app/Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "9066168c9d8541f0c27e66675de20bc534d986760faa9745221047f03f136829"
+      "after": "81d02714e985dd4cab08e7c142213b6538a70333688b7f0284a21f1172a82580"
     },
     {
       "path": "app/best_time_records.py",
@@ -186,7 +186,7 @@
     {
       "path": "app/container_admin_pin.py",
       "before": "c5ee1c1b40ff61c3144d3a2778458760a6eebc588f7c12cbbe7426b4c877b9cf",
-      "after": "7f4081cf293f20472dff95963c08e33776559039a01cb18f93b5fff6e8115034"
+      "after": "676a8ff32de3d8e65de62f414a662be07d8b238e5645081dd95d61399e8daa0e"
     },
     {
       "path": "app/container_audit_product_host.py",
@@ -226,12 +226,12 @@
     {
       "path": "app/direct_sync_push.py",
       "before": "f1f02e07fe892d9beb2f69e15ddd172d01c564e79700ef1d19b7e7423c11c06c",
-      "after": "2bc3aa2af3140e63177e0e81ba4adb81f9f01f190e3f9815815e6ab9bc4d55d4"
+      "after": "c19ae599c61090fd9201338274110695c34f317b25ac969df6f2a70b67eedfda"
     },
     {
       "path": "app/direct_sync_runtime.py",
       "before": "ceccf8e265feaf0280cdb8640810aa4d04e78e61e76fd2c3368d0efcc547acb7",
-      "after": "6f1a218aa077ef12ee659fd87a7890e6e860e738760d53ad98d91649a2f9fbfa"
+      "after": "deb1ed830ca8da59bfa42c3a0170d54e127d10dad7d8fe97cc1a1f7c95e38d44"
     },
     {
       "path": "app/event_contracts.py",
@@ -266,7 +266,7 @@
     {
       "path": "app/item_catalog_sync.py",
       "before": "732e3bf81c11115fb62d7690379164a25a528fd0e7695bfea75fde9e05fdf431",
-      "after": "58f20ae6eb8dce66f33b539f7d362c73132e49164eb81a0ea0a18427d46a28da"
+      "after": "4b19034643fc92654f52d9fdcde9dc25926c7b4697fdbddc0ded0f68a3123494"
     },
     {
       "path": "app/kmtech_factory_contracts/__init__.py",
@@ -426,7 +426,7 @@
     {
       "path": "app/logistics_runtime_profile.py",
       "before": "f3168358c9eadc0297c2c255e2b182924664f65505bf4d3a9e22d2c8b4a87b32",
-      "after": "98575e271894cc55c9720cc70a41d2342f38e73b01ca03924d60cdececc4fae4"
+      "after": "b8bce2bf53ac2a1bc5e0bbe67fa63513423058515331eb9c7ab54fdb616e6eeb"
     },
     {
       "path": "app/main.py",
@@ -471,7 +471,7 @@
     {
       "path": "app/producer_runtime_client.py",
       "before": "5b5a62d8ffaa6693ed0233668f253751b01849164916b257a9a1d08932a8aa3b",
-      "after": "1938e8457e941d4f6d6085ad49c7e3686a19cfbb9fa9eabf0e680fb8a89e998a"
+      "after": "7825b2b85b56cf01777a634ba14872caa998c87dee35b585f88ad87096ac5f7e"
     },
     {
       "path": "app/product_exchange.py",
@@ -491,7 +491,7 @@
     {
       "path": "app/protected_admin.py",
       "before": "6b743e662c3f8120f91286ebd456fbc2be6f4cf73c4466fe900fd799295eb19c",
-      "after": "ef5b6f4f5563b693e9e57f30bcf4273ca3b6639c5549600da3785716a866d2ce"
+      "after": "a703c1207ea2b793931a9da86b1a67822cf3619d78392de86669c75f7651c484"
     },
     {
       "path": "app/recovery_file_read.py",
@@ -1351,7 +1351,7 @@
     {
       "path": "app/transfer_client.py",
       "before": "579b2450bd19777a349331ec3315ff6314151b1a85e812f95346db646f1833bb",
-      "after": "ff697029a137b55506b05683216cf5c7a2034df683b2e186407991d3bd27332b"
+      "after": "dc69464fded9a3915286f577da51a3aac0124cbff8cf093c91fa662dbe67ac60"
     },
     {
       "path": "app/transfer_common.py",
@@ -1451,7 +1451,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "870ca73116a46b97574c1e6c6640c1faadb49bb7c4bd6d38d9b263191cac90b4"
+      "after": "8bfa8a9343fae894a6e7b4d91da8702a85787449032cbaeda7e49ca726f6f4e9"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4501,7 +4501,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "7bf9aa51697877216a6bf926caac1c34489084850a61748ca3c26f42c2b5efe9"
+      "after": "58db99588ce5afd1a761be8df15e2a71c428eba0a0ec15808a2e2ae837719d74"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4511,24 +4511,24 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "b9e58bd45b1c8f1f709bedd020b17b03f457f0acc5e04d114d0b2df1ed983a29"
+      "after": "603921cb931546aa7d5a37dee91e830f524f4013b1f9813400248df2ed970572"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "abd70f9906b10000499d2eca2a4354a848ee6102f8b95deb0d3bc24b81e97cc5"
+      "after": "9cba3e2d00d72c951d11ac737b08c03f51f669c634821dd6736ef516d2f34c85"
     }
   ],
   "source_replacements": [
     {
       "path": "Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "9066168c9d8541f0c27e66675de20bc534d986760faa9745221047f03f136829"
+      "after": "81d02714e985dd4cab08e7c142213b6538a70333688b7f0284a21f1172a82580"
     },
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "0633825b738f150786b7a9276413b787ba06e08ab711fb047fb6ffcb1dbb1092"
+      "after": "2601df811be8178ea4b445a00f210c4ba4d525a45ecd4c2b0008ab3372fd297a"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -4538,7 +4538,7 @@
     {
       "path": "container_admin_pin.py",
       "before": "98f138dec74285ffd1359b9cf934d3ff67dc12a5a15892e035c4228858d55659",
-      "after": "7f4081cf293f20472dff95963c08e33776559039a01cb18f93b5fff6e8115034"
+      "after": "676a8ff32de3d8e65de62f414a662be07d8b238e5645081dd95d61399e8daa0e"
     },
     {
       "path": "container_audit_product_host.py",
@@ -4556,19 +4556,34 @@
       "after": "4b795355163243626f25bfacbab36c7f0f0196a168fe6cc94570d2171374b153"
     },
     {
+      "path": "direct_sync_push.py",
+      "before": "2bc3aa2af3140e63177e0e81ba4adb81f9f01f190e3f9815815e6ab9bc4d55d4",
+      "after": "c19ae599c61090fd9201338274110695c34f317b25ac969df6f2a70b67eedfda"
+    },
+    {
       "path": "direct_sync_runtime.py",
       "before": "8626c0873e3bf1586af93187bc60f429f65036f92c4f2fd14ce2841f8b12eca6",
-      "after": "6f1a218aa077ef12ee659fd87a7890e6e860e738760d53ad98d91649a2f9fbfa"
+      "after": "deb1ed830ca8da59bfa42c3a0170d54e127d10dad7d8fe97cc1a1f7c95e38d44"
+    },
+    {
+      "path": "item_catalog_sync.py",
+      "before": "58f20ae6eb8dce66f33b539f7d362c73132e49164eb81a0ea0a18427d46a28da",
+      "after": "4b19034643fc92654f52d9fdcde9dc25926c7b4697fdbddc0ded0f68a3123494"
     },
     {
       "path": "logistics_runtime_profile.py",
       "before": "f3168358c9eadc0297c2c255e2b182924664f65505bf4d3a9e22d2c8b4a87b32",
-      "after": "98575e271894cc55c9720cc70a41d2342f38e73b01ca03924d60cdececc4fae4"
+      "after": "b8bce2bf53ac2a1bc5e0bbe67fa63513423058515331eb9c7ab54fdb616e6eeb"
+    },
+    {
+      "path": "producer_runtime_client.py",
+      "before": "1938e8457e941d4f6d6085ad49c7e3686a19cfbb9fa9eabf0e680fb8a89e998a",
+      "after": "7825b2b85b56cf01777a634ba14872caa998c87dee35b585f88ad87096ac5f7e"
     },
     {
       "path": "protected_admin.py",
       "before": "e794b2ad313790fc86f6597d6da97def2773d76d2e833d3d158aadbbaeda8e3d",
-      "after": "ef5b6f4f5563b693e9e57f30bcf4273ca3b6639c5549600da3785716a866d2ce"
+      "after": "a703c1207ea2b793931a9da86b1a67822cf3619d78392de86669c75f7651c484"
     },
     {
       "path": "tools/active_work_probe.py",
@@ -4593,7 +4608,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "7bf9aa51697877216a6bf926caac1c34489084850a61748ca3c26f42c2b5efe9"
+      "after": "58db99588ce5afd1a761be8df15e2a71c428eba0a0ec15808a2e2ae837719d74"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4626,6 +4641,11 @@
       "after": "6b906a1e81da93ac73200dd4d1f24e6a52f6d50117e54b462dafd2e6505820f7"
     },
     {
+      "path": "transfer_client.py",
+      "before": "ff697029a137b55506b05683216cf5c7a2034df683b2e186407991d3bd27332b",
+      "after": "dc69464fded9a3915286f577da51a3aac0124cbff8cf093c91fa662dbe67ac60"
+    },
+    {
       "path": "user_relay.py",
       "before": "3d9be9672556e284cfd62d7bfa28c1bcbd8c90688a9f13bc08c5894bfd1750fd",
       "after": "cbf1f5fcde30a5cddc541ca22c026d44942e6d010431d74d3ed410944f82c81d"
@@ -4633,7 +4653,7 @@
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "870ca73116a46b97574c1e6c6640c1faadb49bb7c4bd6d38d9b263191cac90b4"
+      "after": "8bfa8a9343fae894a6e7b4d91da8702a85787449032cbaeda7e49ca726f6f4e9"
     }
   ],
   "hash_provenance": {
