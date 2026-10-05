@@ -1,4 +1,4 @@
-﻿param([string]$Source,[string]$Output,[string]$Python,[string]$Child,[string]$Root,[string]$RecoveryCase='normal')
+param([string]$Source,[string]$Output,[string]$Python,[string]$Child,[string]$Root,[string]$RecoveryCase='normal')
 $ErrorActionPreference='Stop'
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile($Source,[ref]$tokens,[ref]$errors)
@@ -8,7 +8,7 @@ if($clauses.Count -ne 1){throw 'exact catch not found'}
 
 $script:RollbackPython=$Python
 $script:RollbackChild=$Child
-$readerDefinitions=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic')},$true)
+$readerDefinitions=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalFailureDetails')},$true)
 foreach($definition in $readerDefinitions) {
     $readerBody=$definition.Extent.Text
     if($definition.Name -ceq 'Get-CanonicalOnboardingInputBinding') {
@@ -31,6 +31,16 @@ $body=$clauses[0].Body.Extent.Text
 $script:state=@{code='before';data='before';run='before';task='before';relay='before'}
 $script:observed=[ordered]@{product_removal=0;code_restore=0;run_restore=0;task_restore=0;relay_start=0;fence_release=0;audit=0}
 . (Join-Path (Split-Path -Parent $Source) 'tools/bootstrap_integrity.ps1')
+
+# The lifecycle assembly captures finite children and proves READY through this
+# adapter; retain the existing native-free restore/restart observations.
+function Invoke-InstallationEvidenceChild {
+ param($Name,$File,$Arguments)
+ & $File @Arguments
+ return [pscustomobject]@{ExitCode=$global:LASTEXITCODE;Stdout='';Stderr='';ProcessId=0}
+}
+function Start-CanonicalRelayAfterFenceRelease {param($Root,$RunCommand);return (StartRaw $RunCommand)}
+
 function Product {param($Root,$Mode) $script:observed.product_removal++; throw 'isolated removal refusal'}
 function Save {param($Path,$Value) $script:observed.audit++}
 function Sync-CanonicalWriterFenceInventory {param($Digest)}

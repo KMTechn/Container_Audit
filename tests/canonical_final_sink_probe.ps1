@@ -9,7 +9,7 @@ if($clauses.Count -ne 1){throw 'exact catch not found'}
 
 $script:RollbackPython=$Python
 $script:RollbackChild=$Child
-$readerDefinitions=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic')},$true)
+$readerDefinitions=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalFailureDetails')},$true)
 foreach($definition in $readerDefinitions) {
     $readerBody=$definition.Extent.Text
     if($definition.Name -ceq 'Get-CanonicalOnboardingInputBinding') {
@@ -32,6 +32,16 @@ $body=$clauses[0].Body.Extent.Text
 $script:state=@{code='before';data='before';run='before';task='before';relay='before'}
 $script:observed=[ordered]@{product_removal=0;code_restore=0;run_restore=0;task_restore=0;relay_start=0;fence_release=0;audit=0}
 . (Join-Path (Split-Path -Parent $Source) 'tools/bootstrap_integrity.ps1')
+
+# The lifecycle assembly captures finite children and proves READY through this
+# adapter; retain the existing native-free restore/restart observations.
+function Invoke-InstallationEvidenceChild {
+ param($Name,$File,$Arguments)
+ & $File @Arguments
+ return [pscustomobject]@{ExitCode=$global:LASTEXITCODE;Stdout='';Stderr='';ProcessId=0}
+}
+function Start-CanonicalRelayAfterFenceRelease {param($Root,$RunCommand);return (StartRaw $RunCommand)}
+
 function Product {param($Root,$Mode) if($Mode -cne '--remove-current-user-setup'){throw 'unexpected product mode'}; $script:observed.product_removal++;$script:state.run='absent';$script:state.relay='absent'}
 function Save {
  param($Path,$Value,$SanitizeDiagnostics)
@@ -159,6 +169,6 @@ for($depth=0;$null -ne $exception -and $depth -lt 12;$depth++){
 }
 $record=@{case=$RecoveryCase;engine=$PSVersionTable.PSVersion.ToString();console_raw_hits=[int]$console.Contains($script:SyntheticSinkSecret);
  exception_raw_hits=[int]$finalMessage.Contains($script:SyntheticSinkSecret);original_object_preserved=$originalPreserved;inner_chain_preserved=$chainPreserved;
- real_product_catch_and_finally=$true;native_host_calls=0;failed=($null -ne $script:finalError);counts=$script:observed}
+ real_product_catch_and_finally=$true;native_host_calls=0;final_message=(ConvertTo-KmtechRedactedSinkText -Text $finalMessage -UserLine);failed=($null -ne $script:finalError);counts=$script:observed}
 [IO.File]::WriteAllText($Output,($record|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
 $record|ConvertTo-Json -Depth 5 -Compress
