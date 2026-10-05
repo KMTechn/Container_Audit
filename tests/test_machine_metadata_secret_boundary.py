@@ -43,7 +43,7 @@ def test_python_machine_writers_leave_no_secret_temp(tmp_path, monkeypatch, writ
 
 @pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
 def test_large_machine_integrity_roundtrip_and_one_byte_mutation(tmp_path, engine):
-    result = run_functions(tmp_path, ROOT/'tools/bootstrap_integrity.ps1', [], r'''
+    result = run_functions(tmp_path, ROOT/'tools/bootstrap_integrity.ps1', ['Get-StrictFullPath'], r'''
 . $env:CA_CONTRACT_SOURCE
 $root=Join-Path $env:CA_CONTRACT_ROOT 'packet'
 [void][IO.Directory]::CreateDirectory($root)
@@ -69,7 +69,7 @@ if(-not $rejected){throw 'one-byte mutation was admitted'}
                                  'CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID'))
 def test_machine_secret_is_rejected_before_temporary_write(tmp_path, engine, name):
     synthetic = 'machine-secret-' + uuid.uuid4().hex
-    result = run_functions(tmp_path, ROOT/'tools/bootstrap_integrity.ps1', [], r'''
+    result = run_functions(tmp_path, ROOT/'tools/bootstrap_integrity.ps1', ['Get-StrictFullPath'], r'''
 . $env:CA_CONTRACT_SOURCE
 $name=$env:CA_MACHINE_SECRET_NAME
 $path=Join-Path $env:CA_CONTRACT_ROOT 'machine.json'

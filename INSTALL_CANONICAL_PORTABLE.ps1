@@ -2928,9 +2928,11 @@ $winps = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powe
 # Preserve the original lifecycle validator binding after source admission.
 $BootstrapIntegrityFunctions = Join-Path $source 'tools\bootstrap_integrity.ps1'
 . $BootstrapIntegrityFunctions
-# Reject incompatible/damaged installed trees before creating a fence that can
-# stop a resident relay. Repeat the existing integrity readback under the fence.
-if (-not $supportedRemovalResume -and (Test-Path -LiteralPath $install -PathType Container)) {
+# Installation and exact restoration require a verified installed prestate.
+# Ordinary supported removal instead inventories owned content under its fence;
+# damaged or unknown files must reach that preserving, convergent removal path.
+if (-not ($Uninstall -and -not $CompleteRetiredRemoval) -and
+    -not $supportedRemovalResume -and (Test-Path -LiteralPath $install -PathType Container)) {
     $preflightCandidate = InstalledManifest $install $SkipSignatureValidationForTest
     [void](Assert-BootstrapIntegrityRecord $install)
     $preflightInventory = Assert-WriterSinkInventory `

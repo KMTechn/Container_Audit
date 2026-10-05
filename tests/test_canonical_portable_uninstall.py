@@ -64,9 +64,8 @@ if sys.argv[1] == 'relay':
     stop = user_relay.user_relay_stop_path(direct)
     try:
         if os.environ.get('CA_UNINSTALL_REFUSE') == '1':
-            import time
-            while not (root / 'finish').exists(): time.sleep(.05)
-        else:
+            while (root / 'refusal-armed').exists() and not (root / 'finish').exists(): time.sleep(.05)
+        if not (root / 'finish').exists():
             user_relay.run_persistent_relay_loop(
                 lambda: {'status': 'PASS'}, status_path=user_relay.user_relay_status_path(direct),
                 interval_seconds=1, stop_requested=lambda: stop.exists() or (root / 'finish').exists(),
@@ -74,6 +73,13 @@ if sys.argv[1] == 'relay':
     finally:
         lease.release()
         (root / 'relay.ready').unlink(missing_ok=True)
+elif sys.argv[1] == 'preflight':
+    raise SystemExit(onboarding.onboarding_main(sys.argv[2:]))
+elif sys.argv[1] == 'prepare-ready':
+    from tests.test_current_user_onboarding import _ready_state
+    paths = onboarding.resolve_current_user_onboarding_paths(sys.argv[2])
+    _ready_state(paths)
+    onboarding._create_ledger(paths.ledger_path)
 elif sys.argv[1] == 'remove':
     def delete():
         registry.write_text(json.dumps({'exists': False, 'kind': '', 'data': ''}))
@@ -148,6 +154,12 @@ OS_BOUNDARIES = r'''
 # actual WinPS placement child; keep every child/receipt assertion intact.
 $env:PSModulePath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules'
 function Get-AuthenticodeSignature { return [pscustomobject]@{ Status='NotTested' } }
+# Preserve the actual read-only binding reader and adapt only executable/entry
+# transport: this minimal packet intentionally contains non-executable PE doubles.
+$fixtureReader=(Get-Command Get-CanonicalOnboardingInputBinding).ScriptBlock.ToString()
+$fixtureReader=$fixtureReader.Replace('(Join-Path $Root ''runtime\python.exe'')', '$env:CA_UNINSTALL_PYTHON')
+$fixtureReader=$fixtureReader.Replace('(Join-Path $Root ''app\main.py'')', '$env:CA_UNINSTALL_PREFLIGHT')
+Set-Item Function:Get-CanonicalOnboardingInputBinding ([scriptblock]::Create($fixtureReader))
 function Snapshot { return Get-Content (Join-Path $env:CA_UNINSTALL_ROOT 'registry.json') -Raw | ConvertFrom-Json }
 function Restore($Before) { Save (Join-Path $env:CA_UNINSTALL_ROOT 'registry.json') $Before }
 function Relays {
@@ -356,6 +368,12 @@ def _setup(tmp_path, fault=''):
     host = tmp_path / 'host.py'
     host.write_text(PY_HOST, encoding='utf-8')
     env['CA_UNINSTALL_HOST'] = str(host)
+    preflight = tmp_path/'preflight.py'
+    preflight.write_text(
+        "import os, runpy, sys\n"
+        "sys.argv=[os.environ['CA_UNINSTALL_HOST'], 'preflight', *sys.argv[1:]]\n"
+        "runpy.run_path(os.environ['CA_UNINSTALL_HOST'], run_name='__main__')\n", encoding='utf-8')
+    env['CA_UNINSTALL_PREFLIGHT'] = str(preflight)
     source = _portable_release_fixture(tmp_path, directory='packet')
     canonical = source / 'INSTALL_CANONICAL_PORTABLE.ps1'
     text = canonical.read_text(encoding='utf-8-sig').replace('$wanted = Command $install', OS_BOUNDARIES + '\n$wanted = Command $install')
@@ -556,7 +574,12 @@ def _assert_binding_rejection_untouched(tmp_path, env, source, install, child, b
 
 
 def _assert_preserved_and_released(env, protected):
-    assert all(p.read_bytes() == b'protected-fixture-must-be-preserved' for p in protected)
+    prepared = Path(env['CA_UNINSTALL_ROOT'])/'prepared-protected.json'
+    if prepared.exists():
+        before = json.loads(prepared.read_text())
+        assert {str(p): _sha(p) for p in protected} == before
+    else:
+        assert all(p.read_bytes() == b'protected-fixture-must-be-preserved' for p in protected)
     control = Path(env['LOCALAPPDATA']) / 'KMTech/DirectSync/container_audit/control'
     assert not (control / 'writer-session/active.json').exists()
     assert not (control / 'container_audit_user_relay.stop.json').exists()
@@ -605,6 +628,10 @@ def test_live_relay_census_rejects_pid_reuse_as_process_identity(tmp_path):
 @pytest.mark.parametrize('operation', ['uninstall_then_reinstall', 'reinstall_live'])
 def test_quoted_live_relay_uninstall_and_reinstall(tmp_path, operation):
     env, source, install, protected = _setup(tmp_path)
+    ready = subprocess.run([env['CA_UNINSTALL_PYTHON'], '-I', '-B', env['CA_UNINSTALL_HOST'],
+                            'prepare-ready', str(install/'app')], env=env, capture_output=True, timeout=30)
+    assert ready.returncode == 0, 'owned current-user state preparation failed'
+    (tmp_path/'prepared-protected.json').write_text(json.dumps({str(p): _sha(p) for p in protected}))
     quoted = _quote_fixture_executable(env)
     canonical_registry = (tmp_path / 'registry.json').read_bytes()
     assert json.loads(canonical_registry)['data'] != quoted
@@ -637,8 +664,8 @@ def test_quoted_live_relay_uninstall_and_reinstall(tmp_path, operation):
         launches, current = _assert_one_live_relay(tmp_path, env)
         assert launches[0]['CommandLine'] == quoted
         assert current['CommandLine'] == json.loads(canonical_registry)['data']
-        assert len(launches) == 3  # original, delegated onboarding, ordinary post-fence restart
-        assert [row['fence_active'] for row in launches] == [False, True, False]
+        assert len(launches) == 2  # canonical onboarding defers its resident until fence release
+        assert [row['fence_active'] for row in launches] == [False, False]
         calls = (tmp_path / 'product-calls.log').read_text(encoding='utf-8-sig').splitlines()
         assert calls.count('--onboard-current-user') == 1
         assert calls.count('--remove-current-user-setup') == (2 if operation == 'uninstall_then_reinstall' else 1)
@@ -724,6 +751,7 @@ def _rerun_without_fault(tmp_path, env, source, install):
     env['CA_UNINSTALL_INJECT'] = '0'
     env['CA_UNINSTALL_REFUSE'] = '0'
     env['CA_UNINSTALL_INTERACTIVE'] = '0'
+    (tmp_path/'refusal-armed').unlink(missing_ok=True)
     result = _run(tmp_path, env, source, install)
     assert result.returncode == 0, result.stderr
     assert 'uninstall_status=PASS_UNINSTALLED_DATA_PRESERVED' in result.stdout
@@ -764,7 +792,9 @@ def test_normal_uninstall_real_removal_and_forward_convergence(tmp_path, scenari
         unknown = install/'unknown-business.txt'
         unknown.write_bytes(b'preserve-unknown-business')
         retained = {'unknown-business.txt': _sha(unknown)}
-    if scenario == 'refusal': env['CA_UNINSTALL_REFUSE'] = '1'
+    if scenario == 'refusal':
+        env['CA_UNINSTALL_REFUSE'] = '1'
+        (tmp_path/'refusal-armed').touch()
     if scenario == 'interactive': env['CA_UNINSTALL_INTERACTIVE'] = '1'
     with _launch_relay(tmp_path, env) as child:
         result = _run(tmp_path, env, source, install)
