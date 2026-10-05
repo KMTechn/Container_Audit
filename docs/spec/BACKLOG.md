@@ -657,6 +657,19 @@ separate evidence. Independent acceptance remains coordinator owned.
 
 w9next 567ff27 + autoupdate 7247634를 merge a63ae29로 통합했다. 양쪽 G와 설치/복구 소비 경계를 보존하고, fresh census가 발견한 기존 Python2/PS5 미보호 자리는 코디 승인 후 기존 admission/byte-pinned library로 교정한다. 사용되지 않는 startup-control 이동 함수는 실제 preimage save/restore 소비 경로로 안전 회귀 의미를 이관한다. 표준 선언 재생성, 세 판 집중 실패 대조, 후보 전체 및 lab-only stock packet 증거와 독립 review는 sub-248 REPORT/FOR-REVIEW에서 최종 판정한다. native VM 설치·출시 키·출시 수용으로 소급하지 않는다.
 
+## 설치 수명주기 판독 sub-273 (2026-10-05)
+
+보호 helper가 보유한 writer admission mutex를 Python 자식의 guarded task query가
+재획득하던 설치 거절을 기존 pinned PowerShell reader의 같은 스레드 판독으로 교정한다.
+실제 격리 mutex RED와 PS5.1/PS7 첫 설치·잔여 control/task·조회 UNKNOWN 회귀는 PROVEN이다.
+실패 summary/감사는 공통 가림 뒤 64 KiB 전문과 지문 참조를 보존하며 안내는 마지막 예외 한 줄 300자다.
+옛 공식 relay 작업은 태그 묶음 전체 정체성이 일치할 때 preimage 뒤 비활성화하고,
+current 부재/코드 복원 실패와 독립적으로 원 G가 허용할 때만 Enabled와 원 XML 지문을 복원한다.
+암호 저장/대화형 principal은 랩 승인 스위치가 닫혀 있으며 공개 HKCU Run writer는 없다.
+원 sub-271 stdout 소실 때문에 원 실패의 직접 세부는 UNPROVEN이며 새 native 설치·GUI·
+현장 배포 수용은 NOT TESTED다. 검증/stock 판정은
+[sub-273 REPORT](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-273/REPORT.md)를 따른다.
+
 ## 설치 launcher 길이 sub-265 (2026-10-05)
 
 통합 시작 45192a6의 상승/finite helper/일반 producer 전달을 private 파일 두 개와

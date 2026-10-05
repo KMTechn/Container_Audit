@@ -169,6 +169,7 @@ def build_session_direct_sync_command(
 
 @writer_sink("session_direct_sync_process", probe_only=True)
 def _run_command(command: list[str], timeout_seconds: int) -> dict[str, Any]:
+    from auto_update import _failure_details, _failure_text
     try:
         completed = subprocess.run(
             command,
@@ -183,12 +184,14 @@ def _run_command(command: list[str], timeout_seconds: int) -> dict[str, Any]:
             "status": "UNKNOWN",
             "reason": "relay process did not return an exit code",
             "error_type": exc.__class__.__name__,
+            "failure_details": _failure_details(exc),
         }
     return {
         "status": "PASS" if completed.returncode == 0 else "FAIL",
         "returncode": completed.returncode,
-        "stdout_tail": completed.stdout[-2000:],
-        "stderr_tail": completed.stderr[-2000:],
+        "stdout_tail": _failure_text(completed.stdout, limit=65536),
+        "stderr_tail": _failure_text(completed.stderr, limit=65536),
+        "stream_byte_cap": 65536,
     }
 
 

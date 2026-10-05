@@ -55,7 +55,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '180ce6c81631f7825e550774a097fb043e16111226ab1d8969ddab49e7570df5'
+$ExpectedBootstrapIntegritySha256 = '0ffa337a45528491f465322b0b33ff52de1d02289e0f88b77edb3aa179ae34fd'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -693,7 +693,7 @@ function Restore($Before) {
 function Save([string]$Path, $Value) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
     $temp = "$Path.tmp.$PID"
-    $json = ($Value|ConvertTo-Json -Depth 8)+[Environment]::NewLine
+    $json = Protect-InstallationText (($Value|ConvertTo-Json -Depth 8)+[Environment]::NewLine) -1
     if (Get-Variable -Name CompleteRetiredRemoval -ValueOnly -ErrorAction SilentlyContinue) {
         $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($json)
         $stream = New-Object IO.FileStream($temp, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
@@ -1062,7 +1062,10 @@ function Product([string]$Root,[string]$Mode,[string]$AppRoot='') {
     }
     # The capture waits for the host only, never its persistent relay descendant.
     $process = Invoke-InstallationEvidenceChild ('product'+$Mode.TrimStart('-')) (Join-Path $Root 'runtime\pythonw.exe') $args
-    if ($process.ExitCode -ne 0) { throw "Product mode failed: $Mode/$($process.ExitCode)" }
+    if ($process.ExitCode -ne 0) {
+        $line=ConvertTo-KmtechRedactedSinkText -Text $(if($process.Stderr){$process.Stderr}else{$process.Stdout}) -UserLine
+        throw "Product mode failed: $Mode/$($process.ExitCode): $line"
+    }
 }
 function Read-CanonicalRetiredRemoval {
     # These are observations, never authority. The caller still acquires the
@@ -1924,6 +1927,173 @@ function Get-CanonicalWriterBinding($Task) {
     $json = $normalized | ConvertTo-Json -Depth 8 -Compress
     return [ordered]@{ value=$normalized; sha256=ShaText $json }
 }
+function Get-CanonicalOfficialLegacyRelayPreimage {
+    $tasks=@(Get-ScheduledTask -ErrorAction Stop|Where-Object {[string]$_.TaskName -ieq 'direct-sync-relay-container-audit'})
+    if($tasks.Count -gt 1){throw 'NONCANONICAL_WRITER_ENABLED'}
+    if($tasks.Count -eq 0){return $null}
+    $task=$tasks[0]
+    $actions=@($task.Actions)
+    if($actions.Count -ne 1 -or [IO.Path]::GetFileName(([string]$actions[0].Execute).Trim('"')) -inotin @('wscript.exe','cmd.exe')){return $null}
+    $xml=Export-ScheduledTask -TaskName ([string]$task.TaskName) -TaskPath ([string]$task.TaskPath) -ErrorAction Stop
+    $identity=Get-BootstrapOfficialLegacyRelayIdentity $task $xml
+    if(-not $identity.matched){throw 'NONCANONICAL_WRITER_ENABLED'}
+    $oldRoot='';$files=@()
+    foreach($leaf in @('cmd','vbs')){
+        $actionArguments=[string]$actions[0].Arguments
+        $launcher=[regex]::Match($actionArguments,'(?:"(?<path>[^"\r\n]+\.(?:vbs|cmd))"|(?<path>\S+\.(?:vbs|cmd)))\s*$',[Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if(-not $launcher.Success){throw 'NONCANONICAL_WRITER_ENABLED'}
+        $launcherPath=[Environment]::ExpandEnvironmentVariables($launcher.Groups['path'].Value)
+        $path=[IO.Path]::ChangeExtension($launcherPath,$leaf)
+        Assert-BootstrapNoReparsePoint $path 'official legacy launcher' -PathOnly
+        $observation=FileObservation $path;$files+=,@{name=$leaf;exists=$observation.exists;bytes=$observation.bytes;sha256=$observation.sha256}
+        if($leaf -ceq 'cmd' -and $observation.exists -and $observation.bytes -le 65536){
+            $content=Get-Content -LiteralPath $path -Raw -Encoding UTF8
+            $command=@($content -split '\r?\n'|Where-Object {$_ -match 'Container_Audit_DirectSync_Relay\.exe'})
+            if($command.Count -eq 1){
+                $match=[regex]::Match($command[0],'^\s*(?:"(?<exe>[^"]+Container_Audit_DirectSync_Relay\.exe)"|(?<exe>\S+Container_Audit_DirectSync_Relay\.exe))(?:\s|$)',[Text.RegularExpressions.RegexOptions]::IgnoreCase)
+                if($match.Success){$exe=[IO.Path]::GetFullPath($match.Groups['exe'].Value);$oldRoot=Split-Path -Parent $exe;$exeObservation=FileObservation $exe;$files+=,@{name='relay_exe';exists=$exeObservation.exists;bytes=$exeObservation.bytes;sha256=$exeObservation.sha256}}
+            }
+        }
+    }
+    return [pscustomobject]@{xml=[string]$xml;xml_sha256=(ShaText $xml);identity=$identity;enabled=[bool]$task.Settings.Enabled;task_name=[string]$task.TaskName;task_path=[string]$task.TaskPath;old_code_root=$oldRoot;files=$files}
+}
+function Save-CanonicalOfficialLegacyRelayPreimage($Before,[string]$Root) {
+    Assert-InstallationEvidenceWriteRoot $Root
+    # A task preimage may contain author/SID for restoration, never an env secret.
+    if((Protect-InstallationText $Before.xml -1 -LiteralOnly -NoTruncate) -cne $Before.xml){throw 'OFFICIAL_LEGACY_PREIMAGE_CONTAINS_SECRET'}
+    $path=Join-Path $Root 'official-v2.0.33-relay-preimage.xml'
+    if(Test-Path -LiteralPath $path){throw 'OFFICIAL_LEGACY_PREIMAGE_ALREADY_EXISTS'}
+    [IO.File]::WriteAllText($path,$Before.xml,[Text.UTF8Encoding]::new($false))
+    Set-InstallationEvidenceAcl $path $operatorSid
+    $record=[ordered]@{schema='container-audit-official-legacy-relay-preimage-v1';xml_path=$path;xml_sha256=(Sha $path);identity_sha256=[string]$Before.identity.sha256;enabled=[bool]$Before.enabled;task_name=[string]$Before.task_name;task_path=[string]$Before.task_path;old_code_root=[string]$Before.old_code_root;files=$Before.files}
+    $recordPath=Join-Path $Root 'official-v2.0.33-relay-preimage.json'
+    if(Test-Path -LiteralPath $recordPath){throw 'OFFICIAL_LEGACY_PREIMAGE_ALREADY_EXISTS'}
+    [IO.File]::WriteAllText($recordPath,(ConvertTo-KmtechRedactedSinkText ($record|ConvertTo-Json -Depth 8 -Compress)),[Text.UTF8Encoding]::new($false))
+    Set-InstallationEvidenceAcl $recordPath $operatorSid
+    return [pscustomobject]@{path=$recordPath;sha256=(Sha $recordPath);identity=$Before.identity;xml_sha256=[string]$record.xml_sha256}
+}
+function Get-CanonicalOfficialLegacyRelayRunningCount {
+    # Observation only. Never signal a PID or an unrelated GUI.
+    $processes=@(Get-CimInstance Win32_Process -ErrorAction Stop|Where-Object {
+        [IO.Path]::GetFileName([string]$_.ExecutablePath) -ieq 'Container_Audit_DirectSync_Relay.exe' -and
+        [string]$_.CommandLine -match '(?:^|\s)--worker-id\s+"?direct-sync-relay-container-audit"?(?:\s|$)'
+    })
+    $tasks=@(Get-ScheduledTask -TaskName 'direct-sync-relay-container-audit' -TaskPath '\' -ErrorAction Stop)
+    if($tasks.Count -ne 1){throw 'OFFICIAL_LEGACY_RELAY_TASK_QUERY_UNKNOWN'}
+    return $processes.Count+[int]([string]$tasks[0].State -ceq 'Running')
+}
+function Disable-CanonicalOfficialLegacyRelay($Before) {
+    $live=Get-CanonicalOfficialLegacyRelayPreimage
+    if($null -eq $live -or [string]$live.identity.sha256 -cne [string]$Before.identity.sha256){throw 'NONCANONICAL_WRITER_ENABLED'}
+    [void](DisableAndStop-ContainerScheduledTaskUnderWriterFence -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId -DelegationToken $Script:CanonicalWriterFenceDelegationToken -AuthorityLease $canonicalWriterFenceAuthority -TaskName $Before.task_name -TaskPath $Before.task_path)
+    $deadline=[DateTime]::UtcNow.AddSeconds(60)
+    do{$running=Get-CanonicalOfficialLegacyRelayRunningCount;if($running){Start-Sleep -Milliseconds 250}}while($running -and [DateTime]::UtcNow -lt $deadline)
+    $after=Get-CanonicalOfficialLegacyRelayPreimage
+    if($running -or $null -eq $after -or $after.enabled -or [string]$after.identity.sha256 -cne [string]$Before.identity.sha256){throw 'OFFICIAL_LEGACY_RELAY_QUIESCENCE_UNPROVEN'}
+    return @{status='PROVEN_DISABLED_QUIESCENT';identity_sha256=[string]$after.identity.sha256;process_count=0}
+}
+function Restore-CanonicalOfficialLegacyRelay($Binding) {
+    Assert-InstallationEvidenceProtectedPath $Binding.path
+    if((Sha $Binding.path) -cne [string]$Binding.sha256 -or (Get-Item -LiteralPath $Binding.path).Length -gt 65536){throw 'OFFICIAL_LEGACY_PREIMAGE_PIN_DIFFERS'}
+    $record=Get-Content -LiteralPath $Binding.path -Raw -Encoding UTF8|ConvertFrom-Json
+    if([string]$record.schema -cne 'container-audit-official-legacy-relay-preimage-v1' -or $record.enabled -isnot [bool] -or [string]$record.task_name -cne 'direct-sync-relay-container-audit' -or [string]$record.task_path -cne '\'){throw 'OFFICIAL_LEGACY_PREIMAGE_DIFFERS'}
+    Assert-InstallationEvidenceProtectedPath $record.xml_path
+    if((Sha $record.xml_path) -cne [string]$record.xml_sha256 -or (Get-Item -LiteralPath $record.xml_path).Length -gt 65536){throw 'OFFICIAL_LEGACY_PREIMAGE_PIN_DIFFERS'}
+    $xml=Get-Content -LiteralPath $record.xml_path -Raw -Encoding UTF8
+    $task=[pscustomobject]@{TaskName=[string]$record.task_name;TaskPath=[string]$record.task_path}
+    $identity=Get-BootstrapOfficialLegacyRelayIdentity $task $xml
+    if(-not $identity.matched -or [string]$identity.sha256 -cne [string]$record.identity_sha256){throw 'NONCANONICAL_WRITER_ENABLED'}
+    # G remains the original shared gate; no current-tree dependency.
+    if([string]::IsNullOrWhiteSpace([string]$record.old_code_root) -or -not[IO.Path]::IsPathRooted([string]$record.old_code_root)){throw 'OFFICIAL_LEGACY_OLD_CODE_ROOT_UNPROVEN'}
+    try{Assert-ContainerDataGenerationTarget -CandidateRoot ([string]$record.old_code_root) -TargetSid $operatorSid -LocalAppDataRoot $lad -DataRoot $activeDataRoot -HelperRoot $source}
+    catch{Write-InstallationCaughtFailure $_;Write-Warning '자료 판이 옛 판의 실행을 허용하지 않아 옛 전송 예약 작업을 되살리지 않았습니다. 자료와 복구 기록을 보존하고 관리자 지원 복구를 요청하세요.';throw 'OFFICIAL_LEGACY_RELAY_G_BLOCKED'}
+    if(@(Relays).Count -ne 0){throw 'OFFICIAL_LEGACY_RELAY_NEW_RUNTIME_NOT_QUIESCENT'}
+    $live=Get-CanonicalOfficialLegacyRelayPreimage
+    if($null -eq $live -or [string]$live.identity.sha256 -cne [string]$identity.sha256){throw 'NONCANONICAL_WRITER_ENABLED'}
+    [void](Invoke-ContainerWriterFenceMutation -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId -DelegationToken $Script:CanonicalWriterFenceDelegationToken -AuthorityLease $canonicalWriterFenceAuthority -Action {
+        # Retained task + unchanged identity: toggle the existing credential-bearing
+        # object without re-registering XML or reading/re-entering a password.
+        if([bool]$record.enabled){Enable-ScheduledTask -TaskName ([string]$record.task_name) -TaskPath ([string]$record.task_path) -ErrorAction Stop|Out-Null}
+        else{Disable-ScheduledTask -TaskName ([string]$record.task_name) -TaskPath ([string]$record.task_path) -ErrorAction Stop|Out-Null}
+    })
+    $after=Get-CanonicalOfficialLegacyRelayPreimage
+    if($null -eq $after -or [bool]$after.enabled -ne [bool]$record.enabled -or [string]$after.identity.sha256 -cne [string]$identity.sha256 -or [string]$after.xml_sha256 -cne [string]$record.xml_sha256){throw 'OFFICIAL_LEGACY_RELAY_RESTORE_READBACK_FAILED'}
+    return @{status='PROVEN_PREIMAGE_RESTORED';identity_sha256=[string]$after.identity.sha256;xml_sha256=[string]$after.xml_sha256}
+}
+
+function Get-CanonicalOfficialLegacyRelayExpectedSet {
+    return (Get-BootstrapOfficialLegacyRelayExpectedIdentitySet)
+}
+function Get-CanonicalOfficialLegacyRelayWriters {
+    param([string]$ComputerName,[string]$ProgramDataRoot,[string]$CurrentUser)
+    # Local inspection only; callers cannot select another PC or principal.
+    if($ComputerName -and $ComputerName -ine [Environment]::MachineName){throw 'OFFICIAL_LEGACY_REMOTE_CONTEXT_UNSUPPORTED'}
+    if($ProgramDataRoot -and -not(Same $ProgramDataRoot ([Environment]::GetFolderPath('CommonApplicationData')))){throw 'OFFICIAL_LEGACY_PROGRAM_DATA_CONTEXT_DIFFERS'}
+    if($CurrentUser){
+        $currentSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        if($CurrentUser -cne $currentSid){throw 'OFFICIAL_LEGACY_CURRENT_USER_CONTEXT_DIFFERS'}
+    }
+    $writers=@()
+    $tasks=@(Get-ScheduledTask -ErrorAction Stop|Where-Object {[string]$_.TaskName -ieq 'direct-sync-relay-container-audit'})
+    if($tasks.Count -gt 1){throw 'OFFICIAL_LEGACY_NAME_CARDINALITY_UNKNOWN'}
+    foreach($task in $tasks){$xml=Export-ScheduledTask -TaskName ([string]$task.TaskName) -TaskPath ([string]$task.TaskPath) -ErrorAction Stop;$writers+=,[pscustomobject]@{mechanism='scheduled_task';task_path=[string]$task.TaskPath;task_name=[string]$task.TaskName;xml=[string]$xml;transition_record=$null}}
+    # No official public release creates HKCU Run relay persistence.
+    # Existing canonical Run belongs to the canonical lifecycle, outside this set.
+    return ,$writers
+}
+function Get-CanonicalOfficialLegacyRelayState {
+    param($Writer,[object[]]$ExpectedIdentitySet,[string]$EvidenceRoot)
+    if([string]$Writer.mechanism -ceq 'scheduled_task'){
+        $task=[pscustomobject]@{TaskName=[string]$Writer.task_name;TaskPath=[string]$Writer.task_path}
+        $identity=Get-BootstrapOfficialLegacyRelayIdentity $task $Writer.xml $ExpectedIdentitySet
+        # Identity parser prohibits DTDs before this read-only settings extraction.
+        $definition=[xml]$Writer.xml
+        $enabledValue=[string]$definition.Task.Settings.Enabled
+        if($enabledValue -cnotin @('true','false')){$identity.matched=$false;$identity.reason_code='TASK_ENABLED_STATE_UNKNOWN'}
+        $enabled=($enabledValue -ceq 'true')
+    }elseif([string]$Writer.mechanism -ceq 'hkcu_run'){
+        $identity=[pscustomobject]@{matched=$false;sha256='';entry_tag='';reason_code='PUBLIC_HISTORY_HAS_NO_HKCU_RUN_RELAY'}
+        $enabled=[bool]$Writer.run.exists
+    }else{throw 'OFFICIAL_LEGACY_MECHANISM_UNKNOWN'}
+    $binding=if($null -ne $Writer.PSObject.Properties['transition_record']){$Writer.transition_record}else{$null}
+    if($null -ne $binding){
+        Assert-InstallationEvidenceProtectedPath $binding.path
+        if($EvidenceRoot -and -not ([IO.Path]::GetFullPath([string]$binding.path)).StartsWith(([IO.Path]::GetFullPath($EvidenceRoot).TrimEnd('\')+'\'),[StringComparison]::OrdinalIgnoreCase)){throw 'OFFICIAL_LEGACY_PREIMAGE_OUTSIDE_EVIDENCE'}
+        if((Sha $binding.path) -cne [string]$binding.sha256){throw 'OFFICIAL_LEGACY_PREIMAGE_PIN_DIFFERS'}
+        $binding=@{path=[string]$binding.path;sha256=[string]$binding.sha256}
+    }
+    return [pscustomobject]@{recognized=[bool]$identity.matched;entry_tag=[string]$identity.entry_tag;mechanism=[string]$Writer.mechanism;enabled=$enabled;full_fingerprint=[string]$identity.sha256;transition_record=$binding;reason_code=[string]$identity.reason_code}
+}
+function Invoke-CanonicalOfficialLegacyRelayTransition {
+    param([object[]]$Writers,[object[]]$ExpectedIdentitySet,[ValidateSet('install','rollback')][string]$Mode,[bool]$GenerationAllowed)
+    $audit=@();$states=@()
+    if(@($Writers).Count -gt 1){throw 'OFFICIAL_LEGACY_NAME_CARDINALITY_UNKNOWN'}
+    # Validate the whole input before changing even one writer.
+    foreach($writer in $Writers){$state=Get-CanonicalOfficialLegacyRelayState $writer $ExpectedIdentitySet $installationEvidenceRoot;if(-not $state.recognized){throw 'NONCANONICAL_WRITER_ENABLED'}}
+    foreach($writer in $Writers){
+        $failure=$null
+        try{
+            if($Mode -ceq 'rollback' -and -not $GenerationAllowed){throw 'OFFICIAL_LEGACY_RELAY_G_BLOCKED'}
+            if($writer.mechanism -ceq 'scheduled_task'){
+                if($Mode -ceq 'install'){
+                    $before=Get-CanonicalOfficialLegacyRelayPreimage
+                    $writer.transition_record=Save-CanonicalOfficialLegacyRelayPreimage $before $installationEvidenceRoot
+                    [void](Disable-CanonicalOfficialLegacyRelay $before)
+                }else{if($null -eq $writer.transition_record){throw 'OFFICIAL_LEGACY_PREIMAGE_REQUIRED'};[void](Restore-CanonicalOfficialLegacyRelay $writer.transition_record)}
+            }else{
+                throw 'PUBLIC_HISTORY_HAS_NO_HKCU_RUN_RELAY'
+            }
+        }catch{Write-InstallationCaughtFailure $_;$failure=Get-InstallationFailureDetails $_}
+        try{
+            if($writer.mechanism -ceq 'scheduled_task'){$writer.xml=[string](Export-ScheduledTask -TaskName ([string]$writer.task_name) -TaskPath ([string]$writer.task_path) -ErrorAction Stop)}
+            $state=Get-CanonicalOfficialLegacyRelayState $writer $ExpectedIdentitySet $installationEvidenceRoot
+        }catch{Write-InstallationCaughtFailure $_;$failure=Get-InstallationFailureDetails $_;$state=[pscustomobject]@{recognized=$false;entry_tag='';mechanism=[string]$writer.mechanism;enabled=$null;full_fingerprint='';transition_record=$null;reason_code='POST_TRANSITION_QUERY_UNKNOWN'}}
+        $audit+=,@{mechanism=[string]$writer.mechanism;mode=$Mode;status=if($null -eq $failure){'PROVEN'}else{'FAILED'};failure=$failure}
+        $states+=,$state
+    }
+    return [pscustomobject]@{audit=$audit;state=$states}
+}
+
 function Get-CanonicalWriterSnapshot([string]$InstallRootValue) {
     $expectedExecute = Join-Path $InstallRootValue 'runtime\python.exe'
     $expectedMain = Join-Path $InstallRootValue 'app\main.py'
@@ -2034,6 +2204,9 @@ function Get-CanonicalWriterSnapshot([string]$InstallRootValue) {
             }).Count -gt 0
         )
         if (-not $owned) { continue }
+        if([string]$candidate.TaskName -ieq 'direct-sync-relay-container-audit' -and [IO.Path]::GetFileName($execute.Trim('"')) -iin @('wscript.exe','cmd.exe')){
+            if((Get-BootstrapOfficialLegacyRelayIdentity $candidate).matched){continue}
+        }
         $binding = Get-CanonicalWriterBinding $candidate
         $triggers = @($binding.value.triggers)
         $executeExact = (
@@ -2645,6 +2818,8 @@ elseif($null -eq $abandonedPending) {
         -ExpectedRoot $install `
         -StopMarkerExists (Test-Path -LiteralPath $stop)
 }
+$legacyRelayBefore=if($testMode -or $Uninstall -or $RestoreVerifiedReplacement){$null}else{Get-CanonicalOfficialLegacyRelayPreimage}
+$legacyRelayPreimage=$null;$legacyRelayRestoreNeeded=$false;$legacyRelayRestoreAttempted=$false
 $writerBefore = if ($testMode -or ($Uninstall -and -not $CompleteRetiredRemoval)) {
     [ordered]@{ present=$false; classification='TEST_BYPASS'; restore_required=$false }
 }
@@ -2840,6 +3015,10 @@ if ($CompleteRetiredRemoval) {
     $retirement.resume_receipt_path=$ResumeRetirementReceiptPath
     $retirement.resume_receipt_sha256=$ResumeRetirementReceiptSha256
 }
+if($null -ne $legacyRelayBefore){
+    $legacyRelayPreimage=Save-CanonicalOfficialLegacyRelayPreimage $legacyRelayBefore $installationEvidenceRoot
+    $audit.scheduled_writer['official_legacy']=@{preimage_path=$legacyRelayPreimage.path;preimage_sha256=$legacyRelayPreimage.sha256;xml_sha256=$legacyRelayPreimage.xml_sha256;identity_sha256=$legacyRelayPreimage.identity.sha256;fields=$legacyRelayPreimage.identity.fields;record_fields=$legacyRelayPreimage.identity.records;status='PREIMAGE_SAVED'}
+}
 $audit['stage_evidence_root']=$installationEvidenceRoot
 $audit['abandoned_recovery']=$abandonedRecovery
 Set-InstallationEvidenceStage 'canonical.prestate_verification'
@@ -2965,7 +3144,7 @@ $enteredPlacementTry = $true
         }
         $capturedChild = Invoke-InstallationEvidenceChild 'public-code-restore' $winps $publicRestoreArguments
             $global:LASTEXITCODE=$capturedChild.ExitCode
-            Write-Output $capturedChild.Stdout
+            if($capturedChild.ExitCode -ne 0){Write-Output (ConvertTo-KmtechRedactedSinkText -Text $capturedChild.Stdout -UserLine)}else{Write-Output $capturedChild.Stdout}
         if ($LASTEXITCODE -ne 0) { throw "Canonical code restore failed: $LASTEXITCODE" }
         if (-not $testMode) {
             $restoreBinding=Read-InstallationHelperEvidenceBinding @($capturedChild.Stdout -split "`r?`n") $elevationLogPath $capturedChild.ProcessId $sourceHelperSha256
@@ -3146,7 +3325,7 @@ $enteredPlacementTry = $true
         if (-not $resumeCodeAbsent) {
             $capturedChild = Invoke-InstallationEvidenceChild 'uninstall-helper' $winps $uninstallArguments
             $global:LASTEXITCODE=$capturedChild.ExitCode
-            Write-Output $capturedChild.Stdout
+            if($capturedChild.ExitCode -ne 0){Write-Output (ConvertTo-KmtechRedactedSinkText -Text $capturedChild.Stdout -UserLine)}else{Write-Output $capturedChild.Stdout}
             if ($LASTEXITCODE -ne 0) { throw "Code removal failed: $LASTEXITCODE" }
         }
         if ((Test-Path -LiteralPath $install) -or (Snapshot).exists -or @(Relays).Count -ne 0) {
@@ -3182,6 +3361,15 @@ $enteredPlacementTry = $true
         'server_identity_retired=false'
         "audit_path=$auditPath"
         return
+    }
+    if($null -ne $legacyRelayPreimage){
+        Set-InstallationEvidenceStage 'canonical.official_legacy_relay_quiesce'
+        $legacyRelayRestoreNeeded=$true;$mutated=$true
+        $audit.scheduled_writer.official_legacy.status='DISABLING'
+        Save $auditPath $audit
+        $legacyDisabled=Disable-CanonicalOfficialLegacyRelay $legacyRelayBefore
+        $audit.scheduled_writer.official_legacy.status=$legacyDisabled.status
+        Save $auditPath $audit
     }
     if ($writerRestoreNeeded) {
         $writerDisabled = Disable-CanonicalWriter $install $writerBefore
@@ -3449,6 +3637,11 @@ $enteredPlacementTry = $true
         $audit.rollback.scheduled_writer_restored=$true
         $writerRestoreNeeded=$false
     }
+    if($null -ne $legacyRelayPreimage){
+        $legacyAfter=Get-CanonicalOfficialLegacyRelayPreimage
+        if($null -eq $legacyAfter -or $legacyAfter.enabled -or $legacyAfter.identity.sha256 -cne $legacyRelayBefore.identity.sha256){throw 'OFFICIAL_LEGACY_RELAY_SUCCESS_NOT_DISABLED'}
+        $audit.scheduled_writer.official_legacy.status='REPLACED_BY_CANONICAL_DISABLED_RETAINED'
+    }
     $terminalStatus=Get-CanonicalInstallSuccessStatus $testMode
     $audit.status='PRODUCT_AWAITING_RESIDENT_RELAY'
     Save $auditPath $audit
@@ -3563,7 +3756,7 @@ catch {
             }
             [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
         }
-        throw $original
+        $publicFailure=[InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text $original.Exception.Message -UserLine));$publicFailure.Data['original_type']=$original.Exception.GetType().FullName;$original=[Management.Automation.ErrorRecord]::new($publicFailure,'CanonicalInstallationFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null);throw $original
     }
     if (-not $canonicalWriterFenceActive) {
         try {
@@ -3607,7 +3800,7 @@ catch {
         }
         $audit.status='FAILED_REMOVAL_INCOMPLETE';$audit.rollback.applied=$false;$audit.rollback.runtime_restored=$false
         try{Save $auditPath $audit;if($evidenceFull){Save $evidenceFull $audit}}catch{Write-InstallationCaughtFailure $_}
-        throw $original
+        $publicFailure=[InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text $original.Exception.Message -UserLine));$publicFailure.Data['original_type']=$original.Exception.GetType().FullName;$original=[Management.Automation.ErrorRecord]::new($publicFailure,'CanonicalInstallationFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null);throw $original
     }
     if ($Uninstall) {
         # The source survives code removal. Renew this same live delegation even
@@ -3634,7 +3827,7 @@ catch {
                 '-ExpectedUninstallRecordSha256',$uninstallRecordSha256)
             $capturedChild = Invoke-InstallationEvidenceChild 'uninstall-code-recovery' $winps $recoverCodeArguments
             $global:LASTEXITCODE=$capturedChild.ExitCode
-            Write-Output $capturedChild.Stdout
+            if($capturedChild.ExitCode -ne 0){Write-Output (ConvertTo-KmtechRedactedSinkText -Text $capturedChild.Stdout -UserLine)}else{Write-Output $capturedChild.Stdout}
             if ($LASTEXITCODE -ne 0) { throw "Uninstall exact code recovery failed: $LASTEXITCODE" }
         }
         [void](Assert-BootstrapIntegrityRecord $install)
@@ -3685,7 +3878,7 @@ catch {
     Write-InstallationCaughtFailure $_
  Write-Output 'rollback_audit_status=UNAVAILABLE' }
         'uninstall_recovery_status=PASS_EXACT_PREIMAGE_SAFE_TO_RETRY'
-        throw $original
+        $publicFailure=[InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text $original.Exception.Message -UserLine));$publicFailure.Data['original_type']=$original.Exception.GetType().FullName;$original=[Management.Automation.ErrorRecord]::new($publicFailure,'CanonicalInstallationFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null);throw $original
     }
     if ($RestoreVerifiedReplacement) {
         # A child can restore the code and then fail while writing its evidence.
@@ -3793,17 +3986,21 @@ catch {
     $audit.rollback.applied = $mutated
     $audit.rollback.runtime_restored = (-not $mutated)
     try {
-        if ($mutated -and [string]::IsNullOrWhiteSpace($codeRollbackFailure)) {
+        if ($mutated) {
             Set-InstallationEvidenceStage 'rollback.autostart_preimage' 'rollback'
-            Sync-CanonicalWriterFenceInventory $currentTreeInventorySha256
-            $audit.rollback['steps']=Invoke-CanonicalRollbackRuntimePreimage $before
+            # Run preimage recovery remains independent of a failed code
+            # restore or inventory synchronization. Writer release stays gated.
+            try{Sync-CanonicalWriterFenceInventory $currentTreeInventorySha256}catch{Write-InstallationCaughtFailure $_}
+            $removalProven= -not(Test-Path -LiteralPath $install)
+            if($removalProven){[void](Assert-RollbackRelayPreimage -ExpectedRelays @())}
+            $audit.rollback['steps']=Invoke-CanonicalRollbackRuntimePreimage $before -RemovalAlreadyProven:$removalProven
             $check = Snapshot
             if (
                 [bool]$check.exists -ne [bool]$before.exists -or
                 [string]$check.kind -cne [string]$before.kind -or
                 [string]$check.data -cne [string]$before.data -or (Test-Path -LiteralPath $stop) -or @(Relays).Count -ne 0
             ) { throw 'registry restore failed' }
-            $audit.rollback.runtime_restored = ($old.Count -eq 0)
+            $audit.rollback.runtime_restored = ($old.Count -eq 0 -and [string]::IsNullOrWhiteSpace($codeRollbackFailure))
         }
     }
     catch {
@@ -3816,6 +4013,16 @@ catch {
         $audit.failure_type = $original.Exception.GetType().Name
         Save $auditPath $audit
         if ($evidenceFull) { Save $evidenceFull $audit }
+    }
+    if($legacyRelayRestoreNeeded){
+        try{
+            $legacyRelayRestoreAttempted=$true
+            Set-InstallationEvidenceStage 'rollback.official_legacy_relay_preimage' 'rollback'
+            $legacyRestored=Restore-CanonicalOfficialLegacyRelay $legacyRelayPreimage
+            $legacyRelayRestoreNeeded=$false
+            $audit.scheduled_writer.official_legacy.status=$legacyRestored.status
+            $audit.rollback['official_legacy_relay_restored']=$true
+        }catch{Write-InstallationCaughtFailure $_;$autostartRollbackFailure='OFFICIAL_LEGACY_RELAY_RESTORE_FAILED';$audit.rollback['official_legacy_relay_restored']=$false;$audit.scheduled_writer.official_legacy.status='FAILED_RESTORE';Save $auditPath $audit}
     }
     if ($writerRestoreNeeded -and [string]::IsNullOrWhiteSpace($codeRollbackFailure)) {
         try {
@@ -3970,9 +4177,20 @@ catch {
     if ($placement -ceq 'PASS_NEW_VERIFIED') {
         Write-Warning "Current-user runtime restored. New verified code remains at $install"
     }
-    throw $original
+    $publicFailure=[InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text $original.Exception.Message -UserLine));$publicFailure.Data['original_type']=$original.Exception.GetType().FullName;$original=[Management.Automation.ErrorRecord]::new($publicFailure,'CanonicalInstallationFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null);throw $original
 }
 finally {
+    # Even an early code/runtime rollback throw reaches this independent attempt.
+    if($legacyRelayRestoreNeeded -and -not $legacyRelayRestoreAttempted -and $null -ne $original){
+        $legacyRelayRestoreAttempted=$true
+        try{
+            [void](Restore-CanonicalOfficialLegacyRelay $legacyRelayPreimage)
+            $legacyRelayRestoreNeeded=$false
+            $audit.rollback['official_legacy_relay_restored']=$true
+            $audit.scheduled_writer.official_legacy.status='PROVEN_PREIMAGE_RESTORED_FINALLY'
+        }catch{Write-InstallationCaughtFailure $_;$audit.rollback['official_legacy_relay_restored']=$false;$audit.scheduled_writer.official_legacy.status='FAILED_RESTORE_FINALLY'}
+        try{Save $auditPath $audit}catch{Write-InstallationCaughtFailure $_}
+    }
     Complete-InstallationEvidenceStage 'forward'
     $evidenceRollbackFailure=$null
     if($null -ne $original -and ($null -eq $audit -or -not $audit.rollback.runtime_restored)){$evidenceRollbackFailure=$original}

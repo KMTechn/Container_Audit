@@ -756,7 +756,7 @@ function Write-ElevationLog([string]$Status, [string]$Message) {
     }
     [IO.File]::AppendAllText(
         $path,
-        (($entry | ConvertTo-Json -Compress) + [Environment]::NewLine),
+        (ConvertTo-KmtechRedactedSinkText -Text (($entry | ConvertTo-Json -Compress) + [Environment]::NewLine)),
         (New-Object Text.UTF8Encoding($false))
     )
 }
@@ -870,9 +870,10 @@ function Assert-ProtectedCodeAncestors([string]$Path) {
     }
 }
 
-function Assert-ContainerStartupUpdateTrust([string]$Root) {
+function Assert-ContainerStartupUpdateTrust([string]$Root,[switch]$RestorePreimage) {
     Assert-ProtectedCodeAncestors (Split-Path -Parent $Root)
-    Assert-HardenedCodeAcl $Root -Recursive
+    if($RestorePreimage){Assert-NoReparsePoint $Root 'startup restore namespace' -PathOnly}
+    else{Assert-HardenedCodeAcl $Root -Recursive}
 }
 
 function Set-HardenedCodeAcl([string]$Path, [switch]$Recursive) {
@@ -1146,7 +1147,9 @@ function Save-ContainerStartupUpdatePreimage([string]$Root, [string]$Purpose) {
 }
 
 function Restore-ContainerStartupUpdatePreimage([string]$Root, [string]$Directory, [string]$ExpectedSha256) {
-    Assert-ContainerStartupUpdateTrust $Root
+    # Restoration uses the protected parent and exact pinned preimage, not
+    # executable bytes that an earlier rollback step may already have removed.
+    Assert-ContainerStartupUpdateTrust $Root -RestorePreimage
     $managed = Get-StrictFullPath (Split-Path -Parent $Root) 'startup update restore parent'
     $full = Get-StrictFullPath $Directory 'startup update preimage'
     if (-not (Test-PathWithin $full $managed) -or (Split-Path -Leaf $full) -cnotmatch '^\.startup-update-(install|uninstall)\.[0-9a-f]{32}$') { throw 'STARTUP_UPDATE_RESTORE_PATH_INVALID' }
@@ -1609,6 +1612,16 @@ function Remove-ContainerScheduledTasks($Folder, [string]$EvidenceRoot, [string]
             Write-ContainerStartupUpdateRecord -Path (Join-Path $EvidenceRoot ($name + '.json')) -Payload @{
                 name=$name; xml=$task.Xml; sddl=$task.GetSecurityDescriptor(7)
             }
+            if($name -ieq 'direct-sync-relay-container-audit'){
+                $identity=Get-BootstrapOfficialLegacyRelayIdentity ([pscustomobject]@{TaskName=$name;TaskPath='\'}) ([string]$task.Xml)
+                if(-not $identity.matched){throw 'REMOVAL_TASK_IDENTITY_UNKNOWN'}
+                # Preserve credential material and the sealed XML preimage.
+                $task.Enabled=$false
+                $task.Stop(0)
+                $retained=$Folder.GetTask($name)
+                if($retained.Enabled -or -not(Get-BootstrapOfficialLegacyRelayIdentity ([pscustomobject]@{TaskName=$name;TaskPath='\'}) ([string]$retained.Xml)).matched){throw 'REMOVAL_TASK_DISABLE_NOT_PROVEN'}
+                continue
+            }
             $task.Stop(0)
             $Folder.DeleteTask($name, 0)
         }
@@ -1936,10 +1949,90 @@ if ($releaseLayout -ceq 'PORTABLE_CPYTHON') {
         throw 'Integrity helper must load from the admitted SourceRoot.'
     }
 }
+function Set-ContainerLifecycleContextFailure($ContextText) {
+    # Python exception text can contain paths or child streams. Retain only
+    # known classifications, never the original message/stream or extra keys.
+    $safe=[ordered]@{status='UNKNOWN';error_type='UNKNOWN';failure_details=@();output_classification='CONTEXT_OUTPUT_UNKNOWN'}
+    $types=@('ValueError','OSError','FileNotFoundError','PermissionError','NotADirectoryError','RuntimeError','WriterFenceError','WriterFencedError',
+        'InvalidOperationException','RuntimeException','IOException','UnauthorizedAccessException','COMException')
+    $reasons=@('lifecycle_operation_invalid','lifecycle_owned_namespace_collision','lifecycle_namespace_parent_unavailable',
+        'lifecycle_data_namespace_collision','lifecycle_removed_control_remains','lifecycle_register_requires_installed_code',
+        'lifecycle_removed_tasks_remain_or_unknown','lifecycle_stock_protection_invalid','lifecycle_stock_layout_invalid',
+        'lifecycle_stock_manifest_invalid','lifecycle_control_incomplete','lifecycle_transition_requires_recovery',
+        'lifecycle_confirmed_pointer_mismatch','lifecycle_rolled_back_pointer_mismatch','lifecycle_pointer_mismatch',
+        'lifecycle_active_manifest_mismatch','lifecycle_active_trust_key_mismatch','lifecycle_task_absence_or_unknown',
+        'lifecycle_state_changed_during_verification','lifecycle_from_commit_mismatch')
+    $writerReasons=@{
+        'writer admission mutex is held by a deployment operation'='WRITER_GATE_TIMEOUT'
+        'writer denied by the active deployment fence'='ACTIVE_WRITER_FENCE'
+        'nested writer source denied by the active deployment fence'='ACTIVE_WRITER_FENCE'
+        'writer fence path contains a reparse point'='FENCE_REPARSE_REJECTED'
+        'writer fence path cannot be observed'='FENCE_PATH_UNOBSERVABLE'
+    }
+    try {
+        $builder=[Text.StringBuilder]::new()
+        foreach($line in @($ContextText)){
+            $value=[string]$line
+            if($builder.Length+$value.Length+2 -gt 65536){throw 'context output oversized'}
+            [void]$builder.AppendLine($value)
+        }
+        $text=$builder.ToString()
+        if([Text.Encoding]::UTF8.GetByteCount($text) -gt 65536){throw 'context output oversized'}
+        $payload=$text|ConvertFrom-Json -ErrorAction Stop
+        if([string]$payload.status -cne 'FAILED'){throw 'context failure shape differs'}
+        $safe.status='FAILED';$safe.output_classification='CLASSIFIED'
+        $kind=([string]$payload.error_type).Split('.')[-1]
+        if($kind -cin $types){$safe.error_type=$kind}
+        foreach($detail in @($payload.failure_details)|Select-Object -First 16){
+            $kind=([string]$detail.type).Split('.')[-1]
+            if($kind -cnotin $types){$kind='UNKNOWN'}
+            $reason='UNCLASSIFIED';$message=[string]$detail.message
+            if($message -cin $reasons){$reason=$message}
+            elseif($writerReasons.ContainsKey($message)){$reason=$writerReasons[$message]}
+            $safe.failure_details+=,[ordered]@{type=$kind;message=$reason}
+        }
+    }catch{
+        $safe=[ordered]@{status='UNKNOWN';error_type='UNKNOWN';failure_details=@();output_classification='CONTEXT_OUTPUT_UNKNOWN'}
+    }
+    $Script:ContainerLifecycleContextFailure=$safe
+    Write-InstallationEvidenceEvent ([ordered]@{event='LIFECYCLE_CONTEXT_FAILED';diagnostic=$safe})
+}
+
+function Get-ContainerSupportedInstallContext([string]$Source,[string]$Fixed,[string]$RecoveryMessage='Supported lifecycle context is unhealthy.') {
+    $lease=Get-Variable -Name placementWriterFenceLease -ValueOnly -ErrorAction SilentlyContinue
+    if($null -ne $lease -and $lease.acquired -is [bool] -and $lease.acquired){
+        # The helper already owns admission. A Python child cannot reacquire
+        # that mutex; use the existing pinned classifier in this same thread.
+        try{return Get-BootstrapSupportedLifecycleContext (Split-Path -Parent $Fixed) 'install'}
+        catch{
+            Write-InstallationCaughtFailure $_
+            $details=@();$contextException=$_.Exception
+            for($depth=0;$null -ne $contextException -and $depth -lt 16;$depth++){
+                $details+=,@{type=$contextException.GetType().Name;message=$contextException.Message}
+                $contextException=$contextException.InnerException
+            }
+            $text=@{status='FAILED';error_type=$_.Exception.GetType().Name;failure_details=$details}|ConvertTo-Json -Depth 5 -Compress
+            Set-ContainerLifecycleContextFailure @($text)
+            throw $RecoveryMessage
+        }
+    }
+    $child=Invoke-InstallationEvidenceChild 'lifecycle-context-install' (Join-Path $Source 'runtime\python.exe') @((Join-Path $Source 'app\auto_update.py'),'--lifecycle-context','--operation','install','--install-root',$Fixed)
+    $contextText=@($child.Stdout -split '\r?\n')
+    if($child.ExitCode -ne 0){Set-ContainerLifecycleContextFailure $contextText;throw $RecoveryMessage}
+    return $contextText|ConvertFrom-Json
+}
+
+function Invoke-ContainerPlacementRollbackStep([string]$Name,[scriptblock]$Action) {
+    $failure=$null
+    try{Set-InstallationEvidenceStage ('rollback.'+$Name) 'rollback'; & $Action}
+    catch{$failure=Get-InstallationFailureDetails $_;Write-InstallationCaughtFailure $_}
+    $record=[ordered]@{step=$Name;status=if($null -eq $failure){'PROVEN'}else{'FAILED'};failure=$failure}
+    Write-InstallationEvidenceEvent ([ordered]@{event='ROLLBACK_STEP';detail=$record})
+    return $record
+}
+
 if(-not $testOverride -and -not $RestoreUninstallRecordPath -and -not $SupportedActiveVersionPlacement) {
-    $contextText=& (Join-Path $sourceRootFull 'runtime\python.exe') (Join-Path $sourceRootFull 'app\auto_update.py') '--lifecycle-context' '--operation' 'install' '--install-root' $installRootFull
-    if($LASTEXITCODE -ne 0){throw '자료와 등록 및 전송 대기를 보존하고 지원 제거를 먼저 실행한 뒤 다시 설치하세요.'}
-    $context=$contextText|ConvertFrom-Json
+    $context=Get-ContainerSupportedInstallContext $sourceRootFull $installRootFull '자료와 등록 및 전송 대기를 보존하고 지원 제거를 먼저 실행한 뒤 다시 설치하세요.'
     if([string]$context.lifecycle_state -ceq 'HEALTHY' -and [bool]$context.managed -and [string]$context.bootstrap_commit -cne [string]$context.from_commit){throw '자동 적용 뒤 지원 설치는 INSTALL_CANONICAL_PORTABLE.ps1 로 실행하세요.'}
 }
 $sourceInventory = @(Get-CodeInventory $sourceRootFull)
@@ -1973,11 +2066,6 @@ if ($DryRun.IsPresent) {
     exit 0
 }
 
-function Get-ContainerSupportedInstallContext([string]$Source,[string]$Fixed) {
-    $contextText=& (Join-Path $Source 'runtime\python.exe') (Join-Path $Source 'app\auto_update.py') '--lifecycle-context' '--operation' 'install' '--install-root' $Fixed
-    if($LASTEXITCODE -ne 0){throw 'Supported lifecycle context is unhealthy.'}
-    return $contextText|ConvertFrom-Json
-}
 function Invoke-ContainerSupportedActiveVersionPlacement {
     if($testOverride -or -not $ReplaceExistingVerifiedPortable -or $SupportedFromCommit -cnotmatch '^[0-9a-f]{40}$' -or
         $ReplacementTransactionId -cnotmatch '^[0-9a-f]{32}$' -or -not $WriterFencePreparedReceiptPath){throw 'Supported placement requires the live canonical receipt authority.'}
@@ -2280,13 +2368,13 @@ catch {
 
     $originalPlacementFailure = $_
     Fail-InstallationEvidenceStages $originalPlacementFailure
-    Set-InstallationEvidenceStage 'rollback.startup_preimage' 'rollback'
-    if ($null -ne $Script:StartupUpdatePreimage) {
-        Restore-ContainerStartupUpdatePreimage $installRootFull $Script:StartupUpdatePreimage.path $Script:StartupUpdatePreimage.sha256
-    }
+    $Script:PlacementRollbackSteps=@()
+    $Script:PlacementRollbackSteps+=,(Invoke-ContainerPlacementRollbackStep 'startup_preimage' {
+        if($null -ne $Script:StartupUpdatePreimage){Restore-ContainerStartupUpdatePreimage $installRootFull $Script:StartupUpdatePreimage.path $Script:StartupUpdatePreimage.sha256}
+    })
     $otherSessionPreflightFailure = (
         -not $replacementApplied -and
-        $_.Exception.Message -ceq 'CONTAINER_PLACEMENT_OTHER_SESSION_RUNNING'
+        $originalPlacementFailure.Exception.Message -ceq 'CONTAINER_PLACEMENT_OTHER_SESSION_RUNNING'
     )
     if ($otherSessionPreflightFailure) {
         $failureCode = 'CONTAINER_PLACEMENT_OTHER_SESSION_RUNNING'
@@ -2301,18 +2389,21 @@ catch {
         }
         Write-Output "code_placement_preflight_failure=$failureCode"
     } elseif (-not $testOverride) {
-        Write-ElevationLog 'FAILED' ($_.Exception.GetType().Name)
+        try{Write-ElevationLog 'FAILED' ($originalPlacementFailure.Exception.GetType().Name)}catch{Write-InstallationCaughtFailure $_}
     }
-    Set-InstallationEvidenceStage 'rollback.staging_cleanup' 'rollback'
+    $Script:PlacementRollbackSteps+=,(Invoke-ContainerPlacementRollbackStep 'staging_cleanup' {
     if (Test-Path -LiteralPath $stagingRoot) {
         $stagingFull = Get-StrictFullPath $stagingRoot "bootstrap staging root"
         $parentFull = (Get-StrictFullPath $applicationParent "application parent") + '\'
         if (-not $stagingFull.StartsWith($parentFull, [StringComparison]::OrdinalIgnoreCase)) {
             throw "Bootstrap failed and staging cleanup target escaped its parent."
         }
-        Remove-Item -LiteralPath $stagingFull -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stagingFull -Recurse -ErrorAction Stop
+        if(Test-Path -LiteralPath $stagingFull){throw 'Staging cleanup readback failed.'}
     }
-    Set-InstallationEvidenceStage 'rollback.contain_and_restore_tree' 'rollback'
+    })
+    $recoveryState=@{tree_restored=$false}
+    $Script:PlacementRollbackSteps+=,(Invoke-ContainerPlacementRollbackStep 'contain_and_restore_tree' {
     if ($replacementApplied) {
         Assert-ContainerDataGenerationTarget -CandidateRoot $replacementRollbackRoot -TargetSid $OperatorSid `
             -LocalAppDataRoot $OperatorLocalAppDataRoot -DataRoot $OperatorDataRoot -HelperRoot $PSScriptRoot
@@ -2332,22 +2423,32 @@ catch {
         if (-not (Test-BootstrapReplacementTreeIdentity $previousReplacementIdentity $restoredIdentity)) {
             throw 'Verified replacement prior tree restore readback failed.'
         }
-    Set-InstallationEvidenceStage 'rollback.receipt_cleanup' 'rollback'
-        if ($replacementReceiptWritten -and (Test-Path -LiteralPath $replacementReceiptFull -PathType Leaf)) {
-            Remove-Item -LiteralPath $replacementReceiptFull -Force -ErrorAction SilentlyContinue
-        }
-        Complete-InstallationEvidenceStage 'rollback'
-        # Preserve the original message/line/chain after recording successful recovery.
-        throw $originalPlacementFailure
+        $recoveryState.tree_restored=$true
     }
-    throw
+    })
+    $Script:PlacementRollbackSteps+=,(Invoke-ContainerPlacementRollbackStep 'receipt_cleanup' {
+      if($recoveryState.tree_restored){
+        if ($replacementReceiptWritten -and (Test-Path -LiteralPath $replacementReceiptFull -PathType Leaf)) {
+            Remove-Item -LiteralPath $replacementReceiptFull -ErrorAction Stop
+            if(Test-Path -LiteralPath $replacementReceiptFull){throw 'Replacement receipt cleanup readback failed.'}
+        }
+      }
+    })
+    Complete-InstallationEvidenceStage 'rollback'
+    # Failed recovery steps remain recorded independently; never replace the
+    # first placement exception or delete a receipt for an unverified tree.
+    throw $originalPlacementFailure
 }
 }
 catch {
     $originalHelperFailure=$_
     Fail-InstallationEvidenceStages $originalHelperFailure
     $diagnostic=Get-InstallationFallbackDiagnostic $originalHelperFailure
-    [Console]::Out.WriteLine('installation_failure_summary='+($diagnostic | ConvertTo-Json -Depth 10 -Compress))
+    $contextFailure=Get-Variable -Name ContainerLifecycleContextFailure -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if($null -ne $contextFailure){$diagnostic.lifecycle_context_failure=$contextFailure}
+    $rollbackSteps=Get-Variable -Name PlacementRollbackSteps -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if($null -ne $rollbackSteps){$diagnostic.rollback_steps=@($rollbackSteps|ForEach-Object {@{step=$_.step;status=$_.status}})}
+    [Console]::Out.WriteLine('installation_failure_summary='+(ConvertTo-KmtechRedactedSinkText -Text ($diagnostic | ConvertTo-Json -Depth 10 -Compress)))
     exit $diagnostic.exit_code
 }
 finally {

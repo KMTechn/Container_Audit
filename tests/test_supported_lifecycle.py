@@ -68,7 +68,7 @@ def test_owner_a_active_a_remains_existing_supported_path(installed):
 
 
 def test_first_install_ignores_retained_foreign_version_material(tmp_path, monkeypatch):
-    monkeypatch.setattr(update,'supported_tasks_absent',lambda root:True)
+    monkeypatch.setattr(update,'supported_tasks_absent',lambda root, **kwargs:True)
     root=tmp_path/'removed'; (root/'versions/foreign').mkdir(parents=True)
     original=root/'versions/foreign/data.bin';original.write_bytes(b'quantity and membership')
     assert update.resolve_lifecycle_context(root,operation='install')['lifecycle_state']=='REMOVED'
@@ -76,7 +76,7 @@ def test_first_install_ignores_retained_foreign_version_material(tmp_path, monke
 
 
 def test_absent_current_with_live_or_unknown_task_is_not_removed(tmp_path, monkeypatch):
-    monkeypatch.setattr(update,'supported_tasks_absent',lambda root:False)
+    monkeypatch.setattr(update,'supported_tasks_absent',lambda root, **kwargs:False)
     with pytest.raises(ValueError,match='지원 제거'):
         update.resolve_lifecycle_context(tmp_path/'removed',operation='install')
 

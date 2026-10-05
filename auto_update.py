@@ -421,9 +421,18 @@ def write_json_durable(path: Path, payload: Mapping[str, Any]) -> None:
 
     _assert_no_reparse_components(path)
     temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+    safe_payload = redact_json_for_sink(payload)
+    text = json.dumps(safe_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    if len(text.encode()) + 1 > 65536 and "failure_details" in safe_payload:
+        # Full messages/streams have separate protected, pinned records.
+        safe_payload["failure_details"] = [{key: _failure_text(value, limit=300) if key in {"message", "stdout", "stderr"} else value
+                                            for key, value in entry.items()} for entry in safe_payload["failure_details"]]
+        safe_payload["failure_preview_bounded"] = True
+        text = json.dumps(safe_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    if len(text.encode()) + 1 > 65536:
+        raise ValueError("redacted control JSON exceeds 65536 bytes")
     with temporary.open("x", encoding="utf-8", newline="\n") as output:
-        json.dump(payload, output, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        output.write("\n")
+        output.write(text + "\n")
         output.flush()
         os.fsync(output.fileno())
     if os.name == "nt":
@@ -454,10 +463,94 @@ def control_root(app_root: Path) -> Path | None:
     return policy.parent
 
 
+def _sink_policy() -> dict:
+    return {"environment_names": frozenset(("DEFECT_FINAL_DEFECT_CLAIM_TOKEN", "DEFECT_FINAL_DEFECT_INTAKE_CLAIM_TOKEN", "DEFECT_LINKED_MANIFEST_LOCK_API_TOKEN", "DEFECT_LOGISTICS_API_TOKEN", "DEFECT_RETURN_MANIFEST_API_TOKEN", "DEFECT_SERVER_ACTIVE_LOCK_TOKEN", "DEFECT_TRANSFER_MANIFEST_API_TOKEN", "INSPECTION_WORKER_WAREHOUSE_RESPONSE_EXPORT_TOKEN", "KMTECH_DEFECT_WRITER_DELEGATION_TOKEN", "KMTECH_REWORK_TEMP_NG_CANDIDATE_TOKEN", "KMTECH_REWORK_TEMP_NG_CLAIM_TOKEN", "REWORK_ENROLLMENT_RESTORE_TOKEN", "REWORK_LOGISTICS_API_TOKEN", "CONTAINER_AUDIT_ENROLLMENT_TOKEN", "CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN", "CONTAINER_RUNTIME_SECRET", "KM_LOGISTICS_INSTALL_BEARER_TOKEN", "WORKER_ANALYSIS_LOGISTICS_API_TOKEN", "KMTECH_LABEL_WRITER_DELEGATION_TOKEN", "PRODUCER_SELF_ENROLL_TOKEN", "DIRECT_SYNC_AUTH_TOKEN", "PRODUCER_API_TOKEN", "LOGISTICS_API_TOKEN")),
+            "sensitive_pattern": r"(?i)(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_?KEY|API_?KEY|COOKIE|SESSION_?KEY|DELEGATION|BEARER|ENROLLMENT_CODE|RESTORE_CODE|ADMIN_PIN)",
+            "path_pattern": r"(?i)_(FILE|PATH|DIR|ROOT)$", "digest_pattern": r"(?i)_(sha256s?|fingerprint|hash)$", "short_digest_pattern": r"(?i)(pin|otp|password)", "env_marker": "[REDACTED:{name}]", "field_marker": "[REDACTED:field]",
+            "short_marker": "[REDACTION_NOTE:short_value_skipped:{name}]", "full_byte_cap": 65536, "head_byte_cap": 8192,
+            "truncation_marker": "\n[TRUNCATED: {omitted} bytes omitted]\n"}
+
+
+def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit: int = 65536, _no_truncate: bool = False) -> str:
+    policy = _sink_policy()
+    text = text.decode("utf-8", errors="replace") if isinstance(text, bytes) else str(text or "")
+    selected, notes = [], []
+    # Enumeration is internal to the redactor; no environment is emitted.
+    for name, value in sorted(environ.items()):
+        if name in policy["environment_names"] or (re.search(policy["sensitive_pattern"], name) and not re.search(policy["path_pattern"], name)):
+            if not value:
+                continue
+            if len(value) < 4:
+                notes.append(policy["short_marker"].format(name=name))
+            else:
+                selected.append((name, value))
+    for name, value in sorted(selected, key=lambda item: (-len(item[1]), item[0])):
+        variants = {value, json.dumps(value, ensure_ascii=True)[1:-1], json.dumps(value, ensure_ascii=False)[1:-1], value.replace("'", "''"), value.replace('"', '""')}
+        for variant in sorted(variants, key=len, reverse=True):
+            text = text.replace(variant, policy["env_marker"].format(name=name))
+    # Field values are removed as a whole, before any head/tail selection.
+    def redact_fields(value):
+        if isinstance(value, dict):
+            return {key: policy["field_marker"] if _redact_field(key, item, policy)
+                    else redact_fields(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [redact_fields(item) for item in value]
+        return value
+    try:
+        parsed = json.loads(text)
+        changed = redact_fields(parsed)
+        if changed != parsed:
+            text = json.dumps(changed, ensure_ascii=True)
+    except (ValueError, TypeError):
+        pass
+    if notes:
+        text += "\n" + "\n".join(notes)
+    if _no_truncate:
+        return text
+    data, bound = text.encode("utf-8"), min(limit, policy["full_byte_cap"])
+    if len(data) <= bound:
+        return text
+    head = data[:min(policy["head_byte_cap"], bound // 8)].decode("utf-8", errors="ignore").encode("utf-8")
+    tail = b""
+    budget = max(0, bound - len(head) - 80)
+    for _ in range(8):
+        tail = data[-budget:].decode("utf-8", errors="ignore").encode("utf-8") if budget else b""
+        marker = policy["truncation_marker"].format(omitted=len(data) - len(head) - len(tail)).encode("utf-8")
+        next_budget = max(0, bound - len(head) - len(marker))
+        if next_budget == budget:
+            break
+        budget = next_budget
+    marker = policy["truncation_marker"].format(omitted=len(data) - len(head) - len(tail)).encode("utf-8")
+    assert len(head) + len(marker) + len(tail) <= bound
+    return (head + marker + tail).decode("utf-8")
+
+
+def _redact_field(name, value, policy):
+    if value is None or type(value) is bool:
+        return False
+    if re.search(policy["path_pattern"], name):
+        return False
+    if re.search(policy["digest_pattern"], name) and not re.search(policy["short_digest_pattern"], name):
+        return False
+    return bool(re.search(policy["sensitive_pattern"], name) or name.lower() in {"pin", "otp", "password"})
+
+
+def redact_json_for_sink(value, environ: Mapping[str, str] = os.environ):
+    policy = _sink_policy()
+    if isinstance(value, dict):
+        return {key: policy["field_marker"] if _redact_field(str(key), item, policy)
+                else redact_json_for_sink(item, environ) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact_json_for_sink(item, environ) for item in value]
+    if isinstance(value, str):
+        return redact_for_sink(value, environ)
+    return value
+
+
 def _failure_text(value, *, limit: int = 16384) -> str:
-    text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else str(value or "")
+    text = redact_for_sink(value, _no_truncate=True)
     # Decode quoted field names/values instead of stopping at escaped quotes
-    # or a comma inside a credential object. No store/environment lookup.
+    # or a comma inside a credential object. No credential store lookup.
     sensitive = r"authorization|credential|password|secret|token|signature|apikey|accesskey|privatekey"
     decoder, spans, covered = json.JSONDecoder(), [], 0
     for match in re.finditer(r'"(?P<key>(?:\\.|[^"\\])*)"\s*[:=]\s*', text):
@@ -470,21 +563,23 @@ def _failure_text(value, *, limit: int = 16384) -> str:
         if re.search(sensitive, key.replace("-", "").replace("_", ""), re.IGNORECASE) is None:
             continue
         try:
-            _, end = decoder.raw_decode(text, match.end())
+            value, end = decoder.raw_decode(text, match.end())
+            if not _redact_field(key, value, _sink_policy()):
+                continue
         except ValueError:
             end = len(text)  # Malformed sensitive JSON is never partly retained.
         spans.append((match.end(), end))
         covered = end
     for start, end in reversed(spans):
-        text = text[:start] + "[redacted]" + text[end:]
+        text = text[:start] + "[REDACTED:field]" + text[end:]
     text = re.sub(r"(?i)(\b[a-z][a-z0-9+.-]*://)[^/\s?#]*@",
                   lambda match: match.group(1) + "[redacted]@", text)
     # Quoted JSON keys were handled above. Keep assignments, query/header
     # fields and Python-style quoted keys, including hyphenated API keys.
     text = re.sub(r'''(?ix)(?<![\w"])(\b[A-Za-z0-9_-]*(?:authorization|credential|password|secret|token|signature|api[_-]?key|access[_-]?key|private[_-]?key)[A-Za-z0-9_-]*'?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|[^\r\n;&}]+)''',
-                  lambda match: match.group(1) + "[redacted]", text)
-    text = re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+=*", "Bearer [redacted]", text)
-    return text[:limit]
+                  lambda match: match.group(0) if "[REDACTED:" in match.group(0) else match.group(1) + "[REDACTED:field]", text)
+    text = re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+=*", "Bearer [REDACTED:field]", text)
+    return redact_for_sink(text, {}, limit=limit)
 
 
 def _failure_details(error: BaseException) -> list[dict]:
@@ -506,6 +601,29 @@ def _failure_details(error: BaseException) -> list[dict]:
         error = error.__cause__ or error.__context__
     return details
 
+
+
+def _write_failure_evidence(control: Path, error: BaseException) -> list[dict]:
+    refs, seen = [], set()
+    while error is not None and id(error) not in seen and len(refs) < 64:
+        seen.add(id(error))
+        entry = {"type": type(error).__module__ + "." + type(error).__name__, "streams": {}}
+        for name, value in (("message", str(error)), ("stdout", getattr(error, "stdout", None)), ("stderr", getattr(error, "stderr", None))):
+            if not isinstance(value, (str, bytes)):
+                continue
+            # JSON escaping and envelope bytes are budgeted before writing;
+            # the text has already been redacted in memory.
+            safe = _failure_text(value, limit=57344)
+            payload = {"schema": "container-audit-redacted-failure-text-v1", "text": safe}
+            while len(json.dumps(payload, ensure_ascii=True).encode()) > 65535:
+                safe = _failure_text(safe, limit=max(128, len(safe.encode()) // 2))
+                payload["text"] = safe
+            path = control / ("failure-text-" + uuid.uuid4().hex + ".json")
+            write_json_durable(path, payload)
+            entry["streams"][name] = {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "complete": "[TRUNCATED:" not in safe}
+        refs.append(entry)
+        error = error.__cause__ or error.__context__
+    return refs
 
 
 def installation_root(app_root: Path) -> Path | None:
@@ -532,19 +650,31 @@ def verify_lifecycle_stock(bundle: Path) -> dict[str, Any]:
 
 
 @writer_sink("auto_update_control")
-def supported_tasks_absent(fixed: Path) -> bool:
+def supported_tasks_absent(fixed: Path, *, operation: str = "inspect") -> bool:
     """Removal markers do not substitute for actual task absence."""
     import subprocess
     escaped = str(fixed).replace("'", "''")
-    script = ("$ErrorActionPreference='Stop';$root='" + escaped + "';"
-              "$s=New-Object -ComObject 'Schedule.Service';$s.Connect();"
-              "foreach($t in @($s.GetFolder('\\').GetTasks(1))){"
-              "if($t.Name -cin @('direct-sync-relay-container-audit','container-audit-isolated-qualification-authority')){exit 5};"
-              "if($t.Name -cmatch '^KMTech\\.ContainerAudit\\.StartupUpdate\\.[0-9a-f]{24}$'){"
-              "[xml]$x=$t.Xml;foreach($a in @($x.Task.Actions.Exec)){if(([string]$a.Arguments).IndexOf($root,[StringComparison]::OrdinalIgnoreCase) -ge 0){exit 5}}}};exit 0")
+    library = Path(__file__).resolve().parent / "tools/bootstrap_integrity.ps1"
+    if not library.is_file():
+        library = Path(__file__).resolve().parent.parent / "tools/bootstrap_integrity.ps1"
+    _assert_no_reparse_components(library)
+    if not library.is_file():
+        raise ValueError("lifecycle_task_reader_unavailable")
+    escaped_library = str(library).replace("'", "''")
+    allow_legacy = "$true" if operation == "install" else "$false"
+    script = ("$ErrorActionPreference='Stop';. '" + escaped_library + "';$root='" + escaped + "';"
+              "foreach($t in @(Get-ScheduledTask -ErrorAction Stop)){"
+              "if($t.TaskName -ieq 'direct-sync-relay-container-audit'){"
+              "if(-not " + allow_legacy + " -or -not(Get-BootstrapOfficialLegacyRelayIdentity $t).matched){exit 5}}"
+              "elseif($t.TaskName -ieq 'container-audit-isolated-qualification-authority'){exit 5};"
+              "if($t.TaskName -cmatch '^KMTech\\.ContainerAudit\\.StartupUpdate\\.[0-9a-f]{24}$'){"
+              "[xml]$x=Export-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -ErrorAction Stop;"
+              "foreach($a in @($x.Task.Actions.Exec)){if(([string]$a.Arguments).IndexOf($root,[StringComparison]::OrdinalIgnoreCase) -ge 0){exit 5}}}};exit 0")
     result = subprocess.run([system_executable('WindowsPowerShell/v1.0/powershell.exe'), '-NoLogo', '-NoProfile',
                              '-NonInteractive', '-Command', script], capture_output=True,
                             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    if result.returncode not in (0, 5):
+        raise subprocess.CalledProcessError(result.returncode, "lifecycle-task-query", output=result.stdout, stderr=result.stderr)
     return result.returncode == 0
 
 
@@ -602,7 +732,7 @@ def resolve_lifecycle_context(root: Path, *, operation: str = 'inspect', expecte
                 raise ValueError('lifecycle_removed_control_remains')
             if operation == 'register':
                 raise ValueError('lifecycle_register_requires_installed_code')
-            if not supported_tasks_absent(fixed):
+            if not supported_tasks_absent(fixed, operation=operation):
                 raise ValueError('lifecycle_removed_tasks_remain_or_unknown')
             return dict(status='PASS', lifecycle_state='REMOVED', fixed_root=str(fixed),
                         owner_app_root=str(fixed / 'app'), active_code_root=None, active_app_root=None, from_commit=None)
@@ -809,7 +939,9 @@ def fixed_helper(control: Path, mode: str, *, code_root: Path | None = None) -> 
         arguments.extend(["-CodeRoot", str(code_root)])
     completed = subprocess.run(arguments, capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if completed.returncode:
-        raise RuntimeError("fixed update helper failed: " + mode)
+        error = RuntimeError("fixed update helper failed: " + mode)
+        error.stdout, error.stderr, error.exit_code = completed.stdout, completed.stderr, completed.returncode
+        raise error
     return completed.stdout.strip()
 
 
@@ -884,7 +1016,7 @@ def apply_prepared(control: Path) -> int:
             not_applied = pointer == before and (not state or state.get("phase") in {"CONFIRMED", "ROLLED_BACK", "DEFERRED", "PREPARED"})
             failure = {**(state or {}), "schema": SCHEMA,
                        "phase": "DEFERRED" if not_applied else "UNKNOWN",
-                       "deferred_at": now_utc(), "reason": type(error).__name__, "failure_details": _failure_details(error)}
+                       "deferred_at": now_utc(), "reason": type(error).__name__, "failure_details": _failure_details(error), "failure_evidence": _write_failure_evidence(control, error)}
             write_json_durable(control / ("failure-" + uuid.uuid4().hex + ".json"), failure)
             write_json_durable(control / "transition.json", failure)
         return 0 if not_applied else 20
@@ -1509,7 +1641,9 @@ def request_apply_task(control: Path, policy: Mapping[str, Any]) -> None:
     executable = system_executable("schtasks.exe")
     result = subprocess.run([executable, "/Run", "/TN", task_name(control.parent / "current", policy["operator_sid"])], capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if result.returncode:
-        raise RuntimeError("the installed update task could not be requested")
+        error = RuntimeError("the installed update task could not be requested")
+        error.stdout, error.stderr, error.exit_code = result.stdout, result.stderr, result.returncode
+        raise error
 
 
 @writer_sink("auto_update_control")

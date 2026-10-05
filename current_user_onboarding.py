@@ -562,7 +562,11 @@ def _windows_acl_identity(path: Path) -> dict[str, Any]:
         or len(completed.stdout.encode("utf-8")) > 131072
         or len(completed.stderr.encode("utf-8")) > 4096
     ):
-        raise OSError("replacement lifecycle ACL readback failed")
+        error = OSError("replacement lifecycle ACL readback failed")
+        error.stderr, error.exit_code = completed.stderr, completed.returncode
+        # ACL stdout is restoration material, never diagnostic text.
+        error.stdout_sha256 = hashlib.sha256(completed.stdout.encode('utf-8')).hexdigest()
+        raise error
     try:
         result = json.loads(completed.stdout)
     except (TypeError, UnicodeError, json.JSONDecodeError) as exc:
@@ -625,7 +629,9 @@ def _replacement_identities_match(expected: Mapping[str, Any], actual: Mapping[s
         timeout=15, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if completed.returncode != 0 or completed.stdout.strip() not in ("True", "False"):
-        raise OSError("replacement ACL comparison failed")
+        error = OSError("replacement ACL comparison failed")
+        error.stderr, error.exit_code = completed.stderr, completed.returncode
+        raise error
     return completed.stdout.strip() == "True"
 
 
