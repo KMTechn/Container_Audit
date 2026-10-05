@@ -71,7 +71,7 @@ if ($RecoveryCase -ceq 'code-mismatch') {
 }
 if ($RecoveryCase -ceq 'g-unknown') {
     [IO.Directory]::CreateDirectory((Join-Path $activeDataRoot 'control')) | Out-Null
-    [IO.File]::WriteAllText((Join-Path $activeDataRoot 'control/data-generation.json'), 'invalid isolated generation marker')
+    [IO.File]::WriteAllText((Join-Path $activeDataRoot 'data-generation.json'), 'invalid isolated generation marker')
 }
 $errorType=''
 try {. ([ScriptBlock]::Create("try {throw 'Product mode failed: --onboard-current-user/2'} catch "+$body))}
