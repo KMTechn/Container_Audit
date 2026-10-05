@@ -19,7 +19,9 @@ def test_python_packet_generation_identity(tmp_path, monkeypatch):
     literal = str(packet).replace("'", "''")
     result = run_functions(tmp_path, source_root / "tools/bootstrap_integrity.ps1",
         ["Get-StrictFullPath", "Get-RelativeCodePath", "Get-FileSha256", "Get-CodeInventory",
-         "Get-InventoryAggregate", "Write-Utf8Json", "Write-BootstrapIntegrityRecord"], f"""
+         "Get-InventoryAggregate", "Protect-InstallationText",
+         "Assert-InstallationMachineMetadataNoSecrets", "Write-Utf8Json",
+         "Write-BootstrapIntegrityRecord"], f"""
 $BootstrapIntegritySchema='container-audit-bootstrap-integrity-v1'
 $BootstrapIntegrityFileName='bootstrap-integrity.json'
 [void](Write-BootstrapIntegrityRecord -Root '{literal}' -CodeRootIdentity '.')

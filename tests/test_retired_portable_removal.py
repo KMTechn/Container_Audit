@@ -65,6 +65,11 @@ def _expected_evidence_tree(root, before, result, *, claimant=False):
 
 def _retired_fixture(tmp_path, fault='', *, historical=False):
     env, old_source, install, protected = _setup(tmp_path, fault)
+    # PowerShell's asynchronous OS module cache is outside the product/preimage
+    # tree. Keep exact tree comparisons; concurrent controllers may create it.
+    module_cache = tmp_path.parent / 'ps-module-cache' / tmp_path.name / 'cache'
+    module_cache.parent.mkdir(parents=True, exist_ok=True)
+    env['PSModuleAnalysisCachePath'] = str(module_cache)
     manager = tmp_path / 'manager'
     shutil.copytree(old_source, manager)
     if historical:

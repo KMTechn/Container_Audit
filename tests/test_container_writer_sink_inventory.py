@@ -389,7 +389,11 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
 
     scheduled = payload["powershell_execution_inventory"]["mutation_sites"]
     assert scheduled and all(row["guarded"] for row in scheduled)
-    assert {row["file"] for row in scheduled} == {"tools/container_writer_fence.ps1", "INSTALL_THIS_PC.ps1"}
+    assert {row["file"] for row in scheduled} == {
+        "tools/container_writer_fence.ps1", "INSTALL_THIS_PC.ps1", "INSTALL_CANONICAL_PORTABLE.ps1",
+    }
+    canonical_tasks = [row for row in scheduled if row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1"]
+    assert {row["wrapper_function"] for row in canonical_tasks} == {"Restore-CanonicalScheduledWriterPreimage"}
     assert {row["wrapper_function"] for row in scheduled if row["file"] == "tools/container_writer_fence.ps1"} <= {
         "Disable-ContainerScheduledTaskUnderWriterFence",
         "Enable-ContainerScheduledTaskUnderWriterFence",
