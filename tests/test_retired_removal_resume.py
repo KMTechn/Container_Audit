@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from tests.test_retired_portable_removal import _complete, _retired_fixture
+from tests.test_retired_portable_removal import _complete, _retired_fixture, _expected_evidence_tree
 from tests.test_canonical_portable_uninstall import _ps, _sha, _tree
 
 
@@ -118,7 +118,8 @@ def test_resume_after_controller_exit_and_duplicate_completion_preserve_retireme
                          resume_path=completed_journal)
     assert replayed.returncode == 0, replayed.stdout + replayed.stderr
     assert 'retirement_resume_status=ALREADY_COMPLETED_VERIFIED' in replayed.stdout
-    assert _tree(Path(env['CONTAINER_AUDIT_DATA_ROOT'])) == before
+    root = Path(env['CONTAINER_AUDIT_DATA_ROOT'])
+    assert _tree(root) == _expected_evidence_tree(root, before, replayed)
 
 
 @pytest.mark.parametrize('difference', ['journal_hash', 'active_request', 'active_receipt', 'retired_pair', 'live_owner', 'pid_reused', 'foreign_attempt'])
@@ -177,7 +178,9 @@ def test_resume_rejects_valid_but_foreign_or_live_evidence_without_mutation(tmp_
     assert 'RETIREMENT_' in result.stderr
     if difference == 'pid_reused':
         assert 'RETIREMENT_ORIGINAL_PID_REUSED' in result.stderr
-    assert _tree(tmp_path) == original
+    expected = (_expected_evidence_tree(tmp_path, original, result)
+                if difference in {'active_receipt', 'active_request', 'foreign_attempt'} else original)
+    assert _tree(tmp_path) == expected
 
 
 def test_historical_d69_helper_can_resume_after_code_removal(tmp_path):
@@ -204,7 +207,7 @@ def test_resume_rejects_changed_receipt_even_after_owned_marker_was_removed(tmp_
     result = _complete(tmp_path, env, old_source, manager, install, receipt, marker, resume_path=journal)
     assert result.returncode != 0
     assert 'RETIREMENT_RESUME_ACTIVE_REQUEST_CHANGED' in result.stderr
-    assert _tree(tmp_path) == original
+    assert _tree(tmp_path) == _expected_evidence_tree(tmp_path, original, result)
 
 
 @pytest.mark.parametrize('resume_arguments', [False, True])
@@ -245,7 +248,7 @@ def test_two_simultaneous_resumers_have_one_atomic_authority_winner(tmp_path):
                                resume_path=journal)
             assert second.returncode != 0
             assert 'RETIREMENT_RESUME_AUTHORITY_ALREADY_EXISTS' in second.stderr
-            assert _tree(tmp_path) == claimed
+            assert _tree(tmp_path) == _expected_evidence_tree(tmp_path, claimed, second, claimant=True)
         finally:
             release.write_text('continue')
         result = first.result(timeout=60)

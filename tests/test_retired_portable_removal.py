@@ -15,6 +15,38 @@ from tests.test_canonical_portable_uninstall import HELPER_OS, ROOT, _install, _
 OLD_COMMIT = 'd69dd303c8829132b02971473d8093e024e8b6dd'
 
 
+def _expected_evidence_tree(root, before, result, *, claimant=False):
+    """Add only this observed run/PID's exact 3115733 diagnostic artifacts."""
+    observation = result.fixture_audit
+    assert observation is not None
+    audit = Path(observation['audit_path'])
+    assert audit.name == 'canonical-portable-' + observation['run_id'] + '.json'
+    assert type(observation['process_id']) is int and observation['process_id'] > 0
+    directory = Path(str(audit) + '.evidence.' + str(observation['process_id']))
+    assert directory.resolve().is_relative_to(root.resolve())
+    stages = directory / 'stages.jsonl'
+    expected_paths = {stages}
+    if claimant:
+        expected_paths.add(directory / 'evidence-status.json')
+    assert {p for p in directory.rglob('*') if p.is_file()} == expected_paths
+    rows = [json.loads(line) for line in stages.read_text(encoding='utf-8-sig').splitlines()]
+    assert rows and all(isinstance(row, dict) for row in rows)
+    assert rows[0]['event'] == 'INITIALIZED'
+    assert rows[0]['process_id'] == observation['process_id']
+    assert any(row.get('stage') == 'canonical.writer_fence_preflight' for row in rows)
+    if claimant:
+        assert any(row.get('event') == 'END' and row.get('result') == 'FAILED' for row in rows)
+        assert any(row.get('lane') == 'rollback' for row in rows)
+        summary = json.loads((directory / 'evidence-status.json').read_text(encoding='utf-8-sig'))
+        assert summary['root'] == str(directory) and summary['summary_written'] is True
+    expected = dict(before)
+    for path in expected_paths:
+        relative = str(path.relative_to(root))
+        assert relative not in expected
+        expected[relative] = _sha(path)
+    return expected
+
+
 def _retired_fixture(tmp_path, fault='', *, historical=False):
     env, old_source, install, protected = _setup(tmp_path, fault)
     manager = tmp_path / 'manager'
@@ -270,7 +302,9 @@ def test_retirement_rejects_foreign_requests_and_overlapping_output_before_mutat
     result = _complete(tmp_path, env, old_source, manager, install, receipt, marker, **pins)
     assert result.returncode != 0
     assert 'RETIREMENT_' in result.stderr or 'CANONICAL_STOP_MARKER_PREEXISTS' in result.stderr
-    assert _tree(tmp_path) == original
+    expected = (_expected_evidence_tree(tmp_path, original, result)
+                if difference == 'active_marker' else original)
+    assert _tree(tmp_path) == expected
 
 
 @pytest.mark.parametrize('bound', [True, False])

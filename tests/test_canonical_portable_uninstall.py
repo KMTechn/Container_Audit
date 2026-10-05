@@ -316,11 +316,16 @@ function Assert-BootstrapProtectedRelayPath([string]$Path,[switch]$AllowSupporte
 
 
 def _ps(path, env, *args):
-    return run_powershell(
+    result = run_powershell(
         [_powershell(), '-NoLogo', '-NoProfile', '-NonInteractive',
          '-ExecutionPolicy', 'Bypass', '-File', str(path), *args],
         env=env, capture_output=True, text=True, timeout=90,
     )
+    observations = [json.loads(line.removeprefix('ca_fixture_audit='))
+                    for line in result.stdout.splitlines() if line.startswith('ca_fixture_audit=')]
+    assert len(observations) <= 1
+    result.fixture_audit = observations[0] if observations else None
+    return result
 
 
 def _setup(tmp_path, fault=''):
@@ -343,6 +348,12 @@ def _setup(tmp_path, fault=''):
     source = _portable_release_fixture(tmp_path, directory='packet')
     canonical = source / 'INSTALL_CANONICAL_PORTABLE.ps1'
     text = canonical.read_text(encoding='utf-8-sig').replace('$wanted = Command $install', OS_BOUNDARIES + '\n$wanted = Command $install')
+    audit_assignment = '$auditPath = Join-Path $auditRoot "canonical-portable-$runId.json"'
+    assert text.count(audit_assignment) == 1
+    # Observe real run/PID provenance; evidence initialization and BasePath stay
+    # byte-for-byte product calls (3115733), including their actual tree location.
+    text = text.replace(audit_assignment, audit_assignment + '\n'
+                        + "[Console]::WriteLine('ca_fixture_audit=' + ([ordered]@{run_id=$runId; process_id=$PID; audit_path=$auditPath} | ConvertTo-Json -Compress))")
     if fault == 'after_removal':
         text = text.replace("if ($LASTEXITCODE -ne 0) { throw \"Code removal failed: $LASTEXITCODE\" }",
                             "if ($LASTEXITCODE -ne 0) { throw \"Code removal failed: $LASTEXITCODE\" }\n        throw 'AFTER_REMOVAL_INJECTED_FAILURE'")
