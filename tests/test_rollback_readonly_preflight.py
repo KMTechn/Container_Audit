@@ -8,6 +8,7 @@ import uuid
 import pytest
 
 from tests.powershell_contracts import run_powershell
+from current_user_onboarding import resolve_current_user_onboarding_paths
 from tests.test_canonical_rollback_resume import _fixture, _produce_pending
 from tests.test_canonical_portable_uninstall import _launch_relay, _live_preimage, _sha, _tree
 
@@ -67,8 +68,12 @@ def test_exact_pending_preflight_is_readonly_and_rechecks_each_owner(tmp_path, e
     nested = tmp_path / 'external-preflight/payload.json'
     nested.parent.mkdir()
     nested.write_text('{}', encoding='utf-8')
+    credential = resolve_current_user_onboarding_paths(source / 'app', environ=env).credential_path
+    assert credential.resolve().is_relative_to(tmp_path.resolve())
+    credential.write_text('{}', encoding='utf-8')
     observation = tmp_path / 'preflight-read-observation.json'
     generation_preimage = {path: path.read_bytes() for path in tmp_path.rglob('data-generation.json')}
+    vectors = []
     synthetic = uuid.uuid4().hex + uuid.uuid4().hex
     env['CUSTOM_PREFLIGHT_SECRET'] = synthetic
     for case in ('match', 'tuple_mismatch', 'unrelated', 'locator_advance', 'nested_advance'):
@@ -103,6 +108,7 @@ def test_exact_pending_preflight_is_readonly_and_rechecks_each_owner(tmp_path, e
         reads=json.loads(observation.read_text())
         if case == 'match':
             assert result.returncode == 0 and re.fullmatch('onboarding_input_binding=[0-9a-f]{64}:[0-9a-f]{64}\\s*',result.stdout)
+            assert reads == {'locator': 1, 'nested': 0}
         else:
             assert result.returncode != 0, (case, reads)
             if case in ('tuple_mismatch','unrelated'):
@@ -117,6 +123,7 @@ def test_exact_pending_preflight_is_readonly_and_rechecks_each_owner(tmp_path, e
                     assert diagnostic['original_error_type'] == 'WriterFencedError'
                     assert diagnostic['reason_code'] == 'ACTIVE_WRITER_FENCE'
             if case != 'nested_advance': assert reads['locator'] == 0
+            else: assert reads['locator'] == 1
             assert reads['nested'] == 0
         after=_tree(tmp_path)
         after.pop(str(observation.relative_to(tmp_path)))
@@ -128,3 +135,6 @@ def test_exact_pending_preflight_is_readonly_and_rechecks_each_owner(tmp_path, e
                 after.pop(relative)
                 before.pop(relative, None)
         assert after == before
+        vectors.append({'case': case, 'allowed': result.returncode == 0,
+                        'reads': reads, 'product_state_unchanged': after == before})
+    (tmp_path / 'readonly-vector-observation.json').write_text(json.dumps(vectors), encoding='utf-8')
