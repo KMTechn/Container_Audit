@@ -37,12 +37,11 @@ READ_OBSERVATION = r'''
         if mode=='locator_advance': advance(paths.credential_path.parent)
         return original_prepare(paths,*args,**kwargs)
     onboarding._prepare_onboarding_inputs=prepare
-    import builtins
-    original_open=builtins.open
+    original_open=Path.open
     def observe_open(path,*args,**kwargs):
-        if isinstance(path,(str,bytes,Path)) and Path(path)==nested: reads['nested']+=1
+        if path==nested: reads['nested']+=1
         return original_open(path,*args,**kwargs)
-    builtins.open=observe_open
+    Path.open=observe_open
     original_main=onboarding.onboarding_main
     def observed_main(*args,**kwargs):
         try:return original_main(*args,**kwargs)
@@ -109,8 +108,14 @@ def test_exact_pending_preflight_is_readonly_and_rechecks_each_owner(tmp_path, e
             if case in ('tuple_mismatch','unrelated'):
                 diagnostic=json.loads(next(line.split('=',1)[1] for line in result.stdout.splitlines()
                     if line.startswith('onboarding_preflight_error=')))
-                assert diagnostic['original_error_type'] == 'WriterFencedError'
-                assert diagnostic['reason_code'] == 'ACTIVE_WRITER_FENCE'
+                if case == 'tuple_mismatch':
+                    # A changed original tuple has no exact protected authority
+                    # link; preserve the existing unobservable-input error.
+                    assert diagnostic['original_error_type'] == 'WriterFenceError'
+                    assert diagnostic['reason_code'] == 'FENCE_PREPARED_RECEIPT_UNOBSERVABLE'
+                else:
+                    assert diagnostic['original_error_type'] == 'WriterFencedError'
+                    assert diagnostic['reason_code'] == 'ACTIVE_WRITER_FENCE'
             if case != 'nested_advance': assert reads['locator'] == 0
             assert reads['nested'] == 0
         after=_tree(tmp_path)

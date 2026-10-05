@@ -1359,16 +1359,19 @@ function Get-CanonicalOnboardingInputBinding([string]$Root,[string]$TargetReleas
     $pendingContinuation=Get-Variable -Name rollbackContinuation -ValueOnly -ErrorAction SilentlyContinue
     $fenceAlreadyActive=Get-Variable -Name canonicalWriterFenceActive -ValueOnly -ErrorAction SilentlyContinue
     if ($TargetReleaseRoot -and $pendingContinuation -and -not $fenceAlreadyActive) {
-        $pendingRecheck=Read-CanonicalRollbackContinuation $install $lad $operatorSid
-        if ($null -eq $pendingRecheck -or [string]$pendingRecheck.record_sha256 -cne [string]$pendingContinuation.record_sha256) {
-            throw 'Rollback continuation changed before read-only preflight.'
-        }
         $pendingFence=Read-ContainerWriterFence -AllowAbsent
-        if ($null -eq $pendingFence) { throw 'Rollback continuation pending fence is absent.' }
-        [void](Read-BootstrapRollbackContinuationAuthority $pendingRecheck ([string]$pendingRecheck.record_path) ([string]$pendingRecheck.record_sha256) $pendingFence)
-        $preflightArguments+=@('--rollback-preflight-journal-path',[string]$pendingRecheck.record_path,
-            '--rollback-preflight-journal-sha256',[string]$pendingRecheck.record_sha256,
-            '--rollback-preflight-fence-sha256',(Get-ContainerWriterFenceFileSha256 (Get-ContainerWriterFenceActivePath)))
+        # After a verified release, use the unchanged ordinary preflight.
+        # The read-only continuation scope applies only to a present fence.
+        if ($null -ne $pendingFence) {
+            $pendingRecheck=Read-CanonicalRollbackContinuation $install $lad $operatorSid
+            if ($null -eq $pendingRecheck -or [string]$pendingRecheck.record_sha256 -cne [string]$pendingContinuation.record_sha256) {
+                throw 'Rollback continuation changed before read-only preflight.'
+            }
+            [void](Read-BootstrapRollbackContinuationAuthority $pendingRecheck ([string]$pendingRecheck.record_path) ([string]$pendingRecheck.record_sha256) $pendingFence)
+            $preflightArguments+=@('--rollback-preflight-journal-path',[string]$pendingRecheck.record_path,
+                '--rollback-preflight-journal-sha256',[string]$pendingRecheck.record_sha256,
+                '--rollback-preflight-fence-sha256',(Get-ContainerWriterFenceFileSha256 (Get-ContainerWriterFenceActivePath)))
+        }
     }
     $output=@(& (Join-Path $Root 'runtime\python.exe') @preflightArguments 2>&1)
     $preflightExitCode=$LASTEXITCODE

@@ -1518,9 +1518,11 @@ def _verified_rollback_preflight(app_root, target_root, release, journal_path, j
         active_path = fence.canonical_control_root(environ) / fence.ACTIVE_FILENAME
         read_pinned(active_path, fence_sha256)
         active = fence.active_fence(environ=environ)
+        # The authenticated resume controller can hold its old continuation
+        # claim during this child read. No writer authority is acquired here;
+        # the original owner must still be exited and every exact pin survives.
         if (active is None or active.get('owner_kind') != 'canonical_installer' or
-                active.get('status') not in ('INSTALLING', 'RESTORING', 'RESTORE_FAILED') or
-                fence._named_mutex_held_by_other(active['session_authority_mutex_name'])):
+                active.get('status') not in ('INSTALLING', 'RESTORING', 'RESTORE_FAILED')):
             deny()
         names = ('session_id', 'attempt_id', 'orchestrator_sha256',
                  'writer_contract_sha256', 'replacement_transaction_id')
