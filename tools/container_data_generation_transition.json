@@ -4598,7 +4598,7 @@
     {
       "path": "tools/direct_sync_relay_install_pack.py",
       "before": "67dded828d179145b38ff374082c0f6f56fade9a1d0ee7cb56c5f4fcbba70d9a",
-      "after": "8673455368f3fe76ecb7a8d70d919ca7603bf8258bcf7ce1cbb3175cc361aa11"
+      "after": "f2581bf3d2d973e905ce2d821837f062681d169e632c8cfa328afc6caa3e4e9f"
     },
     {
       "path": "tools/direct_sync_relay_operator.py",
