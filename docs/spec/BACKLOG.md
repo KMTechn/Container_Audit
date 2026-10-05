@@ -658,3 +658,20 @@ separate evidence. Independent acceptance remains coordinator owned.
 ## 설치 통합 sub-248 (2026-10-05, 독립 확인 전)
 
 w9next 567ff27 + autoupdate 7247634를 merge a63ae29로 통합했다. 양쪽 G와 설치/복구 소비 경계를 보존하고, fresh census가 발견한 기존 Python2/PS5 미보호 자리는 코디 승인 후 기존 admission/byte-pinned library로 교정한다. 사용되지 않는 startup-control 이동 함수는 실제 preimage save/restore 소비 경로로 안전 회귀 의미를 이관한다. 표준 선언 재생성, 세 판 집중 실패 대조, 후보 전체 및 lab-only stock packet 증거와 독립 review는 sub-248 REPORT/FOR-REVIEW에서 최종 판정한다. native VM 설치·출시 키·출시 수용으로 소급하지 않는다.
+
+## 설치 launcher 길이 sub-265 (2026-10-05)
+
+통합 시작 45192a6의 상승/finite helper/일반 producer 전달을 private 파일 두 개와
+메모리 SHA256으로 바꿨다. 16,000자 전체 명령 bound, 각 파일의 새 DACL,
+확인 동안 read handle과 원 helper/library pin·AST filename·result binding을 유지한다.
+PS5.1/PS7 transport 회귀70개 PASS, 같은 기존206개는 시작188P·18F에서 입력 병합
+후190P·16F로 새 실패0이다. 전체 명령6,917자·인용 확장 상한8,297자다.
+미배포 autoupdate의 runtime_files 목록을 별도 pinned runtime-file-inventory.json으로
+옮겼다. 기존 manifest 판독3곳을64KiB로 복원하고 공용 helper를 보존하며,
+별도 목록에만1MiB 상한·길이/SHA256/구성 검사를 적용한다.
+실제 stock feed 준비가 미사용 validator 설정 자산을 거절하는 기존 결함을 확인해
+portable 자산 목록 한 항목만 제외했다. source 파일·denylist·예외·필터는 유지한다.
+manifest 실제 stock 통과·상한1B 초과 거절, 최종 재생성/check·집중·LF clone stock의
+근거는 [sub-265 REPORT](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-265/REPORT.md)와
+FOR-REVIEW.md에 기록한다. 실제 UAC·옛 v2.0.33 위 설치·현장 경로/계정 수용은
+NOT TESTED이며 coordinator의 랩 예행과 독립 확인에 남긴다.

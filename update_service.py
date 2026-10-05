@@ -30,6 +30,9 @@ WINDOWS_RESERVED_NAMES = {
 DEFAULT_MAX_UPDATE_ARCHIVE_ENTRIES = 20_000
 DEFAULT_MAX_UPDATE_ARCHIVE_MEMBER_BYTES = 512 * 1024 * 1024
 DEFAULT_MAX_UPDATE_ARCHIVE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+RUNTIME_FILE_INVENTORY_FILENAME = "runtime-file-inventory.json"
+RUNTIME_FILE_INVENTORY_SCHEMA = "container-audit-runtime-file-inventory-v1"
+DEFAULT_MAX_RUNTIME_FILE_INVENTORY_BYTES = 1024 * 1024
 DENIED_UPDATE_ARCHIVE_PATH_SEGMENTS = frozenset(
     {
         ".syncthing",
@@ -808,6 +811,39 @@ def validate_update_archive_layout(members: list[str], archive_policy: Mapping[s
             raise ValueError("업데이트 ZIP에 manifest 필수 파일이 없습니다: " + ", ".join(policy_missing))
 
 
+def _read_canonical_runtime_file_inventory(zip_ref: zipfile.ZipFile, stock: Any, unique_object) -> list:
+    if (not isinstance(stock, dict) or stock.get("schema") != "container-audit-portable-tree-v1"
+            or "runtime_files" in stock
+            or "runtime_file_inventory_sha256" not in stock
+            or "runtime_file_inventory_bytes" not in stock):
+        raise ValueError("canonical stock runtime inventory is missing")
+    size = stock["runtime_file_inventory_bytes"]
+    digest = stock["runtime_file_inventory_sha256"]
+    if (type(size) is not int or not 0 < size <= DEFAULT_MAX_RUNTIME_FILE_INVENTORY_BYTES
+            or not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None):
+        raise ValueError("canonical stock runtime inventory pin is invalid")
+    try:
+        entry = zip_ref.getinfo("Container_Audit/" + RUNTIME_FILE_INVENTORY_FILENAME)
+    except KeyError as exc:
+        raise ValueError("canonical stock runtime inventory is missing") from exc
+    if entry.file_size > DEFAULT_MAX_RUNTIME_FILE_INVENTORY_BYTES:
+        raise ValueError("canonical stock runtime inventory is oversized")
+    if entry.file_size != size:
+        raise ValueError("canonical stock runtime inventory size differs")
+    with zip_ref.open(entry) as source:
+        raw = source.read(DEFAULT_MAX_RUNTIME_FILE_INVENTORY_BYTES + 1)
+    if len(raw) != size:
+        raise ValueError("canonical stock runtime inventory size differs")
+    if hashlib.sha256(raw).hexdigest() != digest:
+        raise ValueError("canonical stock runtime inventory hash differs")
+    inventory = json.loads(raw.decode("utf-8-sig"), object_pairs_hook=unique_object)
+    if (not isinstance(inventory, dict) or set(inventory) != {"schema", "files"}
+            or inventory["schema"] != RUNTIME_FILE_INVENTORY_SCHEMA
+            or not isinstance(inventory["files"], list) or not inventory["files"]):
+        raise ValueError("canonical stock runtime inventory is invalid")
+    return inventory["files"]
+
+
 def validate_update_archive(zip_ref: zipfile.ZipFile, archive_policy: Mapping[str, Any] | None = None) -> None:
     """Canonical runtime exceptions require exact stock paths and actual hashes.
 
@@ -835,9 +871,7 @@ def validate_update_archive(zip_ref: zipfile.ZipFile, archive_policy: Mapping[st
                 value[key] = item
             return value
         stock = json.loads(zip_ref.read(stock_entry).decode("utf-8-sig"), object_pairs_hook=unique_object)
-        rows = stock.get("runtime_files") if isinstance(stock, dict) else None
-        if not isinstance(rows, list) or not rows or stock.get("schema") != "container-audit-portable-tree-v1":
-            raise ValueError("canonical stock runtime inventory is missing")
+        rows = _read_canonical_runtime_file_inventory(zip_ref, stock, unique_object)
         expected = {}
         for row in rows:
             if not isinstance(row, dict) or set(row) != {"path", "sha256"}:

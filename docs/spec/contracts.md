@@ -173,9 +173,13 @@ source의 단일 CURRENT_VERSION 문자열 literal과 일치해야 한다. feed�
 엄격한 증가만 허용하고, 같은/낮은 판은 거절한다. 두 계약 원문 파일의 경로+LF와 실제
 SHA256 digest를 다시 해시하며 manifest의 설명값을 계약 원문으로 사용하지 않는다.
 USER 준비는 검증한 단일 `Container_Audit/` 접두 아래의 stock·계약 원문을 읽는다.
-canonical ZIP의 `runtime/` 예외는 서명된 packet SHA에 결속된 stock manifest의
-`runtime_files`(정확한 경로·SHA256)와 실제 ZIP 구성·바이트가 모두 일치할 때만 적용한다.
-빌더가 그 목록을 기록하며 USER 준비와 SYSTEM 압축 해제가 같은 검사를 사용한다.
+canonical ZIP의 `runtime/` 예외는 서명된 packet SHA에 결속된 stock manifest가
+`runtime-file-inventory.json`의 SHA256·byte_count를 인증하고 그 파일의 정확한
+경로·SHA256 목록과 실제 ZIP 구성·바이트가 모두 일치할 때만 적용한다.
+manifest의 필드는 `runtime_file_inventory_sha256`·`runtime_file_inventory_bytes`다.
+별도 파일은1MiB 이하·선언/실제 길이·SHA256·고유 JSON 필드를 확인한 뒤 사용한다.
+빌더는 그 파일을 manifest 전 tree 지표에 포함하며 USER 준비와 SYSTEM 압축 해제가
+같은 검사를 사용한다. 미배포 inline `runtime_files` 형식은 거절한다.
 목록 밖 runtime 파일·루트 파일·중복 경로와 runtime 아래 장부·로그·credential은 거절한다.
 runtime 목록이 없는 옛 stock에는 이 예외를 적용하지 않는다.
 CONFIRMED 전 실패는 원래 policy를 보존하고, 확인 뒤에만 역방향 승인 감사를

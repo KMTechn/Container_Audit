@@ -28,6 +28,11 @@ from tools.derive_container_writer_sinks import (  # noqa: E402
     _canonical_json_bytes as _writer_inventory_json_bytes,
     derive_inventory as _derive_writer_inventory,
 )
+from update_service import (  # noqa: E402
+    DEFAULT_MAX_RUNTIME_FILE_INVENTORY_BYTES,
+    RUNTIME_FILE_INVENTORY_FILENAME,
+    RUNTIME_FILE_INVENTORY_SCHEMA,
+)
 
 
 EXPECTED_PYTHON = (3, 12, 10)
@@ -120,7 +125,6 @@ APP_DATA_FILES = (
     "kmtech_shared.manifest.json",
     "kmtech_shared.lock.json",
     "config/container_audit_settings.json",
-    "config/validator_settings.json",
 )
 EXTERNAL_TOOL_MODULES: tuple[str, ...] = ("tools.direct_sync_relay_operator",)
 PORTABLE_INSTALL_ASSETS = (
@@ -509,6 +513,22 @@ def _tree_metrics(root: Path) -> tuple[int, int]:
     return len(files), sum(path.stat().st_size for path in files)
 
 
+def _write_runtime_file_inventory(output: Path) -> dict:
+    inventory = {
+        "schema": RUNTIME_FILE_INVENTORY_SCHEMA,
+        "files": [
+            {"path": path.relative_to(output).as_posix(), "sha256": _sha256(path)}
+            for path in sorted((output / "runtime").rglob("*")) if path.is_file()
+        ],
+    }
+    raw = (json.dumps(inventory, ensure_ascii=True, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    if len(raw) > DEFAULT_MAX_RUNTIME_FILE_INVENTORY_BYTES:
+        raise PortableBuildError("runtime file inventory exceeds its reader bound")
+    (output / RUNTIME_FILE_INVENTORY_FILENAME).write_bytes(raw)
+    return {"runtime_file_inventory_sha256": hashlib.sha256(raw).hexdigest(),
+            "runtime_file_inventory_bytes": len(raw)}
+
+
 def _git_value(repo_root: Path, expression: str) -> str:
     completed = subprocess.run(
         ["git", "rev-parse", "--verify", expression],
@@ -655,6 +675,7 @@ def build(
         raise PortableBuildError(
             "forbidden dependencies entered the portable tree: " + ", ".join(forbidden_paths)
         )
+    runtime_inventory_pin = _write_runtime_file_inventory(output)
     file_count, byte_count = _tree_metrics(output)
     manifest = {
         "schema": PORTABLE_SCHEMA,
@@ -667,10 +688,7 @@ def build(
         "python_version": ".".join(str(value) for value in EXPECTED_PYTHON),
         "python_home": str(python_home),
         "runtime_pythonw_sha256": _sha256(output / "runtime" / "pythonw.exe"),
-        "runtime_files": [
-            {"path": path.relative_to(output).as_posix(), "sha256": _sha256(path)}
-            for path in sorted((output / "runtime").rglob("*")) if path.is_file()
-        ],
+        **runtime_inventory_pin,
         "entrypoint": "runtime/pythonw.exe app/main.py",
         "launcher": "launch-container-audit.cmd",
         "launcher_sha256": _sha256(output / "launch-container-audit.cmd"),

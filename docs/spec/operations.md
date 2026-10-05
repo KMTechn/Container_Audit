@@ -197,9 +197,13 @@ owner가 살아 있거나 기록·source가 다르면 거절한다. 사용자 �
 국제 도메인은 ASCII punycode로 설정한다. 판 번호가 없는 옛 stock은 지원 재설치를 안내하며,
 feed가 꺼진 기존 실행/relay의 SHA 식별 경로에는 판 번호를 새 전제로 넣지 않는다.
 canonical feed ZIP은 `Container_Audit/` 아래 원문으로 준비한다. bundled runtime은
-빌더의 stock `runtime_files`에 기록한 정확한 경로·해시와 실제 ZIP이 일치해야 한다.
+빌더의 `runtime-file-inventory.json`에 기록한 정확한 경로·해시와 실제 ZIP이 일치해야 한다.
+stock manifest의 `runtime_file_inventory_sha256`·`runtime_file_inventory_bytes`로
+별도 파일의 길이와 SHA256을 먼저 확인하며 그 파일만1MiB 판독 상한을 적용한다.
 추가 runtime 파일·해시 불일치·목록 부재나 민감 상태 파일은 `prepared.json` 게시 전에 거절한다.
 이 목록도 담는 packet SHA는 기존 설치 키로 서명한 feed manifest에서 인증한다.
+portable은 현재 제품 reader가 없는 config/validator_settings.json을 포장하지 않는다.
+source 자산은 보존하며 runtime-local denylist·정확 runtime 예외·feed 필터는 바꾸지 않는다.
 
 관리자 설치기는 기존 보호 코드 배치와 같은 writer delegation 아래서
 `versions/<source SHA>`·`update-control`을 보호하고, 지정 작업자 SID의 로그온으로
@@ -925,7 +929,15 @@ CA-T01의 이름 14개와 실제 register→ValueError, CA-T02의 malformed JSON
 G 시작 거절 대화상자는 REFUSE/UNKNOWN에 맞는 고정 한국어 원인·복구 안내만 전달한다. 임의 예외 진단은 작업자 대화상자에 전달하지 않는다. 전체 비교에서 드러난 relay 모의는 read-only Git 신원 확인을 보존하며, 실제 자료 경계/호환 판정은 동일하다.
 # Installation follow-up evidence — 2026-10-02
 
-설치 상승 wrapper와 일반 토큰 producer wrapper는 파일 없이 메모리 명령으로 실행한다.
+설치 상승 wrapper·그 안의 finite helper·일반 토큰 producer wrapper는 기존 private
+evidence root에 CreateNew로 만든 두 transport 파일(UTF-8 source와 JSON argv)을 쓴다.
+각 파일은 내용을 쓰기 전에 새 DACL로 보호하며 owner 변경은 하지 않는다. caller가
+게시 전 메모리 bytes의 SHA256을 짧은 bootstrap에 결속한다. bootstrap은 leaf/ancestor
+reparse를 거절하고 FileShare.Read handle을 유지한 채 한 번 읽어 hash를 확인한다.
+확인한 bytes만 파싱·실행하며 source의 기존 filename metadata와 독립 pin은 유지한다.
+launcher 전체 명령은 고정 옵션·실행 파일을 포함해 16,000자 이하이고 기존 30,000자
+encoded 보조 guard도 유지한다. 완료·실패·취소의 finally에서 자기 파일만 정리한다.
+정리 실패는 원 오류/rollback을 덮지 않고 private 파일과 불완전 evidence를 보존한다.
 상승 helper·bootstrap library·writer fence helper와 일반 토큰 API는 한 번 읽은
 바이트의 SHA256을 확인하고 그 바이트를 파싱·평가한다. 실행 동안 source handle을
 독점 보유하지 않는다. 높은 권한의 stage journal·stream·summary·placement log·
@@ -1137,3 +1149,15 @@ canonical의 PlanOnly/설치 상태 분류보다 앞선 검사는 처음 검증�
 원 실패는 자기 stages.jsonl에 남긴다. 일반 catch의 감사 기록은 유지한다.
 퇴역 마감은 인정 없는 비활성 noncanonical 작업 배열도 거절한다.
 공식 옛 비활성 작업의 허용은 공통 정체성·전환 기록 판정 연결 후 조립 확인 대상이다.
+
+## Portable manifest 판독 크기
+
+설치된 portable manifest 확인, placement release 확인, 기존 task 제거와 공유
+portable helper의 manifest 판독 상한은 기존64KiB다. runtime 목록은 고정
+`runtime-file-inventory.json`으로 분리하고 manifest에는 그 SHA256과 크기만 둔다.
+별도 파일도 manifest 이전 지표에 포함하며 stock에 bootstrap-integrity.json은 넣지 않는다.
+약288KiB 목록의 여유3.6배인1MiB 상한은 별도 목록 판독에만 적용한다.
+각 상한을1바이트라도 넘으면 JSON 해석이나 후속 변경 전에 거절한다.
+receipt·relay status·writer contract·pin과 공유 helper의 기존 바이트는 보존한다.
+실제 최종 stock과 PS5.1/PS7 경계 회귀의 증거는
+sub-265 REPORT에 기록하며 실제 task 제거/전체 설치의 랩 수용과 구분한다.
