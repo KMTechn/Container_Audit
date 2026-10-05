@@ -19,7 +19,7 @@ function Test-BootstrapPrivilegedOwnerSid([string]$Sid) {
 }
 
 function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Configuration, [switch]$LiteralOnly, [Collections.IDictionary]$Environment, [switch]$CommonOnly, [switch]$NoTruncate) {
-    $policy=@{environment_names=@('DEFECT_FINAL_DEFECT_CLAIM_TOKEN','DEFECT_FINAL_DEFECT_INTAKE_CLAIM_TOKEN','DEFECT_LINKED_MANIFEST_LOCK_API_TOKEN','DEFECT_LOGISTICS_API_TOKEN','DEFECT_RETURN_MANIFEST_API_TOKEN','DEFECT_SERVER_ACTIVE_LOCK_TOKEN','DEFECT_TRANSFER_MANIFEST_API_TOKEN','INSPECTION_WORKER_WAREHOUSE_RESPONSE_EXPORT_TOKEN','KMTECH_DEFECT_WRITER_DELEGATION_TOKEN','KMTECH_REWORK_TEMP_NG_CANDIDATE_TOKEN','KMTECH_REWORK_TEMP_NG_CLAIM_TOKEN','REWORK_ENROLLMENT_RESTORE_TOKEN','REWORK_LOGISTICS_API_TOKEN','CONTAINER_AUDIT_ENROLLMENT_TOKEN','CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','CONTAINER_RUNTIME_SECRET','KM_LOGISTICS_INSTALL_BEARER_TOKEN','WORKER_ANALYSIS_LOGISTICS_API_TOKEN','KMTECH_LABEL_WRITER_DELEGATION_TOKEN','PRODUCER_SELF_ENROLL_TOKEN','DIRECT_SYNC_AUTH_TOKEN','PRODUCER_API_TOKEN','LOGISTICS_API_TOKEN');sensitive_pattern='(?i)(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_?KEY|API_?KEY|COOKIE|SESSION_?KEY|DELEGATION|BEARER|ENROLLMENT_CODE|RESTORE_CODE|ADMIN_PIN)';path_pattern='(?i)_(FILE|PATH|DIR|ROOT)$';digest_pattern='(?i)_(sha256s?|fingerprint|hash)$';short_digest_pattern='(?i)(pin|otp|password)';env_marker='[REDACTED:{0}]';field_marker='[REDACTED:field]';short_marker='[REDACTION_NOTE:short_value_skipped:{0}]';full_byte_cap=65536;head_byte_cap=8192;truncation_marker="`n[TRUNCATED: {0} bytes omitted]`n"}
+    $policy=@{environment_names=@('DEFECT_FINAL_DEFECT_CLAIM_TOKEN','DEFECT_FINAL_DEFECT_INTAKE_CLAIM_TOKEN','DEFECT_LINKED_MANIFEST_LOCK_API_TOKEN','DEFECT_LOGISTICS_API_TOKEN','DEFECT_RETURN_MANIFEST_API_TOKEN','DEFECT_SERVER_ACTIVE_LOCK_TOKEN','DEFECT_TRANSFER_MANIFEST_API_TOKEN','INSPECTION_WORKER_WAREHOUSE_RESPONSE_EXPORT_TOKEN','KMTECH_DEFECT_WRITER_DELEGATION_TOKEN','KMTECH_REWORK_TEMP_NG_CANDIDATE_TOKEN','KMTECH_REWORK_TEMP_NG_CLAIM_TOKEN','REWORK_ENROLLMENT_RESTORE_TOKEN','REWORK_LOGISTICS_API_TOKEN','CONTAINER_AUDIT_ENROLLMENT_TOKEN','CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','CONTAINER_RUNTIME_SECRET','KM_LOGISTICS_INSTALL_BEARER_TOKEN','WORKER_ANALYSIS_LOGISTICS_API_TOKEN','KMTECH_LABEL_WRITER_DELEGATION_TOKEN','PRODUCER_SELF_ENROLL_TOKEN','DIRECT_SYNC_AUTH_TOKEN','PRODUCER_API_TOKEN','LOGISTICS_API_TOKEN');sensitive_pattern='(?i)(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_?KEY|API_?KEY|COOKIE|SESSION_?KEY|DELEGATION|BEARER|ENROLLMENT_CODE|RESTORE_CODE|ADMIN_PIN)';path_pattern='(?i)_(FILE|PATH|DIR|ROOT)$';digest_pattern='(?i)_(sha256s?|fingerprint|hash)$';short_digest_pattern='(?i)(pin|otp|password)';identifier_name_pattern='(?i)_(TRANSACTION|SESSION|ATTEMPT)_ID\z';identifier_value_pattern='^(?:[0-9A-Fa-f]{32}|[0-9A-Fa-f]{64}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\z';env_marker='[REDACTED:{0}]';field_marker='[REDACTED:field]';short_marker='[REDACTION_NOTE:short_value_skipped:{0}]';full_byte_cap=65536;head_byte_cap=8192;truncation_marker="`n[TRUNCATED: {0} bytes omitted]`n"}
     if($Configuration){return $policy}
     if($null -eq $Environment){$Environment=[Environment]::GetEnvironmentVariables('Process')}
     $values=@();$notes=@()
@@ -27,6 +27,7 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
         if($name -cin $policy.environment_names -or ($name -match $policy.sensitive_pattern -and $name -notmatch $policy.path_pattern)){
             $value=[string]$Environment[$name]
             if(-not $value){continue}
+            if($name -cnotin $policy.environment_names -and $name -match $policy.identifier_name_pattern -and $value -cmatch $policy.identifier_value_pattern){continue}
             if($value.Length -lt 4){$notes+=($policy.short_marker -f $name);continue}
             $values+=,@{name=[string]$name;value=$value}
         }
@@ -1572,10 +1573,40 @@ function Get-InventoryAggregate([object[]]$Inventory) {
     }
 }
 
+function Assert-InstallationMachineMetadataNoSecrets([string]$Json) {
+    # Authentication documents preserve their exact bytes. Reject secret
+    # content before opening even a temporary file; diagnostics use the sink
+    # redactor instead. The selection policy remains one common constant.
+    $policy=Protect-InstallationText -Configuration
+    $environment=[Environment]::GetEnvironmentVariables('Process')
+    $selected=[Collections.Generic.List[string]]::new()
+    foreach($name in $environment.Keys){
+        $explicit=$name -cin $policy.environment_names
+        if(-not $explicit -and ($name -notmatch $policy.sensitive_pattern -or $name -match $policy.path_pattern)){continue}
+        $value=[string]$environment[$name]
+        if(-not $value){continue}
+        if(-not $explicit -and $name -match $policy.identifier_name_pattern -and $value -cmatch $policy.identifier_value_pattern){continue}
+        $selected.Add($value)
+    }
+    $known=Get-Variable -Name InstallationEvidenceSensitiveValues -Scope Script -ErrorAction SilentlyContinue
+    if($null -ne $known){foreach($value in $known.Value){if($value -is [string] -and $value){$selected.Add($value)}}}
+    foreach($name in @('CanonicalWriterFenceDelegationToken','WriterFenceDelegationToken')){
+        $value=Get-Variable -Name $name -ValueOnly -ErrorAction SilentlyContinue
+        if($value -is [string] -and $value){$selected.Add($value)}
+    }
+    foreach($value in $selected){
+        $quoted=ConvertTo-Json -InputObject $value -Compress
+        $variants=@($value,$quoted.Substring(1,$quoted.Length-2),$value.Replace("'","''"),$value.Replace('"','""'))
+        foreach($variant in $variants){
+            if($Json.Contains($variant)){throw 'BOOTSTRAP_MACHINE_METADATA_SECRET_DETECTED'}
+        }
+    }
+}
 function Write-Utf8Json([string]$Path, $Payload) {
     $temporary = "$Path.tmp.$PID"
-    $json = Protect-InstallationText ($Payload | ConvertTo-Json -Depth 8) -1
-    [IO.File]::WriteAllText($temporary, $json + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+    $json = (($Payload | ConvertTo-Json -Depth 40).Replace("`r`n","`n")) + "`n"
+    Assert-InstallationMachineMetadataNoSecrets $json
+    [IO.File]::WriteAllText($temporary, $json, (New-Object Text.UTF8Encoding($false)))
     Move-Item -LiteralPath $temporary -Destination $Path -Force
 }
 

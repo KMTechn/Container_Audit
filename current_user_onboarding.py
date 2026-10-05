@@ -292,8 +292,8 @@ def _persist_failure_report(path: Path, report: dict[str, Any], error: BaseExcep
 
 @writer_sink("current_user_onboarding_storage")
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
-    from auto_update import serialize_json_for_sink
-    safe_text = serialize_json_for_sink(_report_metadata_for_sink(payload))
+    from auto_update import serialize_machine_metadata
+    safe_text = serialize_machine_metadata(payload)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
@@ -311,8 +311,8 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
 def _write_json_atomic_create_new(path: Path, payload: Mapping[str, Any]) -> None:
     """Publish JSON atomically without ever replacing an existing pathname."""
 
-    from auto_update import serialize_json_for_sink
-    safe_text = serialize_json_for_sink(_report_metadata_for_sink(payload))
+    from auto_update import serialize_machine_metadata
+    safe_text = serialize_machine_metadata(payload)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:

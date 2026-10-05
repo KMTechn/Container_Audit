@@ -57,7 +57,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = 'f71aa20740165a8dd900bc05731558b7237f0d2ff0c2d6cfbf80f1d197114925'
+$ExpectedBootstrapIntegritySha256 = '89df450b98679a462b86b950f1476bd92efdc475d7e0c0d619ac16158ce235b9'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -813,10 +813,38 @@ function Restore($Before) {
 function ConvertTo-CanonicalSafeDiagnostic([string]$Text) {
     return (ConvertTo-KmtechRedactedSinkText -Text $Text)
 }
+function ConvertTo-CanonicalAuditJson($Value) {
+    # Redact a valid in-memory envelope first. Budget diagnostic strings before
+    # serializing, so authenticated tuple/path fields and JSON syntax survive.
+    $safe=Protect-InstallationText ($Value|ConvertTo-Json -Depth 40) -1 -NoTruncate
+    $copy=$safe|ConvertFrom-Json
+    $diagnostics=[Collections.Generic.List[object]]::new()
+    function Find-CanonicalAuditDiagnosticStrings($Node,[bool]$InsideDiagnostic=$false) {
+        if($Node -is [Management.Automation.PSCustomObject]){
+            foreach($property in $Node.PSObject.Properties){
+                $diagnostic=$InsideDiagnostic -or $property.Name -match '(?i)failure|message|stdout|stderr|traceback'
+                if($diagnostic -and $property.Value -is [string]){$diagnostics.Add($property)}
+                else{Find-CanonicalAuditDiagnosticStrings $property.Value $diagnostic}
+            }
+        }elseif($Node -is [Collections.IEnumerable] -and $Node -isnot [string]){
+            foreach($item in $Node){Find-CanonicalAuditDiagnosticStrings $item $InsideDiagnostic}
+        }
+    }
+    Find-CanonicalAuditDiagnosticStrings $copy
+    foreach($property in $diagnostics){$property.Value=ConvertTo-KmtechRedactedSinkText -Text ([string]$property.Value)}
+    do {
+        $json=($copy|ConvertTo-Json -Depth 40 -Compress)+"`n"
+        if([Text.Encoding]::UTF8.GetByteCount($json) -le 65536){return $json}
+        $largest=@($diagnostics|Sort-Object @{Expression={[Text.Encoding]::UTF8.GetByteCount([string]$_.Value)};Descending=$true}|Select-Object -First 1)
+        if($largest.Count -ne 1 -or [Text.Encoding]::UTF8.GetByteCount([string]$largest[0].Value) -le 256){throw 'CANONICAL_AUDIT_METADATA_EXCEEDS_BOUND'}
+        $budget=[Math]::Max(256,[int]([Text.Encoding]::UTF8.GetByteCount([string]$largest[0].Value)/2))
+        $largest[0].Value=Protect-InstallationText ([string]$largest[0].Value) $budget
+    }while($true)
+}
 function Save([string]$Path, $Value, [bool]$SanitizeDiagnostics=$false) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
     $temp = "$Path.tmp.$PID"
-    $json = Protect-InstallationText (($Value|ConvertTo-Json -Depth 8)+[Environment]::NewLine) -1
+    $json = ConvertTo-CanonicalAuditJson $Value
     if (Get-Variable -Name CompleteRetiredRemoval -ValueOnly -ErrorAction SilentlyContinue) {
         $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($json)
         $stream = New-Object IO.FileStream($temp, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
@@ -860,6 +888,7 @@ function New-CanonicalWriterFencePreparedReceipt(
     }
     New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
     $json = ($payload | ConvertTo-Json -Depth 8) + "`n"
+    Assert-InstallationMachineMetadataNoSecrets $json
     $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($json)
     $stream = New-Object IO.FileStream($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
     try {
@@ -941,7 +970,7 @@ function New-CanonicalWriterFenceReleaseAuthorization(
         [string]$payload.binding_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
         [string]::IsNullOrWhiteSpace([string]$payload.future_natural_trigger_utc)
     )) { throw 'CANONICAL_WRITER_RELEASE_BASELINE_INVALID' }
-    Save $Path $payload
+    Write-Utf8Json $Path $payload
     $expectedFields = @(
         'schema','status','phase','app_id','session_id','attempt_id',
         'replacement_transaction_id','writer_inventory_sha256','task_name','task_path',
@@ -2129,7 +2158,7 @@ function Get-CanonicalOfficialLegacyRelayPreimage {
 function Save-CanonicalOfficialLegacyRelayPreimage($Before,[string]$Root) {
     Assert-InstallationEvidenceWriteRoot $Root
     # A task preimage may contain author/SID for restoration, never an env secret.
-    if((Protect-InstallationText $Before.xml -1 -LiteralOnly -NoTruncate) -cne $Before.xml){throw 'OFFICIAL_LEGACY_PREIMAGE_CONTAINS_SECRET'}
+    Assert-InstallationMachineMetadataNoSecrets $Before.xml
     $path=Join-Path $Root 'official-v2.0.33-relay-preimage.xml'
     if(Test-Path -LiteralPath $path){throw 'OFFICIAL_LEGACY_PREIMAGE_ALREADY_EXISTS'}
     [IO.File]::WriteAllText($path,$Before.xml,[Text.UTF8Encoding]::new($false))
@@ -2137,7 +2166,9 @@ function Save-CanonicalOfficialLegacyRelayPreimage($Before,[string]$Root) {
     $record=[ordered]@{schema='container-audit-official-legacy-relay-preimage-v1';xml_path=$path;xml_sha256=(Sha $path);identity_sha256=[string]$Before.identity.sha256;enabled=[bool]$Before.enabled;task_name=[string]$Before.task_name;task_path=[string]$Before.task_path;old_code_root=[string]$Before.old_code_root;files=$Before.files}
     $recordPath=Join-Path $Root 'official-v2.0.33-relay-preimage.json'
     if(Test-Path -LiteralPath $recordPath){throw 'OFFICIAL_LEGACY_PREIMAGE_ALREADY_EXISTS'}
-    [IO.File]::WriteAllText($recordPath,(ConvertTo-KmtechRedactedSinkText ($record|ConvertTo-Json -Depth 8 -Compress)),[Text.UTF8Encoding]::new($false))
+    $recordJson=$record|ConvertTo-Json -Depth 8 -Compress
+    Assert-InstallationMachineMetadataNoSecrets $recordJson
+    [IO.File]::WriteAllText($recordPath,$recordJson,[Text.UTF8Encoding]::new($false))
     Set-InstallationEvidenceAcl $recordPath $operatorSid
     return [pscustomobject]@{path=$recordPath;sha256=(Sha $recordPath);identity=$Before.identity;xml_sha256=[string]$record.xml_sha256}
 }
@@ -2218,7 +2249,7 @@ function Save-CanonicalOfficialLegacyRelayTransitionPointer($Binding,[switch]$Re
         if($Required){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_REQUIRED'};return
     }
     Assert-BootstrapNoReparsePoint $onboardingPath 'official relay installation record' -PathOnly
-    if((Get-Item -LiteralPath $onboardingPath).Length -gt 65536){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_DIFFERS'}
+    if((Get-Item -LiteralPath $onboardingPath).Length -gt 1048576){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_DIFFERS'}
     $priorSha=Sha $onboardingPath
     $report=Get-Content -LiteralPath $onboardingPath -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
     if([string]$report.status -cne 'READY' -or [string]$report.state_scope -cne 'current_user'){
@@ -2228,7 +2259,8 @@ function Save-CanonicalOfficialLegacyRelayTransitionPointer($Binding,[switch]$Re
     $pointer=[ordered]@{schema='container-audit-official-legacy-relay-transition-pointer-v1';path=$proof.path;sha256=$proof.sha256;
         identity_sha256=$proof.identity_sha256;install_root=$install;operator_sid=$operatorSid}
     $report|Add-Member -MemberType NoteProperty -Name official_legacy_relay_transition -Value $pointer -Force
-    $text=ConvertTo-KmtechRedactedSinkText -Text ($report|ConvertTo-Json -Depth 20 -Compress)
+    $text=$report|ConvertTo-Json -Depth 20 -Compress
+    Assert-InstallationMachineMetadataNoSecrets $text
     [void]($text|ConvertFrom-ContainerWriterFenceJson)
     $temporary=$onboardingPath+'.tmp.'+[Guid]::NewGuid().ToString('N')
     $bytes=[Text.UTF8Encoding]::new($false).GetBytes($text+"`n")
@@ -2247,7 +2279,7 @@ function Save-CanonicalOfficialLegacyRelayTransitionPointer($Binding,[switch]$Re
 function Read-CanonicalOfficialLegacyRelayTransitionPointer {
     if(-not $onboardingPath -or -not(Test-Path -LiteralPath $onboardingPath -PathType Leaf)){return $null}
     Assert-BootstrapNoReparsePoint $onboardingPath 'official relay installation record' -PathOnly
-    if((Get-Item -LiteralPath $onboardingPath).Length -gt 65536){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_DIFFERS'}
+    if((Get-Item -LiteralPath $onboardingPath).Length -gt 1048576){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_DIFFERS'}
     $priorSha=Sha $onboardingPath
     $report=Get-Content -LiteralPath $onboardingPath -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
     $pointer=$report.official_legacy_relay_transition
@@ -3639,7 +3671,12 @@ $enteredPlacementTry = $true
             '-ElevationLogPath',$elevationLogPath)
         if($testMode){$args+='-AllowNoncanonicalLayoutForTest'}
         $child=Invoke-InstallationEvidenceChild 'supported-content-removal' $winps $args
-        if($child.ExitCode -ne 0){throw '지원 제거를 마치지 못했습니다. 자료를 보존하고 같은 제거를 다시 실행하세요.'}
+        if($child.ExitCode -ne 0){
+            $audit['removal_child_failure']=Get-CanonicalRetirementChildFailure $child
+            if($audit.removal_child_failure.stdout){Write-Output (ConvertTo-KmtechRedactedSinkText -Text $audit.removal_child_failure.stdout)}
+            if($audit.removal_child_failure.stderr){Write-Output (ConvertTo-KmtechRedactedSinkText -Text $audit.removal_child_failure.stderr)}
+            throw '지원 제거를 마치지 못했습니다. 자료를 보존하고 같은 제거를 다시 실행하세요.'
+        }
         $removed=Get-Content -LiteralPath (Join-Path (Split-Path -Parent $install) 'removed.json') -Raw -Encoding UTF8|ConvertFrom-Json
         if([string]$removed.schema -cne 'container-audit-supported-removal-v1' -or [string]$removed.lifecycle_state -cne 'REMOVED' -or
             (Snapshot).exists -or @(Relays).Count){throw 'REMOVAL_END_STATE_NOT_PROVEN'}

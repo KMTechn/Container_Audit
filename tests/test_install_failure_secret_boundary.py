@@ -39,7 +39,7 @@ $ErrorActionPreference='Stop'
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile($Source,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'canonical parse failed'}
-foreach($name in @('ConvertTo-CanonicalSafeDiagnostic','Save')){
+foreach($name in @('ConvertTo-CanonicalSafeDiagnostic','ConvertTo-CanonicalAuditJson','Save')){
     $found=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name},$true)
     if($found.Count -ne 1){throw 'diagnostic function missing'}
     Invoke-Expression $found[0].Extent.Text

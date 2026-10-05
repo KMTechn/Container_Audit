@@ -10,7 +10,7 @@ from tests.powershell_contracts import run_functions
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/installation_redaction_vectors.json"
-assert hashlib.sha256(FIXTURE.read_bytes()).hexdigest() == "3c6b87ae65e4e1496f94bdfbba7908ea0427411855b8b69bfbd1854ed646add5"
+assert hashlib.sha256(FIXTURE.read_bytes()).hexdigest() == "a7694ad8a7f84f924fe89f718452ebbc6c0c62b49340a9e31bd93ebed11ca5d6"
 VECTORS = json.loads(FIXTURE.read_bytes())["vectors"]
 
 
@@ -54,6 +54,11 @@ def test_shared_python_vectors(vector):
 def _assert_no_raw_environment_bytes(vector, text):
     encoded = text.encode('utf-8')
     for name, value in vector['environ'].items():
+        from auto_update import _sink_policy
+        policy = _sink_policy()
+        if (name not in policy['environment_names'] and re.search(policy['identifier_name_pattern'], name)
+                and re.fullmatch(policy['identifier_value_pattern'], value)):
+            continue
         if len(value) < 4 or re.search(r'(?i)_(FILE|PATH|DIR|ROOT)$', name):
             continue
         for variant in (value, json.dumps(value, ensure_ascii=True)[1:-1], json.dumps(value, ensure_ascii=False)[1:-1]):

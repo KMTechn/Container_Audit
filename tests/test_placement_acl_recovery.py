@@ -113,7 +113,7 @@ try{
 }finally{if($null -ne $held){Exit-ContainerWriterSessionAuthority $held}}
 '''
     result = run_functions(tmp_path, ROOT / 'INSTALL_CANONICAL_PORTABLE.ps1',
-                           ['Restore-CanonicalApplicationProtection', 'Write-CanonicalInstallReentryRecord', 'Resume-CanonicalAbandonedRollback', 'Invoke-CanonicalRollbackRuntimePreimage', 'Save', 'Sha'],
+                           ['Restore-CanonicalApplicationProtection', 'Write-CanonicalInstallReentryRecord', 'Resume-CanonicalAbandonedRollback', 'Invoke-CanonicalRollbackRuntimePreimage', 'ConvertTo-CanonicalAuditJson', 'Save', 'Sha'],
                            script, engine=engine, values={'CA_REENTRY_CASE': case, 'CA_FENCE_HELPER': str(ROOT / 'tools/container_writer_fence.ps1')})
     assert result.returncode == 0, result.stdout + result.stderr
 

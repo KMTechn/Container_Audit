@@ -421,7 +421,10 @@ def write_json_durable(path: Path, payload: Mapping[str, Any]) -> None:
 
     _assert_no_reparse_components(path)
     temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
-    text = serialize_json_for_sink(payload)
+    # These fixed control records are read back for authentication. Failure
+    # evidence has its own filename family and remains a diagnostic sink.
+    text = (serialize_json_for_sink(payload) if path.name.startswith("failure-")
+            else serialize_machine_metadata(payload))
     with temporary.open("x", encoding="utf-8", newline="\n") as output:
         output.write(text + "\n")
         output.flush()
@@ -460,6 +463,8 @@ def _sink_policy() -> dict:
             "path_pattern": r"(?i)_(FILE|PATH|DIR|ROOT)$", "digest_pattern": r"(?i)_(sha256s?|fingerprint|hash)$", "short_digest_pattern": r"(?i)(pin|otp|password)", "env_marker": "[REDACTED:{name}]", "field_marker": "[REDACTED:field]",
             "compatibility_field_pattern": r"(?i)^(authorization|registration[_-]?(?:value|code))$",
             "diagnostic_fields": frozenset(("failure", "message", "detail", "stdout", "stderr", "stdout_tail", "stderr_tail")),
+            "identifier_name_pattern": r"(?i)_(TRANSACTION|SESSION|ATTEMPT)_ID$",
+            "identifier_value_pattern": r"(?:[0-9A-Fa-f]{32}|[0-9A-Fa-f]{64}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})",
             "short_marker": "[REDACTION_NOTE:short_value_skipped:{name}]", "full_byte_cap": 65536, "head_byte_cap": 8192,
             "truncation_marker": "\n[TRUNCATED: {omitted} bytes omitted]\n"}
 
@@ -471,6 +476,10 @@ def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit
     # Enumeration is internal to the redactor; no environment is emitted.
     for name, value in sorted(environ.items()):
         if name in policy["environment_names"] or (re.search(policy["sensitive_pattern"], name) and not re.search(policy["path_pattern"], name)):
+            if (name not in policy["environment_names"]
+                    and re.search(policy["identifier_name_pattern"], name)
+                    and re.fullmatch(policy["identifier_value_pattern"], str(value))):
+                continue
             if not value:
                 continue
             if len(value) < 4:
@@ -539,6 +548,33 @@ def redact_json_for_sink(value, environ: Mapping[str, str] = os.environ):
         return redact_for_sink(value, environ)
     return value
 
+
+
+def assert_machine_metadata_no_secrets(text: str, environ=None) -> None:
+    """Reject known secret bytes before any metadata file or temp is opened."""
+    policy = _sink_policy()
+    environment = os.environ if environ is None else environ
+    for name, value in environment.items():
+        explicit = name in policy["environment_names"]
+        if not explicit and (not re.search(policy["sensitive_pattern"], name)
+                             or re.search(policy["path_pattern"], name)):
+            continue
+        if not value:
+            continue
+        if (not explicit and re.search(policy["identifier_name_pattern"], name)
+                and re.fullmatch(policy["identifier_value_pattern"], value)):
+            continue
+        variants = {value, json.dumps(value, ensure_ascii=True)[1:-1],
+                    json.dumps(value, ensure_ascii=False)[1:-1],
+                    value.replace("'", "''"), value.replace('"', '""')}
+        if any(variant in text for variant in variants):
+            raise ValueError("MACHINE_METADATA_SECRET_DETECTED")
+
+
+def serialize_machine_metadata(payload: Mapping[str, Any]) -> str:
+    text = json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2)
+    assert_machine_metadata_no_secrets(text)
+    return text
 
 
 def serialize_json_for_sink(payload: Mapping[str, Any]) -> str:
