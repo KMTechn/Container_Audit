@@ -152,9 +152,12 @@ $canonicalWriterFenceOrchestratorSha256='c'*64;$Script:CanonicalWriterFenceTrans
 $canonicalWriterFenceContractSha256='e'*64
 $earlyCatch=@($mainTry.CatchClauses[0].Body.Statements|Where-Object {{$_.Extent.Text -match '^if \(-not \$enteredPlacementTry\)'}})[0].Extent.Text
 try{{
+ $ErrorActionPreference='Continue'
  try{{Invoke-Expression $prefix;'preflight_status=PASS'}}
  catch{{
   $original=$_
+  $nativeErrors=@($Error|ForEach-Object {{@{{type=$_.Exception.GetType().Name;message=(ConvertTo-CanonicalSafeDiagnostic ([string]$_.Exception.Message))}}}})
+  [System.IO.File]::WriteAllText({quote(root/'powershell.native-errors.json')},(ConvertTo-Json -InputObject $nativeErrors))
   $failure=@{{type=$_.Exception.GetType().Name;message=(ConvertTo-CanonicalSafeDiagnostic ([string]$_.Exception.Message))}}
   [System.IO.File]::WriteAllText({quote(root/'powershell.preflight.exception.json')},($failure|ConvertTo-Json))
   Invoke-Expression $earlyCatch}}
