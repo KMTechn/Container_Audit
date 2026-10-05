@@ -384,7 +384,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
     }
     installer_tasks = [row for row in scheduled if row["file"] == "INSTALL_THIS_PC.ps1"]
     assert {row["wrapper_function"] for row in installer_tasks} == {
-        "Restore-ContainerStartupUpdatePreimage", "Initialize-ContainerStartupUpdate", "",
+        "Restore-ContainerStartupUpdatePreimage", "Initialize-ContainerStartupUpdate",
     }
     assert all(row["guard_name"] == "Enter-ContainerPlacementWriterFence" for row in installer_tasks)
 
