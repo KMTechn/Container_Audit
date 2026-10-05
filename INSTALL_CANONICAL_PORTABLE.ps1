@@ -2063,6 +2063,7 @@ function Get-CanonicalOfficialLegacyRelayState {
             # bool, never an XML default or a cast from null/unknown.
             $enabled=[bool]$observedProperty.Value
         }else{$identity.matched=$false;$identity.reason_code='TASK_ENABLED_STATE_UNKNOWN'}
+        if(-not $hasObservation){$identity.matched=$false;$identity.reason_code='TASK_ENABLED_STATE_UNKNOWN';$enabled=$null}
     }elseif([string]$Writer.mechanism -ceq 'hkcu_run'){
         $identity=[pscustomobject]@{matched=$false;sha256='';entry_tag='';reason_code='PUBLIC_HISTORY_HAS_NO_HKCU_RUN_RELAY'}
         $enabled=[bool]$Writer.run.exists

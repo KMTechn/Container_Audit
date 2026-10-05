@@ -123,7 +123,7 @@ def test_product_expected_set_has_only_official_public_source_templates():
 def test_shared_transition_reports_post_mutation_state_and_g_denial(tmp_path,engine):
     result=run_functions(tmp_path,CANONICAL,['Get-CanonicalOfficialLegacyRelayState','Get-CanonicalOfficialLegacyRelayExpectedSet','Invoke-CanonicalOfficialLegacyRelayTransition'],XML_SETUP+r'''
 $installationEvidenceRoot=$env:CA_CONTRACT_ROOT;$script:enabled=$true
-$writer=[pscustomobject]@{mechanism='scheduled_task';task_path='\';task_name=$name;xml=$xml;transition_record=$null}
+$writer=[pscustomobject]@{mechanism='scheduled_task';task_path='\';task_name=$name;xml=$xml;observed_enabled=$true;transition_record=$null}
 function Get-CanonicalOfficialLegacyRelayPreimage {return @{identity='fixture'}}
 function Save-CanonicalOfficialLegacyRelayPreimage {param($Before,$Root);return @{path=(Join-Path $Root 'fixture');sha256=('a'*64)}}
 function Disable-CanonicalOfficialLegacyRelay {param($Before);$script:enabled=$false}
@@ -133,6 +133,7 @@ function Sha {param($Path);return ('a'*64)}
 function Write-InstallationCaughtFailure {param($Failure)}
 function Get-InstallationFailureDetails {param($Failure);return @{type='fixture'}}
 function Export-ScheduledTask {param($TaskName,$TaskPath,$ErrorAction);if($script:enabled){return $xml};return $xml.Replace('<Enabled>true</Enabled>','<Enabled>false</Enabled>')}
+function Get-ScheduledTask {param($TaskName,$TaskPath,$ErrorAction);return [pscustomobject]@{Settings=[pscustomobject]@{Enabled=$script:enabled}}}
 $set=Get-CanonicalOfficialLegacyRelayExpectedSet
 $result=Invoke-CanonicalOfficialLegacyRelayTransition @($writer) $set install $true
 if($result.audit[0].status -cne 'PROVEN' -or $result.state[0].enabled -or $null -eq $result.state[0].transition_record){throw 'Post-install state was stale.'}
@@ -182,6 +183,10 @@ $writer.observed_enabled=$false
 $writer.xml=$doc.OuterXml.Replace('</Settings>','<Enabled>true</Enabled></Settings>')
 $changed=Get-CanonicalOfficialLegacyRelayState $writer $expected $env:CA_CONTRACT_ROOT
 if($changed.recognized -or $changed.reason_code -cne 'TASK_ENABLED_OBSERVATION_DIFFERS'){throw 'Contradicting scheduler and XML states admitted.'}
+$writer.observed_enabled=$null
+$unknown=Get-CanonicalOfficialLegacyRelayState $writer $expected $env:CA_CONTRACT_ROOT
+if($unknown.recognized -or $unknown.reason_code -cne 'TASK_ENABLED_STATE_UNKNOWN'){throw 'Explicit XML allowed an unobserved scheduler state.'}
+
 
 'PASS'
 """, engine=engine, values={'CA_GUEST_FIXTURE': str(fixture), 'CA_GUEST_FINGERPRINT': provenance['expected_full_fingerprint']})
