@@ -36,12 +36,12 @@ if case.startswith('restore-'):
     (target_root/'runtime').mkdir()
     (target_root/'app/Container_Audit.py').write_text('CURRENT_VERSION = "v2.0.98"\n',encoding='utf-8')
     (target_root/'app/main.py').write_text('# isolated metadata-only target\n',encoding='utf-8')
-    (target_root/'runtime/python.exe').write_bytes(b'isolated target is never executed')
-    manifest={'schema':onboarding.PORTABLE_MANIFEST_VERSION,'entrypoint':'runtime/python.exe app/main.py',
+    (target_root/'runtime/pythonw.exe').write_bytes(b'isolated target is never executed')
+    manifest={'schema':onboarding.PORTABLE_MANIFEST_VERSION,'entrypoint':'runtime/pythonw.exe app/main.py',
         'source_commit':'1'*40,'source_tree':'2'*40,'version':'v2.0.98'}
     (target_root/'portable-manifest.json').write_text(json.dumps(manifest),encoding='utf-8')
     files=[]
-    for name in ('app/Container_Audit.py','app/main.py','runtime/python.exe','portable-manifest.json'):
+    for name in ('app/Container_Audit.py','app/main.py','runtime/pythonw.exe','portable-manifest.json'):
         raw=(target_root/name).read_bytes()
         files.append({'path':name,'size':len(raw),'sha256':hashlib.sha256(raw).hexdigest()})
     aggregate=hashlib.sha256(''.join(f"{f['sha256']} {f['size']} {f['path']}\n" for f in files).encode()).hexdigest()
