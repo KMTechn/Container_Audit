@@ -350,7 +350,9 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         < installer.index("$sourceManifest = Manifest")
         < installer.index("$BootstrapIntegrityFunctions = Join-Path $source 'tools\\bootstrap_integrity.ps1'")
         < installer.rindex(". $BootstrapIntegrityFunctions")
-        < installer.index("[void](Assert-BootstrapIntegrityRecord $install)")
+        # The earlier recovery function declaration is not a main-flow call.
+        < installer.index("[void](Assert-BootstrapIntegrityRecord $install)",
+                          installer.rindex(". $BootstrapIntegrityFunctions"))
         < installer.index("[void](Start-ContainerWriterFence")
     )
     raster_write = next(
