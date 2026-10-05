@@ -1125,3 +1125,12 @@ fixture Python canonical_control_root는 PS의 L/c와 같다. ordinary persisten
 ## 설치 통합의 읽기 전용 수명주기 검사 (sub-248)
 
 canonical의 PlanOnly/설치 상태 분류보다 앞선 검사는 처음 검증한 bootstrap library 안에서 같은 프로세스로 실행한다. 설치 namespace/stock identity·control·trust 설정·실제 task XML의 read-only 관측을 확인하며 거절 시 원래 지원 제거 안내를 유지한다. JSON은 중복 key, 잘못된 key 대소문자, 비객체, 손상/1MiB 초과와 잘못된 판 식별자를 거절하고, 확인 뒤 control을 다시 읽어 의미상 동일함을 검사한다. 실제 query의 subprocess 경로는 기존 auto_update_control admission이 spawn 전에 거절한다. pinned library ScriptBlock은 이미 승인된 변수 기호에 결속하며 원 bytes/hash/AST 검증을 계속 적용한다. 설치/복원/G 및 host/native 증거의 범위는 sub-248 REPORT와 COVERAGE-FIX에 기록한다.
+
+## Portable manifest 판독 크기
+
+설치된 portable manifest 확인, placement release 확인, 기존 task 제거의 manifest
+판독 상한은1MiB다. 업데이트 ZIP의 runtime 검증이 소비하는 runtime_files 목록을
+유지하며, 통합 stock의 약291KB manifest를 수용한다. 상한을1바이트라도 넘으면
+JSON 해석이나 후속 변경 전에 거절한다. receipt·relay status·writer contract·pin의
+기존64KiB 상한은 그대로다. 실제 최종 stock과 PS5.1/PS7 경계 회귀의 증거는
+sub-265 REPORT에 기록하며 실제 task 제거/전체 설치의 랩 수용과 구분한다.
