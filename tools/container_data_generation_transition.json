@@ -201,7 +201,7 @@
     {
       "path": "app/current_user_onboarding.py",
       "before": "3781e04e185b139c0bacb8b8c3bd2c69f42cc3735760d45191d851d4d98914aa",
-      "after": "ba2fb9ed4148b4584001025a488c3679fcdb39deb75ddc0dd4c7b9143cc11417"
+      "after": "edfa3ab62fa603a602bc09ca7b2b63d7ad94d33bd99cb8b70ff501c53fcadf4a"
     },
     {
       "path": "app/data_generation_guard.py",
@@ -4548,7 +4548,7 @@
     {
       "path": "current_user_onboarding.py",
       "before": "3781e04e185b139c0bacb8b8c3bd2c69f42cc3735760d45191d851d4d98914aa",
-      "after": "ba2fb9ed4148b4584001025a488c3679fcdb39deb75ddc0dd4c7b9143cc11417"
+      "after": "edfa3ab62fa603a602bc09ca7b2b63d7ad94d33bd99cb8b70ff501c53fcadf4a"
     },
     {
       "path": "data_generation_guard.py",

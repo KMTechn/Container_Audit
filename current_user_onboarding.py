@@ -1545,7 +1545,7 @@ def _verified_rollback_preflight(app_root, target_root, release, journal_path, j
             path = journal_path.parent / ('authority-' + wanted['attempt_id'] + '.json')
             link_sha = fence._sha256_file_bounded(path, 131072)
             link = read_pinned(path, link_sha)
-            if (set(link) != {'schema','transaction_id','journal_sha256','receipt_sha256',
+            if (set(link) != {'schema','transaction_id','journal_sha256','receipt_sha256','prepared_receipt_path',
                     'owner_process_id','owner_started_at_utc','previous','previous_link_sha256',
                     'authority','prepared_receipt_sha256','secret_values_recorded'} or
                     link.get('schema') != 'container-audit-rollback-authority-link-v1' or

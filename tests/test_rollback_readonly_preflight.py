@@ -104,7 +104,7 @@ def test_exact_pending_preflight_is_readonly_and_rechecks_each_owner(tmp_path, e
         if case == 'match':
             assert result.returncode == 0 and re.fullmatch('onboarding_input_binding=[0-9a-f]{64}:[0-9a-f]{64}\\s*',result.stdout)
         else:
-            assert result.returncode != 0
+            assert result.returncode != 0, (case, reads)
             if case in ('tuple_mismatch','unrelated'):
                 diagnostic=json.loads(next(line.split('=',1)[1] for line in result.stdout.splitlines()
                     if line.startswith('onboarding_preflight_error=')))
