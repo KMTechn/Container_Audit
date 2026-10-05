@@ -18,28 +18,130 @@ function Test-BootstrapPrivilegedOwnerSid([string]$Sid) {
     )
 }
 
-function Protect-InstallationText([string]$Text, [int]$Limit = 4096) {
-    # Same known-value replacement and message markers as the runtime redactors.
-    $values = [Collections.Generic.List[string]]::new()
-    $known = Get-Variable -Name InstallationEvidenceSensitiveValues -Scope Script -ErrorAction SilentlyContinue
-    if ($null -ne $known) { foreach ($value in $known.Value) { if ($value -is [string] -and $value.Length) { $values.Add($value) } } }
-    foreach ($name in @('CanonicalWriterFenceDelegationToken','WriterFenceDelegationToken')) {
-        $value = Get-Variable -Name $name -Scope Script -ValueOnly -ErrorAction SilentlyContinue
-        if ($value -is [string] -and $value.Length) { $values.Add($value) }
+function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Configuration, [switch]$LiteralOnly, [Collections.IDictionary]$Environment, [switch]$CommonOnly, [switch]$NoTruncate) {
+    $policy=@{environment_names=@('DEFECT_FINAL_DEFECT_CLAIM_TOKEN','DEFECT_FINAL_DEFECT_INTAKE_CLAIM_TOKEN','DEFECT_LINKED_MANIFEST_LOCK_API_TOKEN','DEFECT_LOGISTICS_API_TOKEN','DEFECT_RETURN_MANIFEST_API_TOKEN','DEFECT_SERVER_ACTIVE_LOCK_TOKEN','DEFECT_TRANSFER_MANIFEST_API_TOKEN','INSPECTION_WORKER_WAREHOUSE_RESPONSE_EXPORT_TOKEN','KMTECH_DEFECT_WRITER_DELEGATION_TOKEN','KMTECH_REWORK_TEMP_NG_CANDIDATE_TOKEN','KMTECH_REWORK_TEMP_NG_CLAIM_TOKEN','REWORK_ENROLLMENT_RESTORE_TOKEN','REWORK_LOGISTICS_API_TOKEN','CONTAINER_AUDIT_ENROLLMENT_TOKEN','CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','CONTAINER_RUNTIME_SECRET','KM_LOGISTICS_INSTALL_BEARER_TOKEN','WORKER_ANALYSIS_LOGISTICS_API_TOKEN','KMTECH_LABEL_WRITER_DELEGATION_TOKEN','PRODUCER_SELF_ENROLL_TOKEN','DIRECT_SYNC_AUTH_TOKEN','PRODUCER_API_TOKEN','LOGISTICS_API_TOKEN');sensitive_pattern='(?i)(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_?KEY|API_?KEY|COOKIE|SESSION_?KEY|DELEGATION|BEARER|ENROLLMENT_CODE|RESTORE_CODE|ADMIN_PIN)';path_pattern='(?i)_(FILE|PATH|DIR|ROOT)$';digest_pattern='(?i)_(sha256s?|fingerprint|hash)$';short_digest_pattern='(?i)(pin|otp|password)';env_marker='[REDACTED:{0}]';field_marker='[REDACTED:field]';short_marker='[REDACTION_NOTE:short_value_skipped:{0}]';full_byte_cap=65536;head_byte_cap=8192;truncation_marker="`n[TRUNCATED: {0} bytes omitted]`n"}
+    if($Configuration){return $policy}
+    if($null -eq $Environment){$Environment=[Environment]::GetEnvironmentVariables('Process')}
+    $values=@();$notes=@()
+    foreach($name in @($Environment.Keys|Sort-Object)){
+        if($name -cin $policy.environment_names -or ($name -match $policy.sensitive_pattern -and $name -notmatch $policy.path_pattern)){
+            $value=[string]$Environment[$name]
+            if(-not $value){continue}
+            if($value.Length -lt 4){$notes+=($policy.short_marker -f $name);continue}
+            $values+=,@{name=[string]$name;value=$value}
+        }
     }
-    foreach ($value in $values) { if ($value -is [string] -and $value.Length) { $Text = $Text.Replace($value, '[redacted]') } }
-    $lines = @($Text -split '(?<=\n)' | ForEach-Object {
-        if ($_ -match '(?i)canonical signed request|hmac_key|producer_signature|raw_payload|raw_secret|receipt_json|secret_hex|should-not-leak|source_file_bytes|source_file_text|x-producer-signature') { '[REDACTED]' + "`n" }
-        else { $_ }
-    })
-    $Text = $lines -join ''
-    $Text = [regex]::Replace($Text, '(?i)authorization\s*:\s*[^\r\n]+', '[redacted]')
-    $Text = [regex]::Replace($Text, '(?i)\b([A-Za-z0-9_-]*(?:secret|token|signature|password|credential|registration[_-]?(?:value|code)|api[_-]?key)[A-Za-z0-9_-]*)\s*[=:]\s*[^\r\n,;]+', '$1=[redacted]')
-    $Text = [regex]::Replace($Text, '(?i)("[^"]*(?:secret|token|signature|password|registration|api[_-]?key|authorization|credential)[^"]*"\s*:\s*")(?:\\.|[^"\\])*', '$1[redacted]')
-    $Text = [regex]::Replace($Text, '(https?://)[^\s/@]+:[^\s/@]+@', '$1[redacted]@')
-    $Text = [regex]::Replace($Text, '(https?://[^\s?]+)\?[^\s]+', '$1?[redacted]')
-    if ($Limit -ge 0 -and $Text.Length -gt $Limit) { return $Text.Substring(0,$Limit) + '[truncated]' }
-    return $Text
+    # Explicit secret arguments can be supplied before their process env exists.
+    $known=Get-Variable -Name InstallationEvidenceSensitiveValues -Scope Script -ErrorAction SilentlyContinue
+    if($null -ne $known){foreach($value in $known.Value){if($value -is [string] -and $value.Length -ge 4){$values+=,@{name='field';value=$value}}}}
+    foreach($name in @('CanonicalWriterFenceDelegationToken','WriterFenceDelegationToken')){
+        $value=Get-Variable -Name $name -ValueOnly -ErrorAction SilentlyContinue
+        if($value -is [string] -and $value.Length -ge 4){$values+=,@{name='CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN';value=$value}}
+    }
+    foreach($entry in @($values|Sort-Object @{Expression={$_.value.Length};Descending=$true},@{Expression={$_.name}})){
+        $marker=$policy.env_marker -f $entry.name
+        $escaped=ConvertTo-Json -InputObject $entry.value -Compress
+        $jsonVariant=$escaped.Substring(1,$escaped.Length-2)
+        $asciiVariant=[regex]::Replace($jsonVariant,'[^\x00-\x7F]',[Text.RegularExpressions.MatchEvaluator]{param($m) '\u'+([int][char]$m.Value).ToString('x4')})
+        $variants=@($entry.value,$jsonVariant,$asciiVariant,$entry.value.Replace("'","''"),$entry.value.Replace('"','""'))|Sort-Object Length -Descending -Unique
+        foreach($variant in $variants){$Text=$Text.Replace($variant,$marker)}
+    }
+    if(-not $LiteralOnly){
+        function Test-RedactedField([string]$Name,$Value){
+            if($null -eq $Value -or $Value -is [bool]){return $false}
+            if($Name -match $policy.path_pattern){return $false}
+            if($Name -match $policy.digest_pattern -and $Name -notmatch $policy.short_digest_pattern){return $false}
+            return ($Name -match $policy.sensitive_pattern -or $Name -imatch '^(pin|otp|password)$' -or (-not $CommonOnly -and $Name -imatch '^(authorization|registration[_-]?(?:value|code))$'))
+        }
+        function Convert-RedactedValue($Value){
+            if($null -eq $Value){return $null}
+            if($Value -is [Collections.IDictionary]){
+                $result=[ordered]@{}
+                foreach($key in $Value.Keys){$result[$key]=if(Test-RedactedField $key $Value[$key]){$redactionState.changed=$true;$policy.field_marker}else{Convert-RedactedValue $Value[$key]}}
+                return $result
+            }
+            if($Value -is [pscustomobject]){
+                $result=[ordered]@{}
+                foreach($property in $Value.PSObject.Properties){$key=$property.Name;$result[$key]=if(Test-RedactedField $key $property.Value){$redactionState.changed=$true;$policy.field_marker}else{Convert-RedactedValue $property.Value}}
+                return $result
+            }
+            if($Value -is [Collections.IEnumerable] -and $Value -isnot [string]){
+                $items=@(foreach($item in $Value){Convert-RedactedValue $item});return ,$items
+            }
+            return $Value
+        }
+        try{
+            $jsonProcessed=$false
+            $candidate=$Text.Trim()
+            if($candidate.StartsWith('{') -or $candidate.StartsWith('[')){
+                $value=ConvertFrom-Json -InputObject $candidate -ErrorAction Stop
+                $redactionState=@{changed=$false}
+                $converted=Convert-RedactedValue $value
+                if($redactionState.changed){$Text=$converted|ConvertTo-Json -Depth 100 -Compress};$jsonProcessed=$true
+            }
+        }catch{}
+        if(-not $CommonOnly -and -not $jsonProcessed){
+            $jsonKey='"(?<key>(?:\\.|[^"\\])*)"\s*:\s*'
+            $matches=@([regex]::Matches($Text,$jsonKey));$spans=@();$covered=0
+            foreach($match in $matches){
+                if($match.Index -lt $covered){continue}
+                try{$key=ConvertFrom-Json -InputObject ('"'+$match.Groups['key'].Value+'"') -ErrorAction Stop}catch{continue}
+                if(-not(Test-RedactedField $key 'untyped-json-value')){continue}
+                $begin=$match.Index+$match.Length;$end=$begin;$depth=0;$quoted=$false;$escaped=$false
+                for(;$end -lt $Text.Length;$end++){
+                    $ch=$Text[$end]
+                    if($quoted){if($escaped){$escaped=$false}elseif($ch -ceq '\'){$escaped=$true}elseif($ch -ceq '"'){$quoted=$false;if($depth -eq 0){$end++;break}};continue}
+                    if($ch -ceq '"'){$quoted=$true;continue}
+                    if($ch -cin @('{','[')){$depth++;continue}
+                    if($ch -cin @('}',']')){if($depth -eq 0){break};$depth--;if($depth -eq 0){$end++;break};continue}
+                    if($depth -eq 0 -and $ch -cin @(',',"`r","`n")){break}
+                }
+                try{$fieldValue=ConvertFrom-Json -InputObject $Text.Substring($begin,$end-$begin) -ErrorAction Stop;if(-not(Test-RedactedField $key $fieldValue)){continue}}catch{}
+                $spans+=,@{offset=$begin;end=$end};$covered=$end
+            }
+            foreach($span in @($spans|Sort-Object offset -Descending)){$Text=$Text.Substring(0,$span.offset)+'"'+$policy.field_marker+'"'+$Text.Substring($span.end)}
+
+            # Retain existing non-JSON credential assignments/header protection.
+            $Text=[regex]::Replace($Text,'(?i)(\b[A-Za-z0-9_-]*(?:secret|token|signature|password|credential|registration[_-]?(?:value|code)|api[_-]?key)[A-Za-z0-9_-]*\s*[=:]\s*)([^\r\n,;]+)',[Text.RegularExpressions.MatchEvaluator]{param($m) if($m.Groups[2].Value.StartsWith('[REDACTED:')){return $m.Value};return $m.Groups[1].Value+$policy.field_marker})
+            $Text=[regex]::Replace($Text,'(?i)authorization\s*:\s*[^\r\n]+',$policy.field_marker)
+            $Text=[regex]::Replace($Text,'(https?://)[^\s/@]+:[^\s/@]+@',('$1'+$policy.field_marker+'@'))
+            $Text=[regex]::Replace($Text,'(https?://[^\s?]+)\?[^\s]+',('$1?'+$policy.field_marker))
+        }
+    }
+    if($notes.Count){$Text+="`n"+($notes -join "`n")}
+    if($NoTruncate){return $Text} # Internal in-memory envelope budgeting only.
+    $bound=if($Limit -lt 0){$policy.full_byte_cap}else{[Math]::Min($Limit,$policy.full_byte_cap)}
+    $utf8=[Text.UTF8Encoding]::new($false)
+    $bytes=$utf8.GetBytes($Text)
+    if($bytes.Length -le $bound){return $Text}
+    $headCount=[Math]::Min($policy.head_byte_cap,[int]($bound/8))
+    while($headCount -gt 0 -and ($bytes[$headCount] -band 192) -eq 128){$headCount--}
+    $tailCount=[Math]::Max(0,$bound-$headCount-80)
+    for($i=0;$i -lt 8;$i++){
+        $tailStart=$bytes.Length-$tailCount
+        while($tailStart -lt $bytes.Length -and ($bytes[$tailStart] -band 192) -eq 128){$tailStart++}
+        $tailCount=$bytes.Length-$tailStart
+        $marker=$policy.truncation_marker -f ($bytes.Length-$headCount-$tailCount)
+        $budget=[Math]::Max(0,$bound-$headCount-$utf8.GetByteCount($marker))
+        if($tailCount -eq $budget){break};$tailCount=$budget
+    }
+    $tailStart=$bytes.Length-$tailCount
+    while($tailStart -lt $bytes.Length -and ($bytes[$tailStart] -band 192) -eq 128){$tailStart++}
+    $tailCount=$bytes.Length-$tailStart
+    $marker=$policy.truncation_marker -f ($bytes.Length-$headCount-$tailCount)
+    return $utf8.GetString($bytes,0,$headCount)+$marker+$utf8.GetString($bytes,$tailStart,$tailCount)
+}
+
+function ConvertTo-KmtechRedactedSinkText {
+    param([string]$Text,[Collections.IDictionary]$Environment,[switch]$UserLine)
+    $safe=Protect-InstallationText $Text -1 -Environment $Environment
+    if($UserLine){
+        $lines=@($safe -split '\r?\n'|Where-Object {$_ -and $_ -notmatch '^\[REDACTION_NOTE:|^\[TRUNCATED:'})
+        $line=if($lines.Count){[string]$lines[-1]}else{''}
+        if($line.Length -gt 300){$line=$line.Substring(0,300)}
+        return $line
+    }
+    return $safe
 }
 
 function Get-InstallationFailureDetails($Failure) {
@@ -372,9 +474,11 @@ function Initialize-InstallationEvidence([string]$BasePath,[string]$OperatorSid,
     $Script:InstallationLastChildEvidenceFailure=$null
     $Script:InstallationFirstFailedChildCapture=$null
     $Script:InstallationFirstFailedChildEvidenceFailure=$null
+    $Script:InstallationFirstFailedChildStreams=$null
+    $Script:InstallationOriginalFailure=$null
     $Script:InstallationEvidenceFailed = $false
     $Script:InstallationEvidenceFailureCodes = [Collections.Generic.List[string]]::new()
-    Write-InstallationEvidenceEvent ([ordered]@{event='INITIALIZED';process_id=$PID;byte_cap_per_stream=1048576;journal_cap_bytes=1048576;raw_command_recorded=$false})
+    Write-InstallationEvidenceEvent ([ordered]@{event='INITIALIZED';process_id=$PID;byte_cap_per_stream=(Protect-InstallationText -Configuration).full_byte_cap;journal_cap_bytes=1048576;raw_command_recorded=$false})
     return $root
 }
 
@@ -390,11 +494,24 @@ function Write-InstallationEvidenceEvent($Payload) {
         Assert-InstallationEvidenceWriteRoot $root
         $path=Join-Path $root 'stages.jsonl'
         $Payload['captured_at']=[DateTime]::UtcNow.ToString('o')
-        $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($Payload | ConvertTo-Json -Depth 12 -Compress)+"`n")
-        if ((Test-Path -LiteralPath $path) -and (Get-Item -LiteralPath $path).Length + $bytes.Length -gt 1048576) {
-            $Script:InstallationEvidenceFailed=$true
-            if(-not $Script:InstallationEvidenceFailureCodes.Contains('JOURNAL_LIMIT')){$Script:InstallationEvidenceFailureCodes.Add('JOURNAL_LIMIT')}
-            return
+        $text=Protect-InstallationText ($Payload|ConvertTo-Json -Depth 12 -Compress) -1 -NoTruncate
+        if([Text.Encoding]::UTF8.GetByteCount($text)+1 -gt 65536){
+            $preview=Protect-InstallationText $text 57344
+            do{$text=(@{event=$Payload.event;captured_at=$Payload.captured_at;detail_text=$preview;complete=$false}|ConvertTo-Json -Depth 6 -Compress);if([Text.Encoding]::UTF8.GetByteCount($text)+1 -gt 65536){$preview=Protect-InstallationText $preview ([Math]::Max(256,[int]([Text.Encoding]::UTF8.GetByteCount($preview)/2)))}}while([Text.Encoding]::UTF8.GetByteCount($text)+1 -gt 65536)
+        }
+        $bytes=[Text.Encoding]::UTF8.GetBytes($text+"`n")
+        # Each journal part is a sink capped at 64 KiB; retain the existing
+        # aggregate 1 MiB budget as at most sixteen independently pinned parts.
+        $index=0
+        while(Test-Path -LiteralPath $path){
+            $length=(Get-Item -LiteralPath $path).Length
+            if($length -gt 65536 -or ($index -ge 15 -and $length+$bytes.Length -gt 65536)){
+                $Script:InstallationEvidenceFailed=$true
+                if(-not $Script:InstallationEvidenceFailureCodes.Contains('JOURNAL_LIMIT')){$Script:InstallationEvidenceFailureCodes.Add('JOURNAL_LIMIT')}
+                return
+            }
+            if($length+$bytes.Length -le 65536){break}
+            $index++;$path=Join-Path $root ('stages-'+$index.ToString('00')+'.jsonl')
         }
         $newFile=-not (Test-Path -LiteralPath $path)
         $stream=[IO.FileStream]::new($path,[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::Read)
@@ -412,20 +529,21 @@ function Complete-InstallationEvidence {
     $codes=Get-Variable -Name InstallationEvidenceFailureCodes -Scope Script -ValueOnly -ErrorAction SilentlyContinue
     $summary=[ordered]@{status=if(-not $root){'NOT_CONFIGURED'}elseif($failed){'INCOMPLETE'}else{'COMPLETE'};
         recording_failed=[bool]$failed;root=[string]$root;journal_cap_bytes=1048576;failure_codes=@($codes);
-        summary_path='';summary_written=$false;business_result_is_separate=$true}
+        summary_path='';summary_written=$false;business_result_is_separate=$true;journal_part_cap_bytes=65536;journal_parts=@()}
     if(-not $root){return $summary}
     $summary.summary_path=Join-Path $root 'evidence-status.json'
+    foreach($index in 0..15){$leaf=if($index){'stages-'+$index.ToString('00')+'.jsonl'}else{'stages.jsonl'};$part=Join-Path $root $leaf;if(Test-Path -LiteralPath $part -PathType Leaf){$summary.journal_parts+=,@{path=$part;sha256=(Get-FileSha256 $part)}}}
     try {
         Assert-InstallationEvidenceWriteRoot $root
         $summary.summary_written=$true
-        [IO.File]::WriteAllText($summary.summary_path,($summary|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText($summary.summary_path,(Protect-InstallationText ($summary|ConvertTo-Json -Depth 5) -1),[Text.UTF8Encoding]::new($false))
         Set-InstallationEvidenceAcl $summary.summary_path $Script:InstallationEvidenceSid
     }catch {
         $Script:InstallationEvidenceFailed=$true
         $summary.status='INCOMPLETE';$summary.recording_failed=$true;$summary.summary_written=$false
         # If writing succeeded before an ACL/readback failure, replace the
         # success-looking body where possible; stdout still carries INCOMPLETE.
-        try{Assert-InstallationEvidenceWriteRoot $root;[IO.File]::WriteAllText($summary.summary_path,($summary|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))}catch{}
+        try{Assert-InstallationEvidenceWriteRoot $root;[IO.File]::WriteAllText($summary.summary_path,(Protect-InstallationText ($summary|ConvertTo-Json -Depth 5) -1),[Text.UTF8Encoding]::new($false))}catch{}
         $summary.failure_codes+=@('FINAL_SUMMARY_IO_OR_ACL_FAILURE')
     }
     return $summary
@@ -732,7 +850,7 @@ $record=[ordered]@{schema='container-audit-installation-elevation-capture-v1';pa
  evidence_summary=$summary;failure=$failure;raw_arguments_recorded=$false;secret_values_recorded=$false}
 Assert-InstallationEvidenceWriteRoot (Split-Path -Parent $resultPath)
 if(Test-Path -LiteralPath $resultPath){throw 'Elevation result already exists.'}
-[IO.File]::WriteAllText($resultPath,($record|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($resultPath,(Protect-InstallationText ($record|ConvertTo-Json -Depth 10) -1),[Text.UTF8Encoding]::new($false))
 Set-InstallationEvidenceAcl $resultPath $sid
 exit $exitCode
 '@)
@@ -794,11 +912,11 @@ function Invoke-InstallationElevationCapture([string]$Target,[string[]]$Argument
     # Only this ordinary caller writes the operator-owned result/summary. The
     # privileged original and all streams remain in the protected run.
     Assert-InstallationEvidenceWriteRoot $root
-    [IO.File]::WriteAllText($resultPath,$resultText,[Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($resultPath,(ConvertTo-KmtechRedactedSinkText $resultText),[Text.UTF8Encoding]::new($false))
     Set-InstallationEvidenceAcl $resultPath $OperatorSid
     if($result.helper_stage_evidence_root){
         $log=Join-Path ([string]$result.helper_stage_evidence_root) 'placement-result.jsonl'
-        if(Test-Path -LiteralPath $log){Assert-InstallationEvidenceProtectedPath $log;[IO.File]::WriteAllText($AuditBase,[IO.File]::ReadAllText($log),[Text.UTF8Encoding]::new($false))}
+        if(Test-Path -LiteralPath $log){Assert-InstallationEvidenceProtectedPath $log;[IO.File]::WriteAllText($AuditBase,(ConvertTo-KmtechRedactedSinkText ([IO.File]::ReadAllText($log))),[Text.UTF8Encoding]::new($false))}
         $exports=@{'RestoreEvidencePath'='restore-evidence.json'}
         if($Arguments -ccontains '-ReplaceExistingVerifiedPortable'){$exports['ReplacementReceiptPath']='replacement-receipt.json'}
         foreach($name in $exports.Keys){
@@ -811,7 +929,7 @@ function Invoke-InstallationElevationCapture([string]$Target,[string[]]$Argument
             $destination=Get-StrictFullPath $Arguments[$index+1] 'ordinary installation result'
             Assert-BootstrapNoReparsePoint (Split-Path -Parent $destination) 'ordinary installation result parent' -PathOnly
             if(Test-Path -LiteralPath $destination){throw 'Ordinary installation result already exists.'}
-            [IO.File]::WriteAllBytes($destination,[IO.File]::ReadAllBytes($source))
+            [IO.File]::WriteAllText($destination,(ConvertTo-KmtechRedactedSinkText ([IO.File]::ReadAllText($source))),[Text.UTF8Encoding]::new($false))
             Set-InstallationEvidenceAcl $destination $OperatorSid
         }
     }
@@ -861,7 +979,7 @@ $record=[ordered]@{schema='container-audit-normal-producer-capture-v1';parent_pr
  raw_arguments_recorded=$false;secret_values_recorded=$false}
 Assert-BootstrapNoReparsePoint (Split-Path -Parent $resultPath) 'normal producer result parent' -PathOnly
 if(Test-Path -LiteralPath $resultPath){throw 'Normal producer result already exists.'}
-[IO.File]::WriteAllText($resultPath,($record|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($resultPath,(Protect-InstallationText ($record|ConvertTo-Json -Depth 10) -1),[Text.UTF8Encoding]::new($false))
 Set-InstallationEvidenceAcl $resultPath $sid
 exit $exitCode
 '@)
@@ -950,10 +1068,70 @@ function Set-InstallationEvidenceStage([string]$Name,[string]$Lane='forward') {
 }
 
 function Write-InstallationCaughtFailure($Failure) {
+function Write-InstallationOriginalFailure($Failure) {
+    $cap=(Protect-InstallationText -Configuration).full_byte_cap
+    $record=[ordered]@{status='NOT_CONFIGURED';path='';sha256='';saved_bytes=0;complete=$false;byte_cap=$cap;depth_cap=64}
+    $root=Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if(-not $root){return $record}
+    $exception=if($Failure -is [Exception]){$Failure}else{$Failure.Exception}
+    $cacheKey='installation_original_failure_reference'
+    if($exception.Data.Contains($cacheKey)){
+        $cached=$exception.Data[$cacheKey]
+        if([string]$cached.path -and ([string]$cached.path).StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)){return $cached}
+    }
+    $detail=Get-InstallationFailureDetails $Failure
+    $detail.exception_chain=@();$observed=0;$complete=$true
+    $exception=if($Failure -is [Exception]){$Failure}else{$Failure.Exception}
+    for($depth=0;$null -ne $exception -and $depth -lt 64;$depth++){
+        $message=Protect-InstallationText ([string]$exception.Message) -1 -NoTruncate
+        $message=[regex]::Replace($message,'S-\d+(?:-\d+)+','[SID redacted]')
+        $native=if($exception -is [ComponentModel.Win32Exception]){$exception.NativeErrorCode}else{$null}
+        $entry=[ordered]@{type=$exception.GetType().FullName;message=$message;hresult=$exception.HResult;win32_error=$native}
+        $observed+=[Text.Encoding]::UTF8.GetByteCount(($entry|ConvertTo-Json -Depth 5 -Compress))
+        # Reserve envelope space inside the common 64 KiB failure boundary.
+        # Never present an omitted message as complete.
+        if($observed -gt ($cap-4096)){$complete=$false;$entry.message=Protect-InstallationText $message ([Math]::Max(256,$cap-8192));$detail.exception_chain+=,$entry;break}
+        $detail.exception_chain+=,$entry
+        $exception=$exception.InnerException
+    }
+    if($null -ne $exception){$complete=$false}
+    $payload=[ordered]@{schema='container-audit-original-installation-failure-v1';complete=$complete;
+        byte_cap=$cap;depth_cap=64;observed_detail_bytes=$observed;truncated=(-not $complete);truncation_marker=if($complete){''}else{'[TRUNCATED: bounded original failure]'};failure=$detail}
+    try{
+        Assert-InstallationEvidenceWriteRoot $root
+        $path=Join-Path $root ('original-failure-'+[guid]::NewGuid().ToString('N')+'.json')
+        $text=Protect-InstallationText ($payload|ConvertTo-Json -Depth 12 -Compress) -1 -NoTruncate
+        while([Text.Encoding]::UTF8.GetByteCount($text) -gt $cap){
+            $largest=@($payload.failure.exception_chain|Sort-Object @{Expression={[Text.Encoding]::UTF8.GetByteCount($_.message)};Descending=$true})[0]
+            $length=[Text.Encoding]::UTF8.GetByteCount($largest.message)
+            if($length -le 256){throw 'Original failure envelope exceeds its metadata budget.'}
+            $largest.message=Protect-InstallationText $largest.message ([Math]::Max(256,[int]($length/2)))
+            $complete=$false;$payload.complete=$false;$payload.truncated=$true;$payload.truncation_marker='[TRUNCATED: bounded original failure]'
+            $text=Protect-InstallationText ($payload|ConvertTo-Json -Depth 12 -Compress) -1 -NoTruncate
+        }
+        $bytes=[Text.Encoding]::UTF8.GetBytes($text)
+        if($bytes.Length -gt $cap){throw 'Original failure envelope exceeded its byte bound.'}
+        $stream=[IO.FileStream]::new($path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::Read)
+        try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
+        Set-InstallationEvidenceAcl $path $Script:InstallationEvidenceSid
+        $record.status=if($complete){'PRESERVED'}else{'INCOMPLETE_SIZE_OR_DEPTH_BOUND'}
+        $record.path=$path;$record.sha256=Get-FileSha256 $path;$record.saved_bytes=$bytes.Length;$record.complete=$complete
+    }catch{
+        $record.status='IO_OR_ACL_FAILED';$Script:InstallationEvidenceFailed=$true
+        $codes=Get-Variable -Name InstallationEvidenceFailureCodes -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if($null -ne $codes -and -not $codes.Contains('ORIGINAL_FAILURE_IO_OR_ACL_FAILURE')){$codes.Add('ORIGINAL_FAILURE_IO_OR_ACL_FAILURE')}
+    }
+    $outerException=if($Failure -is [Exception]){$Failure}else{$Failure.Exception}
+    $outerException.Data[$cacheKey]=$record
+    if(-not(Get-Variable -Name InstallationOriginalFailure -Scope Script -ValueOnly -ErrorAction SilentlyContinue)){$Script:InstallationOriginalFailure=$record}
+    return $record
+}
+
     $active=@()
     $lanes=Get-Variable -Name InstallationEvidenceLanes -Scope Script -ValueOnly -ErrorAction SilentlyContinue
     if($null -ne $lanes){foreach($lane in $lanes.Keys){$active+=@{lane=$lane;stage=$lanes[$lane].name;sequence=$lanes[$lane].sequence}}}
-    Write-InstallationEvidenceEvent ([ordered]@{event='CAUGHT_FAILURE';active_stages=$active;failure=(Get-InstallationFailureDetails $Failure)})
+    $original=Write-InstallationOriginalFailure $Failure
+    Write-InstallationEvidenceEvent ([ordered]@{event='CAUGHT_FAILURE';active_stages=$active;failure=(Get-InstallationFailureDetails $Failure);original_failure=$original})
 }
 
 function Fail-InstallationEvidenceStages($Failure) {
@@ -971,7 +1149,7 @@ public static class KMTechInstallationChildCapture {
  public sealed class Result { public int pid, exit_code; public Output stdout, stderr; }
  sealed class Reader {
   public MemoryStream saved=new MemoryStream(); public long observed; public bool complete; public object gate=new object();
-  public void Read(Stream stream) { try { byte[] b=new byte[8192]; int n; while((n=stream.Read(b,0,b.Length))>0) { lock(gate) { observed+=n; int keep=(int)Math.Min(n,1048576-saved.Length); if(keep>0) saved.Write(b,0,keep); } } complete=true; } catch(ObjectDisposedException) {} catch(IOException) {} }
+  public void Read(Stream stream) { try { byte[] b=new byte[8192]; int n; while((n=stream.Read(b,0,b.Length))>0) { lock(gate) { observed+=n; int keep=(int)Math.Min(n,33554432-saved.Length); if(keep>0) saved.Write(b,0,keep); } } complete=true; } catch(ObjectDisposedException) {} catch(IOException) {} }
   public Output Snapshot() { lock(gate) { return new Output {bytes=saved.ToArray(),observed=observed,complete=complete}; } }
  }
  static string Quote(string value) {
@@ -995,6 +1173,10 @@ public static class KMTechInstallationChildCapture {
 
 function ConvertTo-SafeInstallationOutput($Output) {
     $bytes=[byte[]]$Output.bytes
+    # A finite 32 MiB RAM admission boundary prevents unbounded child output.
+    # Above it no partial input is persisted: a token/JSON value may straddle
+    # the admission boundary. Ordinary output is redacted before its 64 KiB cap.
+    if($Output.observed -gt $bytes.Length){return @{bytes=[Text.Encoding]::UTF8.GetBytes('[TRUNCATED: child input exceeded 33554432 byte RAM admission; detail unavailable]');redacted=$true;truncated=$true;encoding='utf-8'}}
     $truncated=($Output.observed -gt $bytes.Length -or -not $Output.complete)
     $encoding=[Text.UTF8Encoding]::new($false,$true)
     if ($bytes.Length -ge 2 -and $bytes[0] -eq 255 -and $bytes[1] -eq 254) { $encoding=[Text.UnicodeEncoding]::new($false,$true,$true) }
@@ -1019,15 +1201,17 @@ function ConvertTo-SafeInstallationOutput($Output) {
     }
     $safe=Protect-InstallationText $text -1
     $redacted=($safe -cne $text)
-    $saved=[byte[]]::new(0)
-    if(-not $redacted -and -not $truncated){$saved=$bytes}else{$saved=$encoding.GetBytes($safe)}
-    return @{bytes=[byte[]]$saved;redacted=$redacted;truncated=$truncated;encoding=$encoding.WebName}
+    $safe=ConvertTo-KmtechRedactedSinkText -Text $text
+    $saved=[Text.Encoding]::UTF8.GetBytes($safe)
+    $truncated=($truncated -or $safe.Contains('[TRUNCATED: '))
+    if($truncated -and -not $safe.Contains('[TRUNCATED: ')){$safe+='[TRUNCATED: capture incomplete]';$saved=[Text.Encoding]::UTF8.GetBytes((Protect-InstallationText $safe -1))}
+    return @{bytes=[byte[]]$saved;redacted=$redacted;truncated=$truncated;encoding='utf-8'}
 }
 
 function Invoke-InstallationEvidenceChild([string]$Name,[string]$Executable,[string[]]$Arguments,[string]$WorkingDirectory='') {
     Initialize-InstallationChildCapture
     if (-not $WorkingDirectory) { $WorkingDirectory=[IO.Path]::GetDirectoryName($Executable) }
-    Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_START';stage=$Name;executable_leaf=[IO.Path]::GetFileName($Executable);byte_cap_per_stream=1048576;arguments_recorded=$false})
+    Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_START';stage=$Name;executable_leaf=[IO.Path]::GetFileName($Executable);byte_cap_per_stream=(Protect-InstallationText -Configuration).full_byte_cap;arguments_recorded=$false})
     $watch=[Diagnostics.Stopwatch]::StartNew()
     $result=[KMTechInstallationChildCapture]::Run($Executable,$Arguments,$WorkingDirectory)
     $watch.Stop(); $streams=@{}; $texts=@{}; $evidenceFailure=$null
@@ -1064,14 +1248,16 @@ function Invoke-InstallationEvidenceChild([string]$Name,[string]$Executable,[str
         -not(Get-Variable -Name InstallationFirstFailedChildCapture -Scope Script -ValueOnly -ErrorAction SilentlyContinue)){
         $Script:InstallationFirstFailedChildCapture=$Script:InstallationLastChildCapture
         $Script:InstallationFirstFailedChildEvidenceFailure=$evidenceFailure
+        $Script:InstallationFirstFailedChildStreams=$streams
     }
     Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_EXIT';stage=$Name;pid=$result.pid;exit_code=$result.exit_code;elapsed_ms=$watch.ElapsedMilliseconds;streams=$streams;evidence_failure=$evidenceFailure})
     # A pinned helper's bounded one-line fallback belongs in its parent's own
     # journal. Retain it even when the helper could not persist a summary file.
     $failureDiagnostic=$null
     foreach($line in @($texts.stdout -split '\r?\n')){
-        if($line.Length -le 4096 -and $line.StartsWith('installation_failure_summary=',[StringComparison]::Ordinal)){
+        if($line.StartsWith('installation_failure_summary=',[StringComparison]::Ordinal)){
             try{
+                if([Text.Encoding]::UTF8.GetByteCount($line) -gt 65536){throw 'Helper failure JSON exceeded the 64 KiB bound; full stream evidence remains authoritative.'}
                 $diagnostic=$line.Substring('installation_failure_summary='.Length) | ConvertFrom-Json
                 if([string]$diagnostic.schema -ceq 'container-audit-installation-fallback-v1' -and [int]$diagnostic.exit_code -in @(71,72,73)){
                     Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_FAILURE_FALLBACK';stage=$Name;pid=$result.pid;child_exit_code=$result.exit_code;diagnostic=$diagnostic})
@@ -1106,7 +1292,12 @@ function Get-InstallationFallbackDiagnostic($Failure) {
     }
     # Fixed table: protected evidence write / native child / other helper failure.
     $code=if($null -ne $evidence){71}elseif($null -ne $child -and [int]$child.exit_code -ne 0){72}else{73}
-    return [ordered]@{schema='container-audit-installation-fallback-v1';exit_code=$code;failure=$detail;child=$child;evidence_failure=$evidence}
+    $diagnostic=[ordered]@{schema='container-audit-installation-fallback-v1';exit_code=$code;failure=$detail;child=$child;evidence_failure=$evidence}
+    $original=Get-Variable -Name InstallationOriginalFailure -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if($null -ne $original){$diagnostic.original_failure=$original}
+    $streams=Get-Variable -Name InstallationFirstFailedChildStreams -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if($null -ne $streams){$diagnostic.child_streams=$streams}
+    return $diagnostic
 }
 
 function Get-StrictFullPath([string]$Path, [string]$Purpose) {
@@ -1383,7 +1574,7 @@ function Get-InventoryAggregate([object[]]$Inventory) {
 
 function Write-Utf8Json([string]$Path, $Payload) {
     $temporary = "$Path.tmp.$PID"
-    $json = $Payload | ConvertTo-Json -Depth 8
+    $json = Protect-InstallationText ($Payload | ConvertTo-Json -Depth 8) -1
     [IO.File]::WriteAllText($temporary, $json + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
     Move-Item -LiteralPath $temporary -Destination $Path -Force
 }
@@ -2099,6 +2290,108 @@ function Test-BootstrapLifecycleJsonEqual($Left,$Right) {
     return $Left -eq $Right
 }
 
+function Get-BootstrapOfficialLegacyRelayExpectedIdentitySet {
+    # Candidate authorization: lab1/2 passed; guest must prove install3/4.
+    # Coordinator closes this single switch if guest recovery or exclusion fails.
+    $allowCredentialPrincipalTransition=$true
+    $entries=@((@'
+[{"branch":"interactive_current_user","field_templates":{"task.path":"\\","task.name":"direct-sync-relay-container-audit","action.count":"1","action.type":"Exec","action.command":"{system_directory}\\wscript.exe","action.arguments":"//B //NoLogo {program_data}\\KMTech\\DirectSync\\container_audit\\bin\\direct-sync-relay-container-audit.vbs","action.workdir":"","principal.user":"{current_user}","principal.logon_type":"InteractiveToken","principal.run_level":"LeastPrivilege","trigger.count":"1","trigger.type":"TimeTrigger","trigger.repetition_interval":"PT1M"},"tags":["v2.0.10","v2.0.11","v2.0.12","v2.0.13","v2.0.14","v2.0.15","v2.0.16","v2.0.17"],"allowed":false},{"branch":"stored_password_current_user","field_templates":{"task.path":"\\","task.name":"direct-sync-relay-container-audit","action.count":"1","action.type":"Exec","action.command":"{system_directory}\\wscript.exe","action.arguments":"//B //NoLogo {program_data}\\KMTech\\DirectSync\\container_audit\\bin\\direct-sync-relay-container-audit.vbs","action.workdir":"","principal.user":"{current_user}","principal.logon_type":"Password","principal.run_level":"LeastPrivilege","trigger.count":"1","trigger.type":"TimeTrigger","trigger.repetition_interval":"PT1M"},"tags":["v2.0.12","v2.0.13","v2.0.14","v2.0.15","v2.0.16","v2.0.17","v2.0.18","v2.0.19","v2.0.20","v2.0.21","v2.0.22","v2.0.23","v2.0.24","v2.0.25","v2.0.26","v2.0.27","v2.0.28","v2.0.29","v2.0.30","v2.0.31","v2.0.32","v2.0.33","v2.0.34","v2.0.36","v2.0.37","v2.0.52","v2.0.53","v2.0.54","v2.0.55","v2.0.56","v2.0.57","v2.0.58","v2.0.59","v2.0.61"],"allowed":false},{"branch":"system_vbs","field_templates":{"task.path":"\\","task.name":"direct-sync-relay-container-audit","action.count":"1","action.type":"Exec","action.command":"{system_directory}\\wscript.exe","action.arguments":"//B //NoLogo {program_data}\\KMTech\\DirectSync\\container_audit\\bin\\direct-sync-relay-container-audit.vbs","action.workdir":"","principal.user":"SYSTEM","principal.logon_type":"ServiceAccount","principal.run_level":"LeastPrivilege","trigger.count":"1","trigger.type":"TimeTrigger","trigger.repetition_interval":"PT1M"},"tags":["v2.0.18","v2.0.19","v2.0.20","v2.0.21","v2.0.22","v2.0.23","v2.0.24","v2.0.25","v2.0.26","v2.0.27","v2.0.28","v2.0.29","v2.0.30","v2.0.31","v2.0.32","v2.0.33","v2.0.34","v2.0.36","v2.0.37","v2.0.52","v2.0.53","v2.0.54","v2.0.55","v2.0.56","v2.0.57","v2.0.58","v2.0.59","v2.0.61"],"allowed":true}]
+'@ | ConvertFrom-Json))
+    foreach($entry in $entries){if($entry.branch -cin @('stored_password_current_user','interactive_current_user')){$entry.allowed=$allowCredentialPrincipalTransition}}
+    return ,$entries
+}
+
+function Get-BootstrapOfficialLegacyRelayIdentity($Task,[string]$Xml='',[object[]]$ExpectedIdentitySet=@()) {
+    # v2.0.33 tools/direct_sync_relay_install_pack.py:40,133-153,978-988.
+    # Identity contract 298c9729; guest-proven XML default normalization.
+    $name='direct-sync-relay-container-audit'
+    $empty=[pscustomobject]@{matched=$false;sha256='';fields=@();records=@();entry_tag='';reason_code='IDENTITY_DIFFERS'}
+    if(-not $ExpectedIdentitySet.Count){$ExpectedIdentitySet=Get-BootstrapOfficialLegacyRelayExpectedIdentitySet}
+    if([string]$Task.TaskName -ine $name){return $empty}
+    if($null -eq $Task.PSObject.Properties['TaskPath'] -or -not [string]$Task.TaskPath){return $empty}
+    if(-not $Xml){$Xml=Export-ScheduledTask -TaskName ([string]$Task.TaskName) -TaskPath ([string]$Task.TaskPath) -ErrorAction Stop}
+    if([Text.Encoding]::UTF8.GetByteCount($Xml) -gt 65536){throw 'NONCANONICAL_WRITER_ENABLED'}
+    $settings=[Xml.XmlReaderSettings]::new();$settings.DtdProcessing=[Xml.DtdProcessing]::Prohibit;$settings.XmlResolver=$null
+    $reader=[Xml.XmlReader]::Create([IO.StringReader]::new($Xml),$settings)
+    try{$document=[Xml.XmlDocument]::new();$document.XmlResolver=$null;$document.Load($reader)}finally{$reader.Dispose()}
+    function Task-Nodes([string]$XPath){return ,@($document.SelectNodes($XPath))}
+    function Task-Text($Node,[string]$Name){$value=$Node.SelectSingleNode('*[local-name()="'+$Name+'"]');if($null -eq $value){return ''};return [string]$value.InnerText}
+    function Task-Path([string]$Path,[switch]$Executable){
+        if(-not $Path){return ''}
+        $pathValue=[Environment]::ExpandEnvironmentVariables($Path.Trim().Trim('"')).Replace('/','\')
+        if($Executable -and -not[IO.Path]::IsPathRooted($pathValue)){$pathValue=Join-Path ([Environment]::SystemDirectory) $pathValue}
+        if(-not[IO.Path]::IsPathRooted($pathValue)){return '!relative'}
+        return [IO.Path]::GetFullPath($pathValue).TrimEnd('\').ToLowerInvariant()
+    }
+    function Task-Sha([string]$Value){$algorithm=[Security.Cryptography.SHA256]::Create();try{return ([BitConverter]::ToString($algorithm.ComputeHash([Text.Encoding]::UTF8.GetBytes($Value))).Replace('-','').ToLowerInvariant())}finally{$algorithm.Dispose()}}
+    $actions=Task-Nodes '/*[local-name()="Task"]/*[local-name()="Actions"]/*'
+    $principals=Task-Nodes '/*[local-name()="Task"]/*[local-name()="Principals"]/*'
+    $triggers=Task-Nodes '/*[local-name()="Task"]/*[local-name()="Triggers"]/*'
+    if($actions.Count -ne 1 -or $principals.Count -ne 1 -or $triggers.Count -ne 1){return $empty}
+    $principal=Task-Text $principals[0] 'UserId'
+    try{$sid=ConvertTo-BootstrapPrincipalSid $principal}catch{return $empty}
+    $principalLabel=if($sid -ceq (@('S','1','5','18') -join '-')){'SYSTEM'}elseif($sid -ceq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value){'CURRENT_USER'}else{'OTHER'}
+    $logonNode=$principals[0].SelectSingleNode('*[local-name()="LogonType"]')
+    $logonType=if($null -eq $logonNode){if($principalLabel -ceq 'SYSTEM'){'ServiceAccount'}else{'ABSENT'}}else{[string]$logonNode.InnerText}
+    if($null -ne $logonNode -and $logonType -cnotin @('Password','S4U','InteractiveToken','Group','ServiceAccount','InteractiveTokenOrPassword')){
+        $empty.reason_code='LOGON_TYPE_UNKNOWN';return $empty
+    }
+    $runLevelNode=$principals[0].SelectSingleNode('*[local-name()="RunLevel"]')
+    $runLevel=if($null -eq $runLevelNode){'LeastPrivilege'}else{[string]$runLevelNode.InnerText}
+    if($runLevel -cnotin @('LeastPrivilege','HighestAvailable')){$empty.reason_code='RUN_LEVEL_UNKNOWN';return $empty}
+    $arguments=Task-Text $actions[0] 'Arguments'
+    function Task-Arguments([string]$Value){
+        $tokens=@([regex]::Matches($Value.Trim(),'"[^"]*"|[^\s]+')|ForEach-Object {
+            $token=$_.Value;$quoted=$token.StartsWith('"');$bare=$token.Trim('"')
+            $pathValue=[Environment]::ExpandEnvironmentVariables($bare).Replace('/','\')
+            if($pathValue -match '^(?:[A-Za-z]:\\|\\\\[^\\]+\\[^\\]+)'){$bare=Task-Path $bare;$token=if($quoted){'"'+$bare+'"'}else{$bare}}
+            $token
+        });return ($tokens -join ' ')
+    }
+    $argumentIdentity=Task-Arguments $arguments
+    $repetition=$triggers[0].SelectSingleNode('*[local-name()="Repetition"]')
+    $interval=if($null -eq $repetition){''}else{Task-Text $repetition 'Interval'}
+    if($interval){try{$interval=[Xml.XmlConvert]::ToString([Xml.XmlConvert]::ToTimeSpan($interval))}catch{return $empty}}
+    $actual=[ordered]@{
+        'task.path'=(([string]$Task.TaskPath).TrimEnd('\')+'\').ToLowerInvariant();'task.name'=([string]$Task.TaskName).ToLowerInvariant()
+        'action.count'=[string]$actions.Count;'action.type'=[string]$actions[0].LocalName
+        'action.command'=Task-Path (Task-Text $actions[0] 'Command') -Executable
+        'action.arguments'=$argumentIdentity;'action.workdir'=Task-Path (Task-Text $actions[0] 'WorkingDirectory')
+        'principal.user'=$principalLabel;'principal.logon_type'=$logonType;'principal.run_level'=$runLevel
+        'trigger.count'=[string]$triggers.Count;'trigger.type'=[string]$triggers[0].LocalName;'trigger.repetition_interval'=$interval
+    }
+    $equal=$false;$entryTag='';$expected=$null
+    foreach($entry in $ExpectedIdentitySet){
+        if(-not $entry.allowed){continue}
+        $candidate=[ordered]@{}
+        foreach($property in $entry.field_templates.PSObject.Properties){
+            $value=[string]$property.Value
+            $value=$value.Replace('{system_directory}',[Environment]::SystemDirectory).Replace('{program_data}',[Environment]::GetFolderPath('CommonApplicationData')).Replace('{user_local_app_data}',[Environment]::GetFolderPath('LocalApplicationData')).Replace('{current_user}','CURRENT_USER')
+            if($property.Name -cin @('action.command','action.workdir')){$value=Task-Path $value -Executable:($property.Name -ceq 'action.command')}
+            if($property.Name -ceq 'action.arguments'){
+                # Source subprocess.list2cmdline quotes paths only when required.
+                $prefix=if($entry.branch -ceq 'system_cmd'){'/d /q /c '}else{'//B //NoLogo '}
+                $path=$value.Substring($prefix.Length);if($path -match '\s'){$path='"'+$path+'"'}
+                $value=Task-Arguments ($prefix+$path)
+            }
+            $candidate[$property.Name]=$value
+        }
+        $same=$true
+        foreach($key in $actual.Keys){if([string]$actual[$key] -cne [string]$candidate[$key]){$same=$false;break}}
+        if($same){$equal=$true;$entryTag=[string]$entry.tags[0];$expected=$candidate;break}
+    }
+    if($null -eq $expected){$expected=@{}}
+    $fields=@();$lines=''
+    foreach($key in @($actual.Keys|Sort-Object)){
+        $line=$key+'='+$actual[$key]+"`n";$lines+=$line
+        $same=([string]$actual[$key] -ceq [string]$expected[$key])
+        $fields+=,@{name=$key;sha256=(Task-Sha $line);matched=$same}
+    }
+    $records=@()
+    foreach($node in @($document.SelectNodes('/*[local-name()="Task"]/*[local-name()="RegistrationInfo"]/* | /*[local-name()="Task"]/*[local-name()="Settings"] | /*[local-name()="Task"]/*[local-name()="Triggers"]/*/*[local-name()="StartBoundary" or local-name()="EndBoundary"]'))){$records+=,@{name=[string]$node.LocalName;sha256=(Task-Sha $node.OuterXml)}}
+    return [pscustomobject]@{matched=$equal;sha256=(Task-Sha $lines);fields=$fields;records=$records;entry_tag=$entryTag;reason_code=if($equal){'EXACT_OFFICIAL_SOURCE_IDENTITY'}elseif($logonType -ceq 'ABSENT'){'LOGON_TYPE_ABSENT_UNMATCHED'}else{'IDENTITY_DIFFERS'}}
+}
+
 function Get-BootstrapSupportedLifecycleContext([string]$Root,[string]$Operation='inspect',[string]$ExpectedFromCommit='') {
     # Read-only counterpart of auto_update.resolve_lifecycle_context, called
     # through the existing byte-pinned bootstrap library before PlanOnly.
@@ -2134,7 +2427,9 @@ function Get-BootstrapSupportedLifecycleContext([string]$Root,[string]$Operation
             if($managed){throw 'lifecycle_removed_control_remains'}
             if($Operation -ceq 'register'){throw 'lifecycle_register_requires_installed_code'}
             foreach($task in @(Get-ScheduledTask -ErrorAction Stop)){
-                if([string]$task.TaskName -cin @('direct-sync-relay-container-audit','container-audit-isolated-qualification-authority')){throw 'lifecycle_removed_tasks_remain_or_unknown'}
+                if([string]$task.TaskName -ieq 'direct-sync-relay-container-audit'){
+                    if($Operation -cne 'install' -or -not(Get-BootstrapOfficialLegacyRelayIdentity $task).matched){throw 'lifecycle_removed_tasks_remain_or_unknown'}
+                }elseif([string]$task.TaskName -ieq 'container-audit-isolated-qualification-authority'){throw 'lifecycle_removed_tasks_remain_or_unknown'}
                 if([string]$task.TaskName -cmatch '^KMTech\.ContainerAudit\.StartupUpdate\.[0-9a-f]{24}$'){
                     [xml]$taskXml=Export-ScheduledTask -TaskName ([string]$task.TaskName) -TaskPath ([string]$task.TaskPath) -ErrorAction Stop
                     foreach($action in @($taskXml.Task.Actions.Exec)){

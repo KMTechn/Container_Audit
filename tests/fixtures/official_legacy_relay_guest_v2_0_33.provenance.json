@@ -1,0 +1,34 @@
+{
+  "kind": "guest_export_with_record_only_placeholders",
+  "fixture_sha256": "223f7a38ce595ca999bd81b9a53aa02dd9660971f5a1b3a205efb0f831315129",
+  "origin": "w9setupprep/sub-276/fixtures/Container_Audit-v2.0.33.xml",
+  "origin_readme": "w9setupprep/sub-276/fixtures/README.md",
+  "guest_entry_sha256": "2526926de1339ec54b7982a099fbe2a0b4eef2909200983b4554d69301e7afa9",
+  "expected_full_fingerprint": "cbf02ac74f9859b80773b674987e125f5f10cc99cbbfcde5d74d663985c12fad",
+  "expected_field_sha256": {
+    "action.arguments": "f330ce9e7c3031f3bfd63e5d951a84ef9788cce2c6a04cac68d0c4348b60f672",
+    "action.command": "a887318c77bfd2067b3511c0d3a5ad06656712e5c866551eb9711a17ccea06db",
+    "action.count": "13d7a5787d6f8fe46bc74a90d810f6ae02773736206ffac2c252d927f1ea6944",
+    "action.type": "cedf8cd5fe2f38e19545818a6f5d720224e2194f3a80ed1be482ca619a647821",
+    "action.workdir": "31ae0f83debbd0ac7c88cd1bb3b1e6b54045c900a6567d9398da177eeb105243",
+    "principal.logon_type": "75687971f236bea92db88859b7c992edb387440f65b3949d5b658a28bc232817",
+    "principal.run_level": "78f57f4d0823450514f2e5d9b55f21dbd3c16d4a7061a63b9885d8c54e6ef90d",
+    "principal.user": "4f1ad47684d037bb7e40b5dc8dfe4b04bd3eb0687572910674a813d7f1a9f42c",
+    "task.name": "b58f91e3f541545e44044c0872bd631e87535462b540ccffadd97b64ddd13081",
+    "task.path": "8b80c4dd7508e52bd42c2675c8f1fadd39b25d17e83d330f8e8287197bdbd69e",
+    "trigger.count": "89821fb336a8638a07a8268c2dcfba0dd91cc7ec35fb8c7330b783846f7db551",
+    "trigger.repetition_interval": "f8e5612eebb35c40ae2f1ff88267ea64ec35d485a98fccece23e930576865f89",
+    "trigger.type": "40a23ab9bdeb1ddbdab0910afdc7f5bfcf259c2161e1b5e326c4e3c792aaee11"
+  },
+  "normalization": "omitted RunLevel=LeastPrivilege; SYSTEM omitted LogonType=ServiceAccount",
+  "record_only_placeholders": [
+    "FIXTURE_AUTHOR",
+    "FIXTURE_NON_WELLKNOWN_SID"
+  ],
+  "proven": "official relay-pack creation command registered a task on Windows 11 build 26200",
+  "unproven": [
+    "full official installation",
+    "business relay execution"
+  ],
+  "limitations": "Official registration failed; wrapper and launcher were not created. This fixture proves XML normalization only; it is distinct from synthetic XML_SETUP."
+}

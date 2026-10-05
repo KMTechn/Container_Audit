@@ -77,7 +77,7 @@ def test_readonly_library_preserves_lifecycle_classification(tmp_path, monkeypat
     if case == "array_metadata":
         policy["owned_extra"] = [None, [], {"a": 1, "b": 1.0}, "2026-10-05T00:00:00Z"]
         (control / "policy.json").write_text(json.dumps(policy), encoding="utf-8")
-    monkeypatch.setattr(update, "supported_tasks_absent", lambda root: True)
+    monkeypatch.setattr(update, "supported_tasks_absent", lambda root, **kwargs: True)
     monkeypatch.setattr(update, "supported_task_present", lambda *args: case != "missing_task")
     def stock(bundle):
         if case == "bad_stock":
