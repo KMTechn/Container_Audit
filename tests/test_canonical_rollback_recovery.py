@@ -14,7 +14,7 @@ REPO=Path(__file__).resolve().parents[1]
 @pytest.mark.parametrize('kind,case',[
     ('allowed','normal'), ('refusal','normal'),
     ('refusal','code-mismatch'), ('refusal','g-unknown'),('refusal','nested-high'),
-])
+('allowed','audit-save-failure'),('allowed','evidence-save-failure')])
 def test_canonical_rollback_attempts_remaining_recovery_with_actual_g(tmp_path,shell,kind,case):
     executable=shutil.which(shell)
     assert executable is not None
@@ -38,7 +38,7 @@ def test_canonical_rollback_attempts_remaining_recovery_with_actual_g(tmp_path,s
     counts=result['observed']
     assert counts['run_restore']==1
     assert counts['task_restore']==1
-    if case=='normal':
+    if case in ('normal','audit-save-failure','evidence-save-failure'):
         assert counts['code_restore']==1
         assert counts['fence_release']==1
         assert result['generation_readback']=='PASS'
@@ -64,3 +64,7 @@ def test_canonical_rollback_attempts_remaining_recovery_with_actual_g(tmp_path,s
         else:
             assert counts['code_restore']==1
         assert result['code_rollback_failure']
+
+    if case in ('audit-save-failure','evidence-save-failure'):
+        assert counts['evidence_save'] > 0
+        assert counts['diagnostic_failures'] > 0

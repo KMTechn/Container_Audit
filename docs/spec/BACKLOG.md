@@ -466,3 +466,7 @@ G 전체 비교의 GUI 직접 예외 표시와 relay 모의의 Git 가로채기�
 
 
 - sub-233 follow-up: preserve legitimate removal delegation through a single statically fixed, already-admitted G metadata probe with `probe_only=True`; actual marker writing keeps the original decorator. Add process snapshots of data/control file list, size and mtime and missing/equal/newer/UNKNOWN removal checks; retain legacy identity, string profile-path API and invalid-storage BLOCKED diagnostics. Conditional decision `msg_eb3b375df3eb`; targeted eleven cases and standard regen/check PASS on the clean follow-up source; final packet and wider verification are recorded in the task report.
+
+- sub-272 추가: startup 뒤 credential/profile/DPAPI/TLS 첫 판독의 G 재확인과
+  catch 감사 저장 실패 격리 구현. 실제 G·PS5.1/PS7·집중 기준선 증거는 해당
+  REPORT 최종 커밋에 결합하며, 증거 확정 전 UNPROVEN으로 유지한다.

@@ -32,7 +32,18 @@ $script:state=@{code='before';data='before';run='before';task='before';relay='be
 $script:observed=[ordered]@{product_removal=0;code_restore=0;run_restore=0;task_restore=0;relay_start=0;fence_release=0;audit=0}
 . (Join-Path (Split-Path -Parent $Source) 'tools/bootstrap_integrity.ps1')
 function Product {param($Root,$Mode) if($Mode -cne '--remove-current-user-setup'){throw 'unexpected product mode'}; $script:observed.product_removal++;$script:state.run='absent';$script:state.relay='absent'}
-function Save {param($Path,$Value) $script:observed.audit++}
+function Save {
+ param($Path,$Value,$SanitizeDiagnostics)
+ $script:observed.audit++
+ if ($RecoveryCase -ceq 'audit-save-failure' -and $Path -ceq $auditPath) {
+  throw 'ISOLATED_CATCH_AUDIT_STORAGE_UNAVAILABLE'
+ }
+ if ($RecoveryCase -cin @('audit-save-failure','evidence-save-failure') -and $Path -ceq $evidenceFull) {
+  $script:observed.evidence_save=1+[int]$script:observed.evidence_save
+  $script:observed.diagnostic_failures=@($Value.diagnostic_write_failures).Count
+  if ($RecoveryCase -ceq 'evidence-save-failure') { throw 'ISOLATED_CATCH_EVIDENCE_STORAGE_UNAVAILABLE' }
+ }
+}
 function Sync-CanonicalWriterFenceInventory {param($Digest)}
 function Assert-RollbackRelayPreimage {param($ExpectedRelays)}
 function Restore {param($Value) $script:observed.run_restore++;$script:state.run='before'}
@@ -105,6 +116,10 @@ if ($RecoveryCase -ceq 'g-unknown') {
     [IO.File]::WriteAllText((Join-Path $activeDataRoot 'data-generation.json'), 'invalid isolated generation marker')
 }
 $errorType=''
+if ($RecoveryCase -cin @('audit-save-failure','evidence-save-failure')) {
+ $auditPath=Join-Path $Root 'recovery-audit.json'
+ $evidenceFull=Join-Path $Root 'recovery-evidence.json'
+}
 try {. ([ScriptBlock]::Create("try {throw 'Product mode failed: --onboard-current-user/2'} catch "+$body))}
 catch {$errorType=$_.Exception.GetType().Name}
 $result=@{rollback_status=$audit.status;generation_readback=$audit.rollback.steps.generation_readback.status;operator_notice_saved=[bool]$audit.rollback.operator_message;support_procedure=$audit.rollback.support_recovery_procedure;rollback_steps=$audit.rollback.steps;recovery_verified=$rollbackRecoveryVerified;actual_g_error_id=$script:actualGErrorId;actual_g_command=$script:actualGCommand;actual_g_calls=$script:actualGCalls;actual_g_passed=$script:actualGPassed;actual_g_blocked=$script:actualGBlocked;state_restored=(@($script:state.Values|Where-Object {$_ -cne 'before'}).Count -eq 0);observed=$script:observed;fence_active_after=$canonicalWriterFenceActive;child_locator_reads=$childResult.locator_reads;child_payload_reads=$childResult.observed.input_reads;child_changes=$childResult.changed_file_count;child_status=$childResult.status;error_type=$errorType;code_rollback_failure=$codeRollbackFailure;autostart_rollback_failure=$autostartRollbackFailure;full_installer_executed=$false;actual_host_lifecycle_calls=0;changes_before_child=@('code','Run','task','relay')}

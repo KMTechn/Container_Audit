@@ -828,3 +828,17 @@ Registration retains string profile-path arguments after shared resolution. Inva
 원 설치 시도의 authority가 사라진 채 fence가 남은 경우에는 현장에서 fence 파일을 지우거나 delegation/receipt를 만들어 진행하지 않는다. coordinator에게 보존한 기록과 실패 단계만 전달하고 지원 authority 회수 및 검증된 복구 실행을 요청한다. 종료 조건은 코드 신원·G·runtime 일치, 권한이 확인된 fence 해제, 옛 relay readback 및 업무 수량·소속 보존이다. 이 retained-fence 지원 절차의 실제 랩 1회 PROVEN은 1차 coordinator의 예행 범위이며 이 가지의 headless 격리 시험으로 대체하지 않는다; 아직 실제 랩 수용은 UNPROVEN이다.
 
 실패 안내와 감사에는 writer delegation token·설치 bearer 환경 값의 원문을 남기지 않는다. canonical 오류 안내와 audit/evidence의 JSON 저장, relay 설치기의 child stdout/stderr 및 감사 저장은 알려진 비밀 환경 값을 `[REDACTED]`로 치환한다. profile 설치기의 예외 안내는 예외 종류만 표시한다. 제어 프로토콜의 정상 delegation·receipt 값과 권한 검증은 그대로이며, 비밀 값이 없어도 원 실패 코드와 단계 결과는 유지한다. 실제 값이나 child 출력 전문을 운영 문서에 복사하지 않는다.
+
+### 실행 후 관리자 인증 또는 TLS 자료 판 거절
+
+실행 후에도 관리자 PIN, 품목 새로 고침, relay 재시작과 업데이트 확인은
+자격 자료를 실제로 읽는 시점의 자료 판을 확인한다. 다른 판의 앱이 owner
+기록을 높이면 기존 창이 열려 있어도 판독·복호·TLS 전송을 진행하지 않는다.
+“이 PC의 자료 판을 확인할 수 없습니다” 또는 호환 판 거절 안내가 나오면
+자료와 설치 기록을 보존하고 관리자에게 호환 앱 확인을 요청한다. marker나
+중지 표시를 지워서 우회하지 않는다. 기존 준비 입력도 첫 판독 전에 재확인한다.
+
+복구 중 audit 저장이 실패해도 원 오류를 유지하고 다른 복원 단계를 계속
+시도한다. 별도 evidence에 저장 실패 단계·대상·예외 종류 기록을 시도하고,
+둘 다 저장할 수 없으면 UNAVAILABLE 상태를 남긴다. 봉인된 퇴역 audit는
+다시 쓰지 않는다. 코드·G·runtime 정합이 증명되어야 fence와 relay를 복귀한다.

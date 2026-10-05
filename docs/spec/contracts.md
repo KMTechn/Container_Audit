@@ -371,3 +371,17 @@ claim으로 한 개만 받는다. writer admission 안에서 journal·두 marker
 **최종 d440 별도 대상의 실제 등록 경계:** [CA-O10](operations.md#ca-o10)의 c029 VM은 실제 CA 코드/사용자·identity·relay 부재와 ordinary kmadmin session1/medium 및 PlanOnly0를 확인한 fresh-app 대상이며, 복사 OS의 MachineGuid/SID는 유지했다. 최초 정상 Install01은 실제 `producer_identity_conflict`로 native1 / `FAILED_RUNTIME_RESTORED_CODE_RETAINED`였고 exact d440 코드 배치는 `PASS_NEW_VERIFIED`다. 이 실패와 원본13파일을 보존하며 새 Hyper-V GUID나 빈 폴더를 무지원 중앙 등록 PASS로 해석하지 않는다.
 
 Main의 새 QA 소유 배정 뒤 Web이 발행한 단회 recovery를 기존 지원 등록 명령으로 실행한 Recovery01은 ordinary native/task0 / `ADMIN_RECOVERY_REGISTERED`, epoch8이다. 제품이 이 대상에서 만든 실제 current_user fingerprint `bqMrBqbmdGBJjoPnV-JasvUTsdGnMdQKrdXCZrrc3S4`를 그대로 사용했고 producer/source `container-audit-source-20da23dc1c762b3c1055a10e3e2450c1`·install `container-audit-install-87f6d7d8b6e36067490c1d1146fcebeb`, semantic manifest `27c471d693d0de73377beaeeddbbc93aad90ac676b3b2a6c2fa388c37f4b7538`를 확인했다. [Web의14:06:14Z 독립 확인](E:/KMTech/web-integration-20260908/ca-final-recovery-central-readback-01.json)은 recovery 단회 소모와 기존97 receipt의 ID·full row hash/rowid 보존을 입증한다. 기존 key/identity·token·clock·ledger를 시험 도구로 바꾸지 않았으며 `OPERATION_PENDING`은 등록 성공과 별도 권한 상태다. 실제 상태가 회복된 뒤 Install02는 native/task0 / `PASS`·`REUSED_VERIFIED`로 정상 계속했다. [전체 원본·후속 lifecycle](E:/KMTech/ca-final-qualification-20260908/REPORT.md)을 따르며, 기존 Restore09는 원 receipt/VM 범위에서만 재사용하고 이 대상의 무지원 첫 등록 성공으로 승계하지 않는다.
+
+### 시작 뒤 security input의 첫 판독 G (sub-272 추가 교정)
+
+시작 때 허용된 credential snapshot은 나중의 파일 판독 허가가 아니다. 첫
+secret/DPAPI 판독 전에 locator owner와 준비된 nested owner를 기존 2단 G로
+다시 확인한다. GUI PIN은 startup의 준비 경로를 보존하고 재확인한 뒤 현재
+locator를 준비하므로, owner가 높은 판으로 바뀌면 locator 재판독도 하지 않는다.
+미준비 API 소비자는 현재 경로에서 같은 prepare를 호출하며, runtime profile과
+보호 관리자 profile은 각 실제 판독 전에 owner를 확인한다. 지연된 TLS 파일
+판독은 PIN·relay lease·source upload/restore·transfer·catalog·update discovery의
+네트워크 호출 직전에 다시 확인한다. 거절을 일반 신뢰 설정의 재시도로 바꾸지 않는다.
+공용 G 두 파일과 인증·수량·소속 계약은 변경하지 않는다.
+회귀: `tests/test_security_input_first_read.py`; 구현 증거는 sub-272 REPORT의
+최종 커밋·환경과 연결하며 검증 전 상태는 UNPROVEN이다.

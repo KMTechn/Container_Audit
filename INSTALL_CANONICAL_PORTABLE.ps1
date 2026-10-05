@@ -29,6 +29,7 @@ $Script:CanonicalWriterFenceSessionId = ''
 $Script:CanonicalWriterFenceAttemptId = ''
 $Script:CanonicalWriterFenceTransactionId = ''
 $Script:CanonicalWriterFenceDelegationToken = ''
+$retirementAuditSealed = $false
 $testMode = $AllowNoncanonicalLayoutForTest -and
     [string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -ceq '1'
 if ($SkipSignatureValidationForTest -and -not $testMode) {
@@ -2760,6 +2761,36 @@ $enteredPlacementTry = $true
 }
 catch {
     $original=$_
+    if ($null -ne $audit -and -not $audit.Contains('diagnostic_write_failures')) {
+        $audit['diagnostic_write_failures']=@()
+    }
+    # Diagnostics cannot prevent independent recovery. The sealed retirement
+    # audit remains immutable; a separate evidence path records write failures.
+    function Save-CanonicalRecoveryDiagnostics {
+        param([string]$Phase)
+        try {
+            if (-not $retirementAuditSealed) { Save $auditPath $audit $true }
+        }
+        catch {
+            $audit['diagnostic_write_failures']=@($audit.diagnostic_write_failures)+@(
+                [ordered]@{phase=$Phase;target='audit';failure_type=$_.Exception.GetType().Name})
+            Write-Output 'rollback_audit_status=UNAVAILABLE'
+        }
+        if ($evidenceFull) {
+            try { Save $evidenceFull $audit $true }
+            catch {
+                $audit['diagnostic_write_failures']=@($audit.diagnostic_write_failures)+@(
+                    [ordered]@{phase=$Phase;target='evidence';failure_type=$_.Exception.GetType().Name})
+                Write-Output 'rollback_evidence_status=UNAVAILABLE'
+                try { Save $evidenceFull $audit $true }
+                catch { Write-Output 'rollback_evidence_failure_record_status=UNAVAILABLE' }
+            }
+        }
+    }
+    if ($enteredPlacementTry) {
+        $audit.failure_type=$original.Exception.GetType().Name
+        Save-CanonicalRecoveryDiagnostics 'catch.entry'
+    }
     if (-not $enteredPlacementTry) {
         if ($retirementResume -and $canonicalWriterFenceActive) {
             throw 'RETIREMENT_RESUME_JOURNAL_UNKNOWN_FENCE_RETAINED'
@@ -2902,8 +2933,7 @@ catch {
         $audit.rollback.applied = $mutated
         $audit.rollback.runtime_restored = $true
         $audit.rollback.code_exact = $true
-        try { Save $auditPath $audit $true; if ($evidenceFull) { Save $evidenceFull $audit $true } }
-        catch { Write-Output 'rollback_audit_status=UNAVAILABLE' }
+        Save-CanonicalRecoveryDiagnostics 'uninstall.recovered'
         'uninstall_recovery_status=PASS_EXACT_PREIMAGE_SAFE_TO_RETRY'
         throw (ConvertTo-CanonicalSafeDiagnostic ([string]$original.Exception.Message))
     }
@@ -2923,8 +2953,7 @@ catch {
         catch {
             $audit.status = 'RESTORE_FAILED_CODE_STATE_UNVERIFIED'
             $audit.failure_type = $original.Exception.GetType().Name
-            Save $auditPath $audit $true
-            if ($evidenceFull) { Save $evidenceFull $audit $true }
+            Save-CanonicalRecoveryDiagnostics 'restore.code_state_unverified'
             throw 'Canonical restore failed; code state is unverified and writers remain fenced.'
         }
     }
@@ -2942,12 +2971,7 @@ catch {
     function Record-CanonicalRollbackStep {
         param([string]$Step, [string]$Status, [string]$FailureType)
         $audit.rollback.steps[$Step]=[ordered]@{status=$Status;failure_type=$FailureType}
-        try { Save $auditPath $audit $true }
-        catch { Write-Output 'rollback_audit_status=UNAVAILABLE' }
-        if ($evidenceFull) {
-            try { Save $evidenceFull $audit $true }
-            catch { Write-Output 'rollback_evidence_status=UNAVAILABLE' }
-        }
+        Save-CanonicalRecoveryDiagnostics ('rollback.'+$Step)
     }
     try {
     if ($codeRestoreNeeded) {
