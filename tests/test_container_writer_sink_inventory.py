@@ -326,9 +326,9 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         if row['file'] == 'INSTALL_CANONICAL_PORTABLE.ps1'
         and row['caller'] == '__script__'
     ]
-    # Five delegated bootstrap invocations (including public late restore) and
-    # two read-only integrity probes.
-    assert len(helper_calls) == 7
+    # Six delegated bootstrap invocations (including the independent retirement
+    # recovery call and public late restore) and two read-only integrity probes.
+    assert len(helper_calls) == 8
     assert all(row['installer_guarded'] for row in helper_calls)
     assert capture_proof['guarded']
     assert capture_proof['guard_name'] == 'byte_pinned_installer_caller_closure'

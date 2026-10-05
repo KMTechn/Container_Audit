@@ -374,8 +374,9 @@ def _setup(tmp_path, fault=''):
         text = text.replace('function Save([string]$Path, $Value) {',
                             "function Save([string]$Path, $Value) {\n    if ($Value -is [Collections.IDictionary] -and $Value.Contains('status') -and (" + condition + ")) { throw 'AUDIT_INJECTED_FAILURE' }")
     elif fault == 'forged':
-        text = text.replace('& $winps @uninstallArguments',
-                            "$uninstallArguments[$uninstallArguments.IndexOf('-WriterFenceDelegationToken') + 1] = ('e' * 64)\n        & $winps @uninstallArguments")
+        target = "$capturedChild = Invoke-InstallationEvidenceChild 'uninstall-helper' $winps $uninstallArguments"
+        assert text.count(target) == 1
+        text = text.replace(target, "$uninstallArguments[$uninstallArguments.IndexOf('-WriterFenceDelegationToken') + 1] = ('e' * 64)\n        $capturedChild = Invoke-InstallationEvidenceChild 'uninstall-helper' $winps $uninstallArguments")
     elif fault == 'fence_release':
         target = "        if ($CompleteRetiredRemoval) { Set-InstallationEvidenceStage 'retirement.release_authorized' }\n        Stop-CanonicalWriterFenceRelease $releaseAuthorization"
         assert text.count(target) == 1
