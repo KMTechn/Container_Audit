@@ -170,6 +170,13 @@ def prepare_credential_config(path, *, data_root) -> PreparedCredentialConfig:
         if (any(_owner_root_cannot_exist(path.parent) for path in files)
                 or any(_owner_root_cannot_exist(path) for path in directories)):
             raise DirectSyncPushError("credential security input owner path cannot exist")
+        # realpath(strict=False) can retain an invalid leaf on some Python
+        # versions. Native metadata inspection must prove its spelling usable.
+        for security_path in (*files, *directories):
+            try:
+                security_path.lstat()
+            except FileNotFoundError:
+                pass
         probe_before_owner_paths(data_root, file_paths=files, directory_paths=directories)
         return PreparedCredentialConfig(credential_path, MappingProxyType(payload), protected_path,
                                         data_root=resolve_owner_path(data_root),
