@@ -1356,6 +1356,20 @@ function Get-CanonicalOnboardingInputBinding([string]$Root,[string]$TargetReleas
     $preflightArguments=@('-I','-B',(Join-Path $Root 'app\main.py'),
         '--onboard-current-user','--app-root',(Join-Path $Root 'app'),'--preflight-only')
     if ($TargetReleaseRoot) { $preflightArguments+=@('--target-release-root',$TargetReleaseRoot) }
+    $pendingContinuation=Get-Variable -Name rollbackContinuation -ValueOnly -ErrorAction SilentlyContinue
+    $fenceAlreadyActive=Get-Variable -Name canonicalWriterFenceActive -ValueOnly -ErrorAction SilentlyContinue
+    if ($TargetReleaseRoot -and $pendingContinuation -and -not $fenceAlreadyActive) {
+        $pendingRecheck=Read-CanonicalRollbackContinuation $install $lad $operatorSid
+        if ($null -eq $pendingRecheck -or [string]$pendingRecheck.record_sha256 -cne [string]$pendingContinuation.record_sha256) {
+            throw 'Rollback continuation changed before read-only preflight.'
+        }
+        $pendingFence=Read-ContainerWriterFence -AllowAbsent
+        if ($null -eq $pendingFence) { throw 'Rollback continuation pending fence is absent.' }
+        [void](Read-BootstrapRollbackContinuationAuthority $pendingRecheck ([string]$pendingRecheck.record_path) ([string]$pendingRecheck.record_sha256) $pendingFence)
+        $preflightArguments+=@('--rollback-preflight-journal-path',[string]$pendingRecheck.record_path,
+            '--rollback-preflight-journal-sha256',[string]$pendingRecheck.record_sha256,
+            '--rollback-preflight-fence-sha256',(Get-ContainerWriterFenceFileSha256 (Get-ContainerWriterFenceActivePath)))
+    }
     $output=@(& (Join-Path $Root 'runtime\python.exe') @preflightArguments 2>&1)
     $preflightExitCode=$LASTEXITCODE
     if ($preflightExitCode -ne 0) {
@@ -1364,6 +1378,14 @@ function Get-CanonicalOnboardingInputBinding([string]$Root,[string]$TargetReleas
             try { $message=([string]$diagnostic[0]).Substring('onboarding_preflight_error='.Length) | ConvertFrom-Json }
             catch { $message='' }
             if ($message -is [string] -and $message) { throw (ConvertTo-CanonicalSafeDiagnostic $message) }
+            if ($null -ne $message -and (Test-ExactPropertySet $message @('message','original_error_type','reason_code')) -and
+                $message.message -is [string] -and $message.original_error_type -is [string] -and $message.reason_code -is [string] -and
+                $message.original_error_type -cmatch '^[A-Za-z][A-Za-z0-9]{0,79}$' -and $message.reason_code -cmatch '^[A-Z][A-Z0-9_]{0,79}$') {
+                $preflightFailure=[InvalidOperationException]::new((ConvertTo-CanonicalSafeDiagnostic ([string]$message.message)))
+                $preflightFailure.Data['original_error_type']=[string]$message.original_error_type
+                $preflightFailure.Data['reason_code']=[string]$message.reason_code
+                throw $preflightFailure
+            }
         }
         throw '설치 전 자격 설정 경로를 확인하지 못했습니다. 자료와 확인 기록을 보존하고 관리자 지원 복구를 요청하세요.'
     }

@@ -56,6 +56,15 @@ def _helper_failure_message(completed, expected_line):
     return chain[0]["message"]
 
 
+def _unique_helper_throw_line(message):
+    expected = "throw '" + message + "'"
+    lines = [number for number, line in enumerate(
+        INSTALLER.read_text(encoding="utf-8-sig").splitlines(), 1
+    ) if expected in line]
+    assert len(lines) == 1, "helper rejection must retain one exact throw boundary"
+    return lines[0]
+
+
 def test_bootstrap_integrity_rejects_numeric_string_record_fields(tmp_path):
     release = tmp_path / "frozen-release"
     release.mkdir()
@@ -238,7 +247,9 @@ def test_install_helper_rejects_inexact_restore_result_before_pass_evidence(
         transaction, evidence,
     )
     assert result.returncode != 0
-    assert "Replacement restore result Boolean evidence is invalid" in _helper_failure_message(result, 1499)
+    assert "Replacement restore result Boolean evidence is invalid" in _helper_failure_message(
+        result, _unique_helper_throw_line("Replacement restore result Boolean evidence is invalid.")
+    )
     assert json.loads(evidence.read_text(encoding="utf-8"))["status"] == "ROLLBACK_FAILED"
     assert (install / "app" / "main.py").read_text(encoding="utf-8") == "# old\n"
     failed = install.parent / f".current.failed.{transaction}"

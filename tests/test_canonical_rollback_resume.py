@@ -53,6 +53,32 @@ function Get-CimInstance {
 '''
 
 
+AUTHENTICATED_NATIVE_ACTOR = '''
+import data_generation_guard as fixture_generation
+def authenticated_fixture_runtime_release():
+    app = Path(sys.argv[2])
+    identity = onboarding._verified_onboarding_target_release(app.parent)
+    return {'version': identity['version'], 'build_id': identity['build_id'],
+            'data_compatible_min_version': identity['version'], 'compatibility_verified': False}
+if sys.argv[1] in ('onboard', 'remove', 'prepare-ready'):
+    fixture_generation._runtime_release = authenticated_fixture_runtime_release
+'''
+
+
+def _bind_fixture_version(source, version):
+    # Native transport executes repository Python against this minimal packet.
+    # Bind its generation identity to the exact packet it represents; G and the
+    # real integrity reader remain active, including every mutation negative.
+    manifest_path = source / 'portable-manifest.json'
+    manifest = json.loads(manifest_path.read_text())
+    manifest['version'] = version
+    (source / 'app/Container_Audit.py').write_text(
+        'CURRENT_VERSION = "' + version + '"\n', encoding='utf-8'
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+    _bind_packet(source)
+
+
 class _PrivateEnvironment(dict):
     def __repr__(self):
         return '<isolated process environment; values suppressed>'
@@ -92,7 +118,7 @@ def _fixture(tmp_path):
     manifest['writer_session_contract_sha256'] = _sha(contract_path)
     manifest['writer_fence_helper_sha256'] = _sha(fence_path)
     manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
-    _bind_packet(source)
+    _bind_fixture_version(source, 'v2.0.99')
     for file in source.rglob('*'):
         if file.is_file():
             shutil.copyfile(file, install / file.relative_to(source))
@@ -101,9 +127,13 @@ def _fixture(tmp_path):
     host = Path(env['CA_UNINSTALL_HOST'])
     text = host.read_text().replace('import writer_session_fence as fence', 'import writer_session_fence as fence\nfence.WRITER_INVENTORY_SHA256 = ' + repr(digest) + "\nfence.canonical_control_root = lambda *args, **kwargs: Path(os.environ['CA_UNINSTALL_CONTROL'])")
     text = text.replace("(direct / 'control/writer-session/active.json')", "(Path(os.environ['CA_UNINSTALL_CONTROL']) / 'active.json')")
+    actor_anchor = 'import current_user_onboarding as onboarding'
+    assert text.count(actor_anchor) == 1
+    text = text.replace(actor_anchor, actor_anchor + '\n' + AUTHENTICATED_NATIVE_ACTOR)
     host.write_text(text, encoding='utf-8')
     old_tree = _tree(install)
     _distinct_replacement(source)
+    _bind_fixture_version(source, 'v2.0.100')
     evidence = tmp_path / 'protected-control/installation-evidence' / ('run-' + '1' * 32) / 'helper'
     evidence.mkdir(parents=True)
     canonical = source / 'INSTALL_CANONICAL_PORTABLE.ps1'

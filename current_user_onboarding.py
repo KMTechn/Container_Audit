@@ -17,6 +17,7 @@ import subprocess
 import sys
 from typing import Any, Callable, Mapping, MutableMapping
 import uuid
+from contextlib import nullcontext
 
 from direct_sync_push import load_json_no_duplicate_keys, manifest_hash
 from direct_sync_runtime import load_credentials_from_json, prepare_credential_config, PreparedCredentialConfig
@@ -1412,9 +1413,195 @@ def _probe_onboarding_target_owners(release, paths, *, file_paths=(), directory_
             raise DataGenerationBlocked(decision)
 
 
-def preflight_current_user_onboarding(app_root, *, environ=None, target_release_root=""):
+def _rollback_preflight_owner_alive(pid):
+    from ctypes import wintypes
+    from writer_session_fence import WriterFencedError
+    if type(pid) is not int or not 0 < pid <= 2147483647 or os.name != 'nt':
+        raise WriterFencedError('ACTIVE_WRITER_FENCE', 'rollback owner identity is not proven')
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    if not handle:
+        if ctypes.get_last_error() == 87:
+            return False
+        raise WriterFencedError('ACTIVE_WRITER_FENCE', 'rollback owner cannot be observed')
+    try:
+        code = wintypes.DWORD()
+        if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
+            raise WriterFencedError('ACTIVE_WRITER_FENCE', 'rollback owner cannot be observed')
+        return code.value == 259
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def _verified_rollback_preflight(app_root, target_root, release, journal_path, journal_sha256,
+                                 fence_sha256, *, environ=None):
+    """Recheck the parent's exact, protected continuation without publishing state."""
+    import writer_session_fence as fence
+    from tools.register_container_audit_worker_pc import _current_user_sid
+    pins = []
+    def deny():
+        raise fence.WriterFencedError('ACTIVE_WRITER_FENCE', '끝나지 않은 되돌리기의 실행 경계가 인증 기록과 달라 변경하지 않았습니다. 자료와 복구 기록을 보존하고 관리자에게 지원 복구를 요청하세요.')
+    def read_pinned(path, expected, maximum_bytes=131072):
+        path = Path(path)
+        if not path.is_absolute() or not re.fullmatch('[0-9a-f]{64}', str(expected)):
+            deny()
+        fence._assert_no_reparse_components(path)
+        if fence._sha256_file_bounded(path, maximum_bytes) != expected:
+            deny()
+        value = _read_json(path, 'rollback preflight metadata')
+        if fence._sha256_file_bounded(path, maximum_bytes) != expected:
+            deny()
+        pins.append((path, expected))
+        return value
+    try:
+        journal_path = Path(journal_path)
+        record = read_pinned(journal_path, journal_sha256)
+        fields = {'schema','event','install_root','operator_sid','operator_local_appdata_root',
+            'owner_process_id','owner_started_at_utc','session_id','attempt_id','orchestrator_sha256',
+            'writer_contract_sha256','source_manifest_sha256','receipt_path','receipt_binding_path',
+            'receipt_sha256','old_manifest_sha256','new_manifest_sha256','transaction_id',
+            'original_audit_sha256','preimage','original_relays','relay_count','runtime_preimage_binding',
+            'secret_values_recorded'}
+        if (journal_path.name != 'continuation-journal.json' or
+                set(record) != fields or
+                journal_path.parent.name != record.get('transaction_id') or
+                journal_path.parent.parent.name != 'rollback-continuations' or
+                record.get('schema') != 'container-audit-rollback-continuation-v1' or
+                record.get('event') != 'ROLLBACK_CONTINUATION' or
+                record.get('secret_values_recorded') is not False or
+                record.get('operator_sid') != _current_user_sid() or
+                _resolved(record.get('operator_local_appdata_root') or '') !=
+                _resolved((os.environ if environ is None else environ).get('LOCALAPPDATA') or '') or
+                record.get('old_manifest_sha256') != release['manifest_sha256']):
+            deny()
+        if (type(record['relay_count']) is not int or record['relay_count'] not in (0,1) or
+                not isinstance(record['original_relays'],list) or len(record['original_relays']) != record['relay_count'] or
+                set(record['preimage']) != {'exists','kind','data'} or type(record['preimage']['exists']) is not bool or
+                not all(isinstance(record['preimage'][name],str) for name in ('kind','data')) or
+                record['runtime_preimage_binding'].get('status') != 'PASS' or
+                record['runtime_preimage_binding'].get('relay_count') != record['relay_count'] or
+                fence._parse_utc(record['owner_started_at_utc']) is None or
+                any(not re.fullmatch('[0-9a-f]{64}',str(record[name])) for name in (
+                    'orchestrator_sha256','writer_contract_sha256','source_manifest_sha256','receipt_sha256',
+                    'old_manifest_sha256','new_manifest_sha256','original_audit_sha256'))):
+            deny()
+        source = _resolved(app_root).parent
+        source_manifest = _read_json(source / 'portable-manifest.json', 'rollback source manifest')
+        if (_file_sha256(source / 'portable-manifest.json') != record.get('source_manifest_sha256') or
+                source_manifest.get('writer_session_contract_sha256') != record['writer_contract_sha256'] or
+                record.get('new_manifest_sha256') != record.get('source_manifest_sha256') or
+                _file_sha256(source / 'INSTALL_CANONICAL_PORTABLE.ps1') != record.get('orchestrator_sha256')):
+            deny()
+        receipt_path = journal_path.parent / 'replacement-receipt.json'
+        if _resolved(record.get('receipt_path') or '') != receipt_path:
+            deny()
+        receipt = read_pinned(receipt_path, record.get('receipt_sha256'))
+        binding = Path(record.get('receipt_binding_path') or '')
+        if (receipt.get('transaction_id') != record.get('transaction_id') or
+                receipt.get('old', {}).get('manifest_sha256') != record.get('old_manifest_sha256') or
+                receipt.get('old', {}).get('source_commit') != release['build_id'] or
+                receipt.get('new', {}).get('manifest_sha256') != record.get('new_manifest_sha256') or
+                _resolved(receipt.get('install_root') or '') != _resolved(record.get('install_root') or '') or
+                _resolved(receipt.get('receipt_path') or '') != _resolved(binding) or
+                binding.name != 'replacement-receipt.json' or
+                not re.fullmatch('run-[0-9a-f]{32}', binding.parent.parent.name) or
+                binding.parent.parent.parent != journal_path.parent.parent.parent / 'installation-evidence'):
+            deny()
+        fence._assert_no_reparse_components(Path(target_root))
+        if _resolved(target_root) not in {_resolved(receipt['install_root']), _resolved(receipt['rollback_root'])}:
+            deny()
+        read_pinned(binding, record.get('receipt_sha256'))
+        active_path = fence.canonical_control_root(environ) / fence.ACTIVE_FILENAME
+        read_pinned(active_path, fence_sha256)
+        active = fence.active_fence(environ=environ)
+        if (active is None or active.get('owner_kind') != 'canonical_installer' or
+                active.get('status') not in ('INSTALLING', 'RESTORING', 'RESTORE_FAILED') or
+                fence._named_mutex_held_by_other(active['session_authority_mutex_name'])):
+            deny()
+        names = ('session_id', 'attempt_id', 'orchestrator_sha256',
+                 'writer_contract_sha256', 'replacement_transaction_id')
+        original = {name: record.get('transaction_id' if name == 'replacement_transaction_id' else name)
+                    for name in names}
+        for name, value in original.items():
+            if not isinstance(value, str) or not re.fullmatch(
+                    '[0-9a-f]{64}' if name.endswith('sha256') else '[0-9a-f]{32}', value):
+                deny()
+        wanted = {name: active[name] for name in names}
+        links = []
+        for depth in range(129):
+            if wanted == original:
+                predecessor_sha = ''
+                if _rollback_preflight_owner_alive(record.get('owner_process_id')):
+                    deny()
+                break
+            if depth == 128 or not re.fullmatch('[0-9a-f]{32}', str(wanted.get('attempt_id'))):
+                deny()
+            path = journal_path.parent / ('authority-' + wanted['attempt_id'] + '.json')
+            link_sha = fence._sha256_file_bounded(path, 131072)
+            link = read_pinned(path, link_sha)
+            if (set(link) != {'schema','transaction_id','journal_sha256','receipt_sha256',
+                    'owner_process_id','owner_started_at_utc','previous','previous_link_sha256',
+                    'authority','prepared_receipt_sha256','secret_values_recorded'} or
+                    link.get('schema') != 'container-audit-rollback-authority-link-v1' or
+                    link.get('transaction_id') != record['transaction_id'] or
+                    link.get('journal_sha256') != journal_sha256 or
+                    link.get('receipt_sha256') != record['receipt_sha256'] or
+                    link.get('secret_values_recorded') is not False or
+                    link.get('authority') != wanted or
+                    set(link.get('previous', {})) != set(names) or
+                    wanted['orchestrator_sha256'] != original['orchestrator_sha256'] or
+                    wanted['writer_contract_sha256'] != original['writer_contract_sha256'] or
+                    not re.fullmatch('[0-9a-f]{64}',str(link.get('prepared_receipt_sha256'))) or
+                    fence._parse_utc(link.get('owner_started_at_utc')) is None or
+                    _rollback_preflight_owner_alive(link.get('owner_process_id'))):
+                deny()
+            links.append((link, link_sha))
+            wanted = link['previous']
+        for link, link_sha in reversed(links):
+            if link.get('previous_link_sha256') != predecessor_sha:
+                deny()
+            predecessor_sha = link_sha
+        if links:
+            link_path = journal_path.parent / ('authority-' + active['attempt_id'] + '.json')
+            if _resolved(active['prepared_receipt_path']) == link_path:
+                if active['prepared_receipt_sha256'] != links[0][1]: deny()
+            else:
+                authorization = read_pinned(active['prepared_receipt_path'],active['prepared_receipt_sha256'])
+                if (authorization.get('schema') != 'container-audit-writer-release-authorization-v1' or
+                        any(authorization.get(name) != active[name] for name in (
+                            'session_id','attempt_id','replacement_transaction_id'))): deny()
+                audit = read_pinned(authorization.get('install_audit_path') or '',
+                    authorization.get('install_audit_sha256'),1048576)
+                published = audit.get('code_replacement',{}).get('continuation_authority_link',{})
+                if (_resolved(published.get('path') or '') != link_path or
+                        published.get('sha256') != links[0][1]): deny()
+        pins.extend([(source / 'portable-manifest.json', record['source_manifest_sha256']),
+                     (source / 'INSTALL_CANONICAL_PORTABLE.ps1', record['orchestrator_sha256']),
+                     (Path(target_root) / 'portable-manifest.json', release['manifest_sha256']),
+                     (Path(target_root) / 'bootstrap-integrity.json',_file_sha256(Path(target_root) / 'bootstrap-integrity.json'))])
+        def verify_pending():
+            for path, expected in pins:
+                if fence._sha256_file_bounded(path) != expected:
+                    deny()
+            if fence.active_fence(environ=environ) != active:
+                deny()
+        verify_pending()
+        return verify_pending
+    except fence.WriterFenceError:
+        raise
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise fence.WriterFencedError('ACTIVE_WRITER_FENCE', 'rollback preflight binding is not proven') from exc
+
+
+def preflight_current_user_onboarding(app_root, *, environ=None, target_release_root="",
+        rollback_journal_path="", rollback_journal_sha256="", rollback_fence_sha256=""):
     """Admit locator and nested owners without changing installation or user state."""
     from data_generation_guard import DataGenerationBlocked
+    from writer_session_fence import WriterFenceError
 
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
     try:
@@ -1427,10 +1614,19 @@ def preflight_current_user_onboarding(app_root, *, environ=None, target_release_
                 *_owner_artifact_paths(paths).values(), tls_ca_source,
                 default_protected_admin_profile_path(environ=environ),
             ))
-        inputs = _prepare_onboarding_inputs(
-            paths, tls_ca_source, environ,
-            load_credentials_from_json,
-        )
+        read_scope = nullcontext()
+        if any((rollback_journal_path, rollback_journal_sha256, rollback_fence_sha256)):
+            if release is None or not all((rollback_journal_path, rollback_journal_sha256, rollback_fence_sha256)):
+                raise WriterFenceError('ACTIVE_WRITER_FENCE', 'rollback preflight scope is incomplete')
+            from data_generation_guard import _authenticated_readonly_rollback_target
+            verify_pending = _verified_rollback_preflight(app_root, target_release_root, release, rollback_journal_path,
+                rollback_journal_sha256, rollback_fence_sha256, environ=environ)
+            read_scope = _authenticated_readonly_rollback_target(release, verify_pending)
+        with read_scope:
+            inputs = _prepare_onboarding_inputs(
+                paths, tls_ca_source, environ,
+                load_credentials_from_json,
+            )
         if release is not None and inputs[1] is not None:
             prepared = inputs[1]
             _probe_onboarding_target_owners(release, paths, file_paths=(
@@ -1438,6 +1634,11 @@ def preflight_current_user_onboarding(app_root, *, environ=None, target_release_
                 prepared.payload.get("isolated_qualification_context_path"),
             ), directory_paths=((prepared.payload.get("secret_data_dir"),)
                 if prepared.protected_secret_path is not None else ()))
+    except WriterFenceError as exc:
+        failure = CurrentUserOnboardingError(str(exc), report_path=paths.onboarding_report_path, status='FAILED')
+        failure.original_error_type = type(exc).__name__
+        failure.reason_code = exc.code
+        raise failure from exc
     except DataGenerationBlocked as exc:
         raise CurrentUserOnboardingError(
             exc.user_message, report_path=paths.onboarding_report_path, status="FAILED",
@@ -2294,10 +2495,19 @@ def onboarding_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--expected-input-binding", default="")
     parser.add_argument("--target-release-root", default="")
+    parser.add_argument("--rollback-preflight-journal-path", default="")
+    parser.add_argument("--rollback-preflight-journal-sha256", default="")
+    parser.add_argument("--rollback-preflight-fence-sha256", default="")
     args = parser.parse_args(argv)
     try:
         if args.preflight_only:
-            binding = preflight_current_user_onboarding(args.app_root, target_release_root=args.target_release_root)
+            preflight_options = {'target_release_root': args.target_release_root}
+            if any((args.rollback_preflight_journal_path, args.rollback_preflight_journal_sha256,
+                    args.rollback_preflight_fence_sha256)):
+                preflight_options.update(rollback_journal_path=args.rollback_preflight_journal_path,
+                    rollback_journal_sha256=args.rollback_preflight_journal_sha256,
+                    rollback_fence_sha256=args.rollback_preflight_fence_sha256)
+            binding = preflight_current_user_onboarding(args.app_root, **preflight_options)
             print(f"onboarding_input_binding={binding}")
             return 0
         report = onboard_current_user(
@@ -2309,7 +2519,10 @@ def onboarding_main(argv: list[str] | None = None) -> int:
     except CurrentUserOnboardingError as exc:
         if args.preflight_only:
             # Native PS5.1 and PS7 transports must not depend on a console code page.
-            print("onboarding_preflight_error=" + json.dumps(str(exc), ensure_ascii=True))
+            from auto_update import redact_for_sink
+            print("onboarding_preflight_error=" + redact_for_sink(json.dumps(
+                {'message': str(exc), 'original_error_type': exc.original_error_type, 'reason_code': exc.reason_code}
+                if hasattr(exc, 'reason_code') else str(exc), ensure_ascii=True)))
             return ONBOARDING_EXIT_CODE
         print(f"onboarding_status={exc.status}")
         print(str(exc))

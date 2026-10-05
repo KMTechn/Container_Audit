@@ -8,9 +8,24 @@ import re
 import stat
 import subprocess
 import sys
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from kmtech_shared import data_generation as generation
 from writer_session_fence import canonical_control_root, writer_sink
+
+_READONLY_ROLLBACK_TARGET = ContextVar('container_readonly_rollback_target', default=None)
+
+
+@contextmanager
+def _authenticated_readonly_rollback_target(release, verify_pending):
+    """Only the exact continuation preflight supplies this read-only target."""
+    verify_pending()
+    scope = _READONLY_ROLLBACK_TARGET.set((dict(release), verify_pending))
+    try:
+        yield
+    finally:
+        _READONLY_ROLLBACK_TARGET.reset(scope)
 
 
 class DataGenerationBlocked(RuntimeError):
@@ -168,6 +183,20 @@ def record_before_data_open(data_root, *, probe_only=False):
 def probe_before_data_open(data_root, *, admission_source=None):
     """Existing admission must cover this check and the following control read."""
     if admission_source is None:
+        target = _READONLY_ROLLBACK_TARGET.get()
+        if target is not None:
+            release, verify_pending = target
+            verify_pending()
+            from tools.register_container_audit_worker_pc import _current_user_sid
+            sid = _current_user_sid()
+            decision = generation.probe_downgrade(
+                marker_paths(data_root, sid), release['version'],
+                app_id='container_audit', subject_sid=sid,
+                target_build_id=release['build_id'],
+            )
+            if not decision['allowed']:
+                raise DataGenerationBlocked(decision)
+            return decision
         return record_before_data_open(data_root, probe_only=True)
     if admission_source != "current_user_setup_removal":
         raise ValueError("unsupported generation probe admission source")
