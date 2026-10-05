@@ -53,7 +53,58 @@ def test_byte_exact_inventory_outputs_disable_checkout_eol_conversion() -> None:
         assert attributes.get("text") == "unset" or attributes.get("eol") == "lf"
 
 
-def test_container_writer_sink_inventory_has_expected_current_findings() -> None:
+def _assert_canonical_relay_restore_g_precedes_scheduler(tmp_path) -> None:
+    from tests.powershell_contracts import run_functions
+    from tests.test_official_legacy_relay_identity import XML_SETUP
+
+    for engine in ("powershell.exe", "pwsh.exe"):
+        root = tmp_path / engine
+        root.mkdir()
+        result = run_functions(root, ROOT / "INSTALL_CANONICAL_PORTABLE.ps1",
+                               ["Restore-CanonicalOfficialLegacyRelay"], XML_SETUP + r'''
+$source=$env:CA_FIXTURE_SOURCE;$root=$env:CA_CONTRACT_ROOT
+$operatorSid='S-1-5-21-350';$lad=Join-Path $root 'local';$activeDataRoot=Join-Path $root 'data'
+$oldCode=Join-Path $root 'old-code'
+foreach($path in @($lad,$activeDataRoot,$oldCode)){[void][IO.Directory]::CreateDirectory($path)}
+[IO.File]::WriteAllText((Join-Path $oldCode 'portable-manifest.json'),('{"version":"v2.0.33","source_commit":"'+('a'*40)+'"}'))
+function Assert-InstallationEvidenceProtectedPath {param($Path)}
+function Sha {param($Path);return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()}
+function Write-InstallationCaughtFailure {param($Failure)}
+function Relays {return @()}
+function Invoke-ContainerWriterFenceMutation {param($SessionId,$AttemptId,$ReplacementTransactionId,$DelegationToken,$AuthorityLease,$Action);& $Action}
+$actualGenerationGate=${function:Assert-ContainerDataGenerationTarget}
+function Assert-ContainerDataGenerationTarget {
+ param($CandidateRoot,$TargetSid,$LocalAppDataRoot,$DataRoot,$HelperRoot)
+ $script:events.Add('g-enter')
+ try{& $actualGenerationGate @PSBoundParameters;$script:events.Add('g-pass')}
+ catch{$script:events.Add('g-reject');throw}
+}
+function Enable-ScheduledTask {param($TaskName,$TaskPath,$ErrorAction);if($TaskName -cne $name -or $TaskPath -cne '\'){throw 'WRONG_TASK'};$script:events.Add('enable');$script:liveEnabled=$true}
+function Disable-ScheduledTask {param($TaskName,$TaskPath,$ErrorAction);if($TaskName -cne $name -or $TaskPath -cne '\'){throw 'WRONG_TASK'};$script:events.Add('disable');$script:liveEnabled=$false}
+function Get-CanonicalOfficialLegacyRelayPreimage {
+ $liveXml=$xml.Replace('<Enabled>true</Enabled>',('<Enabled>'+([string]$script:liveEnabled).ToLowerInvariant()+'</Enabled>'))
+ return [pscustomobject]@{identity=(Get-BootstrapOfficialLegacyRelayIdentity $task $liveXml);enabled=$script:liveEnabled;xml_sha256='live-xml-readback'}
+}
+$xmlPath=Join-Path $root 'preimage.xml';[IO.File]::WriteAllText($xmlPath,$xml,[Text.UTF8Encoding]::new($false))
+$identity=Get-BootstrapOfficialLegacyRelayIdentity $task $xml
+if(-not $identity.matched){throw 'OFFICIAL_FIXTURE_IDENTITY_FAILED'}
+foreach($blocked in @($false,$true)){
+ $marker=Join-Path $activeDataRoot 'data-generation.json'
+ if($blocked){[IO.File]::WriteAllText($marker,('{"schema":"kmtech-data-generation-v2","app_id":"container_audit","subject_sid":"'+$operatorSid+'","version":"v2.0.99","data_compatible_min_version":"v2.0.99","build_id":"'+('a'*40)+'","compatibility_verified":false}'))}
+ foreach($enabled in @($false,$true)){
+  $script:events=[Collections.Generic.List[string]]::new();$script:liveEnabled=-not $enabled
+  $record=[ordered]@{schema='container-audit-official-legacy-relay-preimage-v1';enabled=$enabled;task_name=$name;task_path='\';xml_path=$xmlPath;xml_sha256=(Sha $xmlPath);identity_sha256=$identity.sha256;old_code_root=$oldCode}
+  $recordPath=Join-Path $root 'preimage.json';[IO.File]::WriteAllText($recordPath,($record|ConvertTo-Json -Compress))
+  $failure='';$failureId='';try{$restored=Restore-CanonicalOfficialLegacyRelay ([pscustomobject]@{path=$recordPath;sha256=(Sha $recordPath)})}catch{$failure=$_.Exception.Message;$failureId=$_.FullyQualifiedErrorId}
+  if($blocked){if($failure -cne 'OFFICIAL_LEGACY_RELAY_G_BLOCKED' -or ($script:events -join ',') -cne 'g-enter,g-reject' -or $script:liveEnabled -eq $enabled){throw 'G_REJECTION_REACHED_SCHEDULER'}}
+  else{$mutation=if($enabled){'enable'}else{'disable'};if($failure -or ($script:events -join ',') -cne ('g-enter,g-pass,'+$mutation) -or $script:liveEnabled -ne $enabled -or $restored.status -cne 'PROVEN_PREIMAGE_RESTORED'){throw ('G_DID_NOT_PRECEDE_SCHEDULER;code='+$failureId+';events='+($script:events -join ','))}}
+ }
+}
+'PASS_G_BEFORE_SCHEDULER'
+''', engine=engine, values={"CA_FIXTURE_SOURCE": str(ROOT)})
+        assert result.returncode == 0, result.stderr
+        assert "PASS_G_BEFORE_SCHEDULER" in result.stdout
+def test_container_writer_sink_inventory_has_expected_current_findings(tmp_path) -> None:
     payload = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
     module = _load_module()
 
@@ -393,7 +444,8 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         "tools/container_writer_fence.ps1", "INSTALL_THIS_PC.ps1", "INSTALL_CANONICAL_PORTABLE.ps1",
     }
     canonical_tasks = [row for row in scheduled if row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1"]
-    assert {row["wrapper_function"] for row in canonical_tasks} == {"Restore-CanonicalScheduledWriterPreimage"}
+    assert {row["wrapper_function"] for row in canonical_tasks} == {"Restore-CanonicalOfficialLegacyRelay"}
+    _assert_canonical_relay_restore_g_precedes_scheduler(tmp_path)
     assert {row["wrapper_function"] for row in scheduled if row["file"] == "tools/container_writer_fence.ps1"} <= {
         "Disable-ContainerScheduledTaskUnderWriterFence",
         "Enable-ContainerScheduledTaskUnderWriterFence",

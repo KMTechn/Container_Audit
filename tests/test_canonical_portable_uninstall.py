@@ -344,7 +344,8 @@ def _ps(path, env, *args):
     result = run_powershell(
         [_powershell(), '-NoLogo', '-NoProfile', '-NonInteractive',
          '-ExecutionPolicy', 'Bypass', '-File', str(path), *args],
-        env=env, capture_output=True, text=True, timeout=90,
+        # Native contracts finish naturally; task policy forbids timeout kills.
+        env=env, capture_output=True, text=True,
     )
     observations = [json.loads(line.removeprefix('ca_fixture_audit='))
                     for line in result.stdout.splitlines() if line.startswith('ca_fixture_audit=')]
