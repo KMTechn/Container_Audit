@@ -1272,3 +1272,5 @@ Registration retains string profile-path arguments after shared resolution. Inva
 시도한다. 별도 evidence에 저장 실패 단계·대상·예외 종류 기록을 시도하고,
 둘 다 저장할 수 없으면 UNAVAILABLE 상태를 남긴다. 봉인된 퇴역 audit는
 다시 쓰지 않는다. 코드·G·runtime 정합이 증명되어야 fence와 relay를 복귀한다.
+
+공식 옛 relay 되돌림은 보호 preimage XML의 SHA256을 먼저 검증한 뒤, live 작업의 정체성 지문과 enabled를 원 상태와 대조한다. 스케줄러의 기록용 XML 필드 변화는 복원 실패로 판정하지 않는다.

@@ -77,7 +77,8 @@ foreach($value in @('UNRECOGNIZED','Limited','Highest','')){
 
 @pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
 @pytest.mark.parametrize('generation_allowed', (True, False))
-def test_task_preimage_restore_is_independent_of_current_and_respects_g(tmp_path, engine, generation_allowed):
+@pytest.mark.parametrize('record_fields_changed', (False, True))
+def test_task_preimage_restore_is_independent_of_current_and_respects_g(tmp_path, engine, generation_allowed, record_fields_changed):
     result = run_functions(tmp_path, CANONICAL, ['Save-CanonicalOfficialLegacyRelayPreimage','Restore-CanonicalOfficialLegacyRelay'], XML_SETUP + r'''
 $root=$env:CA_CONTRACT_ROOT;$operatorSid='';$lad='unused';$activeDataRoot='unused';$source='unused';$install=Join-Path $root 'current-absent'
 function Assert-InstallationEvidenceWriteRoot {param($Path)}
@@ -95,6 +96,9 @@ function Enable-ScheduledTask {param($TaskName,$TaskPath,$ErrorAction);$script:e
 function Disable-ScheduledTask {param($TaskName,$TaskPath,$ErrorAction);$script:enabled=$false}
 function Get-CanonicalOfficialLegacyRelayPreimage {
     $liveXml=if($script:enabled){$xml}else{$xml.Replace('<Enabled>true</Enabled>','<Enabled>false</Enabled>')}
+    if($script:enableCalls -gt 0 -and $env:CA_RECORD_FIELDS_CHANGED -ceq '1'){
+        $liveXml=$liveXml.Replace('AUTHOR_PLACEHOLDER','CHANGED_RECORD_AUTHOR').Replace('2020-01-01','2024-02-02')
+    }
     return [pscustomobject]@{xml=$liveXml;xml_sha256=(ShaText $liveXml);identity=(Get-BootstrapOfficialLegacyRelayIdentity $task $liveXml);enabled=$script:enabled;task_name=$name;task_path='\';old_code_root=(Join-Path $root 'old-code');files=@()}
 }
 $before=Get-CanonicalOfficialLegacyRelayPreimage
@@ -106,7 +110,8 @@ if($env:CA_GENERATION_ALLOWED -ceq '1'){
  if($failed -or -not $script:enabled -or $script:enableCalls -ne 1){throw 'Independent exact preimage restore was not attempted.'}
 }else{if(-not $failed -or $script:enabled -or $script:enableCalls){throw 'G denial reactivated legacy writer.'}}
 'PASS'
-''', engine=engine, values={'CA_GENERATION_ALLOWED': '1' if generation_allowed else '0'})
+''', engine=engine, values={'CA_GENERATION_ALLOWED': '1' if generation_allowed else '0',
+                           'CA_RECORD_FIELDS_CHANGED': '1' if record_fields_changed else '0'})
     assert result.returncode == 0, result.stderr
 
 

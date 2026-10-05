@@ -2196,7 +2196,7 @@ function Restore-CanonicalOfficialLegacyRelay($Binding) {
         else{Disable-ScheduledTask -TaskName ([string]$record.task_name) -TaskPath ([string]$record.task_path) -ErrorAction Stop|Out-Null}
     })
     $after=Get-CanonicalOfficialLegacyRelayPreimage
-    if($null -eq $after -or [bool]$after.enabled -ne [bool]$record.enabled -or [string]$after.identity.sha256 -cne [string]$identity.sha256 -or [string]$after.xml_sha256 -cne [string]$record.xml_sha256){throw 'OFFICIAL_LEGACY_RELAY_RESTORE_READBACK_FAILED'}
+    if($null -eq $after -or [bool]$after.enabled -ne [bool]$record.enabled -or [string]$after.identity.sha256 -cne [string]$identity.sha256){throw 'OFFICIAL_LEGACY_RELAY_RESTORE_READBACK_FAILED'}
     return @{status='PROVEN_PREIMAGE_RESTORED';identity_sha256=[string]$after.identity.sha256;xml_sha256=[string]$after.xml_sha256}
 }
 
