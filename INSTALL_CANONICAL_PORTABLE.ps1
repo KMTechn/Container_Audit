@@ -425,6 +425,77 @@ function Get-WriterInventorySemantics($Inventory) {
     Remove-WriterInventoryPositions $copy
     return ($copy | ConvertTo-Json -Depth 40 -Compress)
 }
+function Test-InstalledReleasePreimages($Old,$New,[string]$BeforeRoot,[string]$AfterRoot) {
+    # The exact release-pair route additionally binds ONE complete installed
+    # release. A file cannot borrow another release's preimage or absence.
+    try {
+        if (-not $BeforeRoot -or -not $AfterRoot) { return $false }
+        $path=Join-Path $AfterRoot 'tools\container_data_generation_transition.json'
+        if ((Get-Item -LiteralPath $path -ErrorAction Stop).Length -gt 2MB) { return $false }
+        $declaration=Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ([string]$declaration.schema_version -cne 'container-audit-g-forward-transition-v1' -or
+            [string]$declaration.direction -cne 'forward' -or
+            [string]$declaration.after_inventory_sha256 -cne [string]$New.writer_sink_inventory_contract_sha256) { return $false }
+        $rows=@($declaration.installed_release_preimages)
+        if ($rows.Count -ne 2) { return $false }
+        $releases=@{}
+        foreach($row in $rows) {
+            if (-not (Test-ExactPropertySet $row @('source_commit','writer_inventory_sha256','files')) -or
+                $row.source_commit -isnot [string] -or $row.source_commit -cnotmatch '^[0-9a-f]{40}$' -or
+                $row.writer_inventory_sha256 -isnot [string] -or $row.writer_inventory_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+                $releases.ContainsKey($row.source_commit)) { return $false }
+            $releases[$row.source_commit]=$row
+        }
+        if (-not $releases.ContainsKey([string]$Old.source_commit)) { return $false }
+        $selected=$releases[[string]$Old.source_commit]
+        if ([string]$selected.writer_inventory_sha256 -cne [string]$Old.writer_sink_inventory_contract_sha256) { return $false }
+        $expected=@{}
+        $nonDeployed=@('tools/active_work_probe.py','tools/build_operator_review_case_report.py',
+            'tools/build_portable_release_candidate.py','tools/check_logistics_runtime_profile.py',
+            'tools/direct_sync_relay_install_pack.py','tools/install_protected_admin.py')
+        $sourceSeen=@{}
+        if (@($declaration.source_replacements).Count -ne 27) { return $false }
+        foreach($entry in @($declaration.source_replacements)) {
+            $sourcePath=[string]$entry.path
+            if (-not (Test-ExactPropertySet $entry @('path','before','after')) -or $sourceSeen.ContainsKey($sourcePath)) { return $false }
+            $sourceSeen[$sourcePath]=$true
+            $packetRows=@($declaration.files|Where-Object {[string]$_.path -ceq $sourcePath -or [string]$_.path -ceq ('app/'+$sourcePath)})
+            if ($sourcePath -cin $nonDeployed) {
+                # These developer tools are deliberately outside the stock.
+                if ($packetRows.Count -ne 0) { return $false }
+                continue
+            }
+            if ($packetRows.Count -ne 1) { return $false }
+            $relative=[string]$packetRows[0].path
+            if ($relative -cnotmatch '^[A-Za-z0-9_./-]+$' -or $relative.StartsWith('/') -or
+                '..' -cin @($relative.Split('/')) -or $expected.ContainsKey($relative) -or
+                [string]$entry.after -cnotmatch '^[0-9a-f]{64}$' -or
+                [string]$packetRows[0].after -cne [string]$entry.after) { return $false }
+            $expected[$relative]=[string]$entry.after
+        }
+        if ($expected.Count -ne 21 -or @($selected.files).Count -ne $expected.Count) { return $false }
+        $seen=@{}
+        foreach($entry in @($selected.files)) {
+            $relative=[string]$entry.path
+            if (-not $expected.ContainsKey($relative) -or $seen.ContainsKey($relative)) { return $false }
+            $seen[$relative]=$true
+            $beforePath=Join-Path $BeforeRoot $relative
+            $afterPath=Join-Path $AfterRoot $relative
+            Assert-BootstrapNoReparsePoint $beforePath 'installed exact preimage' -PathOnly
+            Assert-BootstrapNoReparsePoint $afterPath 'assembly exact after' -PathOnly
+            if ($null -ne $entry.PSObject.Properties['absent']) {
+                if (-not (Test-ExactPropertySet $entry @('path','absent')) -or
+                    $entry.absent -isnot [bool] -or -not $entry.absent -or (Test-Path -LiteralPath $beforePath)) { return $false }
+            } else {
+                if (-not (Test-ExactPropertySet $entry @('path','sha256')) -or
+                    $entry.sha256 -isnot [string] -or $entry.sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+                    -not (Test-Path -LiteralPath $beforePath -PathType Leaf) -or (Sha $beforePath) -cne $entry.sha256) { return $false }
+            }
+            if (-not (Test-Path -LiteralPath $afterPath -PathType Leaf) -or (Sha $afterPath) -cne $expected[$relative]) { return $false }
+        }
+        return $true
+    } catch { return $false }
+}
 function Test-ExactApprovedWriterTransition($Old, $New, [string]$SourceRoot) {
     $settingsPath = Join-Path $SourceRoot 'app\auto-update-settings.json'
     if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) { return $false }
@@ -449,6 +520,12 @@ function Test-ExactApprovedWriterTransition($Old, $New, [string]$SourceRoot) {
             $pin.to_contract_sha256 -ceq $New.writer_sink_inventory_contract_sha256) { $found = $true }
     }
     return $found
+}
+function Test-ExactApprovedInstalledWriterTransition($Old,$New,[string]$SourceRoot,[string]$BeforeRoot=$install) {
+    # Admission is forward-only; verified replacement restoration keeps its
+    # separately authenticated receipt and exact reverse policy unchanged.
+    return ((Test-ExactApprovedWriterTransition $Old $New $SourceRoot) -and
+        (Test-InstalledReleasePreimages $Old $New $BeforeRoot $SourceRoot))
 }
 # App-only, forward-only admission for the exact sub-233 G source transition.
 # The existing writer-semantic predicate and common helpers remain unchanged.
@@ -2975,7 +3052,7 @@ if (-not ($Uninstall -and -not $CompleteRetiredRemoval) -and
         ([string]$preflightCandidate.writer_sink_inventory_sha256) `
         ([string]$preflightCandidate.writer_sink_inventory_contract_sha256)
     if ((Get-WriterInventorySemantics $preflightInventory) -cne (Get-WriterInventorySemantics $lifecycleWriterInventory) -and
-        -not (Test-ExactApprovedWriterTransition $preflightCandidate $lifecycleManifest $lifecycleSource) -and
+        -not (Test-ExactApprovedInstalledWriterTransition $preflightCandidate $lifecycleManifest $lifecycleSource) -and
         ($Uninstall -or $RestoreVerifiedReplacement -or $CompleteRetiredRemoval -or
          -not (Test-ContainerDataGenerationForwardTransition -BeforeRoot $install -AfterRoot $source -BeforeInventory $preflightInventory -AfterInventory $lifecycleWriterInventory))) {
         throw 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER'
@@ -3523,7 +3600,7 @@ $enteredPlacementTry = $true
                 -not ($Uninstall -or $RestoreVerifiedReplacement -or $CompleteRetiredRemoval) -and
                 (Test-ContainerDataGenerationForwardTransition -BeforeRoot $install -AfterRoot $source -BeforeInventory $installedInventory -AfterInventory $lifecycleWriterInventory)
             if (-not $writerSemanticsIdentical -and -not $declaredGenerationTransition -and
-                -not (Test-ExactApprovedWriterTransition $candidate $lifecycleManifest $lifecycleSource)) {
+                -not (Test-ExactApprovedInstalledWriterTransition $candidate $lifecycleManifest $lifecycleSource)) {
                 throw 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER'
             }
             $installedInventorySha256 = [string]$candidate.writer_sink_inventory_contract_sha256

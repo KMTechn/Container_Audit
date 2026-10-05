@@ -63,6 +63,15 @@ REFUSE/UNKNOWN은 한국어 안내만 내고 기존 report·relay·Run·예약 �
 ea566d1에서 이 교정 후보로의 설치 전진은 앱 전용 G 전환 선언의 정확한 코드 파일
 before/after hash와 resident/raw 두 route의 지정 G 변화로만 허용한다. 기존 writer
 의미 비교는 유지하며 다른 sink/guard/route, 파일 변경·추가, 역전환은 예외가 아니다.
+조립 판의 다른 writer 변화는 기존 exact release-pair 경로에 전체 설치 preimage를 AND로
+결속한다. `installed_release_preimages`는 실제 설치된 EA 계보·TEST1 v2.0.99/8928228의
+commit·inventory와 stock G source 21개 이름·committed LF SHA(또는 정확 부재)를
+한 release 전체로 비교한다. 파일마다 release를 섞거나 같은 판의 다른 build를 쓰는 것은
+거절한다. data_generation_guard.py 부재는 8928228의 정확 부재에만 해당한다.
+scalar EA before·resident/raw 2-route predicate·기존 files 871 경계는 그대로이며
+새 OR·wildcard·G 역전환은 없다. 배포되지 않는 개발 도구 6개는 committed LF hash를
+G-PAIR-DIFF에 따로 남기고, files 표 또는 stock zip에 들어오면 범위 회귀가 실패한다.
+검증된 replacement receipt의 기존 정확 복원 policy는 별도 경로로 유지한다.
 검증 버전·실제 subprocess 결과·제외와 한계는
 [G 직접 입구 교정](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-233/REPORT.md)에 기록한다.
 
