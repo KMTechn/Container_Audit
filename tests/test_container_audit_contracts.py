@@ -8058,6 +8058,13 @@ def test_submit_current_tray_rolls_back_partial_flag_when_log_preflight_fails(tm
 
 def test_worker_scanner_partial_submit_writes_completion_and_relay_plan(tmp_path, monkeypatch):
     app = _completion_app(tmp_path)
+    # Decision 11-13: this data-only harness also owns the new UI expiry timer.
+    expiry_jobs = []
+    cancelled_jobs = []
+    app.root = SimpleNamespace(
+        after=lambda delay, callback: expiry_jobs.append((delay, callback)) or f'job-{len(expiry_jobs)}',
+        after_cancel=cancelled_jobs.append,
+    )
     app.current_tray.master_label_code = '{"CLC":"AAA2270730100","QT":"60"}'
     app.current_tray.has_error_or_reset = False
     app.current_tray.is_partial_submission = False
@@ -8078,7 +8085,10 @@ def test_worker_scanner_partial_submit_writes_completion_and_relay_plan(tmp_path
 
     assert not Path(app.log_file_path).exists()
     assert app._short_confirmation_undo is not None
+    assert expiry_jobs and 0 <= expiry_jobs[0][0] <= 60001
+    expiry_job = app._short_confirmation_expiry_job
     assert app._commit_short_confirmation()
+    assert cancelled_jobs == [expiry_job]
     with open(app.log_file_path, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     assert len(rows) == 1

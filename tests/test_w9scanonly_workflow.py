@@ -436,7 +436,7 @@ def test_short_csv_lost_ack_retries_same_row_before_settling(flow, windows, monk
     assert windows == []
 
 
-def test_short_legacy_restart_projects_held_csv_once(flow, windows, tmp_path):
+def test_short_legacy_restart_projects_held_csv_once(flow, windows, tmp_path, scan_clock):
     root = tmp_path / "restart"
     app = flow(transition=True, root=root)
     # The flow fixture names its CSV with the host day; this module freezes
@@ -451,6 +451,9 @@ def test_short_legacy_restart_projects_held_csv_once(flow, windows, tmp_path):
     path = app._short_projection_path(app._short_confirmation_undo["completion_id"])
     state = json.loads(path.read_text(encoding="utf-8"))["state"]
     assert app._save_tray_state_snapshot(state)
+    # DESIGN 11-13: restart projects immediately after the 60-second grace;
+    # an earlier restart must retain the remaining UNDO time.
+    scan_clock(61)
     restarted = flow(transition=True, root=root)
     restarted._restore_tray_from_state(state)
     restarted._load_session_state()

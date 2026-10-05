@@ -360,6 +360,10 @@ packet의 역방향 승인과 원 replacement receipt를 함께 사용한다. �
 사용자 자료·신원·장부를 과거 snapshot으로 되돌리지 않는다.
 옛 releases/latest 경로를 켜지 않는다.
 
+### 현장 옛 판 전환 중 공개 발행 동결
+
+현장 옛 이적 판이 모두 걷힐 때까지(되돌림 기간 포함) 공개 릴리스·태그 push·GitHub latest 변경은 0건으로 유지한다. 새 판은 회사 서버 private feed·설치 패키지로만 전달한다. v2.0.9는 시작 때 `releases/latest` 태그를 문자열로 비교하며 `v2.0.99 > v2.0.9`이면 서명 없는 ZIP을 덮는 업데이트를 제시한다. [릴리스 계약](../../RELEASE_GATE_CONTRACT.md)의 동결을 적용하며, 기존 `--latest=false` 설정은 공개 발행 승인을 대신하지 않는다.
+
 설치 때 HiberbootEnabled를 읽고 policy에 값/읽기 결과만 기록한다.
 SYSTEM 로그온 작업의 XML은 SYSTEM SID와 HighestAvailable을 유지하고 선택
 LogonType 요소를 생략한다. ServiceAccount는 cmdlet/COM enum이며 XML schema 값이
@@ -637,7 +641,7 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 
 제품 형식 오류는 [현장 안내](../OUTLINE_CONTAINER_AUDIT_USER_MANUAL_20260627.md#제품-형식-오류가-나타나면)의 라벨·스캐너 설정 확인 또는 담당자 문의를 따른다. 짧은 제품 바코드는 제품 라벨 확인 후 다시 스캔하고, 같은 오류가 계속되면 담당자에게 라벨 형식을 확인한다. 길이 초과·위험 형식·트레이 설정 오류에 반복 스캔을 지시하지 않으며, 원문 redaction과 기존 입력 잠금/확인 동작은 유지한다. U06의 fake-Tk 문구 비교는 실제 글꼴 배치·스캐너 입력 확인을 대신하지 않는다.
 
-제품 교환은 [스캐너 경계](member-exchange-view.md)에 따라 창·수량 선택·완료 클릭 없이 진행한다. 명령 카드는 모든 스캔 파서 전에 가른다. 미달은 제품 1개 이상 뒤 같은 현품표로 확정하며, 바로 앞 동일 라벨 3초 이내 중복만 무시한다. 부족 수와 다른 소리를 표시하고 다음 현품표 전 UNDO로 원 기록을 남긴 채 재개한다. 현대·과도기 미달의 HELD 기록은 로컬 JSON/intent에 먼저 저장하고 CSV에는 아직 쓰지 않는다. 다음 현품표/로그아웃/종료로 보류를 풀 때 원 id/time/worker의 TRAY_COMPLETE CSV를 멱등 저장한 뒤 중앙 전송을 허용한다. HELD 중 UNDO는 CSV 행 없이 로컬 JSON/intent에 취소와 원 증거를 남긴다. 관리자 운영·복구 전용 삭제/격리/PIN 창은 수동 판단을 유지한다.
+제품 교환은 [스캐너 경계](member-exchange-view.md)에 따라 창·수량 선택·완료 클릭 없이 진행한다. 명령 카드는 모든 스캔 파서 전에 가른다. 미달은 제품 1개 이상 뒤 같은 현품표로 확정하며, 바로 앞 동일 라벨 3초 이내 중복만 무시한다. 부족 수와 다른 소리를 표시하고 유예 중 UNDO로 원 기록을 남긴 채 재개한다. 현대·과도기 미달의 HELD 기록은 로컬 JSON/intent에 먼저 저장하고 CSV에는 아직 쓰지 않는다. 다음 현품표/로그아웃/종료 또는 확정 뒤 60초 무입력으로 보류를 풀 때 원 id/time/worker의 TRAY_COMPLETE CSV를 멱등 저장한 뒤 중앙 전송을 허용한다. 재시작은 내구 확정 시각으로 남은 유예를 복원하고 60초가 지났으면 즉시 투영·전송한다. HELD 중 UNDO는 CSV 행 없이 로컬 JSON/intent에 취소와 원 증거를 남긴다. 관리자 운영·복구 전용 삭제/격리/PIN 창은 수동 판단을 유지한다.
 
 
 2026-09-12 UI 변경은 일상 안내 band와 작업 상세를 접고, 알림/현품표 교체 및 사용자가 연 상세만 펼친다.
@@ -1309,6 +1313,8 @@ Registration retains string profile-path arguments after shared resolution. Inva
 
 공식 옛 relay 전환은 기존 `status/current_user_onboarding.json` 설치 결과의 `official_legacy_relay_transition` 필드에 보호 preimage 경로·SHA256·정체성·설치 경로·작업자 SID를 남긴다. 설치 완료 전 새 READY 결과에도 같은 포인터를 기록하며, 이후 onboarding 결과 갱신은 이 필드를 보존한다. 별도 퇴역 시도의 새 증거 폴더에서 이전 preimage를 찾지 않는다. 퇴역 admission은 이 포인터로만 보호 JSON·XML의 SHA256과 정체성을 검증하고 live 작업이 disabled인지 확인한다. 포인터 없음·변조·enabled·unknown은 거절한다.
 
-조립 실패 출력은 공통 가림 계약 b507945ad94ad9f0e3f935b25a2e1cdc210ff9daa15902f9750a14589faa3f30를 따른다. 이름이 _TRANSACTION_ID/_SESSION_ID/_ATTEMPT_ID로 끝나는 env 값은 엄격 UUID/32·64 hex인 경우에만 비밀 판정에서 제외하며, 명시 비밀 이름에는 예외를 적용하지 않는다. Save의 필드별 예외는 없다. 지원 제거 child의 최초 원인은 공통 가림된 removal_child_failure와 독립 stage evidence에 보존한다.
+조립 실패 출력은 공통 가림 계약 06168bf7039acc37cf216283ecf30bc785ff3bdea9487f19d3c35b4bc1225ffc와 벡터 14개를 따른다. 이름이 _TRANSACTION_ID/_SESSION_ID/_ATTEMPT_ID로 끝나는 env 값은 엄격 UUID/32·64 hex인 경우에만 비밀 판정에서 제외한다. _PID는 양의 1–10자리 숫자, _START는 windows-filetime/linux-startticks와 양의 1–25자리 숫자, _MUTEX는 Local/Global 및 제한된 mutex 이름인 경우에만 제외하며 명시 비밀 이름에는 예외를 적용하지 않는다. 같은 예외는 원 바이트를 유지하는 machine metadata의 쓰기 전 비밀 검사에도 적용한다. Save의 필드별 예외는 없다. 지원 제거 child의 최초 원인은 공통 가림된 removal_child_failure와 독립 stage evidence에 보존한다.
 
 무결성·replacement receipt·writer release/prepared·옛 relay preimage/transition pointer·update-control·current-user READY/lifecycle 기록은 인증 metadata다. 원 JSON/LF를 잘라내거나 가리지 않으며 공통 정책이 고른 알려진 비밀 값이 있으면 temp를 열기 전에 거절한다. failure-* evidence, 설치 pack report, audit의 진단 필드와 최종 출력은 공통 가림과 바이트 상한을 적용한다.
+
+공통 텍스트 가림은 예외 접두나 JSON mapping 뒤의 민감 assignment도 별도로 검사하고 값 전체를 가린 뒤 64 KiB로 제한한다. 설치기 캡처는 32 MiB RAM 입력 관문을 넘으면 부분 원문을 기록하지 않으며, 그 아래 입력은 가림 뒤에 제한한다. 접두 두 형태와 긴 unquoted assignment 두 형태는 Python·PS5.1·PS7 및 실제 stdout/stderr 캡처의 원문 조각 개수 0으로 회귀 검증한다.

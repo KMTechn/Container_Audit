@@ -11,6 +11,10 @@ for relevant changes, failures, or unresolved risks. The publication and
 deployment controls below apply when those actions are actually assigned;
 they are not extra gates for routine source or documentation maintenance.
 
+## 현장 옛 판 전환 중 공개 발행 동결
+
+현장 옛 이적 판이 모두 걷힐 때까지(되돌림 기간 포함) 공개 릴리스·태그 push·GitHub latest 변경은 0건으로 유지한다. 새 판은 회사 서버 private feed·설치 패키지로만 전달한다. v2.0.9는 시작 때 `releases/latest` 태그를 문자열로 비교하므로 `v2.0.99 > v2.0.9`이면 작업자에게 서명 없는 ZIP 덮어쓰기를 제시한다. 아래 공개 발행 절차는 이 동결이 해제된 뒤에만 적용한다. 저장소의 `gh release create/edit` 호출은 `--latest=false`(또는 `make_latest` false)를 명시해야 하며, 이 방어 설정 자체가 동결 기간의 공개 발행 권한은 아니다.
+
 ## Factory Contract adoption status
 
 `RETIRE_CANONICAL_ADOPTION_LAYER` is the governing compatibility decision. The

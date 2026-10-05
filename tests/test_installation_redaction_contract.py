@@ -10,7 +10,7 @@ from tests.powershell_contracts import run_functions
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/installation_redaction_vectors.json"
-assert hashlib.sha256(FIXTURE.read_bytes()).hexdigest() == "a7694ad8a7f84f924fe89f718452ebbc6c0c62b49340a9e31bd93ebed11ca5d6"
+assert hashlib.sha256(FIXTURE.read_bytes()).hexdigest() == "5eed6e05d842b32b271b1a007c9750efcbc2b6b09c557bac7d32c734534d78a7"
 VECTORS = json.loads(FIXTURE.read_bytes())["vectors"]
 
 
@@ -54,10 +54,9 @@ def test_shared_python_vectors(vector):
 def _assert_no_raw_environment_bytes(vector, text):
     encoded = text.encode('utf-8')
     for name, value in vector['environ'].items():
-        from auto_update import _sink_policy
-        policy = _sink_policy()
-        if (name not in policy['environment_names'] and re.search(policy['identifier_name_pattern'], name)
-                and re.fullmatch(policy['identifier_value_pattern'], value)):
+        # Identifier exceptions are contract output, independent of the implementation.
+        expected = vector.get('expected', '')
+        if value in expected and '[REDACTED:' + name + ']' not in expected:
             continue
         if len(value) < 4 or re.search(r'(?i)_(FILE|PATH|DIR|ROOT)$', name):
             continue
@@ -135,3 +134,44 @@ if($safe.Contains([char]0xFFFD)){throw 'UTF8 boundary split.'}
 'PASS'
 ''', engine=engine)
     assert result.returncode == 0, "UTF8 head/tail vector failed"
+
+
+PROCESS_VECTORS = [vector for vector in VECTORS if 'pid-start-mutex' in vector['id']]
+
+
+@pytest.mark.parametrize('vector', PROCESS_VECTORS, ids=lambda vector: vector['id'])
+def test_process_identifier_machine_metadata_follows_shared_contract(vector):
+    import auto_update
+    environment = {name: value for name, value in vector['environ'].items()
+                   if name.endswith(('_PID', '_START', '_MUTEX'))}
+    assert environment
+    for name, value in environment.items():
+        text = json.dumps({'process_identity': value})
+        if vector['id'].endswith('-kept'):
+            auto_update.assert_machine_metadata_no_secrets(text, {name: value})
+        else:
+            with pytest.raises(ValueError, match='^MACHINE_METADATA_SECRET_DETECTED$'):
+                auto_update.assert_machine_metadata_no_secrets(text, {name: value})
+
+
+@pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
+@pytest.mark.parametrize('vector', PROCESS_VECTORS, ids=lambda vector: vector['id'])
+def test_process_identifier_powershell_machine_metadata_follows_shared_contract(tmp_path, engine, vector):
+    environment = {name: value for name, value in vector['environ'].items()
+                   if name.endswith(('_PID', '_START', '_MUTEX'))}
+    path = tmp_path / 'process-vector.json'
+    path.write_text(json.dumps({'environment': environment, 'allowed': vector['id'].endswith('-kept')}), encoding='utf-8')
+    result = run_functions(tmp_path, ROOT / 'tools/bootstrap_integrity.ps1',
+        ['Protect-InstallationText', 'Assert-InstallationMachineMetadataNoSecrets'], r'''
+$vector=Get-Content -LiteralPath $env:CA_VECTOR_PATH -Raw -Encoding UTF8|ConvertFrom-Json
+foreach($p in $vector.environment.PSObject.Properties){[Environment]::SetEnvironmentVariable($p.Name,[string]$p.Value,'Process')}
+foreach($p in $vector.environment.PSObject.Properties){
+    $text=@{process_identity=[string]$p.Value}|ConvertTo-Json -Compress
+    $rejected=$false
+    try{Assert-InstallationMachineMetadataNoSecrets $text}catch{$rejected=$true}
+    if($rejected -eq $vector.allowed){throw 'process identifier metadata policy differs'}
+}
+'PASS'
+''', engine=engine, values={'CA_VECTOR_PATH': str(path)})
+    assert result.returncode == 0, 'Process identifier metadata vector failed; raw values suppressed'
+    assert result.stdout.strip() == 'PASS'

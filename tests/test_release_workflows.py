@@ -127,6 +127,37 @@ def test_tag_release_workflow_is_verification_only():
     assert all(marker not in release for marker in forbidden_build_markers)
 
 
+def test_release_mutations_explicitly_preserve_github_latest():
+    """Old v2.0.9 workers can offer an unsigned ZIP when latest changes."""
+    excluded = {'.git', '.venv', 'venv', 'vendor', 'node_modules', 'tests',
+                '__pycache__', '.pytest_cache', 'build', 'dist', 'archives'}
+    script_suffixes = {'.ps1', '.psm1', '.py', '.sh', '.bat', '.cmd'}
+    checked, unsafe = [], []
+    for directory, subdirs, files in os.walk(ROOT):
+        subdirs[:] = [name for name in subdirs if name not in excluded]
+        for name in files:
+            path = Path(directory) / name
+            workflow = path.is_relative_to(ROOT / '.github' / 'workflows')
+            if path.suffix not in script_suffixes and not (
+                    workflow and path.suffix in {'.yml', '.yaml'}):
+                continue
+            source = path.read_text(encoding='utf-8-sig')
+            source = re.sub(r'(?:`|\\|\^)\s*\r?\n', ' ', source)
+            for call in re.finditer(r'\bgh(?:\.exe)?[ \t]+release[ \t]+(?:create|edit)\b([^\r\n]*)', source):
+                # Flags on a later command cannot protect this invocation.
+                arguments = re.split(r';|&&|\|', call.group(1), maxsplit=1)[0]
+                latest = re.findall(r'--latest(?:=|\s+)[\"\']?([^\s\"\']+)', arguments)
+                make_latest = re.findall(r'\bmake_latest[\"\']?\s*(?:=|:)\s*[\"\']?([^\s\"\',}]+)', arguments)
+                protected = (bool(latest) and all(value == 'false' for value in latest)) or (
+                    not latest and bool(make_latest) and all(value == 'false' for value in make_latest))
+                location = f'{path.relative_to(ROOT)}:{source.count(chr(10), 0, call.start()) + 1}'
+                checked.append(location)
+                if not protected:
+                    unsafe.append(location)
+    assert checked, 'No release mutation checked; review the static scanner when publication tooling changes'
+    assert not unsafe, f'Release mutation requires --latest=false (or make_latest false): {unsafe}'
+
+
 
 
 

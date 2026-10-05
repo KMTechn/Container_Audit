@@ -20,6 +20,11 @@ function Test-BootstrapPrivilegedOwnerSid([string]$Sid) {
 
 function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Configuration, [switch]$LiteralOnly, [Collections.IDictionary]$Environment, [switch]$CommonOnly, [switch]$NoTruncate) {
     $policy=@{environment_names=@('DEFECT_FINAL_DEFECT_CLAIM_TOKEN','DEFECT_FINAL_DEFECT_INTAKE_CLAIM_TOKEN','DEFECT_LINKED_MANIFEST_LOCK_API_TOKEN','DEFECT_LOGISTICS_API_TOKEN','DEFECT_RETURN_MANIFEST_API_TOKEN','DEFECT_SERVER_ACTIVE_LOCK_TOKEN','DEFECT_TRANSFER_MANIFEST_API_TOKEN','INSPECTION_WORKER_WAREHOUSE_RESPONSE_EXPORT_TOKEN','KMTECH_DEFECT_WRITER_DELEGATION_TOKEN','KMTECH_REWORK_TEMP_NG_CANDIDATE_TOKEN','KMTECH_REWORK_TEMP_NG_CLAIM_TOKEN','REWORK_ENROLLMENT_RESTORE_TOKEN','REWORK_LOGISTICS_API_TOKEN','CONTAINER_AUDIT_ENROLLMENT_TOKEN','CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','CONTAINER_RUNTIME_SECRET','KM_LOGISTICS_INSTALL_BEARER_TOKEN','WORKER_ANALYSIS_LOGISTICS_API_TOKEN','KMTECH_LABEL_WRITER_DELEGATION_TOKEN','PRODUCER_SELF_ENROLL_TOKEN','DIRECT_SYNC_AUTH_TOKEN','PRODUCER_API_TOKEN','LOGISTICS_API_TOKEN');sensitive_pattern='(?i)(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_?KEY|API_?KEY|COOKIE|SESSION_?KEY|DELEGATION|BEARER|ENROLLMENT_CODE|RESTORE_CODE|ADMIN_PIN)';path_pattern='(?i)_(FILE|PATH|DIR|ROOT)$';digest_pattern='(?i)_(sha256s?|fingerprint|hash)$';short_digest_pattern='(?i)(pin|otp|password)';identifier_name_pattern='(?i)_(TRANSACTION|SESSION|ATTEMPT)_ID\z';identifier_value_pattern='^(?:[0-9A-Fa-f]{32}|[0-9A-Fa-f]{64}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\z';env_marker='[REDACTED:{0}]';field_marker='[REDACTED:field]';short_marker='[REDACTION_NOTE:short_value_skipped:{0}]';full_byte_cap=65536;head_byte_cap=8192;truncation_marker="`n[TRUNCATED: {0} bytes omitted]`n"}
+    $policy.process_identifier_patterns=@{
+        '(?i)_PID\z'='^[1-9][0-9]{0,9}\z'
+        '(?i)_START\z'='^(windows-filetime|linux-startticks):[1-9][0-9]{0,24}\z'
+        '(?i)_MUTEX\z'='^(Local|Global)\\[A-Za-z0-9._-]{1,200}\z'
+    }
     if($Configuration){return $policy}
     if($null -eq $Environment){$Environment=[Environment]::GetEnvironmentVariables('Process')}
     $values=@();$notes=@()
@@ -27,7 +32,11 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
         if($name -cin $policy.environment_names -or ($name -match $policy.sensitive_pattern -and $name -notmatch $policy.path_pattern)){
             $value=[string]$Environment[$name]
             if(-not $value){continue}
-            if($name -cnotin $policy.environment_names -and $name -match $policy.identifier_name_pattern -and $value -cmatch $policy.identifier_value_pattern){continue}
+            $identifier=$name -match $policy.identifier_name_pattern -and $value -cmatch $policy.identifier_value_pattern
+            foreach($pattern in $policy.process_identifier_patterns.Keys){
+                if($name -match $pattern -and $value -cmatch $policy.process_identifier_patterns[$pattern]){$identifier=$true;break}
+            }
+            if($name -cnotin $policy.environment_names -and $identifier){continue}
             if($value.Length -lt 4){$notes+=($policy.short_marker -f $name);continue}
             $values+=,@{name=[string]$name;value=$value}
         }
@@ -107,6 +116,24 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
             $Text=[regex]::Replace($Text,'(?i)authorization\s*:\s*[^\r\n]+',$policy.field_marker)
             $Text=[regex]::Replace($Text,'(https?://)[^\s/@]+:[^\s/@]+@',('$1'+$policy.field_marker+'@'))
             $Text=[regex]::Replace($Text,'(https?://[^\s?]+)\?[^\s]+',('$1?'+$policy.field_marker))
+        }
+        # Discover overlapping assignments so a non-sensitive exception prefix
+        # cannot consume a later sensitive key/value. Redact before byte bounding.
+        $assignmentPattern=@'
+(?=(?<![\w"'])\b(?<key>[A-Za-z_][A-Za-z0-9_.-]*)\s*[:=]\s*(?<value>"(?:\\.|[^"\\])*(?:"|$)|'(?:''|\\.|[^'\\])*(?:'|$)|[^\s,;}\]"']+))
+'@
+        $spans=@()
+        foreach($match in [regex]::Matches($Text,$assignmentPattern)){
+            $value=$match.Groups['value'].Value
+            if($value.StartsWith('[REDACTED:') -or $value -cin @('true','false','null')){continue}
+            if(Test-RedactedField $match.Groups['key'].Value $value){
+                $start=$match.Groups['value'].Index;$end=$start+$match.Groups['value'].Length
+                if($spans.Count -and $start -lt $spans[-1].end){$spans[-1].end=[Math]::Max($spans[-1].end,$end)}
+                else{$spans+=,@{start=$start;end=$end}}
+            }
+        }
+        foreach($span in @($spans|Sort-Object start -Descending)){
+            $Text=$Text.Substring(0,$span.start)+$policy.field_marker+$Text.Substring($span.end)
         }
     }
     if($notes.Count){$Text+="`n"+($notes -join "`n")}
@@ -1585,7 +1612,11 @@ function Assert-InstallationMachineMetadataNoSecrets([string]$Json) {
         if(-not $explicit -and ($name -notmatch $policy.sensitive_pattern -or $name -match $policy.path_pattern)){continue}
         $value=[string]$environment[$name]
         if(-not $value){continue}
-        if(-not $explicit -and $name -match $policy.identifier_name_pattern -and $value -cmatch $policy.identifier_value_pattern){continue}
+        $identifier=$name -match $policy.identifier_name_pattern -and $value -cmatch $policy.identifier_value_pattern
+        foreach($pattern in $policy.process_identifier_patterns.Keys){
+            if($name -match $pattern -and $value -cmatch $policy.process_identifier_patterns[$pattern]){$identifier=$true;break}
+        }
+        if(-not $explicit -and $identifier){continue}
         $selected.Add($value)
     }
     $known=Get-Variable -Name InstallationEvidenceSensitiveValues -Scope Script -ErrorAction SilentlyContinue

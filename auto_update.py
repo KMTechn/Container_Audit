@@ -465,6 +465,11 @@ def _sink_policy() -> dict:
             "diagnostic_fields": frozenset(("failure", "message", "detail", "stdout", "stderr", "stdout_tail", "stderr_tail")),
             "identifier_name_pattern": r"(?i)_(TRANSACTION|SESSION|ATTEMPT)_ID$",
             "identifier_value_pattern": r"(?:[0-9A-Fa-f]{32}|[0-9A-Fa-f]{64}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})",
+            "process_identifier_patterns": {
+                r"(?i)_PID\Z": r"[1-9][0-9]{0,9}",
+                r"(?i)_START\Z": r"(?:windows-filetime|linux-startticks):[1-9][0-9]{0,24}",
+                r"(?i)_MUTEX\Z": r"(?:Local|Global)\\[A-Za-z0-9._-]{1,200}",
+            },
             "short_marker": "[REDACTION_NOTE:short_value_skipped:{name}]", "full_byte_cap": 65536, "head_byte_cap": 8192,
             "truncation_marker": "\n[TRUNCATED: {omitted} bytes omitted]\n"}
 
@@ -477,8 +482,10 @@ def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit
     for name, value in sorted(environ.items()):
         if name in policy["environment_names"] or (re.search(policy["sensitive_pattern"], name) and not re.search(policy["path_pattern"], name)):
             if (name not in policy["environment_names"]
-                    and re.search(policy["identifier_name_pattern"], name)
-                    and re.fullmatch(policy["identifier_value_pattern"], str(value))):
+                    and ((re.search(policy["identifier_name_pattern"], name)
+                          and re.fullmatch(policy["identifier_value_pattern"], str(value)))
+                         or any(re.search(pattern, name) and re.fullmatch(shape, str(value))
+                                for pattern, shape in policy["process_identifier_patterns"].items()))):
                 continue
             if not value:
                 continue
@@ -505,6 +512,26 @@ def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit
             text = json.dumps(changed, ensure_ascii=True)
     except (ValueError, TypeError):
         pass
+    # Zero-width discovery does not consume an exception/mapping prefix as a
+    # non-sensitive assignment and miss a sensitive assignment inside its value.
+    assignments = r'''(?=(?<![\w"'])\b(?P<key>[A-Za-z_][A-Za-z0-9_.-]*)\s*[:=]\s*(?P<value>"(?:\\.|[^"\\])*(?:"|$)|'(?:''|\\.|[^'\\])*(?:'|$)|[^\s,;}\]"']+))'''
+    spans = []
+    for match in re.finditer(assignments, text):
+        raw = match.group("value")
+        if raw.startswith("[REDACTED:"):
+            continue
+        value = {"true": True, "false": False, "null": None}.get(raw, raw)
+        if _redact_field(match.group("key"), value, policy):
+            spans.append(match.span("value"))
+    # Sensitive values can contain another assignment; redact the outer span.
+    merged = []
+    for start, end in sorted(spans):
+        if merged and start < merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    for start, end in reversed(merged):
+        text = text[:start] + policy["field_marker"] + text[end:]
     if notes:
         text += "\n" + "\n".join(notes)
     if _no_truncate:
@@ -561,8 +588,10 @@ def assert_machine_metadata_no_secrets(text: str, environ=None) -> None:
             continue
         if not value:
             continue
-        if (not explicit and re.search(policy["identifier_name_pattern"], name)
-                and re.fullmatch(policy["identifier_value_pattern"], value)):
+        if (not explicit and ((re.search(policy["identifier_name_pattern"], name)
+                               and re.fullmatch(policy["identifier_value_pattern"], value))
+                              or any(re.search(pattern, name) and re.fullmatch(shape, value)
+                                     for pattern, shape in policy["process_identifier_patterns"].items()))):
             continue
         variants = {value, json.dumps(value, ensure_ascii=True)[1:-1],
                     json.dumps(value, ensure_ascii=False)[1:-1],

@@ -14948,11 +14948,14 @@ class ContainerAudit:
         _prepared_transfer_attempt: Optional[SealAttempt] = None,
         _lane_prechecked: bool = False,
     ):
-        return (yield from tray_completion.complete_tray_steps(
+        completed = yield from tray_completion.complete_tray_steps(
             self, clock=datetime, session_factory=TraySession,
             _prepared_transfer_attempt=_prepared_transfer_attempt,
             _lane_prechecked=_lane_prechecked,
-        ))
+        )
+        if completed and getattr(self, "_short_confirmation_undo", None):
+            self._arm_short_confirmation_expiry()
+        return completed
 
     def _reset_ui_to_waiting_state(self):
         # UI 리셋 시 이미지 체크박스 해제
@@ -17410,6 +17413,54 @@ class ContainerAudit:
         name = hashlib.sha256(str(completion_id).encode("utf-8")).hexdigest() + ".json"
         return Path(self.save_folder) / "short_confirmations" / name
 
+    def _short_confirmation_remaining(self, contract):
+        confirmed = datetime.datetime.fromisoformat(contract["observed_at"])
+        elapsed = (datetime.datetime.now(confirmed.tzinfo) - confirmed).total_seconds()
+        return min(60.0, max(0.0, 60.0 - elapsed))
+
+    def _cancel_short_confirmation_expiry(self):
+        self._short_confirmation_expiry_token = None
+        job = getattr(self, "_short_confirmation_expiry_job", None)
+        self._short_confirmation_expiry_job = None
+        if job is not None:
+            self.root.after_cancel(job)
+
+    def _arm_short_confirmation_expiry(self, *, deadline=None):
+        """Keep one UI timer; only restart converts the durable wall timestamp."""
+        self._cancel_short_confirmation_expiry()
+        undo = getattr(self, "_short_confirmation_undo", None)
+        if undo is None or getattr(self, "_ui_close_requested", False):
+            return
+        if deadline is None:
+            contract = self._completion_event_contract_from_state(undo["state"])
+            deadline = time.monotonic() + self._short_confirmation_remaining(contract)
+        token = self._short_confirmation_expiry_token = object()
+
+        def expire():
+            if (getattr(self, "_short_confirmation_undo", None) is not undo
+                    or self._short_confirmation_expiry_token is not token
+                    or getattr(self, "_ui_close_requested", False)):
+                return
+            self._short_confirmation_expiry_job = None
+            remaining = deadline - time.monotonic()
+            lane = getattr(self, "_ui_lane", None)
+            if remaining > 0:
+                delay = max(1, int(remaining * 1000) + 1)
+            elif (getattr(self, "_scan_callback_pending", False)
+                    or getattr(self, "_live_scan_save_pending", False)
+                    or getattr(self, "_completion_lane_busy", False)
+                    or (lane is not None and lane.is_busy())):
+                delay = 100
+            else:
+                self._commit_short_confirmation()
+                delay = 1000  # Retry storage/admission failure through the same path.
+            if (getattr(self, "_short_confirmation_undo", None) is undo
+                    and self._short_confirmation_expiry_token is token):
+                self._short_confirmation_expiry_job = self.root.after(delay, expire)
+
+        self._short_confirmation_expiry_job = self.root.after(
+            max(0, int((deadline - time.monotonic()) * 1000) + 1), expire)
+
     def _persist_short_completion_projection(self, contract, detail, state, intent_id):
         path = self._short_projection_path(contract["idempotency_key"])
         record = {"status": "HELD", "contract": dict(contract), "detail": dict(detail),
@@ -17431,7 +17482,7 @@ class ContainerAudit:
             return False
         if record["status"] == "SETTLED":
             return True
-        # A next-label/logout/close request ends the UNDO window even if a
+        # A next-label/logout/close request or expiry ends UNDO even if a
         # durable CSV acknowledgement is lost. Retry cannot cancel a row
         # that may already have been read by the unchanged legacy relay.
         record["status"] = "SETTLING"
@@ -17457,13 +17508,24 @@ class ContainerAudit:
         changed = False
         for path in sorted(folder.glob("*.json")):
             record = json.loads(path.read_text(encoding="utf-8"))
-            if record["status"] in {"HELD", "SETTLING"}:
+            active = getattr(self, "_short_confirmation_undo", None)
+            if (record["status"] == "HELD" and active
+                    and active["completion_id"] == record["contract"]["idempotency_key"]):
+                continue  # The live UI timer already owns this monotonic deadline.
+            remaining = (self._short_confirmation_remaining(record["contract"])
+                         if record["status"] == "HELD" else 0.0)
+            if record["status"] == "HELD" and remaining > 0:
+                result["held_confirmation"] = {"state": record["state"],
+                    "intent_id": record["intent_id"],
+                    "completion_id": record["contract"]["idempotency_key"]}
+                result["held_deadline"] = time.monotonic() + remaining
+            elif record["status"] in {"HELD", "SETTLING"}:
                 if not self._settle_short_completion_projection(
                         record["contract"]["idempotency_key"], coordinator=coordinator):
                     raise OSError("held short completion CSV could not be persisted")
                 record = json.loads(path.read_text(encoding="utf-8"))
                 changed = True
-            if record["status"] == "SETTLED" and not record.get("checkpoint_cleaned"):
+            if record["status"] in {"HELD", "SETTLED"} and not record.get("checkpoint_cleaned"):
                 current_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
                 if current_path.exists():
                     recovered = read_recovery_file(current_path, "current", tray_size=self.TRAY_SIZE)
@@ -17520,6 +17582,10 @@ class ContainerAudit:
             self._reset_ui_to_waiting_state()
         if result.get("restored_state"):
             self._restore_tray_from_state(result["restored_state"])
+        if result.get("held_confirmation"):
+            self._short_confirmation_undo = result["held_confirmation"]
+            self.undo_button["state"] = tk.NORMAL
+            self._arm_short_confirmation_expiry(deadline=result["held_deadline"])
         if history is not None or result.get("restored_state") or result.get("cleared_completion_ids"):
             self._update_all_summaries()
             self._update_current_item_label()
@@ -17545,6 +17611,8 @@ class ContainerAudit:
                 self.show_status_message("미달 완료 CSV 저장을 다시 시도하세요.", self.COLOR_DANGER)
                 return False
             self._short_confirmation_undo = None
+            self._cancel_short_confirmation_expiry()
+            self.undo_button["state"] = tk.DISABLED
             self._schedule_scanonly_transport()
             return True
         if hasattr(getattr(self, "root", None), "tk") or on_settled:
@@ -17604,6 +17672,7 @@ class ContainerAudit:
             self.log_file_path = original_log_path
             self._update_all_summaries()
             self._short_confirmation_undo = None
+            self._cancel_short_confirmation_expiry()
             self._pending_completion_event_contract = None
             self._warning_state_presenter().acknowledge()
             self._update_current_item_label()
