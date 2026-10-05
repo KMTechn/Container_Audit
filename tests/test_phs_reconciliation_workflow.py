@@ -1766,7 +1766,7 @@ def test_reconciliation_ui_execution_preserves_tray_scan_progress_and_focus(
 
 
 @pytest.mark.parametrize("approved", (False, True))
-def test_startup_local_print_starting_recovery_uses_keyboard_confirmation(
+def test_startup_local_print_starting_recovery_uses_explicit_button_confirmation(
     monkeypatch,
     approved,
 ):
@@ -1804,9 +1804,8 @@ def test_startup_local_print_starting_recovery_uses_keyboard_confirmation(
             calls.append(("execute", context, kwargs))
             return result
 
-    def askyesno(title, message, **kwargs):
-        calls.append(("prompt", title, message, kwargs))
-        return approved
+    def request_choice(title, message, choices, **kwargs):
+        calls.append(("prompt", title, message, choices, kwargs))
 
     app = ContainerAudit.__new__(ContainerAudit)
     app.root = _ImmediateRoot()
@@ -1842,15 +1841,16 @@ def test_startup_local_print_starting_recovery_uses_keyboard_confirmation(
     lane = _ImmediateLane()
     app._ui_lane = lane
     app._ui_task_lane = lambda: lane
-    monkeypatch.setattr(container_module.messagebox, "askyesno", askyesno)
+    app._request_inline_choice = request_choice
 
     app._schedule_phs_label_exchange_recovery()
 
     prompts = [call for call in calls if call[0] == "prompt"]
     assert len(prompts) == 1
-    assert "Y 승인 / N 취소" in prompts[0][2]
-    assert prompts[0][3]["parent"] is app.root
-    assert prompts[0][3]["default"] == container_module.messagebox.NO
+    assert [label for label, _callback in prompts[0][3]] == ["실물 확인 후 재출력", "작업 계속"]
+    assert not any(call[0] == "execute" for call in calls)
+    # DESIGN §1: scanner keys are no longer the approval; only this explicit button is.
+    prompts[0][3][0 if approved else 1][1]()
     assert ("focus",) in calls
     execute_calls = [call for call in calls if call[0] == "execute"]
     if approved:

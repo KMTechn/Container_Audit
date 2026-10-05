@@ -19,11 +19,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 5030,
+      "line": 5041,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 5034,
+          "line": 5045,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -6766,7 +6766,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
+  "inventory_sha256": "727f02615ef2eb74e12eb6e284bb1d7e979f7616329caff3615c9c1aafe2ce4d",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -13314,7 +13314,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 21517,
+      "line": 21539,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -13322,7 +13322,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 5030,
+      "line": 5041,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -13330,7 +13330,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._clear_projected_checkpoint_audits",
-      "line": 3686,
+      "line": 3697,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -13338,7 +13338,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._recover_checkpoint_audit_events",
-      "line": 3654,
+      "line": 3665,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -13346,7 +13346,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot",
-      "line": 3585,
+      "line": 3596,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -13354,7 +13354,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 4115,
+      "line": 4126,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },

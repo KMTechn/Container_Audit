@@ -5473,7 +5473,7 @@ def test_change_worker_stays_on_current_worker_when_active_state_save_fails(monk
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: True)
     monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: app.errors.append(args))
 
-    app.change_worker()
+    app.change_worker(_confirmed=True)
 
     assert app.worker_name == "홍길동"
     assert not hasattr(app, "cancelled")
@@ -5496,7 +5496,7 @@ def test_change_worker_clears_in_memory_tray_after_successful_pause(monkeypatch)
     app.show_worker_input_screen = lambda: setattr(app, "showed_login", True)
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: True)
 
-    app.change_worker()
+    app.change_worker(_confirmed=True)
 
     assert app.worker_name == ""
     assert app.current_tray.master_label_code == ""
@@ -5533,7 +5533,7 @@ def test_change_worker_preserves_active_tray_when_pause_log_fails(monkeypatch):
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: True)
     monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
 
-    app.change_worker()
+    app.change_worker(_confirmed=True)
 
     assert app.worker_name == "홍길동"
     assert app.current_tray.master_label_code == "ACTIVE"
@@ -5557,7 +5557,7 @@ def test_change_worker_preserves_replacement_state_when_cancel_log_fails(monkeyp
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: True)
     monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
 
-    app.change_worker()
+    app.change_worker(_confirmed=True)
 
     assert app.worker_name == "홍길동"
     assert app.master_label_replace_state == "awaiting_new_replacement"
@@ -5586,7 +5586,7 @@ def test_change_worker_logs_partial_exchange_cancel_before_logout(monkeypatch):
     app.show_worker_input_screen = lambda: setattr(app, "showed_login", True)
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: True)
 
-    app.change_worker()
+    app.change_worker(_confirmed=True)
 
     assert app.worker_name == ""
     assert logged[0]["event"] == "PRODUCT_EXCHANGE_CANCELLED"
@@ -5618,7 +5618,7 @@ def test_change_worker_preserves_partial_exchange_when_cancel_log_fails(monkeypa
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: True)
     monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
 
-    app.change_worker()
+    app.change_worker(_confirmed=True)
 
     assert app.worker_name == "홍길동"
     assert app.current_exchange_session.defective_barcodes == ["AAA2270730100-BAD-1"]
