@@ -8,9 +8,6 @@ if($clauses.Count -ne 1){throw 'exact catch not found'}
 
 $script:RollbackPython=$Python
 $script:RollbackChild=$Child
-$script:RollbackSource=$processSource
-$script:RollbackRoot=$Root
-$script:RollbackGeneration=$readerGeneration
 $readerDefinitions=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic')},$true)
 foreach($definition in $readerDefinitions) {
     $readerBody=$definition.Extent.Text
@@ -89,10 +86,17 @@ $script:state.code='changed';$script:state.run='changed';$script:state.task='cha
 $processSource=Split-Path -Parent $Source
 $readerScenario=if($RecoveryCase -ceq 'nested-high'){'nested-onboard-secret-explicit'}else{'nested-readonly'}
 $readerGeneration=if($RecoveryCase -ceq 'nested-high'){'newer'}else{'missing'}
+$script:RollbackSource=$processSource
+$script:RollbackRoot=Join-Path $Root 'child'
+$script:RollbackGeneration=$readerGeneration
 $raw=@(& $Python -B $Child $processSource $readerScenario (Join-Path $Root 'child') $readerGeneration 'absolute')
 if($LASTEXITCODE -ne 0){throw 'isolated onboarding child failed'}
 $childResult=($raw[-1]|ConvertFrom-Json)
-if($childResult.status -cne 'REFUSE'){throw 'nested child did not refuse'}
+if($RecoveryCase -ceq 'nested-high') {
+  if($childResult.status -cne 'REFUSE'){throw 'nested child did not refuse'}
+} elseif($childResult.status -cne 'NONE' -or $childResult.failure_type) {
+  throw 'allowed nested readonly child failed'
+}
 if ($RecoveryCase -ceq 'code-mismatch') {
     function ReadReplacementRestoreEvidence { throw 'ISOLATED_CODE_RESTORE_EVIDENCE_MISMATCH' }
 }

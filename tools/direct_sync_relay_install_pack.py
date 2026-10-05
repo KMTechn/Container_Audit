@@ -373,9 +373,9 @@ def _apply_container_audit_storage_defaults(args: argparse.Namespace) -> dict:
 
 def _redact_install_diagnostic(value):
     """Remove known process-secret values before storing child diagnostics."""
-    secrets = tuple(value for name in (
+    secrets = tuple(secret_value for name in (
         "CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN", "KM_LOGISTICS_INSTALL_BEARER_TOKEN",
-    ) if (value := os.environ.get(name)))
+    ) if (secret_value := os.environ.get(name)))
     def scrub(item):
         if isinstance(item, str):
             for secret in secrets:
