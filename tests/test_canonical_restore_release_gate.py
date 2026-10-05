@@ -37,4 +37,4 @@ def test_restore_failure_retains_writer_fence(tmp_path, engine, failure):
         assert counts['rollback_steps']['relay_restart']['status']=='UNPROVEN_FENCE_RETAINED'
         step='scheduled_writer_restore' if failure=='task-restore-failure' else 'run_restore_attempt'
         assert counts['rollback_steps'][step]['status']=='FAILED'
-        assert counts['rollback_steps'][step]['failure']=='IOException'
+        assert counts['rollback_steps'][step]['failure_type']=='IOException'
