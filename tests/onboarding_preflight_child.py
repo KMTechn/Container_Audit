@@ -123,7 +123,7 @@ raise SystemExit(onboarding_main(sys.argv[2:]))
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile({quote(repo/'INSTALL_CANONICAL_PORTABLE.ps1')},[ref]$tokens,[ref]$errors)
 if($errors.Count){{throw 'parse errors'}}
-foreach($name in @('Arg','Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic','Assert-CanonicalRestoreCodeBinding','Exit-RetirementResumeClaim')){{
+foreach($name in @('Arg','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic','Assert-CanonicalRestoreCodeBinding','Exit-RetirementResumeClaim')){{
  $found=$ast.FindAll({{param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name}},$true)
  if($found.Count -ne 1){{throw 'preflight function unavailable'}}
  Invoke-Expression $found[0].Extent.Text
@@ -156,7 +156,11 @@ try{{
  catch{{Invoke-Expression $earlyCatch}}
  finally{{Invoke-Expression (($mainTry.Finally.Statements|ForEach-Object {{$_.Extent.Text}})-join "`n")}}
 }}
-catch{{'preflight_status=REFUSED'}}
+catch{{
+ $failure=@{{type=$_.Exception.GetType().Name;message=(ConvertTo-CanonicalSafeDiagnostic ([string]$_.Exception.Message))}}
+ [System.IO.File]::WriteAllText({quote(root/'powershell.exception.json')},($failure|ConvertTo-Json))
+ 'preflight_status=REFUSED'
+}}
 $released=$false
 try{{
  $again=Enter-ContainerWriterSessionAuthority -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId -WriterContractSha256 $canonicalWriterFenceContractSha256
