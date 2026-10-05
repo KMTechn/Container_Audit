@@ -664,10 +664,10 @@ w9next 567ff27 + autoupdate 7247634를 merge a63ae29로 통합했다. 양쪽 G�
 확인 동안 read handle과 원 helper/library pin·AST filename·result binding을 유지한다.
 PS5.1/PS7 transport 회귀70개 PASS, 같은 기존206개는 시작188P·18F에서 입력 병합
 후190P·16F로 새 실패0이다. 전체 명령6,917자·인용 확장 상한8,297자다.
-업데이트 검증이 소비하는 runtime_files 목록을 유지하고 기존 manifest 판독3곳만
-1MiB로 맞췄다. receipt·relay status·pin의64KiB 상한은 유지한다.
+미배포 autoupdate의 runtime_files 목록을 별도 pinned runtime-file-inventory.json으로
+옮겼다. 기존 manifest 판독3곳을64KiB로 복원하고 공용 helper를 보존하며,
+별도 목록에만1MiB 상한·길이/SHA256/구성 검사를 적용한다.
 manifest 실제 stock 통과·상한1B 초과 거절, 최종 재생성/check·집중·LF clone stock의
-최종
 근거는 [sub-265 REPORT](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-265/REPORT.md)와
 FOR-REVIEW.md에 기록한다. 실제 UAC·옛 v2.0.33 위 설치·현장 경로/계정 수용은
 NOT TESTED이며 coordinator의 랩 예행과 독립 확인에 남긴다.

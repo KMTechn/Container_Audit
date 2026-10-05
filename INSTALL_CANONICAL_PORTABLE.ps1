@@ -344,7 +344,7 @@ function InstalledManifest([string]$Root, [bool]$UnsignedOk) {
         }
     }
     $path = Join-Path $Root 'portable-manifest.json'
-    if ((Get-Item $path).Length -gt 1048576) { throw 'Installed portable manifest is oversized.' }
+    if ((Get-Item $path).Length -gt 65536) { throw 'Installed portable manifest is oversized.' }
     $value = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json
     if ([string]$value.schema -cne 'container-audit-portable-tree-v1' -or
         [string]$value.entrypoint -cne 'runtime/pythonw.exe app/main.py' -or

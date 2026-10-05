@@ -39,10 +39,14 @@ def test_authenticated_stock_zip_prepares_only_with_valid_single_prefix(tmp_path
     if variant in sensitive:
         candidate_files[sensitive[variant]] = b'sensitive fixture must stay forbidden even if listed'
     portable = json.loads(candidate_files['portable-manifest.json'])
-    portable['runtime_files'] = [dict(path=name, sha256=hashlib.sha256(data).hexdigest())
+    rows = [dict(path=name, sha256=hashlib.sha256(data).hexdigest())
         for name, data in candidate_files.items() if name.startswith('runtime/')]
-    if variant == 'runtime-unlisted-inventory': portable.pop('runtime_files')
-    elif variant == 'runtime-duplicate-inventory': portable['runtime_files'].append(portable['runtime_files'][0])
+    if variant == 'runtime-duplicate-inventory': rows.append(rows[0])
+    inventory_raw = json.dumps(dict(schema=update_service.RUNTIME_FILE_INVENTORY_SCHEMA, files=rows)).encode()
+    candidate_files[update_service.RUNTIME_FILE_INVENTORY_FILENAME] = inventory_raw
+    portable['runtime_file_inventory_sha256'] = hashlib.sha256(inventory_raw).hexdigest()
+    portable['runtime_file_inventory_bytes'] = len(inventory_raw)
+    if variant == 'runtime-unlisted-inventory': portable.pop('runtime_file_inventory_sha256')
     candidate_files['portable-manifest.json'] = json.dumps(portable).encode()
     if variant == 'runtime-extra': candidate_files['runtime/extra.bin'] = b'not declared in stock'
     elif variant == 'runtime-hash': candidate_files['runtime/python.exe'] += b'changed bytes'

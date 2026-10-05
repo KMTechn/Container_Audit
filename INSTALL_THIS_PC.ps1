@@ -634,7 +634,7 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
     if ($frozen) { return 'FROZEN_EXE' }
 
     $manifestPath = Join-Path $Root 'portable-manifest.json'
-    if ((Get-Item -LiteralPath $manifestPath -Force).Length -gt 1048576) {
+    if ((Get-Item -LiteralPath $manifestPath -Force).Length -gt 65536) {
         throw "Portable release manifest is oversized."
     }
     try {
@@ -944,7 +944,7 @@ function Remove-OwnedLegacyTask([string]$Name, [string]$ExpectedRoot) {
         -not (Test-Path -LiteralPath $manifestPath -PathType Leaf) -or
         -not (Test-Path -LiteralPath $writerFenceHelperPath -PathType Leaf)
     ) { throw 'Legacy task removal requires the admitted all-writer fence helper.' }
-    if ((Get-Item -LiteralPath $manifestPath -Force).Length -gt 1048576) {
+    if ((Get-Item -LiteralPath $manifestPath -Force).Length -gt 65536) {
         throw 'Legacy task removal manifest is oversized.'
     }
     try { $installedManifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json }

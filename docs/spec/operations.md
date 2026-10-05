@@ -197,7 +197,9 @@ owner가 살아 있거나 기록·source가 다르면 거절한다. 사용자 �
 국제 도메인은 ASCII punycode로 설정한다. 판 번호가 없는 옛 stock은 지원 재설치를 안내하며,
 feed가 꺼진 기존 실행/relay의 SHA 식별 경로에는 판 번호를 새 전제로 넣지 않는다.
 canonical feed ZIP은 `Container_Audit/` 아래 원문으로 준비한다. bundled runtime은
-빌더의 stock `runtime_files`에 기록한 정확한 경로·해시와 실제 ZIP이 일치해야 한다.
+빌더의 `runtime-file-inventory.json`에 기록한 정확한 경로·해시와 실제 ZIP이 일치해야 한다.
+stock manifest의 `runtime_file_inventory_sha256`·`runtime_file_inventory_bytes`로
+별도 파일의 길이와 SHA256을 먼저 확인하며 그 파일만1MiB 판독 상한을 적용한다.
 추가 runtime 파일·해시 불일치·목록 부재나 민감 상태 파일은 `prepared.json` 게시 전에 거절한다.
 이 목록도 담는 packet SHA는 기존 설치 키로 서명한 feed manifest에서 인증한다.
 
@@ -1128,9 +1130,12 @@ canonical의 PlanOnly/설치 상태 분류보다 앞선 검사는 처음 검증�
 
 ## Portable manifest 판독 크기
 
-설치된 portable manifest 확인, placement release 확인, 기존 task 제거의 manifest
-판독 상한은1MiB다. 업데이트 ZIP의 runtime 검증이 소비하는 runtime_files 목록을
-유지하며, 통합 stock의 약291KB manifest를 수용한다. 상한을1바이트라도 넘으면
-JSON 해석이나 후속 변경 전에 거절한다. receipt·relay status·writer contract·pin의
-기존64KiB 상한은 그대로다. 실제 최종 stock과 PS5.1/PS7 경계 회귀의 증거는
+설치된 portable manifest 확인, placement release 확인, 기존 task 제거와 공유
+portable helper의 manifest 판독 상한은 기존64KiB다. runtime 목록은 고정
+`runtime-file-inventory.json`으로 분리하고 manifest에는 그 SHA256과 크기만 둔다.
+별도 파일도 manifest 이전 지표에 포함하며 stock에 bootstrap-integrity.json은 넣지 않는다.
+약288KiB 목록의 여유3.6배인1MiB 상한은 별도 목록 판독에만 적용한다.
+각 상한을1바이트라도 넘으면 JSON 해석이나 후속 변경 전에 거절한다.
+receipt·relay status·writer contract·pin과 공유 helper의 기존 바이트는 보존한다.
+실제 최종 stock과 PS5.1/PS7 경계 회귀의 증거는
 sub-265 REPORT에 기록하며 실제 task 제거/전체 설치의 랩 수용과 구분한다.

@@ -6565,11 +6565,11 @@
       ],
       "file": "update_service.py",
       "kind": "function",
-      "line": 890,
+      "line": 924,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 900,
+          "line": 934,
           "operation": "destination_path.mkdir",
           "writer_admission_sources": []
         }
@@ -7545,7 +7545,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "be44bea01a347f0cac0296c4ba8c20667d0662b78d7f9a972e610fb4e03b669e",
+  "inventory_sha256": "1984e362adf9e6d98cdbf7c5f456b6ded745615dbcaba0e34832eae5da0836d8",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -18634,7 +18634,7 @@
       "direct_mutation_site_count": 1,
       "file": "update_service.py",
       "function": "update_service.safe_extract_update_zip",
-      "line": 890,
+      "line": 924,
       "marker_kind": "decorator",
       "source": "update_zip_extract"
     },

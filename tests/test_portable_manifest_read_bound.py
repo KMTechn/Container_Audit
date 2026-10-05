@@ -38,7 +38,7 @@ READERS = {
 
 @pytest.mark.parametrize('engine', ['powershell.exe', 'pwsh.exe'])
 @pytest.mark.parametrize('reader', list(READERS))
-@pytest.mark.parametrize('byte_count', [65537, 1048576, 1048577])
+@pytest.mark.parametrize('byte_count', [65535, 65536, 65537])
 def test_actual_manifest_read_boundary(tmp_path, engine, reader, byte_count):
     executable = shutil.which(engine)
     if not executable:
@@ -95,5 +95,5 @@ try{
     del completed
     assert code == 0, 'Actual product manifest boundary probe failed.'
     observed = json.loads(output)
-    assert observed['oversized'] is (byte_count > 1048576)
-    assert observed['contract_reached'] is (byte_count <= 1048576)
+    assert observed['oversized'] is (byte_count > 65536)
+    assert observed['contract_reached'] is (byte_count <= 65536)
