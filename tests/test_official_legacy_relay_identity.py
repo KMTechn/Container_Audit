@@ -32,6 +32,7 @@ $otherTask=[pscustomobject]@{TaskName='other-task';TaskPath='\'}
 if((Get-BootstrapOfficialLegacyRelayIdentity $otherTask $xml $expected).matched){throw 'Changed name admitted.'}
 $recordVariant=$xml.Replace('AUTHOR_PLACEHOLDER','OTHER_AUTHOR_PLACEHOLDER').Replace('2020-01-01','2024-02-02').Replace('PT24H','P3650D').Replace('<Hidden>true</Hidden>','<Hidden>false</Hidden>').Replace('<Enabled>true</Enabled>','<Enabled>false</Enabled>')
 if(-not(Get-BootstrapOfficialLegacyRelayIdentity $task $recordVariant $expected).matched){throw 'OS-filled record incorrectly became identity.'}
+if(-not(Get-BootstrapOfficialLegacyRelayIdentity $task ($xml.Replace('PT1M','PT60S')) $expected).matched){throw 'Equivalent ISO duration normalization differs.'}
 if(@($expected|Where-Object {$_.allowed -and $_.branch -ne 'system_vbs'}).Count){throw 'Unproven credential branch or unpublished identity opened.'}
 'PASS'
 ''', engine=engine)

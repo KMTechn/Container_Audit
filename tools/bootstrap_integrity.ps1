@@ -51,7 +51,7 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
             if($null -eq $Value -or $Value -is [bool]){return $false}
             if($Name -match $policy.path_pattern){return $false}
             if($Name -match $policy.digest_pattern -and $Name -notmatch $policy.short_digest_pattern){return $false}
-            return ($Name -match $policy.sensitive_pattern -or $Name -imatch '^(pin|otp|password)$')
+            return ($Name -match $policy.sensitive_pattern -or $Name -imatch '^(pin|otp|password)$' -or (-not $CommonOnly -and $Name -imatch '^(authorization|registration[_-]?(?:value|code))$'))
         }
         function Convert-RedactedValue($Value){
             if($null -eq $Value){return $null}
@@ -86,7 +86,7 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
             foreach($match in $matches){
                 if($match.Index -lt $covered){continue}
                 try{$key=ConvertFrom-Json -InputObject ('"'+$match.Groups['key'].Value+'"') -ErrorAction Stop}catch{continue}
-                if($key -notmatch $policy.sensitive_pattern -and $key -notmatch '^(pin|otp|password)$'){continue}
+                if(-not(Test-RedactedField $key 'untyped-json-value')){continue}
                 $begin=$match.Index+$match.Length;$end=$begin;$depth=0;$quoted=$false;$escaped=$false
                 for(;$end -lt $Text.Length;$end++){
                     $ch=$Text[$end]
@@ -2342,6 +2342,7 @@ function Get-BootstrapOfficialLegacyRelayIdentity($Task,[string]$Xml='',[object[
     $argumentIdentity=Task-Arguments $arguments
     $repetition=$triggers[0].SelectSingleNode('*[local-name()="Repetition"]')
     $interval=if($null -eq $repetition){''}else{Task-Text $repetition 'Interval'}
+    if($interval){try{$interval=[Xml.XmlConvert]::ToString([Xml.XmlConvert]::ToTimeSpan($interval))}catch{return $empty}}
     $actual=[ordered]@{
         'task.path'=(([string]$Task.TaskPath).TrimEnd('\')+'\').ToLowerInvariant();'task.name'=([string]$Task.TaskName).ToLowerInvariant()
         'action.count'=[string]$actions.Count;'action.type'=[string]$actions[0].LocalName
