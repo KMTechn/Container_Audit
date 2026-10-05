@@ -1276,3 +1276,5 @@ Registration retains string profile-path arguments after shared resolution. Inva
 공식 옛 relay 되돌림은 보호 preimage XML의 SHA256을 먼저 검증한 뒤, live 작업의 정체성 지문과 enabled를 원 상태와 대조한다. 스케줄러의 기록용 XML 필드 변화는 복원 실패로 판정하지 않는다.
 
 공식 옛 relay 탐색은 빈 결과와 단일 작업을 평탄한 항목으로 반환한다. 같은 이름의 작업이 둘 이상이면 퇴역 admission이 정체성을 추측하지 않고 거절한다.
+
+공식 옛 relay 전환은 기존 `status/current_user_onboarding.json` 설치 결과의 `official_legacy_relay_transition` 필드에 보호 preimage 경로·SHA256·정체성·설치 경로·작업자 SID를 남긴다. 설치 완료 전 새 READY 결과에도 같은 포인터를 기록하며, 이후 onboarding 결과 갱신은 이 필드를 보존한다. 별도 퇴역 시도의 새 증거 폴더에서 이전 preimage를 찾지 않는다. 퇴역 admission은 이 포인터로만 보호 JSON·XML의 SHA256과 정체성을 검증하고 live 작업이 disabled인지 확인한다. 포인터 없음·변조·enabled·unknown은 거절한다.

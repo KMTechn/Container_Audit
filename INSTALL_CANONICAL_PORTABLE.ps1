@@ -2203,6 +2203,70 @@ function Restore-CanonicalOfficialLegacyRelay($Binding) {
 function Get-CanonicalOfficialLegacyRelayExpectedSet {
     return (Get-BootstrapOfficialLegacyRelayExpectedIdentitySet)
 }
+function Read-CanonicalOfficialLegacyRelayTransitionBinding($Binding,[string]$ExpectedIdentitySha256) {
+    if($null -eq $Binding -or [string]$Binding.sha256 -cnotmatch '^[0-9a-f]{64}$'){throw 'OFFICIAL_LEGACY_PREIMAGE_PIN_DIFFERS'}
+    $path=[IO.Path]::GetFullPath([string]$Binding.path)
+    Assert-InstallationEvidenceProtectedPath $path
+    if((Get-Item -LiteralPath $path).Length -gt 65536 -or (Sha $path) -cne [string]$Binding.sha256){throw 'OFFICIAL_LEGACY_PREIMAGE_PIN_DIFFERS'}
+    $record=Get-Content -LiteralPath $path -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+    if([string]$record.schema -cne 'container-audit-official-legacy-relay-preimage-v1' -or $record.enabled -isnot [bool] -or
+        [string]$record.task_name -cne 'direct-sync-relay-container-audit' -or [string]$record.task_path -cne '\' -or
+        [string]$record.xml_sha256 -cnotmatch '^[0-9a-f]{64}$'){throw 'OFFICIAL_LEGACY_PREIMAGE_DIFFERS'}
+    Assert-InstallationEvidenceProtectedPath ([string]$record.xml_path)
+    if((Get-Item -LiteralPath $record.xml_path).Length -gt 65536 -or (Sha $record.xml_path) -cne [string]$record.xml_sha256){throw 'OFFICIAL_LEGACY_PREIMAGE_PIN_DIFFERS'}
+    $xml=Get-Content -LiteralPath $record.xml_path -Raw -Encoding UTF8
+    $identity=Get-BootstrapOfficialLegacyRelayIdentity ([pscustomobject]@{TaskName=$record.task_name;TaskPath=$record.task_path}) $xml
+    if(-not $identity.matched -or [string]$identity.sha256 -cne [string]$record.identity_sha256 -or
+        ($ExpectedIdentitySha256 -and [string]$identity.sha256 -cne $ExpectedIdentitySha256)){throw 'OFFICIAL_LEGACY_PREIMAGE_IDENTITY_DIFFERS'}
+    if((Sha $path) -cne [string]$Binding.sha256 -or (Sha $record.xml_path) -cne [string]$record.xml_sha256){throw 'OFFICIAL_LEGACY_PREIMAGE_PIN_DIFFERS'}
+    return [pscustomobject]@{path=$path;sha256=[string]$Binding.sha256;identity_sha256=[string]$identity.sha256;durable=$true}
+}
+function Save-CanonicalOfficialLegacyRelayTransitionPointer($Binding,[switch]$Required) {
+    # Extend the existing per-user installation result, never create a locator
+    # store or scan installation evidence directories for a plausible preimage.
+    if(-not $onboardingPath -or -not(Test-Path -LiteralPath $onboardingPath -PathType Leaf)){
+        if($Required){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_REQUIRED'};return
+    }
+    Assert-BootstrapNoReparsePoint $onboardingPath 'official relay installation record' -PathOnly
+    if((Get-Item -LiteralPath $onboardingPath).Length -gt 65536){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_DIFFERS'}
+    $priorSha=Sha $onboardingPath
+    $report=Get-Content -LiteralPath $onboardingPath -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+    if([string]$report.status -cne 'READY' -or [string]$report.state_scope -cne 'current_user'){
+        if($Required){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_DIFFERS'};return
+    }
+    $proof=Read-CanonicalOfficialLegacyRelayTransitionBinding $Binding ''
+    $pointer=[ordered]@{schema='container-audit-official-legacy-relay-transition-pointer-v1';path=$proof.path;sha256=$proof.sha256;
+        identity_sha256=$proof.identity_sha256;install_root=$install;operator_sid=$operatorSid}
+    $report|Add-Member -MemberType NoteProperty -Name official_legacy_relay_transition -Value $pointer -Force
+    $text=ConvertTo-KmtechRedactedSinkText -Text ($report|ConvertTo-Json -Depth 20 -Compress)
+    [void]($text|ConvertFrom-ContainerWriterFenceJson)
+    $temporary=$onboardingPath+'.tmp.'+[Guid]::NewGuid().ToString('N')
+    $bytes=[Text.UTF8Encoding]::new($false).GetBytes($text+"`n")
+    $stream=[IO.FileStream]::new($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
+    try{
+        if((Sha $onboardingPath) -cne $priorSha){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_CHANGED'}
+        Move-Item -LiteralPath $temporary -Destination $onboardingPath -Force
+    }finally{if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary}}
+    $readback=Read-CanonicalOfficialLegacyRelayTransitionPointer
+    if($null -eq $readback -or $readback.path -cne $proof.path -or $readback.sha256 -cne $proof.sha256){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_READBACK_DIFFERS'}
+}
+function Read-CanonicalOfficialLegacyRelayTransitionPointer {
+    if(-not $onboardingPath -or -not(Test-Path -LiteralPath $onboardingPath -PathType Leaf)){return $null}
+    Assert-BootstrapNoReparsePoint $onboardingPath 'official relay installation record' -PathOnly
+    if((Get-Item -LiteralPath $onboardingPath).Length -gt 65536){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_DIFFERS'}
+    $priorSha=Sha $onboardingPath
+    $report=Get-Content -LiteralPath $onboardingPath -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+    $pointer=$report.official_legacy_relay_transition
+    if($null -eq $pointer){return $null}
+    if([string]$report.status -cne 'READY' -or [string]$report.state_scope -cne 'current_user' -or
+        [string]$pointer.schema -cne 'container-audit-official-legacy-relay-transition-pointer-v1' -or
+        [string]$pointer.operator_sid -cne $operatorSid -or -not(Same ([string]$pointer.install_root) $install) -or
+        [string]$pointer.identity_sha256 -cnotmatch '^[0-9a-f]{64}$'){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_DIFFERS'}
+    $proof=Read-CanonicalOfficialLegacyRelayTransitionBinding $pointer ([string]$pointer.identity_sha256)
+    if((Sha $onboardingPath) -cne $priorSha){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_CHANGED'}
+    return $proof
+}
 function Get-CanonicalOfficialLegacyRelayWriters {
     param([string]$ComputerName,[string]$ProgramDataRoot,[string]$CurrentUser)
     # Local inspection only; callers cannot select another PC or principal.
@@ -2215,7 +2279,11 @@ function Get-CanonicalOfficialLegacyRelayWriters {
     $writers=@()
     $tasks=@(Get-ScheduledTask -ErrorAction Stop|Where-Object {[string]$_.TaskName -ieq 'direct-sync-relay-container-audit'})
     if($tasks.Count -gt 1){throw 'OFFICIAL_LEGACY_NAME_CARDINALITY_UNKNOWN'}
-    foreach($task in $tasks){$xml=Export-ScheduledTask -TaskName ([string]$task.TaskName) -TaskPath ([string]$task.TaskPath) -ErrorAction Stop;$writers+=,[pscustomobject]@{mechanism='scheduled_task';task_path=[string]$task.TaskPath;task_name=[string]$task.TaskName;xml=[string]$xml;observed_enabled=$task.Settings.Enabled;transition_record=$null}}
+    foreach($task in $tasks){
+        $xml=Export-ScheduledTask -TaskName ([string]$task.TaskName) -TaskPath ([string]$task.TaskPath) -ErrorAction Stop
+        $binding=if($onboardingPath){Read-CanonicalOfficialLegacyRelayTransitionPointer}else{$null}
+        $writers+=,[pscustomobject]@{mechanism='scheduled_task';task_path=[string]$task.TaskPath;task_name=[string]$task.TaskName;xml=[string]$xml;observed_enabled=$task.Settings.Enabled;transition_record=$binding}
+    }
     # No official public release creates HKCU Run relay persistence.
     # Existing canonical Run belongs to the canonical lifecycle, outside this set.
     return $writers
@@ -2250,7 +2318,9 @@ function Get-CanonicalOfficialLegacyRelayState {
     $binding=if($null -ne $Writer.PSObject.Properties['transition_record']){$Writer.transition_record}else{$null}
     if($null -ne $binding){
         Assert-InstallationEvidenceProtectedPath $binding.path
-        if($EvidenceRoot -and -not ([IO.Path]::GetFullPath([string]$binding.path)).StartsWith(([IO.Path]::GetFullPath($EvidenceRoot).TrimEnd('\')+'\'),[StringComparison]::OrdinalIgnoreCase)){throw 'OFFICIAL_LEGACY_PREIMAGE_OUTSIDE_EVIDENCE'}
+        $durable=$null -ne $binding.PSObject.Properties['durable'] -and $binding.durable -is [bool] -and $binding.durable
+        if($durable -and [string]$binding.identity_sha256 -cne [string]$identity.sha256){throw 'OFFICIAL_LEGACY_PREIMAGE_IDENTITY_DIFFERS'}
+        if(-not $durable -and $EvidenceRoot -and -not ([IO.Path]::GetFullPath([string]$binding.path)).StartsWith(([IO.Path]::GetFullPath($EvidenceRoot).TrimEnd('\')+'\'),[StringComparison]::OrdinalIgnoreCase)){throw 'OFFICIAL_LEGACY_PREIMAGE_OUTSIDE_EVIDENCE'}
         if((Sha $binding.path) -cne [string]$binding.sha256){throw 'OFFICIAL_LEGACY_PREIMAGE_PIN_DIFFERS'}
         $binding=@{path=[string]$binding.path;sha256=[string]$binding.sha256}
     }
@@ -2269,7 +2339,7 @@ function Invoke-CanonicalOfficialLegacyRelayTransition {
             if($writer.mechanism -ceq 'scheduled_task'){
                 if($Mode -ceq 'install'){
                     $before=Get-CanonicalOfficialLegacyRelayPreimage
-                    $writer.transition_record=Save-CanonicalOfficialLegacyRelayPreimage $before $installationEvidenceRoot
+                    if($null -eq $writer.transition_record){$writer.transition_record=Save-CanonicalOfficialLegacyRelayPreimage $before $installationEvidenceRoot}
                     [void](Disable-CanonicalOfficialLegacyRelay $before)
                 }else{if($null -eq $writer.transition_record){throw 'OFFICIAL_LEGACY_PREIMAGE_REQUIRED'};[void](Restore-CanonicalOfficialLegacyRelay $writer.transition_record)}
             }else{
@@ -2286,6 +2356,9 @@ function Invoke-CanonicalOfficialLegacyRelayTransition {
                 }
             }
             $state=Get-CanonicalOfficialLegacyRelayState $writer $ExpectedIdentitySet $installationEvidenceRoot
+            if($Mode -ceq 'install' -and $null -eq $failure -and $state.recognized -and $state.enabled -is [bool] -and -not $state.enabled -and $onboardingPath){
+                Save-CanonicalOfficialLegacyRelayTransitionPointer $writer.transition_record
+            }
         }catch{Write-InstallationCaughtFailure $_;$failure=Get-InstallationFailureDetails $_;$state=[pscustomobject]@{recognized=$false;entry_tag='';mechanism=[string]$writer.mechanism;enabled=$null;full_fingerprint='';transition_record=$null;reason_code='POST_TRANSITION_QUERY_UNKNOWN'}}
         $audit+=,@{mechanism=[string]$writer.mechanism;mode=$Mode;status=if($null -eq $failure){'PROVEN'}else{'FAILED'};failure=$failure}
         $states+=,$state
@@ -3733,8 +3806,12 @@ $enteredPlacementTry = $true
         $legacyRelayRestoreNeeded=$true;$mutated=$true
         $audit.scheduled_writer.official_legacy.status='DISABLING'
         Save $auditPath $audit
-        $legacyDisabled=Disable-CanonicalOfficialLegacyRelay $legacyRelayBefore
-        $audit.scheduled_writer.official_legacy.status=$legacyDisabled.status
+        $legacyTransitionWriter=[pscustomobject]@{mechanism='scheduled_task';task_path=$legacyRelayBefore.task_path;task_name=$legacyRelayBefore.task_name;
+            xml=$legacyRelayBefore.xml;observed_enabled=[bool]$legacyRelayBefore.enabled;transition_record=$legacyRelayPreimage}
+        $legacyTransition=Invoke-CanonicalOfficialLegacyRelayTransition @($legacyTransitionWriter) (Get-CanonicalOfficialLegacyRelayExpectedSet) install $true
+        $audit.scheduled_writer.official_legacy['transition']=$legacyTransition.audit
+        if($legacyTransition.audit[0].status -cne 'PROVEN' -or $legacyTransition.state[0].enabled){throw 'OFFICIAL_LEGACY_RELAY_QUIESCENCE_UNPROVEN'}
+        $audit.scheduled_writer.official_legacy.status='PROVEN_DISABLED_QUIESCENT'
         Save $auditPath $audit
     }
     if ($writerRestoreNeeded) {
@@ -4007,6 +4084,9 @@ $enteredPlacementTry = $true
         $legacyAfter=Get-CanonicalOfficialLegacyRelayPreimage
         if($null -eq $legacyAfter -or $legacyAfter.enabled -or $legacyAfter.identity.sha256 -cne $legacyRelayBefore.identity.sha256){throw 'OFFICIAL_LEGACY_RELAY_SUCCESS_NOT_DISABLED'}
         $audit.scheduled_writer.official_legacy.status='REPLACED_BY_CANONICAL_DISABLED_RETAINED'
+        # Onboarding produces a new READY result. Restore the explicit pointer
+        # in that same record before installation can report success.
+        Save-CanonicalOfficialLegacyRelayTransitionPointer $legacyRelayPreimage -Required
     }
     $terminalStatus=Get-CanonicalInstallSuccessStatus $testMode
     $audit.status='PRODUCT_AWAITING_RESIDENT_RELAY'

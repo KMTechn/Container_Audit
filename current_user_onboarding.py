@@ -1540,6 +1540,13 @@ def onboard_current_user(
             tls_ca_source, prepared_credential, _ = (prepared_inputs if prepared_inputs is not None
                 else _prepare_onboarding_inputs(paths, tls_ca_source, environ, credential_loader))
             record_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values())
+            # Preserve the canonical installer's explicit legacy-transition
+            # locator when refreshing this existing installation result. The
+            # retirement controller alone validates and consumes its proof.
+            if paths.onboarding_report_path.is_file():
+                prior = _read_json(paths.onboarding_report_path, "prior onboarding result")
+                if "official_legacy_relay_transition" in prior:
+                    report["official_legacy_relay_transition"] = prior["official_legacy_relay_transition"]
             attempt = RemoteAttempt.begin(paths.onboarding_report_path, "current_user_onboarding")
             for directory in (
                 paths.data_root, paths.events_dir, paths.direct_sync_root,

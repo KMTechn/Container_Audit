@@ -1124,6 +1124,10 @@ def test_first_run_creates_state_and_second_run_reuses_identity(tmp_path):
 
     first = onboard_current_user(app_root, **kwargs)
     identity_before = paths.identity_path.read_bytes()
+    pointer = {"path": str(tmp_path / "install.evidence.1/preimage.json"), "sha256": "a" * 64}
+    persisted = json.loads(paths.onboarding_report_path.read_bytes())
+    persisted["official_legacy_relay_transition"] = pointer
+    paths.onboarding_report_path.write_text(json.dumps(persisted), encoding="utf-8")
     second = onboard_current_user(app_root, **kwargs)
 
     assert first["status"] == second["status"] == "READY"
@@ -1134,6 +1138,8 @@ def test_first_run_creates_state_and_second_run_reuses_identity(tmp_path):
     assert paths.ledger_path.is_file()
     assert first["state_scope"] == "current_user"
     assert first["system_scheduled_task_required"] is False
+    assert second["official_legacy_relay_transition"] == pointer
+    assert json.loads(paths.onboarding_report_path.read_bytes())["official_legacy_relay_transition"] == pointer
 
 
 @pytest.mark.usefixtures("existing_possession_key_contract")
