@@ -543,6 +543,102 @@ function ConvertTo-InstallationMemoryCommand([string]$Source,[string[]]$Argument
     return $encoded
 }
 
+function Assert-InstallationMemoryCommandBound([string]$Encoded) {
+    $winps=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+    $line=(ConvertTo-BootstrapRelayArgument $winps)+' -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand '+$Encoded
+    if($line.Length -gt 16000){throw 'Installation launcher command exceeds the supported caller budget.'}
+}
+
+function Remove-InstallationMemoryTransport($Transport) {
+    if($null -eq $Transport){return}
+    foreach($path in $Transport.Paths){
+        try{if([IO.File]::Exists($path)){Remove-Item -LiteralPath $path -ErrorAction Stop}}
+        catch{
+            # Cleanup must not replace the original child/cancellation/rollback
+            # error. Retain incomplete evidence and the private file on failure.
+            $Script:InstallationEvidenceFailed=$true
+            Write-InstallationEvidenceEvent ([ordered]@{event='TRANSPORT_CLEANUP_FAILED';raw_arguments_recorded=$false})
+        }
+    }
+}
+
+function New-InstallationMemoryTransport([string]$Source,[string[]]$Arguments,[string]$Root,[string]$ReaderSid='') {
+    Assert-InstallationEvidenceWriteRoot $Root
+    $stem=Join-Path $Root ([Guid]::NewGuid().ToString('N').Substring(0,16))
+    $paths=@(($stem+'.ps1'),($stem+'.dat'))
+    $buffers=@([Text.UTF8Encoding]::new($false).GetBytes($Source),
+        [Text.UTF8Encoding]::new($false).GetBytes((ConvertTo-Json -InputObject ([string[]]@($Arguments)) -Compress)))
+    $acl=[Security.AccessControl.FileSecurity]::new()
+    $acl.SetAccessRuleProtection($true,$false)
+    $readers=@([Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-18','S-1-5-32-544')
+    if($ReaderSid){$readers+=$ReaderSid}
+    foreach($sid in $readers | Select-Object -Unique){
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]::new($sid),
+            ([Security.AccessControl.FileSystemRights]::ReadAndExecute -bor [Security.AccessControl.FileSystemRights]::Delete),'Allow'))
+    }
+    $created=@();$hashes=@()
+    try{
+        for($i=0;$i -lt 2;$i++){
+            [byte[]]$bytes=$buffers[$i]
+            if($bytes.Length -le 0 -or $bytes.Length -gt 16777216){throw 'Installation transport size is invalid.'}
+            $sha=[Security.Cryptography.SHA256]::Create()
+            try{$hashes+=([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
+            $stream=[IO.File]::Open($paths[$i],'CreateNew','Write','None');$created+=$paths[$i]
+            try{
+                # Only the DACL of this new file is set, before private content
+                # is written. Do not require WRITE_OWNER/TakeOwnership.
+                # Native setters clear the descriptor's modified flags. Give
+                # each file a fresh DACL, so the second file is also protected.
+                $fileAcl=[Security.AccessControl.FileSecurity]::new()
+                $fileAcl.SetSecurityDescriptorSddlForm($acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access),[Security.AccessControl.AccessControlSections]::Access)
+                if($PSVersionTable.PSEdition -ceq 'Desktop'){[IO.File]::SetAccessControl($paths[$i],$fileAcl)}
+                else{[IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($paths[$i]),$fileAcl)}
+                $stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)
+            }finally{$stream.Dispose()}
+        }
+        $bootstrap=@'
+$ErrorActionPreference='Stop';Set-StrictMode -Version Latest
+$streams=[Collections.Generic.List[IO.Stream]]::new()
+function ReadPinned([string]$path,[string]$expected){
+ for($p=[IO.Path]::GetFullPath($path);$p;$p=[IO.Path]::GetDirectoryName($p)){
+  if([IO.File]::GetAttributes($p) -band [IO.FileAttributes]::ReparsePoint){throw 'Installation transport reparse point.'}
+ }
+ $s=[IO.File]::Open($path,'Open','Read','Read');$streams.Add($s)
+ if($s.Length -le 0 -or $s.Length -gt 16777216){throw 'Installation transport size is invalid.'}
+ [byte[]]$b=([IO.BinaryReader]::new($s)).ReadBytes([int]$s.Length)
+ if($b.Length -ne $s.Length -or $s.ReadByte() -ne -1){throw 'Installation transport read is incomplete.'}
+ $sha=[Security.Cryptography.SHA256]::Create()
+ try{$actual=([BitConverter]::ToString($sha.ComputeHash($b))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
+ if($actual -cne $expected){throw 'Installation transport byte pin differs.'}
+ return ,$b
+}
+try{
+ [byte[]]$code=ReadPinned '@@code-path@@' '@@code-sha@@'
+ [byte[]]$data=ReadPinned '@@data-path@@' '@@data-sha@@'
+ $utf8=[Text.UTF8Encoding]::new($false,$true)
+ $json=$utf8.GetString($data).TrimStart([char]0xfeff)
+ if(-not $json.StartsWith('[') -or -not $json.EndsWith(']')){throw 'Installation transport arguments are not an array.'}
+ $parsed=ConvertFrom-Json -InputObject $json
+ $values=@()
+ if($json -cnotmatch '^\[\s*\]$'){$values=@($parsed)}
+ if(@($values|Where-Object {$_ -isnot [string]}).Count){throw 'Installation transport arguments are not strings.'}
+ $tokens=$null;$errors=$null
+ $ast=[Management.Automation.Language.Parser]::ParseInput($utf8.GetString($code).TrimStart([char]0xfeff),[ref]$tokens,[ref]$errors)
+ if($errors.Count){throw 'Installation transport parse failed.'}
+ $block=$ast.GetScriptBlock()
+ & $block @values
+}catch{[Console]::Error.WriteLine('Installation launcher transport rejected.');exit 1}
+finally{foreach($s in $streams){$s.Dispose()}}
+'@
+        $bootstrap=$bootstrap.Replace('@@code-path@@',$paths[0].Replace("'","''")).Replace('@@code-sha@@',$hashes[0]).Replace(
+            '@@data-path@@',$paths[1].Replace("'","''")).Replace('@@data-sha@@',$hashes[1])
+        $encoded=ConvertTo-InstallationMemoryCommand $bootstrap @()
+        Assert-InstallationMemoryCommandBound $encoded
+        return [pscustomobject]@{Encoded=$encoded;Paths=$paths;PayloadSha256=$hashes[1]}
+    }catch{Remove-InstallationMemoryTransport ([pscustomobject]@{Paths=$created});throw}
+}
+
 function Get-InstallationHelperMemorySource {
     return @'
 $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
@@ -567,8 +663,8 @@ if($bound.ContainsKey('RepairAbandonedInstallationParent') -or $bound.ContainsKe
 }
 
 function Get-InstallationElevationWrapperSource {
-    # No wrapper is persisted. The one read of each source supplies both its
-    # digest and parsed executable bytes, including the script filename metadata.
+    # Transport pins protect the wrapper; the independent original source pins
+    # and verified AST filename metadata remain mandatory inside it.
     return ('function Get-InstallationVerifiedScript {'+${function:Get-InstallationVerifiedScript}.ToString()+"}`n"+@'
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
@@ -616,8 +712,8 @@ try {
  if($fileIndex -lt 0 -or $fileIndex+1 -ge $childArgs.Length -or -not(Test-BootstrapSamePath $childArgs[$fileIndex+1] $target)){throw 'Elevated helper invocation differs.'}
  $parameters=[string[]]@($childArgs|Select-Object -Skip ($fileIndex+2))
  $helperSource='function Get-InstallationVerifiedScript {'+${function:Get-InstallationVerifiedScript}.ToString()+"}`n"+(Get-InstallationHelperMemorySource)
- $encoded=ConvertTo-InstallationMemoryCommand $helperSource (@($target,$targetSha,$library,$librarySha,$Script:InstallationProtectedRunRoot)+$parameters)
- $child=Invoke-InstallationEvidenceChild 'elevated-helper' $winps @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
+ $helperTransport=New-InstallationMemoryTransport $helperSource (@($target,$targetSha,$library,$librarySha,$Script:InstallationProtectedRunRoot)+$parameters) $Script:InstallationEvidenceRoot
+ $child=Invoke-InstallationEvidenceChild 'elevated-helper' $winps @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',$helperTransport.Encoded)
  $exitCode=[int]$child.ExitCode
  $roots=@($child.Stdout -split "`r?`n" | Where-Object {$_ -cmatch '^installation_stage_evidence_root=.+$'} | ForEach-Object {$_.Substring('installation_stage_evidence_root='.Length)})
  if($roots.Count){
@@ -627,6 +723,7 @@ try {
  }
  Complete-InstallationEvidenceStage 'forward'
 }catch{$failure=Get-InstallationFailureDetails $_;Fail-InstallationEvidenceStages $_;$exitCode=1}
+finally{Remove-InstallationMemoryTransport (Get-Variable -Name helperTransport -ValueOnly -ErrorAction SilentlyContinue)}
 $summary=Complete-InstallationEvidence
 $record=[ordered]@{schema='container-audit-installation-elevation-capture-v1';parent_process_id=$parentPid;wrapper_process_id=$PID;
  helper_process_id=if($null -ne $child){[int]$child.ProcessId}else{0};helper_exit_code=$exitCode;helper_sha256=$targetSha;
@@ -669,8 +766,9 @@ function Invoke-InstallationElevationCapture([string]$Target,[string[]]$Argument
     $protectedResult=Join-Path $protectedRun 'elevation-result.json'
     $library=Join-Path (Split-Path -Parent $Target) 'tools\bootstrap_integrity.ps1'
     $targetSha=Get-FileSha256 $Target
-    $encoded=ConvertTo-InstallationMemoryCommand (Get-InstallationElevationWrapperSource) (@($Target,$protectedResult,$AuditBase,$OperatorSid,[string]$PID,$targetSha,(Get-FileSha256 $library))+$Arguments)
-    $argv=@('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
+    $transport=New-InstallationMemoryTransport (Get-InstallationElevationWrapperSource) (@($Target,$protectedResult,$AuditBase,$OperatorSid,[string]$PID,$targetSha,(Get-FileSha256 $library))+$Arguments) $root
+    try{
+    $argv=@('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$transport.Encoded)
     $line=($argv|ForEach-Object {ConvertTo-BootstrapRelayArgument ([string]$_)}) -join ' '
     $winps=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
     # Verb RunAs cannot share RedirectStandardOutput/Error parameter sets.
@@ -720,6 +818,7 @@ function Invoke-InstallationElevationCapture([string]$Target,[string[]]$Argument
     Write-InstallationEvidenceEvent ([ordered]@{event='ELEVATED_FINITE_CHILD';wrapper_pid=[int]$process.Id;helper_pid=[int]$result.helper_process_id;exit_code=[int]$process.ExitCode;result_path=$resultPath;result_sha256=Get-FileSha256 $resultPath})
     return [pscustomobject]@{ExitCode=[int]$process.ExitCode;Id=[int]$result.helper_process_id;WrapperProcessId=[int]$process.Id;ResultPath=$resultPath;
         HelperStageEvidenceRoot=[string]$result.helper_stage_evidence_root;Streams=$result.streams;EvidenceSummary=$result.evidence_summary}
+    }finally{Remove-InstallationMemoryTransport $transport}
 }
 
 function Import-BootstrapCanonicalUserProcessApi([string]$VerifiedProducerRoot) {
@@ -777,6 +876,7 @@ function Invoke-BootstrapNormalFiniteProducer([string]$VerifiedProducerRoot,[str
     if([int]$caller.session_id -le 0){throw 'Lifecycle producer requires the operator interactive session.'}
     $root=Initialize-InstallationEvidence ($EvidenceBase+'.normal') ([string]$caller.sid) @([Environment]::GetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','Process'))
     Set-InstallationEvidenceStage 'lifecycle.normal_producer_prepare'
+    $transport=$null
     try {
     if(-not $caller.elevated){
         Set-InstallationEvidenceStage 'lifecycle.normal_producer_capture'
@@ -792,8 +892,8 @@ function Invoke-BootstrapNormalFiniteProducer([string]$VerifiedProducerRoot,[str
     if(Test-Path -LiteralPath $resultPath){throw 'Normal producer capture target already exists.'}
     $library=Join-Path $VerifiedProducerRoot 'tools\bootstrap_integrity.ps1'
     $winps=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
-    $encoded=ConvertTo-InstallationMemoryCommand (Get-InstallationNormalProducerWrapperSource) (@($library,(Get-FileSha256 $library),$resultPath,[string]$PID,[string]$caller.sid,$Executable)+$Arguments)
-    $argv=@((ConvertTo-BootstrapRelayArgument $winps),'-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
+    $transport=New-InstallationMemoryTransport (Get-InstallationNormalProducerWrapperSource) (@($library,(Get-FileSha256 $library),$resultPath,[string]$PID,[string]$caller.sid,$Executable)+$Arguments) $root ([string]$caller.sid)
+    $argv=@((ConvertTo-BootstrapRelayArgument $winps),'-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$transport.Encoded)
     $names=@('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID','CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID','CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID','CONTAINER_AUDIT_DATA_ROOT')
     $values=[string[]]@($names|ForEach-Object {[string][Environment]::GetEnvironmentVariable($_,'Process')})
     $wrapperPid=Start-BootstrapNormalProducerWrapper ($argv -join ' ') $caller $names $values
@@ -828,7 +928,7 @@ function Invoke-BootstrapNormalFiniteProducer([string]$VerifiedProducerRoot,[str
     return [pscustomobject]@{ExitCode=[int]$result.exit_code;ProcessId=[int]$result.producer_process_id;Stdout=$texts.stdout;Stderr=$texts.stderr;
         Streams=$result.streams;EvidenceSummary=$summary;Failure=$result.failure;NormalProducerResultPath=$resultPath}
     }catch{Fail-InstallationEvidenceStages $_;throw}
-    finally{[void](Complete-InstallationEvidence)}
+    finally{Remove-InstallationMemoryTransport $transport;[void](Complete-InstallationEvidence)}
 }
 
 function Complete-InstallationEvidenceStage([string]$Lane, $Failure=$null) {

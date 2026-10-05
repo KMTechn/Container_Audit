@@ -914,7 +914,15 @@ CA-T01의 이름 14개와 실제 register→ValueError, CA-T02의 malformed JSON
 G 시작 거절 대화상자는 REFUSE/UNKNOWN에 맞는 고정 한국어 원인·복구 안내만 전달한다. 임의 예외 진단은 작업자 대화상자에 전달하지 않는다. 전체 비교에서 드러난 relay 모의는 read-only Git 신원 확인을 보존하며, 실제 자료 경계/호환 판정은 동일하다.
 # Installation follow-up evidence — 2026-10-02
 
-설치 상승 wrapper와 일반 토큰 producer wrapper는 파일 없이 메모리 명령으로 실행한다.
+설치 상승 wrapper·그 안의 finite helper·일반 토큰 producer wrapper는 기존 private
+evidence root에 CreateNew로 만든 두 transport 파일(UTF-8 source와 JSON argv)을 쓴다.
+각 파일은 내용을 쓰기 전에 새 DACL로 보호하며 owner 변경은 하지 않는다. caller가
+게시 전 메모리 bytes의 SHA256을 짧은 bootstrap에 결속한다. bootstrap은 leaf/ancestor
+reparse를 거절하고 FileShare.Read handle을 유지한 채 한 번 읽어 hash를 확인한다.
+확인한 bytes만 파싱·실행하며 source의 기존 filename metadata와 독립 pin은 유지한다.
+launcher 전체 명령은 고정 옵션·실행 파일을 포함해 16,000자 이하이고 기존 30,000자
+encoded 보조 guard도 유지한다. 완료·실패·취소의 finally에서 자기 파일만 정리한다.
+정리 실패는 원 오류/rollback을 덮지 않고 private 파일과 불완전 evidence를 보존한다.
 상승 helper·bootstrap library·writer fence helper와 일반 토큰 API는 한 번 읽은
 바이트의 SHA256을 확인하고 그 바이트를 파싱·평가한다. 실행 동안 source handle을
 독점 보유하지 않는다. 높은 권한의 stage journal·stream·summary·placement log·
