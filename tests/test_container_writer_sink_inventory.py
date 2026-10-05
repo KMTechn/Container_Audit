@@ -284,7 +284,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
     assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
         "call_operator": 16,
         "com_wmi_process_create": 5,
-        "dot_source": 22,
+        "dot_source": 24,  # Admitted manager parser plus retirement independent action invocation.
         "dotnet_process_start": 2,
         "invoke_expression": 1,
         "native_process_api": 4,

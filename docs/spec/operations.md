@@ -485,6 +485,17 @@ old packet의 manifest/aggregate/integrity가 정확히 같아야 한다. 기존
 대조한다. 명령이 실패하면 원 code/record·Run 명령과 은퇴 marker를 검증한 exact rollback 여부를 확인한다.
 다른 request로 바뀐 marker를 정리하지 않으며 불명 상태는 fence와 원본을 보존한다.
 
+살아 있는 퇴역 마감 시도의 부분 제거는 남은 모든 파일이 exact old inventory의
+동일 경로·크기·SHA256인 경우에만 복구한다. 잔여 tree는 그 attempt의
+`.current.uninstall.<attempt>` custody에 보존하고 검증된 staging으로 원 code/record를
+복원한다. 알 수 없는 파일·변경된 파일·변경된 integrity record는 교체하거나 지우지 않는다.
+code 복원 실패에도 Run·귀속된 stop·원 은퇴 쌍 확인을 각각 시도하고 단계별 결과를 기록한다.
+정확 code와 runtime preimage가 입증될 때만 fence를 해제해 옛 relay를 다시 시작한다.
+
+퇴역 release authorization이 고정한 audit은 release 완료 전에는 봉인된 바이트를
+유지한다. 중단·실패 관측은 원 위치의 `stages.jsonl`에 계속 남고, 일반 설치·업데이트·
+일반 제거의 최종 audit에는 기존처럼 `installation_evidence`를 추가한다.
+
 중단된 명령은 자동 성공으로 세지 않는다. 원 `audit_path`의 journal과 SHA256을 보존하고 원 owner 종료를
 확인한 뒤, 동일 관리/old 패키지·두 은퇴 pin에 `-ResumeRetirementReceiptPath`와
 `-ResumeRetirementReceiptSha256`을 함께 전달한다. 이 경로는 귀속·정지와 원 owner/authority 종료를 다시
@@ -1117,3 +1128,12 @@ fixture Python canonical_control_root는 PS의 L/c와 같다. ordinary persisten
 ## 설치 통합의 읽기 전용 수명주기 검사 (sub-248)
 
 canonical의 PlanOnly/설치 상태 분류보다 앞선 검사는 처음 검증한 bootstrap library 안에서 같은 프로세스로 실행한다. 설치 namespace/stock identity·control·trust 설정·실제 task XML의 read-only 관측을 확인하며 거절 시 원래 지원 제거 안내를 유지한다. JSON은 중복 key, 잘못된 key 대소문자, 비객체, 손상/1MiB 초과와 잘못된 판 식별자를 거절하고, 확인 뒤 control을 다시 읽어 의미상 동일함을 검사한다. 실제 query의 subprocess 경로는 기존 auto_update_control admission이 spawn 전에 거절한다. pinned library ScriptBlock은 이미 승인된 변수 기호에 결속하며 원 bytes/hash/AST 검증을 계속 적용한다. 설치/복원/G 및 host/native 증거의 범위는 sub-248 REPORT와 COVERAGE-FIX에 기록한다.
+
+퇴역 child 실패 전문은 앱 공통 `ConvertTo-KmtechRedactedSinkText`를 호출한 뒤
+실패 요약에 보존한다. #31 원문 0은 공통 capture 교정과 조립 뒤에만 보증한다.
+공통 함수 공급 전 퇴역 진단 두 회귀는 조립 뒤 확인 대상이며 대역·skip으로 숨기지 않는다.
+
+봉인 플래그가 켜진 퇴역 release의 공통 catch도 audit 본문 저장을 건너뛰며,
+원 실패는 자기 stages.jsonl에 남긴다. 일반 catch의 감사 기록은 유지한다.
+퇴역 마감은 인정 없는 비활성 noncanonical 작업 배열도 거절한다.
+공식 옛 비활성 작업의 허용은 공통 정체성·전환 기록 판정 연결 후 조립 확인 대상이다.

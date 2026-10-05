@@ -63,10 +63,11 @@ def _crash_fixture(tmp_path, phase, *, historical=False, pause_claim=False):
         needle = '    Move-Item $temp $Path -Force'
         injected = "\n    if ($env:CA_RETIREMENT_CRASH -ceq '1' -and $Path -ceq $auditPath -and $Value.status -ceq '" + status + "') { exit 97 }"
     elif phase == 'removed':
-        needle = 'if ($LASTEXITCODE -ne 0) { throw "Code removal failed: $LASTEXITCODE" }'
+        needle = '        if ((Test-Path -LiteralPath $install) -or (Snapshot).exists -or @(Relays).Count -ne 0) {'
         injected = "\n            if ($env:CA_RETIREMENT_CRASH -ceq '1') { exit 97 }"
+        before = True
     elif phase == 'release_authorized':
-        needle = "        Stop-CanonicalWriterFenceRelease $releaseAuthorization\n        $canonicalWriterFenceActive = $false\n        $audit.status = if ($CompleteRetiredRemoval) { 'PASS_RETIRED_REMOVAL_DATA_PRESERVED' } else { 'PASS_UNINSTALLED_DATA_PRESERVED' }"
+        needle = "        Stop-CanonicalWriterFenceRelease $releaseAuthorization\n        $canonicalWriterFenceActive = $false\n        $retirementAuditSealed=$false"
         injected = "        if ($env:CA_RETIREMENT_CRASH -ceq '1') { exit 97 }\n"
         before = True
     else:
@@ -74,6 +75,7 @@ def _crash_fixture(tmp_path, phase, *, historical=False, pause_claim=False):
         needle = "        $audit.status = if ($CompleteRetiredRemoval) { 'PASS_RETIRED_REMOVAL_DATA_PRESERVED' } else { 'PASS_UNINSTALLED_DATA_PRESERVED' }"
         injected = "\n        if ($env:CA_RETIREMENT_CRASH -ceq '1') { exit 97 }"
     assert text.count(needle) == 1
+    injected = injected.replace('exit 97', "Write-InstallationEvidenceEvent ([ordered]@{event='FIXTURE_CONTROLLER_EXIT';exit_code=97}); exit 97")
     script.write_text(text.replace(needle, injected + needle if before else needle + injected), encoding='utf-8-sig')
     manifest_path = manager / 'portable-manifest.json'
     manifest = json.loads(manifest_path.read_text())
@@ -90,6 +92,16 @@ def _crash_fixture(tmp_path, phase, *, historical=False, pause_claim=False):
         if json.loads(path.read_text()).get('schema') == 'container-audit-canonical-portable-install-v2':
             journals.append(path)
     assert len(journals) == 1
+    if phase == 'release_authorized':
+        fence = Path(env['LOCALAPPDATA']) / 'KMTech/DirectSync/container_audit/control/writer-session/active.json'
+        active = json.loads(fence.read_text())
+        authorization = json.loads(Path(active['prepared_receipt_path']).read_text())
+        assert authorization['install_audit_sha256'] == _sha(journals[0])
+        observation = crashed.fixture_audit
+        stages = Path(observation['audit_path'] + '.evidence.' + str(observation['process_id'])) / 'stages.jsonl'
+        rows = [json.loads(line) for line in stages.read_text().splitlines()]
+        assert any(row.get('event') == 'FIXTURE_CONTROLLER_EXIT' and row.get('exit_code') == 97 for row in rows)
+        assert any(row.get('event') == 'END' and row.get('stage') == 'retirement.release_authorized' for row in rows)
     return fixture, journals[0]
 
 

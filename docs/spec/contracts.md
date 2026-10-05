@@ -404,6 +404,10 @@ stop marker SHA·request ID·경로·현재 사용자 및 채택 루트를 결�
 JSON이나 marker는 정지·승인 증명이 아니다. 현재 Run/relay exact binding, legacy writer 거부,
 살아 있는 session authority/delegation, 하위 old helper의 승격·전체 코드 writer 정지 검사를 모두 요구한다.
 새 stop 요청은 선행 marker가 없는 채택 루트에만 생성하며 실패 시 exact code/Run과 원 은퇴 정지를 복구한다.
+같은 live authority의 퇴역 실패 복구는 pinned old inventory와 일치하는 잔여 code만
+별도 attempt custody에 보존해 복구하며, unknown/변경 파일은 그대로 두고 거절한다.
+각 복원 단계의 실패는 뒤 독립 단계의 시도·기록을 막지 않으며 정확 preimage만 fence를 해제한다.
+release authorization이 고정한 audit SHA는 봉인 중 유지하고 관측 evidence는 그 별도 원 경로에 기록한다.
 
 **은퇴 마감의 중단 재개:** `ResumeRetirementReceiptPath/Sha256`은 같은 관리 패키지와 exact old 입력,
 현재 사용자·두 루트·원 기록·귀속된 active marker/receipt, 원 owner의 PID/시작 시각과 authority 종료를

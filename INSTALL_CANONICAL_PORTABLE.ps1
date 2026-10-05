@@ -515,6 +515,23 @@ function Invoke-CanonicalRollbackRuntimePreimage($Before,[switch]$RemovalAlready
 function Read-CanonicalSupportedRemovalResume {
     $active=Read-ContainerWriterFence -AllowAbsent
     if ($null -eq $active) { return $null }
+    # A retirement attempt has a canonical journal, not a protected supported
+    # removal journal. Reject its bound existing stop before native preparation.
+    $preparedLeaf=[IO.Path]::GetFileName([string]$active.prepared_receipt_path)
+    if ($preparedLeaf -cmatch '^canonical-portable-(\d{8}T\d{9}Z-[0-9a-f]{32})-writer-prepared\.json$') {
+        $originPath=Join-Path (Split-Path -Parent ([string]$active.prepared_receipt_path)) ('canonical-portable-'+$Matches[1]+'.json')
+        [void](Get-ContainerWriterFenceFileSha256 $originPath 1048576)
+        $origin=Get-Content -LiteralPath $originPath -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson
+        if ($null -ne $origin.PSObject.Properties['retirement'] -and
+            [string]$origin.schema -ceq 'container-audit-canonical-portable-install-v2' -and
+            [string]$origin.operation -ceq 'COMPLETE_RETIRED_REMOVAL' -and
+            [string]$origin.retirement.session_id -ceq [string]$active.session_id -and
+            [string]$origin.retirement.attempt_id -ceq [string]$active.attempt_id -and
+            [string]$origin.code_replacement.transaction_id -ceq [string]$active.replacement_transaction_id -and
+            $env:CONTAINER_AUDIT_DATA_ROOT -and (Test-Path -LiteralPath (Join-Path $env:CONTAINER_AUDIT_DATA_ROOT 'direct_sync\control\container_audit_user_relay.stop.json'))) {
+            throw 'CANONICAL_STOP_MARKER_PREEXISTS'
+        }
+    }
     $directory=Join-Path (Join-Path (Get-InstallationEvidenceControlRoot) 'supported-removals') ([string]$active.replacement_transaction_id)
     $path=Join-Path $directory 'removal-journal.json'
     Assert-InstallationEvidenceProtectedPath $directory
@@ -1063,6 +1080,17 @@ function Product([string]$Root,[string]$Mode,[string]$AppRoot='') {
     # The capture waits for the host only, never its persistent relay descendant.
     $process = Invoke-InstallationEvidenceChild ('product'+$Mode.TrimStart('-')) (Join-Path $Root 'runtime\pythonw.exe') $args
     if ($process.ExitCode -ne 0) { throw "Product mode failed: $Mode/$($process.ExitCode)" }
+}
+function Get-CanonicalRetirementChildFailure($Child, [Collections.IDictionary]$Environment=$null) {
+    # App-owned redaction/capture is supplied by lifecycle assembly (sub-273).
+    # Preserve the first child's full diagnostic up to the common sink limit.
+    $detail=[ordered]@{process_id=$Child.ProcessId;exit_code=$Child.ExitCode;streams=$Child.Streams}
+    foreach ($stream in @('Stdout','Stderr')) {
+        $redaction=@{Text=[string]$Child.$stream}
+        if ($null -ne $Environment) { $redaction.Environment=$Environment }
+        $detail[$stream.ToLowerInvariant()]=ConvertTo-KmtechRedactedSinkText @redaction
+    }
+    return $detail
 }
 function Read-CanonicalRetiredRemoval {
     # These are observations, never authority. The caller still acquires the
@@ -2130,6 +2158,54 @@ function Assert-CanonicalWriterRestoreReadback($Before, $After) {
         throw 'CANONICAL_WRITER_RESTORE_BINDING_MISMATCH'
     }
 }
+function Assert-CanonicalRetiredLegacyWriterAdmission($Snapshot,[string]$EvidenceRoot) {
+    $failureMessage='Uninstall/restore requires the current-user layout without legacy scheduled writers.'
+    $candidates=[Collections.Generic.List[object]]::new()
+    if ([bool]$Snapshot.present) { $candidates.Add($Snapshot) }
+    if ($Snapshot -is [Collections.IDictionary]) {
+        $hasDisabled=$Snapshot.Contains('noncanonical_disabled')
+    } else { $hasDisabled=$null -ne $Snapshot.PSObject.Properties['noncanonical_disabled'] }
+    if ($hasDisabled) {
+        foreach ($entry in @($Snapshot.noncanonical_disabled)) {
+            if ($null -ne $entry) { $candidates.Add($entry) }
+        }
+    }
+    if ($candidates.Count -eq 0) { return @() }
+    if ([bool]$Snapshot.present -and [bool]$Snapshot.enabled) { throw $failureMessage }
+    try {
+        # Discovery/identity constants are app-owned lifecycle assembly inputs.
+        # Match full discovered writer objects, never infer identity from a name.
+        $expected=Get-CanonicalOfficialLegacyRelayExpectedSet
+        $writers=@(Get-CanonicalOfficialLegacyRelayWriters `
+            -ComputerName ([Environment]::MachineName) `
+            -ProgramDataRoot ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) `
+            -CurrentUser ([string][Security.Principal.WindowsIdentity]::GetCurrent().User.Value))
+        $proofs=[Collections.Generic.List[object]]::new()
+        foreach ($candidate in $candidates) {
+            $matches=@($writers | Where-Object {
+                [string]$_.mechanism -ceq 'scheduled_task' -and
+                [string]::Equals([string]$_.task_path,[string]$candidate.task_path,[StringComparison]::OrdinalIgnoreCase) -and
+                [string]::Equals([string]$_.task_name,[string]$candidate.task_name,[StringComparison]::OrdinalIgnoreCase)
+            })
+            if ($matches.Count -ne 1) { throw $failureMessage }
+            $state=Get-CanonicalOfficialLegacyRelayState -Writer $matches[0] -ExpectedIdentitySet $expected -EvidenceRoot $EvidenceRoot
+            if ($state.recognized -isnot [bool] -or -not $state.recognized -or
+                $state.enabled -isnot [bool] -or $state.enabled -or
+                $null -eq $state.transition_record -or
+                [string]::IsNullOrWhiteSpace([string]$state.transition_record.path) -or
+                [string]$state.transition_record.sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+                [string]$state.full_fingerprint -cnotmatch '^[0-9a-f]{64}$') { throw $failureMessage }
+            if ((Get-ContainerWriterFenceFileSha256 ([string]$state.transition_record.path) 1048576) -cne
+                [string]$state.transition_record.sha256) { throw $failureMessage }
+            $proofs.Add([ordered]@{mechanism='scheduled_task';entry_tag=[string]$state.entry_tag;
+                full_fingerprint=[string]$state.full_fingerprint;transition_record=$state.transition_record})
+        }
+        return $proofs.ToArray()
+    } catch {
+        # Fail closed when assembly inputs/discovery/transition evidence differ.
+        throw [InvalidOperationException]::new($failureMessage,$_.Exception)
+    }
+}
 function Get-CanonicalWriterPreimageForQuiesce([string]$InstallRootValue) {
     $deadline = (Get-Date).ToUniversalTime().AddSeconds(90)
     do {
@@ -2339,6 +2415,12 @@ if ($CompleteRetiredRemoval) {
         ([string]$lifecycleManifest.writer_sink_inventory_contract_sha256)
 }
 $lifecycleManifestSha256 = Sha (Join-Path $lifecycleSource 'portable-manifest.json')
+if ($CompleteRetiredRemoval) {
+    # Keep the admitted management parser available when the exact historical
+    # guard predates it. The old guard still supplies every old fence function.
+    $writerFenceHelperPath = Join-Path $source 'tools\container_writer_fence.ps1'
+    . $writerFenceHelperPath
+}
 $writerFenceHelperPath = Join-Path $lifecycleSource 'tools\container_writer_fence.ps1'
 if (-not (Test-Path -LiteralPath $writerFenceHelperPath -PathType Leaf)) {
     throw 'Portable tree is missing the all-writer fence helper.'
@@ -2479,10 +2561,16 @@ if (-not [string]::IsNullOrWhiteSpace($env:CONTAINER_AUDIT_DATA_ROOT)) {
 }
 $statusRoot = Join-Path $activeRelayRoot 'status'
 $stop = Join-Path $activeRelayRoot 'control\container_audit_user_relay.stop.json'
+if ($Uninstall -and -not $CompleteRetiredRemoval -and -not $supportedRemovalResume -and
+    (Test-Path -LiteralPath $stop)) {
+    # Reject a retirement-owned stop before evidence preparation has effects.
+    throw 'CANONICAL_STOP_MARKER_PREEXISTS'
+}
 $onboardingPath = Join-Path $statusRoot 'current_user_onboarding.json'
 $removalPath = Join-Path $statusRoot 'current_user_removal.json'
 $relayPath = Join-Path $statusRoot 'container_audit_user_relay.json'
 $retirement = if ($CompleteRetiredRemoval) { Read-CanonicalRetiredRemoval } else { $null }
+$retirementAuditSealed=$false
 $runId = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')+'-'+[Guid]::NewGuid().ToString('N')
 $auditRoot = Join-Path $activeDataRoot 'install-audit'
 $abandonedRecovery=$null
@@ -2649,7 +2737,10 @@ $writerBefore = if ($testMode -or ($Uninstall -and -not $CompleteRetiredRemoval)
     [ordered]@{ present=$false; classification='TEST_BYPASS'; restore_required=$false }
 }
 else { Get-CanonicalWriterPreimageForQuiesce $install }
-if (($Uninstall -or $RestoreVerifiedReplacement) -and [bool]$writerBefore.present) {
+$retirementLegacyWriterAdmission=@()
+if ($CompleteRetiredRemoval) {
+    $retirementLegacyWriterAdmission=Assert-CanonicalRetiredLegacyWriterAdmission $writerBefore $installationEvidenceRoot
+} elseif (($Uninstall -or $RestoreVerifiedReplacement) -and [bool]$writerBefore.present) {
     throw 'Uninstall/restore requires the current-user layout without legacy scheduled writers.'
 }
 $uninstallCodeStarted = $false
@@ -2825,6 +2916,7 @@ $audit = [ordered]@{
 }
 if ($CompleteRetiredRemoval) {
     $audit.retirement=$retirement
+    $retirement.legacy_writer_admission=[Object[]]@($retirementLegacyWriterAdmission)
     $retirement.owner_process_id=$PID
     $retirement.owner_started_at_utc=(Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')
     $retirement.session_id=$Script:CanonicalWriterFenceSessionId
@@ -3162,7 +3254,13 @@ $enteredPlacementTry = $true
             $capturedChild = Invoke-InstallationEvidenceChild 'uninstall-helper' $winps $uninstallArguments
             $global:LASTEXITCODE=$capturedChild.ExitCode
             Write-Output $capturedChild.Stdout
-            if ($LASTEXITCODE -ne 0) { throw "Code removal failed: $LASTEXITCODE" }
+            if ($LASTEXITCODE -ne 0) {
+                if ($CompleteRetiredRemoval) {
+                    $audit['retirement_child_failure']=Get-CanonicalRetirementChildFailure $capturedChild
+                    Write-Output ('retirement_failure_summary='+($audit.retirement_child_failure | ConvertTo-Json -Depth 12 -Compress))
+                }
+                throw "Code removal failed: $LASTEXITCODE"
+            }
         }
         if ((Test-Path -LiteralPath $install) -or (Snapshot).exists -or @(Relays).Count -ne 0) {
             throw 'Uninstall independent code/runtime absence readback failed.'
@@ -3178,14 +3276,20 @@ $enteredPlacementTry = $true
         $audit.code_placement = 'REMOVED'
         $audit.after = Snapshot
         Save $auditPath $audit
+        if ($CompleteRetiredRemoval) {
+            Set-InstallationEvidenceStage 'retirement.release_authorization'
+            $retirementAuditSealed=$true
+        }
         $releaseAuthorization = New-CanonicalWriterFenceReleaseAuthorization `
             -Path $productCompleteAuthorizationPath -Phase 'PRODUCT_COMPLETE' -AuditPath $auditPath
         $canonicalWriterFenceLastReleaseAuthorizationPath = [string]$releaseAuthorization.path
         $canonicalWriterFenceLastReleaseAuthorizationSha256 = [string]$releaseAuthorization.sha256
         Set-CanonicalWriterFenceReleaseAuthorization $releaseAuthorization
         Clear-CanonicalWriterFenceReleaseDelegation
+        if ($CompleteRetiredRemoval) { Set-InstallationEvidenceStage 'retirement.release_authorized' }
         Stop-CanonicalWriterFenceRelease $releaseAuthorization
         $canonicalWriterFenceActive = $false
+        $retirementAuditSealed=$false
         $audit.status = if ($CompleteRetiredRemoval) { 'PASS_RETIRED_REMOVAL_DATA_PRESERVED' } else { 'PASS_UNINSTALLED_DATA_PRESERVED' }
         $audit.completed_at = [DateTime]::UtcNow.ToString('o')
         Save $auditPath $audit
@@ -3515,7 +3619,7 @@ catch {
     if ($enteredPlacementTry) {
         $audit.failure_type=$original.Exception.GetType().Name
         $audit.failure=Get-CanonicalFailureDetails $original 'INSTALL'
-        Save $auditPath $audit
+        if (-not $retirementAuditSealed) { Save $auditPath $audit }
         if ($evidenceFull) { Save $evidenceFull $audit }
         if (-not $testMode -and $codeRestoreNeeded -and -not $RestoreVerifiedReplacement) {
             if (-not $canonicalWriterFenceActive) {
@@ -3625,8 +3729,16 @@ catch {
         throw $original
     }
     if ($Uninstall) {
-        # The source survives code removal. Renew this same live delegation even
-        # if a failed release already cleared it; no foreign session is adopted.
+        $retirementAuditSealed=$false
+        # Retirement recovery attempts each independent preimage even when an
+        # earlier step fails. Writers reopen only after every exact proof passes.
+        $retirementRollbackSteps = [Collections.Generic.List[object]]::new()
+        $retirementCodeExact=$false; $retirementRunExact=$false
+        $retirementStopExact=$false; $retirementPairExact=$false
+        $retirementRelaysBound=$false; $retirementRelaysExact=$false
+        $retirementFenceReleased=$false
+        $retirementActions = @(
+            @{name='delegation'; action={
         $uninstallActiveFence = Read-ContainerWriterFence
         [void](Set-ContainerWriterFencePrepared `
             -SessionId $Script:CanonicalWriterFenceSessionId `
@@ -3643,63 +3755,108 @@ catch {
             -DelegatedSources $canonicalWriterFenceDelegatedSources `
             -LifetimeSeconds 300 `
             -AuthorityLease $canonicalWriterFenceAuthority)
-        if ($uninstallCodeStarted -and -not (Test-Path -LiteralPath $install)) {
-            $recoverCodeArguments = @($uninstallArguments | Where-Object { $_ -cne '-Uninstall' })
-            $recoverCodeArguments += @('-RestoreUninstallRecordPath',$uninstallRecordPreimagePath,
-                '-ExpectedUninstallRecordSha256',$uninstallRecordSha256)
-            $capturedChild = Invoke-InstallationEvidenceChild 'uninstall-code-recovery' $winps $recoverCodeArguments
-            $global:LASTEXITCODE=$capturedChild.ExitCode
-            Write-Output $capturedChild.Stdout
-            if ($LASTEXITCODE -ne 0) { throw "Uninstall exact code recovery failed: $LASTEXITCODE" }
-        }
-        [void](Assert-BootstrapIntegrityRecord $install)
-        if ((Get-InventoryAggregate @(Get-CodeInventory $install)) -cne $uninstallAggregate -or
-            (Sha (Join-Path $install 'bootstrap-integrity.json')) -cne $uninstallRecordSha256) {
-            throw 'Uninstall exact code recovery not proven; runtime remains fenced.'
-        }
-        if ($uninstallCodeStarted) { $audit.code_placement = 'RESTORED_EXACT_PREIMAGE' }
-        if ($CompleteRetiredRemoval) { [void](Read-CanonicalRetiredRemoval) }
-        # A refusing original relay is never killed or duplicated. Restore its
-        # persistence/stop preimage and release only this attempt's live fence.
-        $remaining = @(Relays)
-        foreach ($item in $remaining) {
-            if (@($old | Where-Object { [int]$_.ProcessId -eq [int]$item.ProcessId -and
-                [string]$_.CommandLine -ceq [string]$item.CommandLine -and
-                (Same ([string]$_.ExecutablePath) ([string]$item.ExecutablePath)) }).Count -ne 1) {
-                throw 'Uninstall recovery relay identity changed.'
+            }},
+            @{name='code'; action={
+                $codeAlreadyExact=$false
+                if (Test-Path -LiteralPath $install) {
+                    try {
+                        [void](Assert-BootstrapIntegrityRecord $install)
+                        $codeAlreadyExact=((Get-InventoryAggregate @(Get-CodeInventory $install)) -ceq $uninstallAggregate -and
+                            (Sha (Join-Path $install 'bootstrap-integrity.json')) -ceq $uninstallRecordSha256)
+                    } catch { $codeAlreadyExact=$false }
+                }
+                if ($uninstallCodeStarted -and -not $codeAlreadyExact) {
+                    $recoverCodeArguments = @($uninstallArguments | Where-Object { $_ -cne '-Uninstall' })
+                    $recoverCodeArguments += @('-RestoreUninstallRecordPath',$uninstallRecordPreimagePath,
+                        '-ExpectedUninstallRecordSha256',$uninstallRecordSha256)
+                    $capturedChild = Invoke-InstallationEvidenceChild 'uninstall-code-recovery' $winps $recoverCodeArguments
+                    $global:LASTEXITCODE=$capturedChild.ExitCode
+                    Write-Output $capturedChild.Stdout
+                    if ($LASTEXITCODE -ne 0) {
+                        $audit['retirement_recovery_child_failure']=Get-CanonicalRetirementChildFailure $capturedChild
+                        Write-Output ('retirement_recovery_failure_summary='+($audit.retirement_recovery_child_failure | ConvertTo-Json -Depth 12 -Compress))
+                        throw "Uninstall exact code recovery failed: $LASTEXITCODE"
+                    }
+                }
+                [void](Assert-BootstrapIntegrityRecord $install)
+                if ((Get-InventoryAggregate @(Get-CodeInventory $install)) -cne $uninstallAggregate -or
+                    (Sha (Join-Path $install 'bootstrap-integrity.json')) -cne $uninstallRecordSha256) {
+                    throw 'Uninstall exact code recovery not proven; runtime remains fenced.'
+                }
+                $retirementCodeExact=$true
+                if ($uninstallCodeStarted) { $audit.code_placement='RESTORED_EXACT_PREIMAGE' }
+            }},
+            @{name='retired_pair'; action={
+                [void](Read-CanonicalRetiredRemoval)
+                $retirementPairExact=$true
+            }},
+            @{name='relay_identity'; action={
+                foreach ($item in @(Relays)) {
+                    if (@($old | Where-Object { [int]$_.ProcessId -eq [int]$item.ProcessId -and
+                        [string]$_.CommandLine -ceq [string]$item.CommandLine -and
+                        (Same ([string]$_.ExecutablePath) ([string]$item.ExecutablePath)) }).Count -ne 1) {
+                        throw 'Uninstall recovery relay identity changed.'
+                    }
+                }
+                $retirementRelaysBound=$true
+            }},
+            @{name='run_preimage'; action={
+                Restore $before
+                $check=Snapshot
+                if ([bool]$check.exists -ne [bool]$before.exists -or [string]$check.kind -cne [string]$before.kind -or
+                    [string]$check.data -cne [string]$before.data) { throw 'Uninstall Run preimage restore failed.' }
+                $retirementRunExact=$true
+            }},
+            @{name='stop_preimage'; action={
+                if (Test-Path -LiteralPath $stop) {
+                    if (-not $uninstallStopSha256 -or (Sha $stop) -cne $uninstallStopSha256) {
+                        throw 'RETIREMENT_ACTIVE_STOP_OWNERSHIP_UNKNOWN_RUNTIME_REMAINS_FENCED'
+                    }
+                    Remove-Item -LiteralPath $stop -Force
+                }
+                if (Test-Path -LiteralPath $stop) { throw 'Uninstall stop preimage restore failed.' }
+                $retirementStopExact=$true
+            }},
+            @{name='fence_release'; action={
+                if (-not ($retirementCodeExact -and $retirementPairExact -and $retirementRelaysBound -and
+                    $retirementRunExact -and $retirementStopExact)) { throw 'RETIREMENT_EXACT_PREIMAGE_UNPROVEN_FENCE_RETAINED' }
+                [void](Abort-ContainerWriterFence -SessionId $Script:CanonicalWriterFenceSessionId `
+                    -AttemptId $Script:CanonicalWriterFenceAttemptId `
+                    -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+                    -AuthorityLease $canonicalWriterFenceAuthority)
+                $canonicalWriterFenceActive=$false
+                $retirementFenceReleased=$true
+            }},
+            @{name='old_relay'; action={
+                if (-not $retirementFenceReleased) { throw 'RETIREMENT_OLD_RELAY_BLOCKED_BY_UNPROVEN_PREIMAGE' }
+                if (@(Relays).Count -eq 0 -and $old.Count -gt 0) {
+                    [void](Start-CanonicalRelayAfterFenceRelease -Root $install -RunCommand ([string]$before.data))
+                }
+                [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
+                $retirementRelaysExact=$true
+            }}
+        )
+        foreach ($step in $retirementActions) {
+            Set-InstallationEvidenceStage ('rollback.retirement.'+$step.name) 'rollback'
+            try {
+                . $step.action
+                $retirementRollbackSteps.Add([ordered]@{step=$step.name;status='PROVEN'})
+            } catch {
+                Write-InstallationCaughtFailure $_
+                Complete-InstallationEvidenceStage 'rollback' $_
+                $retirementRollbackSteps.Add([ordered]@{step=$step.name;status='FAILED';failure=Get-CanonicalFailureDetails $_ 'RETIREMENT_ROLLBACK'})
             }
         }
-        if ($CompleteRetiredRemoval -and (Test-Path -LiteralPath $stop) -and
-            (-not $uninstallStopSha256 -or (Sha $stop) -cne $uninstallStopSha256)) {
-            throw 'RETIREMENT_ACTIVE_STOP_OWNERSHIP_UNKNOWN_RUNTIME_REMAINS_FENCED'
-        }
-        Restore $before
-        if (Test-Path -LiteralPath $stop) { Remove-Item -LiteralPath $stop -Force }
-        $check = Snapshot
-        if ([bool]$check.exists -ne [bool]$before.exists -or [string]$check.kind -cne [string]$before.kind -or
-            [string]$check.data -cne [string]$before.data -or (Test-Path -LiteralPath $stop)) {
-            throw 'Uninstall runtime preimage restore failed.'
-        }
-        # Existing abort is authority/tuple checked and does not depend on audit
-        # availability. Code and persistence are exact before writers reopen.
-        [void](Abort-ContainerWriterFence -SessionId $Script:CanonicalWriterFenceSessionId `
-            -AttemptId $Script:CanonicalWriterFenceAttemptId `
-            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
-            -AuthorityLease $canonicalWriterFenceAuthority)
-        $canonicalWriterFenceActive = $false
-        if (@(Relays).Count -eq 0) {
-            if($old.Count -gt 0){[void](Start-CanonicalRelayAfterFenceRelease -Root $install -RunCommand ([string]$before.data))}
-        }
-        [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
-        $audit.status = 'FAILED_ROLLED_BACK'
-        $audit.rollback.applied = $mutated
-        $audit.rollback.runtime_restored = $true
-        $audit.rollback.code_exact = $true
+        $audit.rollback['steps']=$retirementRollbackSteps.ToArray()
+        $audit.rollback.applied=$mutated
+        $audit.rollback.code_exact=$retirementCodeExact
+        $audit.rollback.runtime_restored=($retirementRunExact -and $retirementStopExact -and $retirementRelaysExact)
+        $audit.status=if ($retirementFenceReleased -and $audit.rollback.runtime_restored) { 'FAILED_ROLLED_BACK' } else { 'RETIREMENT_ROLLBACK_INCOMPLETE_FENCED' }
         try { Save $auditPath $audit; if ($evidenceFull) { Save $evidenceFull $audit } }
-        catch {
-    Write-InstallationCaughtFailure $_
- Write-Output 'rollback_audit_status=UNAVAILABLE' }
-        'uninstall_recovery_status=PASS_EXACT_PREIMAGE_SAFE_TO_RETRY'
+        catch { Write-InstallationCaughtFailure $_; Write-Output 'rollback_audit_status=UNAVAILABLE' }
+        if ($retirementFenceReleased -and $audit.rollback.runtime_restored) {
+            'uninstall_recovery_status=PASS_EXACT_PREIMAGE_SAFE_TO_RETRY'
+        }
         throw $original
     }
     if ($RestoreVerifiedReplacement) {
@@ -3996,7 +4153,7 @@ finally {
     if($null -ne $audit){
         $audit['installation_evidence']=$finalEvidence
         try {
-            Save $auditPath $audit
+            if (-not $retirementAuditSealed) { Save $auditPath $audit }
             if($evidenceFull){Save $evidenceFull $audit}
         }catch{Write-Warning 'INSTALLATION_EVIDENCE_FINAL_AUDIT_SAVE_FAILED'}
     }
