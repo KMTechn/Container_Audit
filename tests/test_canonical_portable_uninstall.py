@@ -273,10 +273,14 @@ function Test-UninstallFixtureRootPath([string]$Path) {
     if([string]::IsNullOrWhiteSpace($env:CA_UNINSTALL_ROOT) -or [string]::IsNullOrWhiteSpace($Path)){return $false}
     $root=[IO.Path]::GetFullPath($env:CA_UNINSTALL_ROOT).TrimEnd('\')
     $full=[IO.Path]::GetFullPath($Path)
-    return $full.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)
+    return ($full.Equals($root,[StringComparison]::OrdinalIgnoreCase) -or $full.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase))
 }
 function Test-UninstallFixtureProtectedPath([string]$Path) {
     return (Test-UninstallFixtureRootPath $Path)
+}
+function Protect-KmtechCodeAncestors([string]$CodeParent,[switch]$AdmissionOnly,[switch]$BeforeAppCreation,[string]$ProtectedAncestor) {
+    if(-not (Test-UninstallFixtureRootPath $CodeParent)){throw 'FIXTURE_OWNER_BOUNDARY_ESCAPED'}
+    Assert-BootstrapNoReparsePoint $CodeParent 'fixture owner boundary' -PathOnly
 }
 function Test-InstallationEvidencePrivileged {
     if(Test-UninstallFixtureRootPath $UninstallAuditPath){return $true}
