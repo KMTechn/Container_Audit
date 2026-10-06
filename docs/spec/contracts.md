@@ -15,6 +15,9 @@ G의 REFUSE/UNKNOWN은 직접 등록·지원 명령과 앱 하위 모드에서�
 
 Canonical 설치는 fence·placement·Run/task·relay 변경 전에 기존 onboarding의
 `--preflight-only` 호출로 credential locator와 nested owner의 G를 모두 끝낸다.
+설치 source는 canonical이 검증한 stock의 기존 전체 코드 inventory SHA를 명시적으로 전달한다.
+그 읽기 전용 source 판정은 placement 뒤 생성할 bootstrap 기록을 요구하지 않으며,
+설치된 앱의 시작·실제 onboarding·G와 복원 target은 기존 무결성 기록을 계속 요구한다.
 Python의 기존 해석 결과 digest를 `--expected-input-binding`으로 onboarding에 전달하고,
 child는 같은 resolved 경로·payload인지 기록 전에 대조한다. 거절은 기존 오류 코드·안내로
 끝나며 설치 상태 변경은 없다. rollback의 old-target G는 그대로 유지한다.

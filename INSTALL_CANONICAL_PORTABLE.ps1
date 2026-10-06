@@ -31,6 +31,7 @@ $Script:CanonicalWriterFenceTransactionId = ''
 $Script:CanonicalWriterFenceDelegationToken = ''
 $retirementAuditSealed = $false
 $audit = $null
+$enteredPlacementTry = $false
 $testMode = $AllowNoncanonicalLayoutForTest -and
     [string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -ceq '1'
 if ($SkipSignatureValidationForTest -and -not $testMode) {
@@ -101,6 +102,37 @@ function Test-JsonPositiveInt32($Value) {
 function Get-CanonicalInstallSuccessStatus([bool]$IsTestMode) {
     if ($IsTestMode) { return 'TEST_ONLY_PARTIAL' }
     return 'PASS'
+}
+function Write-CanonicalPreparationAdmissionFailure([string]$AuditPathValue, [string]$EvidencePathValue) {
+    $record = [ordered]@{
+        schema='container-audit-canonical-portable-install-v2';operation='INSTALL'
+        run_id=[Guid]::NewGuid().ToString('N');captured_at=[DateTime]::UtcNow.ToString('o')
+        status='FAILED_PREPARATION_ADMISSION';code_placement='NOT_STARTED'
+        preparation_failure=[ordered]@{code='FAILED_PREPARATION_ADMISSION'}
+        rollback=[ordered]@{applied=$false}
+    }
+    try {
+        if (-not $AuditPathValue) {
+            $root = Full $env:LOCALAPPDATA 'LOCALAPPDATA'
+            $AuditPathValue = Join-Path $root ('KMTech\ContainerAudit\install-audit\canonical-portable-'+$record.run_id+'.json')
+        }
+        # Reuse the existing diagnostic preparation and machine-metadata writer.
+        # Generic transaction Save remains confined to its writer authority.
+        foreach ($path in @($AuditPathValue, $EvidencePathValue)) {
+            if (-not $path) { continue }
+            $path = Full $path 'preparation audit'
+            $parent = Split-Path -Parent $path
+            if (-not (Test-Path -LiteralPath $parent)) {
+                [void](Initialize-InstallationEvidence $path ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value))
+            }
+            Assert-BootstrapNoReparsePoint $parent 'preparation audit parent' -PathOnly
+            if (Test-Path -LiteralPath $path) { Assert-BootstrapNoReparsePoint $path 'preparation audit' -PathOnly }
+            if (Test-Path -LiteralPath "$path.tmp.$PID") { throw 'PREPARATION_AUDIT_TEMP_PREEXISTS' }
+            Write-Utf8Json $path $record
+        }
+        'audit_path='+$AuditPathValue
+    } catch { 'preparation_audit_status=UNAVAILABLE' }
+    'install_status=FAILED_PREPARATION_ADMISSION'
 }
 function Sha([string]$Path) {
     return Get-KmtechFileSha $Path
@@ -1429,12 +1461,16 @@ function Remove-CanonicalSupportedRemovalAttemptStop([string]$RemovalPath,[strin
     Remove-Item -LiteralPath $StopPath -ErrorAction Stop
     return 'REMOVED_EXACT_CURRENT_ATTEMPT'
 }
-function Get-CanonicalOnboardingInputBinding([string]$Root,[string]$TargetReleaseRoot = '') {
+function Get-CanonicalOnboardingInputBinding([string]$Root,[string]$TargetReleaseRoot = '',[string]$InstallerSourceInventorySha256 = '') {
     # The existing product reader owns locator/nested resolution. This call
     # performs only admission/readback and runs before any installer mutation.
     $preflightArguments=@('-I','-B',(Join-Path $Root 'app\main.py'),
         '--onboard-current-user','--app-root',(Join-Path $Root 'app'),'--preflight-only')
     if ($TargetReleaseRoot) { $preflightArguments+=@('--target-release-root',$TargetReleaseRoot) }
+    if ($InstallerSourceInventorySha256) {
+        if ($TargetReleaseRoot -or $InstallerSourceInventorySha256 -cnotmatch '^[0-9a-f]{64}$') { throw 'CANONICAL_SOURCE_INVENTORY_PIN_INVALID' }
+        $preflightArguments+=@('--installer-source-inventory-sha256',$InstallerSourceInventorySha256)
+    }
     $pendingContinuation=Get-Variable -Name rollbackContinuation -ValueOnly -ErrorAction SilentlyContinue
     $fenceAlreadyActive=Get-Variable -Name canonicalWriterFenceActive -ValueOnly -ErrorAction SilentlyContinue
     if ($TargetReleaseRoot -and $pendingContinuation -and -not $fenceAlreadyActive) {
@@ -3549,7 +3585,7 @@ $canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority `
     -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
     -WriterContractSha256 $canonicalWriterFenceContractSha256
 if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
-    $canonicalOnboardingInputBinding = Get-CanonicalOnboardingInputBinding $source
+    $canonicalOnboardingInputBinding = Get-CanonicalOnboardingInputBinding $source -InstallerSourceInventorySha256 (Get-InventoryAggregate @(Get-CodeInventory $source))
 }
 elseif ($RestoreVerifiedReplacement) {
     $restoreTargetRoot = if ([string]$publicRestore.state -ceq 'RESTORED') { $install } else { [string]$publicRestore.receipt.rollback_root }
@@ -5175,6 +5211,10 @@ finally {
 
 } catch {
     $outputFailure=$_
+    if (-not $enteredPlacementTry -and -not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
+        Write-CanonicalPreparationAdmissionFailure ([string](Get-Variable auditPath -ValueOnly -ErrorAction SilentlyContinue)) `
+            ([string](Get-Variable evidenceFull -ValueOnly -ErrorAction SilentlyContinue))
+    }
     if(Get-Command Write-InstallationCaughtFailure -ErrorAction SilentlyContinue){Write-InstallationCaughtFailure $outputFailure}
     Write-CanonicalInstallationPublicRecord -Failure $outputFailure -ExitCode 1
     exit 1

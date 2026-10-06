@@ -30,6 +30,10 @@ locator와 nested owner를 기존 Python reader로 검사한다. 보안 입력�
 않으며, 결과 digest를 실제 onboarding의 `--expected-input-binding`으로 넘겨 같은 입력인지
 최초 기록 전에 비교한다. 깨진 locator·중복 키는 기존 credential BLOCKED 오류 코드로
 종료한다. old-target rollback G는 유지하며 실제 native 설치·복원은 아직 NOT TESTED다.
+새 stock의 설치 전 preflight는 기존 Get-CodeInventory/Get-InventoryAggregate SHA를
+`--installer-source-inventory-sha256`으로 결속한다. source에 설치 후 bootstrap 기록을
+만들지 않는다. placement 전 Python admission 실패는 `FAILED_PREPARATION_ADMISSION`
+install_status와 같은 코드의 실패 audit를 남기며 배치·Run·relay 변경을 시작하지 않는다.
 기본 bootstrap CA는 사용자/자료 bootstrap 폴더의 파일이다. source와 install의 app root가
 달라도 같은 절대 경로·SHA256을 비교하며, CA 변경은 최초 onboarding 기록 전에 거절한다.
 `RestoreVerifiedReplacement`는 fence 전에 old rollback tree(이미 복원됐으면 설치 tree)를

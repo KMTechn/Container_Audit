@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -15,6 +16,7 @@ from kmtech_shared import data_generation as generation
 from writer_session_fence import canonical_control_root, writer_sink
 
 _READONLY_ROLLBACK_TARGET = ContextVar('container_readonly_rollback_target', default=None)
+_READONLY_INSTALLER_SOURCE = ContextVar('container_readonly_installer_source', default=None)
 
 
 @contextmanager
@@ -26,6 +28,65 @@ def _authenticated_readonly_rollback_target(release, verify_pending):
         yield
     finally:
         _READONLY_ROLLBACK_TARGET.reset(scope)
+
+
+@contextmanager
+def _readonly_installer_source(app_root, expected_inventory_sha256):
+    """Use the canonical caller's already admitted stock inventory, only for probes."""
+    from auto_update import source_version_literal
+    from current_user_onboarding import _file_sha256
+    from logistics_runtime_profile import assert_path_has_no_reparse_components
+
+    if not re.fullmatch(r'[0-9a-f]{64}', expected_inventory_sha256):
+        raise ValueError('installer source inventory pin is invalid')
+    app = assert_path_has_no_reparse_components(Path(app_root).absolute(), label='installer source app').resolve()
+    root = app.parent
+    if app.name != 'app' or not (root / 'portable-manifest.json').is_file():
+        raise ValueError('installer source is not a stock packet')
+
+    def verify_source():
+        # This is the existing bootstrap Get-CodeInventory/Get-InventoryAggregate
+        # protocol: ordinal UTF-16 paths; only the root installation record excluded.
+        rows = []
+        for path in root.rglob('*'):
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or getattr(metadata, 'st_file_attributes', 0) & 0x400:
+                raise ValueError('installer source inventory is redirected')
+            if stat.S_ISREG(metadata.st_mode):
+                relative = path.relative_to(root).as_posix()
+                if relative.casefold() != 'bootstrap-integrity.json':
+                    rows.append((relative, metadata.st_size, _file_sha256(path)))
+        rows.sort(key=lambda row: row[0].encode('utf-16-be'))
+        aggregate = hashlib.sha256(''.join(f'{sha} {size} {path}\n' for path, size, sha in rows).encode('utf-8')).hexdigest()
+        if aggregate != expected_inventory_sha256:
+            raise ValueError('installer source inventory binding differs')
+        return {path: (size, sha) for path, size, sha in rows}
+
+    inventory = verify_source()
+    if (root / 'portable-manifest.json').stat().st_size > 65536 or (app / 'Container_Audit.py').stat().st_size > 2097152:
+        raise ValueError('installer source identity is oversized')
+    manifest_bytes = (root / 'portable-manifest.json').read_bytes()
+    version_bytes = (app / 'Container_Audit.py').read_bytes()
+    for name, data in (('portable-manifest.json', manifest_bytes), ('app/Container_Audit.py', version_bytes)):
+        if inventory.get(name) != (len(data), hashlib.sha256(data).hexdigest()):
+            raise ValueError('installer source identity snapshot differs')
+    manifest = json.loads(manifest_bytes)
+    version = source_version_literal(version_bytes)
+    if (manifest.get('schema') != 'container-audit-portable-tree-v1'
+            or manifest.get('version') != version
+            or not re.fullmatch(r'[0-9a-f]{40}', str(manifest.get('source_commit', '')))
+            or not re.fullmatch(r'[0-9a-f]{40}', str(manifest.get('source_tree', '')))):
+        raise ValueError('installer source release binding differs')
+    generation.version_key(version)
+    release = {'version': version, 'build_id': manifest['source_commit'],
+               'data_compatible_min_version': version, 'compatibility_verified': False}
+    verify_source()
+    scope = _READONLY_INSTALLER_SOURCE.set((release, verify_source))
+    try:
+        yield
+        verify_source()
+    finally:
+        _READONLY_INSTALLER_SOURCE.reset(scope)
 
 
 class DataGenerationBlocked(RuntimeError):
@@ -183,7 +244,7 @@ def record_before_data_open(data_root, *, probe_only=False):
 def probe_before_data_open(data_root, *, admission_source=None):
     """Existing admission must cover this check and the following control read."""
     if admission_source is None:
-        target = _READONLY_ROLLBACK_TARGET.get()
+        target = _READONLY_ROLLBACK_TARGET.get() or _READONLY_INSTALLER_SOURCE.get()
         if target is not None:
             release, verify_pending = target
             verify_pending()

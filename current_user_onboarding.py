@@ -1708,7 +1708,8 @@ def _verified_rollback_preflight(app_root, target_root, release, journal_path, j
 
 
 def preflight_current_user_onboarding(app_root, *, environ=None, target_release_root="",
-        rollback_journal_path="", rollback_journal_sha256="", rollback_fence_sha256=""):
+        rollback_journal_path="", rollback_journal_sha256="", rollback_fence_sha256="",
+        installer_source_inventory_sha256=""):
     """Admit locator and nested owners without changing installation or user state."""
     from data_generation_guard import DataGenerationBlocked
     from writer_session_fence import WriterFenceError
@@ -1725,6 +1726,11 @@ def preflight_current_user_onboarding(app_root, *, environ=None, target_release_
                 default_protected_admin_profile_path(environ=environ),
             ))
         read_scope = nullcontext()
+        if installer_source_inventory_sha256:
+            if target_release_root or any((rollback_journal_path, rollback_journal_sha256, rollback_fence_sha256)):
+                raise ValueError('installer source pin cannot authorize a restored target')
+            from data_generation_guard import _readonly_installer_source
+            read_scope = _readonly_installer_source(app_root, installer_source_inventory_sha256)
         if any((rollback_journal_path, rollback_journal_sha256, rollback_fence_sha256)):
             if release is None or not all((rollback_journal_path, rollback_journal_sha256, rollback_fence_sha256)):
                 raise WriterFenceError('ACTIVE_WRITER_FENCE', 'rollback preflight scope is incomplete')
@@ -2592,6 +2598,7 @@ def onboarding_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--app-root", default=str(_default_app_root()))
     parser.add_argument("--server-base-url", default=DEFAULT_SERVER_BASE_URL)
     parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument("--installer-source-inventory-sha256", default="")
     parser.add_argument("--expected-input-binding", default="")
     parser.add_argument("--target-release-root", default="")
     parser.add_argument("--rollback-preflight-journal-path", default="")
@@ -2599,9 +2606,13 @@ def onboarding_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rollback-preflight-fence-sha256", default="")
     args = parser.parse_args(argv)
     failure_attempt = _new_failure_attempt()
+    if args.installer_source_inventory_sha256 and not args.preflight_only:
+        parser.error('installer source inventory pin is read-only preflight only')
     try:
         if args.preflight_only:
             preflight_options = {'target_release_root': args.target_release_root}
+            if args.installer_source_inventory_sha256:
+                preflight_options['installer_source_inventory_sha256'] = args.installer_source_inventory_sha256
             if any((args.rollback_preflight_journal_path, args.rollback_preflight_journal_sha256,
                     args.rollback_preflight_fence_sha256)):
                 preflight_options.update(rollback_journal_path=args.rollback_preflight_journal_path,
