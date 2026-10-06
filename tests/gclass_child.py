@@ -258,6 +258,16 @@ def execute():
             (['--direct-sync-root',str(external)] if is_external else []))
     raise AssertionError(scenario)
 
+# Observe the real guard decision; the public support boundary emits fixed codes.
+# Preserve its constructor and every guard check, then verify the actual capsule.
+import data_generation_guard as guard_module
+guard_decisions = []
+original_guard_init = guard_module.DataGenerationBlocked.__init__
+def observed_guard_init(self, decision):
+    original_guard_init(self, decision)
+    guard_decisions.append((dict(self.decision), self.user_message))
+guard_module.DataGenerationBlocked.__init__ = observed_guard_init
+
 capture = io.StringIO()
 error = ''
 with redirect_stdout(capture), redirect_stderr(capture):
@@ -284,12 +294,29 @@ for line in capture.getvalue().splitlines():
     elif (record.get('reason_code') == 'DATA_GENERATION_UNKNOWN'
             and record.get('guidance') == generation.UNKNOWN_MESSAGE):
         output += generation.UNKNOWN_MESSAGE
+if scenario.startswith('profile-check') and guard_decisions:
+    records = [json.loads(line.split('=', 1)[1]) for line in capture.getvalue().splitlines()
+               if line.startswith('CONTAINER_AUDIT_SUPPORT=')]
+    assert len(records) == 1
+    record = records[0]
+    assert result == 2 and record['status'] == 'FAILED'
+    assert record['stage'] == 'runtime_profile_check'
+    assert record['reason_code'] == 'SUPPORT_FAILURE'
+    assert record['exception_type'] == 'data_generation_guard.DataGenerationBlocked'
+    assert generation.REFUSAL_MESSAGE not in capture.getvalue()
+    assert generation.UNKNOWN_MESSAGE not in capture.getvalue()
+    assert len(guard_decisions) == 1
+    decision, message = guard_decisions[0]
+    assert decision['status'] in ('REFUSE', 'UNKNOWN')
+    assert message == (generation.REFUSAL_MESSAGE if decision['status'] == 'REFUSE'
+                       else generation.UNKNOWN_MESSAGE)
+    output += message
 # Disable only observation after the entry finished; snapshot is test readback.
 watched.clear()
 after = snapshot()
 changed = sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
 print(json.dumps({**observed, 'result': result if isinstance(result, int) else None,
-    'korean_refusal': generation.REFUSAL_MESSAGE in output or generation.UNKNOWN_MESSAGE in output,
+    'guard_refusal': generation.REFUSAL_MESSAGE in output or generation.UNKNOWN_MESSAGE in output,
     'g_status': 'REFUSE' if generation.REFUSAL_MESSAGE in output else 'UNKNOWN' if generation.UNKNOWN_MESSAGE in output else 'NONE',
     'state_changes': [name for name in changed if 'data-generation' not in name],
     'marker_changes': [name for name in changed if 'data-generation' in name]}, ensure_ascii=True))

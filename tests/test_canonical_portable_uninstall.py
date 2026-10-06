@@ -732,8 +732,44 @@ def test_incompatible_installed_writer_identity_is_rejected_before_fence_or_rela
         assert (tmp_path/'registry.json').read_bytes() == before['registry']
         assert not (tmp_path/'product-calls.log').exists()
         assert not (tmp_path/'reinstall-audit.json').exists()
-        assert 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER' in result.stderr
+        _assert_canonical_public_failure(result, tmp_path, 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER', source)
         _assert_preserved_and_released(env, protected)
+
+
+def _assert_canonical_public_failure(result, root, expected_cause, source=None):
+    # 405 / redaction contract 0f: preserve the exact original cause in the
+    # SHA-bound private record; expose fixed fields through the public boundary.
+    records = [json.loads(line.split('=', 1)[1]) for line in result.stdout.splitlines()
+               if line.startswith('CONTAINER_AUDIT_INSTALL_CANONICAL=')]
+    failures = [record for record in records if record.get('status') == 'FAILED']
+    assert len(failures) == 1
+    failure = failures[0]
+    assert result.returncode == failure['exit_code'] == 1
+    assert failure['stage'] == 'canonical_install'
+    assert failure['reason_code'] == 'INSTALLER_CANONICAL_FAILURE'
+    assert result.stderr == ''
+    assert not any(key in failure for key in ('message', 'detail', 'traceback', 'stderr'))
+    if failure.get('report_status') == 'REPORT_UNAVAILABLE':
+        # The pre-fence preparation guard can precede evidence initialization.
+        # Its actual throw location, rather than generic failure alone, proves
+        # the exact semantic rejection tested by this fixture.
+        assert source is not None
+        lines = (source / 'INSTALL_CANONICAL_PORTABLE.ps1').read_text(encoding='utf-8-sig').splitlines()
+        guards = [number for number, line in enumerate(lines, 1)
+                  if 'throw' in line and expected_cause in line]
+        assert guards and failure['location_line'] == min(guards)
+        assert failure['exception_type'] == 'System.Management.Automation.RuntimeException'
+        return
+    report = Path(failure['report_path'])
+    assert report.resolve().is_relative_to(root.resolve())
+    assert failure['report_sha256'] == _sha(report)
+    assert report.stat().st_size <= 65536
+    detail = json.loads(report.read_bytes())
+    assert detail['schema'] == 'container-audit-original-installation-failure-v1'
+    bound_cause = any(expected_cause in item.get('message', '')
+                      for item in detail['failure']['exception_chain'])
+    assert bound_cause, 'SHA-bound protected original cause differs'
+
 
 
 def _assert_removed_and_preserved(tmp_path, env, source, install, protected, source_before, retained=None):
@@ -767,7 +803,7 @@ def test_quoted_live_relay_post_removal_failure_converges_without_resurrection(t
     source_before = _tree(source)
     with _launch_relay(tmp_path, env) as child:
         result = _run(tmp_path, env, source, install)
-        assert result.returncode != 0 and 'AFTER_REMOVAL_INJECTED_FAILURE' in result.stderr
+        _assert_canonical_public_failure(result, tmp_path, 'AFTER_REMOVAL_INJECTED_FAILURE')
         assert child.poll() is not None and not install.exists()
         assert json.loads((tmp_path/'registry.json').read_text())['exists'] is False
         audit = Path(result.fixture_audit['audit_path'])
@@ -818,7 +854,7 @@ def test_normal_uninstall_real_removal_and_forward_convergence(tmp_path, scenari
             # the independent stage evidence retains the first failure.
             if scenario == 'audit_unavailable':
                 assert record['status'] == 'PREIMAGE_SAVED'
-                assert 'AUDIT_INJECTED_FAILURE' in result.stderr
+                _assert_canonical_public_failure(result, tmp_path, 'AUDIT_INJECTED_FAILURE')
             else:
                 assert record['status'] == 'FAILED_REMOVAL_INCOMPLETE'
                 assert record['failure_type'] and record['failure']

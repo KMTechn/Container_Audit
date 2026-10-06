@@ -733,3 +733,5 @@ NOT TESTED이며 coordinator의 랩 예행과 독립 확인에 남긴다.
 - sub-393 컷 뒤 — 개발/검증 CLI의 공개 출력 전환: active-work probe·review-case report·release/build/qualification 도구 등은 현장 설치·업데이트·지원 경계 이후에 처리한다. 전수 목록과 source별 근거는 `w9scanonly/sub-393/logs/POSTCUT-BACKLOG.csv`에 둔다.
 - sub-393 P2 컷 뒤 — 구조화 값 4부류의 보호 보고서 가림: PS5.1/PS7 실제 private writer 8사례에서 보호 파일에만 조각 128개가 남았고 공개 stdout/stderr·caller audit은 0이었다. 가림 멈춤 규칙 0f에 따라 보호 보고서만 남는 모양은 이번에 고치지 않는다. 파일별 조각 수·크기와 실제 reader ACL 검사 근거는 `w9scanonly/sub-393/logs/STRUCTURED-NATIVE-MEASUREMENTS.json`에 둔다.
 - sub-405 P2 컷 뒤 — **설치기 비고급 앞단**: `INSTALL_CANONICAL_PORTABLE.ps1`, `INSTALL_THIS_PC.ps1`, `tools/provision_protected_admin_acl.ps1`의 모르는 인수는 개수만 고정 코드로 거절한다. `tools/apply_prepared_update.ps1`, `tools/container_writer_session.ps1`의 잘못된 Mode도 본문 전 binder가 외부 값을 stderr로 되찍으므로 함께 처리한다. 현재는 공식 wrapper로만 실행한다(코디 10-06 09:0x 판정).
+
+- sub-413 P2 컷 뒤 — fence/evidence 초기화 전 `CODE_PRESTATE_WRITER_SEMANTICS_DIFFER` 거절의 공개 capsule은 계약 0f `REPORT_UNAVAILABLE`·정확 throw 위치/type·exit=1을 유지하지만 개별 고정 실패 코드를 내지 않는다. 코디 10-06 16:0x 승인에 따라 원문 보호 보고서 보완 없이 현장/IT용 코드 노출만 후속 처리한다.

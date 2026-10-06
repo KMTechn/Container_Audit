@@ -38,7 +38,7 @@ def test_direct_entry_refuses_before_identity_and_preserves_state(tmp_path, scen
     assert observed['data_reads'] == 0, observed
     assert observed['network_calls'] == 0, observed
     assert observed['relay_stops'] == observed['autostart_changes'] == observed['task_changes'] == 0, observed
-    assert observed['korean_refusal'], observed
+    assert observed['guard_refusal'], observed
     assert observed['g_status'] == ('REFUSE' if generation_case in ('newer','external') else 'UNKNOWN'), observed
     assert observed['state_changes'] == [], observed
     assert observed['marker_changes'] == [], observed
@@ -48,7 +48,7 @@ def test_direct_entry_refuses_before_identity_and_preserves_state(tmp_path, scen
 def test_allowed_entry_reaches_existing_owner_read(tmp_path, scenario, generation_case):
     observed = run_entry(tmp_path, scenario, generation_case)
     assert observed['data_reads'] > 0, observed
-    assert not observed['korean_refusal'], observed
+    assert not observed['guard_refusal'], observed
     if scenario == 'supervisor':
         assert observed['result'] == 0, observed
 

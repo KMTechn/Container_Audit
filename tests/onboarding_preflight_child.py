@@ -124,7 +124,7 @@ raise SystemExit(onboarding_main(sys.argv[2:]))
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile({quote(repo/'INSTALL_CANONICAL_PORTABLE.ps1')},[ref]$tokens,[ref]$errors)
 if($errors.Count){{throw 'parse errors'}}
-foreach($name in @('Arg','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic','Assert-CanonicalRestoreCodeBinding','Exit-RetirementResumeClaim')){{
+foreach($name in @('Write-CanonicalInstallationPublicRecord','Arg','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic','Assert-CanonicalRestoreCodeBinding','Exit-RetirementResumeClaim')){{
  $found=$ast.FindAll({{param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name}},$true)
  if($found.Count -ne 1){{throw 'preflight function unavailable'}}
  Invoke-Expression $found[0].Extent.Text
