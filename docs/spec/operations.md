@@ -1331,3 +1331,5 @@ Registration retains string profile-path arguments after shared resolution. Inva
 가린 전체 traceback은 UTF-8 64 KiB 안에서 앞·뒤 맥락을 보존하여 같은 시도의 기존 보호 onboarding/removal/lifecycle 보고서에 둔다. 공개 `report_path`와 `report_sha256`은 이번 CLI 시도의 원자 게시와 저장된 UTF-8 바이트의 SHA256 및 시도 식별자가 모두 맞을 때만 포함한다. 게시 실패·옛 보고서·게시 뒤 변조는 `REPORT_UNAVAILABLE`로 표시한다. preflight는 보고서를 만들려고 자료를 변경하지 않는다. 설치기 수신부는 새 레코드를 검사하고 고정 코드로 중단한다. 다른 설치기·업데이트 적용기·지원 도구 출력은 sub-379 보고서의 `허용 목록 전환 후보` 표에 남기며 후속 가지에서 전환한다.
 
 Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종료 코드 23과 등록된 원인 코드(`ACTIVE_WRITER_FENCE`, `FENCE_BINDING_INVALID` 등)를 보존한다. 그 밖의 설치 실패는 기존 종료 코드 4를 유지한다. 예외 문장은 공개하지 않으며 미등록 writer 코드 문구는 보호 전문에만 남기고 공개 고정 코드 `WRITER_FENCE_FAILED`를 쓴다. 설치기 reader는 등록된 원인 코드와 4/23 조합 및 실제 자식 종료 코드가 일치하는지 확인한 뒤 고정 코드로 중단한다.
+
+배포 집합의 PowerShell 파일에 비ASCII 문자열이 있으면 UTF-8 BOM을 포함한다. Windows PowerShell 5.1의 cp949 기본 판독에서도 UTF-8로 감지되어 한국어 안내와 구문을 보존해야 한다. G after 해시와 고정 선언·pin은 BOM을 포함한 committed LF 바이트를 기준으로 확인한다.

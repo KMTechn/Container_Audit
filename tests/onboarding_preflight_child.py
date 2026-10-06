@@ -155,6 +155,7 @@ if($receipts.Count -ne 1){{throw 'TEST_PREPARED_RECEIPT_STATEMENT_NOT_UNIQUE'}}
 $receipt=$receipts[0]
 $prefix=(@($mainTry.Body.Statements|Where-Object {{$_.Extent.StartOffset -lt $receipt.Extent.StartOffset}})|ForEach-Object {{$_.Extent.Text}})-join "`n"
 $enteredPlacementTry=$false;$canonicalWriterFenceActive=$false;$audit=$null;$retirementResume=$null;$retirementResumeClaim=$null
+$legacyRelayPreimage=$null;$legacyRelayRestoreNeeded=$false;$legacyRelayRestoreAttempted=$false
 $canonicalWriterFenceAuthority=$null;$canonicalWriterFenceEnvironmentNames=@()
 $canonicalWriterFencePreparedPath={quote(root/'no-receipt.json')}
 $source={quote(packet)};$install={quote(root/'existing-code')};$old=@()
