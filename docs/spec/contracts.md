@@ -608,4 +608,4 @@ locator를 준비하므로, owner가 높은 판으로 바뀌면 locator 재판�
 회귀: `tests/test_security_input_first_read.py`; 구현 증거는 sub-272 REPORT의
 최종 커밋·환경과 연결하며 검증 전 상태는 UNPROVEN이다.
 
-관리자 relay resume 감사는 공통 공개 레코드의 허용 불리언·SHA256을 보존한다. `forced_invalid_marker`, `previous_marker_valid`, `previous_paused`, `reason_sha256`은 강제 해제 사실의 근거이며 자유 이유 문장·외부 식별자 값은 허용 형식으로 제한한다. relay runtime/upload/persistent/host/operator 혼합 상태는 기존 JSON 바이트·내구 순서를 유지하고, 알려진 비밀 값이 있으면 디렉터리·임시 파일을 만들기 전에 거절하여 기존 상태를 보존한다.
+관리자 relay resume 감사는 공통 가림 뒤 공개 레코드의 허용 불리언·SHA256을 보존한다. `forced_invalid_marker`, `previous_marker_valid`, `previous_paused`, `reason_sha256`은 강제 해제 사실의 근거이며 자유 이유 문장·외부 식별자 값은 허용 형식으로 제한한다. 허용 UUID 모양이어도 알려진 비밀 값은 공개하지 않는다. relay runtime/upload/persistent/host/operator 혼합 상태와 operator pause marker는 기존 JSON 바이트·내구 순서를 유지하고, 알려진 비밀 값이 있으면 디렉터리·임시 파일을 만들기 전에 거절하여 기존 상태를 보존한다.

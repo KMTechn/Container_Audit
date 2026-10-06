@@ -6,6 +6,7 @@ import pytest
 
 
 WRITERS = (
+    "direct_sync_operator",
     "direct_sync_runtime",
     "direct_sync_push",
     "user_relay",
@@ -75,3 +76,23 @@ def test_operator_cli_secret_rejection_does_not_replace_status_with_error(tmp_pa
     public = json.loads(captured.err.split("=", 1)[1])
     assert public["reason_code"] == "SUPPORT_FAILURE"
     assert public["exception_type"] == "builtins.ValueError"
+
+
+def test_operator_audit_allowed_identifier_does_not_publish_known_secret(tmp_path, monkeypatch):
+    import direct_sync_operator
+
+    value = "12345678-1234-5678-1234-567812345678"
+    monkeypatch.setenv("CUSTOM_SERVICE_SECRET", value)
+    path = tmp_path / "audit.jsonl"
+    direct_sync_operator._append_operator_audit(path, action="resume", report={
+        "status": "PASS", "operator_id": value,
+        "forced_invalid_marker": True, "previous_marker_valid": False,
+        "previous_paused": True, "reason_sha256": "a" * 64,
+    })
+
+    assert value.encode("utf-8") not in path.read_bytes()
+    audit = json.loads(path.read_bytes())
+    assert audit["forced_invalid_marker"] is True
+    assert audit["previous_marker_valid"] is False
+    assert audit["previous_paused"] is True
+    assert audit["reason_sha256"] == "a" * 64

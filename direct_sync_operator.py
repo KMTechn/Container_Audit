@@ -67,12 +67,14 @@ SENSITIVE_ASSIGNMENT_RE = re.compile(
 
 @writer_sink("operator_evidence")
 def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
+    from auto_update import assert_machine_metadata_no_secrets
+    encoded = json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    assert_machine_metadata_no_secrets(encoded)
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     temp_path = target.with_name(f"{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-        json.dump(dict(payload), handle, ensure_ascii=False, indent=2, sort_keys=True)
-        handle.write("\n")
+        handle.write(encoded)
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temp_path, target)
@@ -424,8 +426,8 @@ def _append_operator_audit(audit_log_path: str | os.PathLike[str], *, action: st
         "tool_version": OPERATOR_TOOL_VERSION,
         "generated_at": utc_now_text(),
     }
-    from auto_update import PUBLIC_CODES, SAFE_MESSAGES, public_record
-    entry.update(public_record(report, PUBLIC_CODES, SAFE_MESSAGES))
+    from auto_update import PUBLIC_CODES, SAFE_MESSAGES, public_record, redact_json_for_sink
+    entry.update(public_record(redact_json_for_sink(dict(report)), PUBLIC_CODES, SAFE_MESSAGES))
     _append_jsonl(audit_log_path, entry)
 
 
