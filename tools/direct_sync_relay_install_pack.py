@@ -381,8 +381,10 @@ def _redact_install_diagnostic(value):
 
 @writer_sink("direct_sync_install_pack")
 def _write_json(path: Path, payload: dict) -> None:
-    from auto_update import mixed_status_record, serialize_mixed_status_record
-    encoded = serialize_mixed_status_record(mixed_status_record(payload))
+    from auto_update import mixed_status_record, serialize_json_for_sink
+    # This plan is a diagnostic sink, not an authenticated product record.
+    # Apply the existing whole-field credential rule before atomic publication.
+    encoded = serialize_json_for_sink(mixed_status_record(payload))
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:

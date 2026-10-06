@@ -83,6 +83,19 @@ def test_actual_plan_file_masks_fields_and_preserves_2b_metadata(tmp_path, monke
     assert actual["credential_path"] == payload["credential_path"]
 
 
+def test_diagnostic_plan_masks_credential_contents_absent_from_environment(tmp_path):
+    import uuid
+    secret = uuid.uuid4().hex + uuid.uuid4().hex
+    path = tmp_path / "public-plan.json"
+    install_pack._write_json(path, {"credential": {"password": secret},
+                                  "status": "BLOCKED", "password_supplied": False})
+    raw = path.read_bytes()
+    assert secret.encode() not in raw, "credential file contents reached diagnostic plan"
+    record = json.loads(raw)
+    assert record["credential"] == _FIELD_MARKER
+    assert record["status"] == "BLOCKED" and record["password_supplied"] is False
+
+
 @pytest.fixture(autouse=True)
 def _factory_install_test_mode(monkeypatch):
     monkeypatch.setenv("KMTECH_FACTORY_INSTALL_TEST_MODE", "1")
