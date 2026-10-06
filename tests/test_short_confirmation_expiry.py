@@ -44,6 +44,9 @@ class TimedRoot(ScheduledRoot):
         self.due = {}
         self.serial = 0
 
+    def winfo_exists(self):
+        return True
+
     def after(self, delay, callback, *args):
         self.serial += 1
         job = f'timed-{self.serial}'
@@ -129,16 +132,94 @@ def test_61_seconds_settles_once_without_next_scan(flow, windows, monkeypatch, c
 
 
 @pytest.mark.parametrize('wall_offset', [-3600, 3600])
-def test_running_grace_uses_monotonic_clock(flow, windows, monkeypatch, clock, wall_offset):
+def test_running_grace_uses_durable_confirmation_clock(flow, windows, monkeypatch, clock, wall_offset):
+    # sub-419 / DESIGN 11-13: sleep must count and clock rollback must defer.
     app, sent, path, undo = hold(flow, monkeypatch, clock)
     clock.wall_offset = wall_offset
     clock.seconds = 33
     app.root.tick()
-    assert json.loads(path.read_text(encoding='utf-8'))['status'] == 'HELD'
+    assert json.loads(path.read_text(encoding='utf-8'))['status'] == ('HELD' if wall_offset < 0 else 'SETTLED')
     clock.seconds = 61
+    app.root.tick()
+    if wall_offset < 0:
+        assert sent == []
+        assert len(_rows(app, 'SHORT_CONFIRMATION_CLOCK_REGRESSION')) == 1
+        clock.wall_offset = 0
+        clock.seconds = 62
+        app.root.tick()
+    assert sent == [undo['intent_id']]
+    assert len(_rows(app, 'TRAY_COMPLETE')) == 1 and windows == []
+
+
+@pytest.mark.parametrize('elapsed', [30, 70])
+def test_resume_clock_tick_counts_sleep_without_another_scan(flow, windows, monkeypatch, clock, elapsed):
+    app, sent, path, undo = hold(flow, monkeypatch, clock)
+    confirmed_contract = json.loads(path.read_text(encoding='utf-8'))['contract']
+    clock.wall_offset = elapsed  # Sleep advances wall time while timers are suspended.
+    app._update_clock()
+    app.root.tick()
+    if elapsed < 60:
+        assert json.loads(path.read_text(encoding='utf-8'))['status'] == 'HELD'
+        assert sent == []
+        clock.seconds = 29
+        app.root.tick()
+        assert sent == []
+        clock.seconds = 30  # The boundary is >=60 seconds, including at exactly 60.
+        app._update_clock()
+        app.root.tick()
+    assert json.loads(path.read_text(encoding='utf-8'))['status'] == 'SETTLED'
+    assert app._short_confirmation_undo is None
+    assert sent == [undo['intent_id']]
+    assert len(_rows(app, 'TRAY_COMPLETE')) == 1
+    assert json.loads(path.read_text(encoding='utf-8'))['contract'] == confirmed_contract
+    clock.seconds = 180
+    app.root.tick()
+    assert sent == [undo['intent_id']] and windows == []
+
+
+def test_delayed_expiry_callback_counts_sleep(flow, windows, monkeypatch, clock):
+    app, sent, path, undo = hold(flow, monkeypatch, clock)
+    callback = next(entry[2] for entry in app.root.jobs if entry[0] == app._short_confirmation_expiry_job)
+    clock.wall_offset = 70
+    callback()
+    app.root.tick()
+    assert json.loads(path.read_text(encoding='utf-8'))['status'] == 'SETTLED'
+    assert sent == [undo['intent_id']]
+    assert len(_rows(app, 'TRAY_COMPLETE')) == 1 and windows == []
+
+
+@pytest.mark.parametrize('busy', [False, True])
+def test_resume_undo_after_expiry_is_refused_before_delayed_timer(flow, windows, monkeypatch, clock, busy):
+    app, sent, path, undo = hold(flow, monkeypatch, clock)
+    errors = []
+    monkeypatch.setattr(app, '_start_warning_beep', lambda: errors.append('error'))
+    app._scan_callback_pending = busy
+    clock.wall_offset = 70
+    assert app._undo_short_confirmation() is False
+    assert json.loads(path.read_text(encoding='utf-8'))['status'] == ('HELD' if busy else 'SETTLED')
+    assert any('미달 확정 취소 시간이 지났습니다' in notice[0] for notice in app.statuses)
+    assert errors == ['error']
+    app._scan_callback_pending = False
+    app._update_clock()
     app.root.tick()
     assert sent == [undo['intent_id']]
     assert len(_rows(app, 'TRAY_COMPLETE')) == 1 and windows == []
+
+
+def test_backward_clock_after_sleep_defers_and_records_once(flow, windows, monkeypatch, clock):
+    app, sent, path, undo = hold(flow, monkeypatch, clock)
+    clock.wall_offset = 50
+    app._update_clock()
+    clock.wall_offset = 40
+    app._update_clock()
+    app._update_clock()
+    app.root.tick()
+    assert json.loads(path.read_text(encoding='utf-8'))['status'] == 'HELD' and sent == []
+    assert len(_rows(app, 'SHORT_CONFIRMATION_CLOCK_REGRESSION')) == 1
+    clock.wall_offset = 70
+    app._update_clock()
+    app.root.tick()
+    assert sent == [undo['intent_id']] and windows == []
 
 
 @pytest.mark.parametrize('elapsed', [33, 61])
@@ -215,7 +296,7 @@ def test_restored_grace_can_be_undone_and_old_callback_cannot_settle(flow, windo
     restarted._apply_short_projection_recovery(
         restarted._recover_short_completion_projections(restarted.transfer_seal_coordinator))
     assert restarted._short_confirmation_undo['completion_id'] == undo['completion_id']
-    callback = next(entry[2] for entry in restarted.root.jobs if entry[1] > 1000)
+    callback = next(entry[2] for entry in restarted.root.jobs if entry[0] == restarted._short_confirmation_expiry_job)
     assert restarted._undo_short_confirmation()
     clock.seconds = 61
     callback()  # A callback already dequeued by Tk can outlive after_cancel.

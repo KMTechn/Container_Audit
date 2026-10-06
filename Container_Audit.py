@@ -15259,6 +15259,7 @@ class ContainerAudit:
 
     def _update_clock(self):
         if not self.root.winfo_exists(): return
+        self._check_short_confirmation_expiry()
         now = datetime.datetime.now()
         if hasattr(self, 'date_label') and self.date_label.winfo_exists(): self.date_label['text'] = now.strftime('%Y-%m-%d')
         if hasattr(self, 'clock_label') and self.clock_label.winfo_exists(): self.clock_label['text'] = now.strftime('%H:%M:%S')
@@ -17436,15 +17437,42 @@ class ContainerAudit:
         if job is not None:
             self.root.after_cancel(job)
 
-    def _arm_short_confirmation_expiry(self, *, deadline=None):
-        """Keep one UI timer; only restart converts the durable wall timestamp."""
+    def _check_short_confirmation_expiry(self):
+        """Count suspended time from the durable confirmation, including on resume."""
+        undo = getattr(self, "_short_confirmation_undo", None)
+        if undo is None or getattr(self, "_ui_close_requested", False):
+            return None
+        contract = self._completion_event_contract_from_state(undo["state"])
+        confirmed = datetime.datetime.fromisoformat(contract["observed_at"])
+        now = datetime.datetime.now(confirmed.tzinfo)
+        observation = getattr(self, "_short_confirmation_clock_observation", None)
+        previous = observation[1] if observation and observation[0] is undo else confirmed
+        self._short_confirmation_clock_observation = (undo, max(previous, now))
+        remaining = self._short_confirmation_remaining(contract)
+        if now < previous:
+            if getattr(self, "_short_confirmation_clock_warning_owner", None) is not undo:
+                if self._log_event("SHORT_CONFIRMATION_CLOCK_REGRESSION",
+                                   detail={"backward_seconds": (previous - now).total_seconds()}):
+                    self._short_confirmation_clock_warning_owner = undo
+            return max(1.0, remaining)
+        self._short_confirmation_clock_warning_owner = None
+        lane = getattr(self, "_ui_lane", None)
+        if remaining <= 0:
+            self.undo_button["state"] = tk.DISABLED
+            if not (getattr(self, "_scan_callback_pending", False)
+                    or getattr(self, "_live_scan_save_pending", False)
+                    or getattr(self, "_completion_lane_busy", False)
+                    or (lane is not None and lane.is_busy())):
+                self._commit_short_confirmation()
+        return remaining
+
+    def _arm_short_confirmation_expiry(self):
+        """Keep one short poll; Tk delay is a wake-up hint, not elapsed time."""
         self._cancel_short_confirmation_expiry()
         undo = getattr(self, "_short_confirmation_undo", None)
         if undo is None or getattr(self, "_ui_close_requested", False):
             return
-        if deadline is None:
-            contract = self._completion_event_contract_from_state(undo["state"])
-            deadline = time.monotonic() + self._short_confirmation_remaining(contract)
+        contract = self._completion_event_contract_from_state(undo["state"])
         token = self._short_confirmation_expiry_token = object()
 
         def expire():
@@ -17453,24 +17481,17 @@ class ContainerAudit:
                     or getattr(self, "_ui_close_requested", False)):
                 return
             self._short_confirmation_expiry_job = None
-            remaining = deadline - time.monotonic()
-            lane = getattr(self, "_ui_lane", None)
+            remaining = self._check_short_confirmation_expiry()
             if remaining > 0:
-                delay = max(1, int(remaining * 1000) + 1)
-            elif (getattr(self, "_scan_callback_pending", False)
-                    or getattr(self, "_live_scan_save_pending", False)
-                    or getattr(self, "_completion_lane_busy", False)
-                    or (lane is not None and lane.is_busy())):
-                delay = 100
+                delay = min(1000, max(1, int(remaining * 1000) + 1))
             else:
-                self._commit_short_confirmation()
-                delay = 1000  # Retry storage/admission failure through the same path.
+                delay = 100  # Retry pending scans/storage/admission through the same path.
             if (getattr(self, "_short_confirmation_undo", None) is undo
                     and self._short_confirmation_expiry_token is token):
                 self._short_confirmation_expiry_job = self.root.after(delay, expire)
 
         self._short_confirmation_expiry_job = self.root.after(
-            max(0, int((deadline - time.monotonic()) * 1000) + 1), expire)
+            min(1000, max(0, int(self._short_confirmation_remaining(contract) * 1000) + 1)), expire)
 
     def _persist_short_completion_projection(self, contract, detail, state, intent_id):
         path = self._short_projection_path(contract["idempotency_key"])
@@ -17522,14 +17543,13 @@ class ContainerAudit:
             active = getattr(self, "_short_confirmation_undo", None)
             if (record["status"] == "HELD" and active
                     and active["completion_id"] == record["contract"]["idempotency_key"]):
-                continue  # The live UI timer already owns this monotonic deadline.
+                continue  # The live UI owns the durable confirmation's expiry checks.
             remaining = (self._short_confirmation_remaining(record["contract"])
                          if record["status"] == "HELD" else 0.0)
             if record["status"] == "HELD" and remaining > 0:
                 result["held_confirmation"] = {"state": record["state"],
                     "intent_id": record["intent_id"],
                     "completion_id": record["contract"]["idempotency_key"]}
-                result["held_deadline"] = time.monotonic() + remaining
             elif record["status"] in {"HELD", "SETTLING"}:
                 if not self._settle_short_completion_projection(
                         record["contract"]["idempotency_key"], coordinator=coordinator):
@@ -17596,7 +17616,7 @@ class ContainerAudit:
         if result.get("held_confirmation"):
             self._short_confirmation_undo = result["held_confirmation"]
             self.undo_button["state"] = tk.NORMAL
-            self._arm_short_confirmation_expiry(deadline=result["held_deadline"])
+            self._arm_short_confirmation_expiry()
         if history is not None or result.get("restored_state") or result.get("cleared_completion_ids"):
             self._update_all_summaries()
             self._update_current_item_label()
@@ -17633,6 +17653,12 @@ class ContainerAudit:
 
     def _undo_short_confirmation(self):
         undo = self._short_confirmation_undo
+        contract = self._completion_event_contract_from_state(undo["state"])
+        if self._short_confirmation_remaining(contract) <= 0:
+            self._check_short_confirmation_expiry()
+            self.show_status_message("미달 확정 취소 시간이 지났습니다. 다음 작업을 계속하세요.", self.COLOR_DANGER)
+            self._start_warning_beep()
+            return False
         def steps():
             state = dict(undo["state"])
             state.pop(COMPLETION_EVENT_STATE_KEY, None)
