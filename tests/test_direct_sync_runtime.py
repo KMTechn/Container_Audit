@@ -108,12 +108,31 @@ class FakeSession:
         return self.response
 
 
+def assert_runtime_machine_status(config, status, *, authority=False):
+    manifest_bytes = Path(config.producer_manifest_path).read_bytes()
+    identity = json.loads(manifest_bytes)["pc_identity"]
+    assert status["worker_id"] == config.worker_id
+    assert status["producer_manifest_sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
+    assert status["source_identity"]["producer_install_id"] == identity["producer_install_id"]
+    assert status["runtime_lease"] == ({
+        "status": "ACTIVE", "server_grant_accepted": True,
+        "producer_install_id": identity["producer_install_id"],
+        "lease_id": "lease-runtime-test", "runtime_instance_id": "runtime-test",
+        "expires_at": "2099-01-01T00:00:00Z", "request_sent": False,
+    } if authority else {})
+    expected = json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    assert Path(config.runtime_status_path).read_bytes() == expected.encode("utf-8")
+    event = json.loads(Path(config.log_path).read_text(encoding="utf-8").splitlines()[-1])
+    assert event["report_status"] == "REPORT_UNAVAILABLE"
+    assert "report_path" not in event
+
+
 class RaisingSession:
     def __init__(self):
         self.calls = []
 
     def post(self, url, *, data, files, headers, timeout, allow_redirects):
-        self.calls.append({"url": url, "headers": dict(headers), "timeout": timeout, "allow_redirects": allow_redirects})
+        self.calls.append({"url": url, "metadata": data["metadata"], "headers": dict(headers), "timeout": timeout, "allow_redirects": allow_redirects})
         raise TimeoutError("Authorization: Bearer SHOULD-NOT-LEAK raw_payload")
 
 
@@ -457,14 +476,16 @@ def test_runtime_records_credential_load_errors_for_enqueue_and_drain(tmp_path, 
     bad_config = DirectSyncRuntimeConfig(**{**config.__dict__, "credential_path": credential_path})
 
     enqueue_status = enqueue_completed_source_file(bad_config, source_file_path=source_file)
+    assert_runtime_machine_status(bad_config, enqueue_status)
     run_status = run_relay_once(bad_config, session=EchoAcceptedSession())
 
     assert enqueue_status["status"] == "enqueue_error"
     assert enqueue_status["error_code"] == "direct_sync_enqueue_error"
-    assert "credential file is missing or invalid" in enqueue_status["error_message"]
+    assert enqueue_status["error_message"] == "SUPPORT_FAILURE"
     assert run_status["status"] == "runtime_error"
     assert run_status["error_code"] == "direct_sync_runtime_error"
-    assert "credential file is missing or invalid" in run_status["error_message"]
+    assert run_status["error_message"] == "SUPPORT_FAILURE"
+    assert_runtime_machine_status(bad_config, run_status)
     assert Path(bad_config.runtime_status_path).is_file()
     assert Path(bad_config.log_path).is_file()
     assert relay_queue_status(config.db_path)["counts"] == {}
@@ -572,7 +593,9 @@ def test_runtime_rejects_unsafe_endpoint_before_posting_or_claiming(tmp_path):
     status = run_relay_once(config, session=session)
 
     assert status["status"] == "runtime_error"
-    assert "endpoint_url" in status["error_message"]
+    assert status["error_code"] == "direct_sync_runtime_error"
+    assert status["error_message"] == "SUPPORT_FAILURE"
+    assert_runtime_machine_status(config, status)
     assert session.calls == []
     queue = relay_queue_status(config.db_path)
     assert queue["counts"][RELAY_STATUS_PENDING] == 1
@@ -588,7 +611,8 @@ def test_runtime_corrupt_relay_db_records_runtime_error_without_posting(tmp_path
 
     assert status["status"] == "runtime_error"
     assert status["error_code"] == "relay_queue_db_error"
-    assert status["error_message"] == "relay queue database error: DatabaseError"
+    assert status["error_message"] == "SUPPORT_FAILURE"
+    assert_runtime_machine_status(config, status)
     assert status["queue"]["status"] == "unavailable"
     assert status["queue"]["error_code"] == "relay_queue_db_error"
     assert "not a sqlite database" not in json.dumps(status)
@@ -624,7 +648,8 @@ def test_enqueue_spool_filesystem_error_is_not_reported_as_queue_db_error(tmp_pa
 
     assert status["status"] == "enqueue_error"
     assert status["error_code"] == "relay_spool_filesystem_error"
-    assert "relay spool file cannot be written" in status["error_message"]
+    assert status["error_message"] == "SUPPORT_FAILURE"
+    assert_runtime_machine_status(config, status)
     assert status["queue"]["counts"] == {}
     persisted = json.loads(Path(config.runtime_status_path).read_text(encoding="utf-8"))
     assert persisted["error_code"] == "relay_spool_filesystem_error"
@@ -641,15 +666,17 @@ def test_runtime_queue_db_filesystem_error_writes_status_instead_of_raising(tmp_
     session = EchoAcceptedSession()
 
     enqueue_status = enqueue_completed_source_file(blocked_config, source_file_path=source_file)
+    assert_runtime_machine_status(blocked_config, enqueue_status)
     run_status = run_relay_once(blocked_config, session=session)
 
     assert enqueue_status["status"] == "enqueue_error"
     assert enqueue_status["error_code"] == "relay_queue_db_error"
-    assert enqueue_status["error_message"] == "relay queue database error: FileExistsError"
+    assert enqueue_status["error_message"] == "SUPPORT_FAILURE"
     assert enqueue_status["queue"]["status"] == "unavailable"
     assert run_status["status"] == "runtime_error"
     assert run_status["error_code"] == "relay_queue_db_error"
-    assert run_status["error_message"] == "relay queue database error: FileExistsError"
+    assert run_status["error_message"] == "SUPPORT_FAILURE"
+    assert_runtime_machine_status(blocked_config, run_status)
     assert run_status["queue"]["status"] == "unavailable"
     assert Path(blocked_config.runtime_status_path).is_file()
     assert Path(blocked_config.log_path).is_file()
@@ -1302,6 +1329,8 @@ def test_runtime_retryable_failure_records_retry_wait_and_skips_early_retry(tmp_
 
     assert status["status"] == "retry_wait"
     assert status["last_result"]["retryable"] is True
+    assert status["last_result"]["error_code"] == "temporary_unavailable"
+    assert_runtime_machine_status(config, status, authority=True)
     assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_RETRY_WAIT] == 1
     with sqlite3.connect(config.db_path) as conn:
         conn.row_factory = sqlite3.Row
@@ -1316,6 +1345,10 @@ def test_runtime_retryable_failure_records_retry_wait_and_skips_early_retry(tmp_
     assert retry_due in {"2099-01-01T00:00:01Z", "2099-01-01T00:00:02Z"}
     assert row["last_error_code"] == "temporary_unavailable"
     assert Path(row["upload_status_path"]).is_file()
+    upload_status = json.loads(Path(row["upload_status_path"]).read_text(encoding="utf-8"))
+    assert upload_status["error_code"] == "temporary_unavailable"
+    assert upload_status["error_message"] == "SUPPORT_FAILURE"
+    assert upload_status["metadata"] == json.loads(retry_session.calls[0]["metadata"])
 
     early_success = EchoAcceptedSession()
     idle = run_relay_once(config, session=early_success, now=cycle_now)
@@ -1343,6 +1376,7 @@ def test_runtime_transport_exception_records_retry_wait_and_redacts_status(tmp_p
     assert status["last_result"]["retryable"] is True
     assert status["last_result"]["status_code"] == 0
     assert status["last_result"]["error_code"] == "transport_error"
+    assert_runtime_machine_status(config, status, authority=True)
     assert "SHOULD-NOT-LEAK" not in json.dumps(status)
     assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_RETRY_WAIT] == 1
     with sqlite3.connect(config.db_path) as conn:
@@ -1355,7 +1389,12 @@ def test_runtime_transport_exception_records_retry_wait_and_redacts_status(tmp_p
         ).fetchone()
     assert row["last_error_code"] == "transport_error"
     status_text = Path(row["upload_status_path"]).read_text(encoding="utf-8")
-    assert "TimeoutError" in status_text
+    upload_status = json.loads(status_text)
+    assert upload_status["error_code"] == "transport_error"
+    assert upload_status["error_message"] == "SUPPORT_FAILURE"
+    assert upload_status["retryable"] is True
+    assert upload_status["status_code"] == 0
+    assert upload_status["metadata"] == json.loads(session.calls[0]["metadata"])
     assert "SHOULD-NOT-LEAK" not in status_text
 
 
