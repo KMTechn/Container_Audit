@@ -150,7 +150,7 @@ if((Get-Content -LiteralPath $auditPath -Raw) -match 'PRIVATE_DETAIL_MUST_NOT_AP
 def test_uncaught_preparation_failure_uses_fixed_public_message(tmp_path, engine):
     from tests.powershell_contracts import run_functions
     source = Path(__file__).resolve().parents[1]/'INSTALL_CANONICAL_PORTABLE.ps1'
-    result = run_functions(tmp_path, source, ['Full','Get-CanonicalFailureDetails','Write-CanonicalPreparationAdmissionFailure'], r'''
+    result = run_functions(tmp_path, source, ['Full','Get-CanonicalFailureDetails','Write-CanonicalPreparationAdmissionFailure','Write-CanonicalInstallationPublicRecord'], r'''
 $auditPath=Join-Path $env:CA_CONTRACT_ROOT 'failure.json';$evidenceFull=$null
 $enteredPlacementTry=$false;$Uninstall=$false;$RestoreVerifiedReplacement=$false;$CompleteRetiredRemoval=$false;$Script:CanonicalPreparationAdmissionFailed=$false;$Script:CanonicalInstallerSourceInventorySha256=''
 $ast=[Management.Automation.Language.Parser]::ParseFile($env:CA_CONTRACT_SOURCE,[ref]$null,[ref]$null)
@@ -158,14 +158,22 @@ $boundary=@($ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation
 try{throw [InvalidOperationException]::new('PRIVATE_ADMISSION_DETAIL_MUST_STAY_PRIVATE')}
 catch{Invoke-Expression ('& '+$boundary.CatchClauses[0].Body.Extent.Text)}
 ''', engine=engine)
-    assert result.returncode != 0
+    assert result.returncode == 1
     assert result.stdout.count('install_status=FAILED') == 1
-    assert 'FAILED_PREPARATION_ADMISSION' in result.stderr
-    assert 'InvalidOperation' in result.stderr
+    assert result.stderr == ''
+    records = [json.loads(line.split('=', 1)[1]) for line in result.stdout.splitlines()
+               if line.startswith('CONTAINER_AUDIT_INSTALL_CANONICAL=')]
+    assert len(records) == 1
+    assert records[0]['status'] == 'FAILED'
+    assert records[0]['reason_code'] == 'INSTALLER_CANONICAL_FAILURE'
+    assert records[0]['exit_code'] == 1
+    assert 'InvalidOperationException' in records[0]['exception_type']
     assert 'PRIVATE_ADMISSION_DETAIL_MUST_STAY_PRIVATE' not in result.stdout + result.stderr
     audit = json.loads((tmp_path/'failure.json').read_bytes())
     assert audit['status'] == 'FAILED'
     assert audit['preparation_status'] == audit['preparation_failure']['code'] == 'FAILED_PREPARATION_ADMISSION'
+    assert any('InvalidOperationException' in name for name in audit['preparation_failure']['exception_types'])
+    assert audit['preparation_failure']['script_line'] > 0
 
 
 @pytest.mark.parametrize('engine', ('powershell.exe','pwsh.exe'))
@@ -173,7 +181,7 @@ catch{Invoke-Expression ('& '+$boundary.CatchClauses[0].Body.Extent.Text)}
 def test_source_admission_wrapper_is_quiet_on_success_and_audits_once(tmp_path, engine, refuse):
     from tests.powershell_contracts import run_functions
     source = Path(__file__).resolve().parents[1]/'INSTALL_CANONICAL_PORTABLE.ps1'
-    result = run_functions(tmp_path, source, ['Full','Get-CanonicalFailureDetails','Write-CanonicalPreparationAdmissionFailure','Invoke-ContainerSourceDataAdmission'], r'''
+    result = run_functions(tmp_path, source, ['Full','Get-CanonicalFailureDetails','Write-CanonicalPreparationAdmissionFailure','Invoke-ContainerSourceDataAdmission','Write-CanonicalInstallationPublicRecord'], r'''
 $auditPath=Join-Path $env:CA_CONTRACT_ROOT 'admission.json';$evidenceFull=$null
 $enteredPlacementTry=$false;$Uninstall=$false;$RestoreVerifiedReplacement=$false;$CompleteRetiredRemoval=$false
 $Script:CanonicalPreparationAdmissionFailed=$false;$Script:CanonicalInstallerSourceInventorySha256=('a'*64)
@@ -186,7 +194,11 @@ function Get-CanonicalOnboardingInputBinding {
 $ast=[Management.Automation.Language.Parser]::ParseFile($env:CA_CONTRACT_SOURCE,[ref]$null,[ref]$null)
 $boundary=@($ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.TryStatementAst]})[-1]
 try{Invoke-ContainerSourceDataAdmission $env:CA_CONTRACT_ROOT ('a'*64) $auditPath $evidenceFull}
-catch{try{Invoke-Expression ('& '+$boundary.CatchClauses[0].Body.Extent.Text)}catch{if($_.Exception.Message -cne 'FAILED_PREPARATION_ADMISSION'){throw 'public failure differs'}}}
+catch{
+ $record=Get-Content -LiteralPath $auditPath -Raw|ConvertFrom-Json
+ if($record.status -cne 'FAILED' -or $record.source_inventory_sha256 -cne ('a'*64) -or $record.preparation_failure.exception_types.Count -lt 1){throw 'typed source failure binding differs'}
+ Invoke-Expression ('& '+$boundary.CatchClauses[0].Body.Extent.Text)
+}
 if($env:CA_REFUSE -cne 'True'){
  if($Script:canonicalOnboardingInputBinding -cne ('b'*64) -or (Test-Path $auditPath)){throw 'success wrote admission state'}
 }else{
@@ -194,10 +206,15 @@ if($env:CA_REFUSE -cne 'True'){
  if($record.status -cne 'FAILED' -or $record.source_inventory_sha256 -cne ('a'*64) -or $record.preparation_failure.exception_types.Count -lt 1){throw 'typed source failure binding differs'}
 }
 ''', engine=engine, values={'CA_REFUSE':str(refuse)})
-    assert result.returncode == 0
+    assert result.returncode == int(refuse)
     assert result.stdout.count('install_status=FAILED') == int(refuse)
     assert 'PRIVATE_WRAPPER_DETAIL' not in result.stdout + result.stderr
     if refuse:
         assert 'PRIVATE_WRAPPER_DETAIL' not in (tmp_path/'admission.json').read_text()
+        assert result.stderr == ''
+        record = json.loads(next(line.split('=', 1)[1] for line in result.stdout.splitlines()
+                                 if line.startswith('CONTAINER_AUDIT_INSTALL_CANONICAL=')))
+        assert record['status'] == 'FAILED' and record['exit_code'] == 1
+        assert record['reason_code'] == 'INSTALLER_CANONICAL_FAILURE'
     else:
         assert not result.stdout.strip()

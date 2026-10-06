@@ -82,8 +82,16 @@ def test_shared_structured_installer_failure_sinks(tmp_path, monkeypatch, capsys
     if mode == 'preflight':
         if record.get('report_status') != 'REPORT_UNAVAILABLE' or report_path.exists():
             pytest.fail('Read-only structured failure wrote a report count=1', pytrace=False)
-    elif record.get('report_sha256') != hashlib.sha256(protected).hexdigest() or record.get('report_path') != str(report_path):
-        pytest.fail('Structured protected publication binding mismatches=1', pytrace=False)
+    else:
+        # Contract 0f: a caller-selected root has no proven reader ACL. Retain
+        # the no-fragment checks above and refuse to publish its path or hash.
+        assert protected
+        assert record.get('report_status') == 'REPORT_UNAVAILABLE'
+        assert 'report_path' not in record and 'report_sha256' not in record
+        assert record['status'] == 'FAILED'
+        assert record['exit_code'] == onboarding.ONBOARDING_EXIT_CODE
+        assert record['exception_type'] == 'builtins.RuntimeError'
+        assert record['location_function'] == 'operation'
 
 
 def _sample(shape, style):
