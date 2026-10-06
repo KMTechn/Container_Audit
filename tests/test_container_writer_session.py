@@ -831,7 +831,18 @@ def test_installers_reject_changed_writer_bytes_before_placement(tmp_path, relat
     assert result.returncode != 0
     # User 15:5x: canonical admission failures expose a fixed preparation code.
     if caller == "bootstrap":
-        assert "Portable release manifest hash readback failed" in result.stdout + result.stderr
+        summary = [json.loads(line.split('=', 1)[1]) for line in result.stdout.splitlines()
+                   if line.startswith('installation_failure_summary=')]
+        assert len(summary) == 1
+        assert summary[0]['status'] == 'FAILED'
+        assert summary[0]['stage'] == 'installer_helper'
+        assert summary[0]['reason_code'] == 'INSTALLER_HELPER_FAILURE'
+        assert summary[0]['exit_code'] == result.returncode == 1
+        assert summary[0]['exception_type'] == 'System.Management.Automation.RuntimeException'
+        assert summary[0]['report_status'] == 'REPORT_UNAVAILABLE'
+        assert result.stderr == ''
+        helper_lines = (release / 'INSTALL_THIS_PC.ps1').read_text(encoding='utf-8-sig').splitlines()
+        assert 'Portable release manifest hash readback failed' in helper_lines[summary[0]['location_line'] - 1]
     else:
         failures = [json.loads(line.split('=', 1)[1]) for line in result.stdout.splitlines()
                     if line.startswith('CONTAINER_AUDIT_INSTALL_CANONICAL=')]
