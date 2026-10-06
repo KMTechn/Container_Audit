@@ -67,11 +67,13 @@ def test_shared_structured_installer_failure_sinks(tmp_path, monkeypatch, capsys
     text, fragments = vector['text'], _vector_fragments(vector)
     report_path = tmp_path / 'protected.json'
     def operation(*args, **kwargs):
-        cause = RuntimeError(text)
-        if mode != 'preflight':
-            onboarding._persist_failure_report(report_path, {'status': 'FAILED'}, cause)
-            raise onboarding.CurrentUserOnboardingError('synthetic wrapper', report_path=report_path) from cause
-        raise cause
+        try:
+            raise RuntimeError(text)
+        except RuntimeError as cause:
+            if mode != 'preflight':
+                onboarding._persist_failure_report(report_path, {'status': 'FAILED'}, cause)
+                raise onboarding.CurrentUserOnboardingError('synthetic wrapper', report_path=report_path) from cause
+            raise
     raw = _invoke(_cli(monkeypatch, tmp_path, mode, operation), capsys)
     protected = report_path.read_bytes() if report_path.exists() else b''
     counts = {'public': _original_count(raw, fragments), 'protected': _original_count(protected, fragments)}
