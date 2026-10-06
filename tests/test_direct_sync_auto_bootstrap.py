@@ -1,3 +1,4 @@
+import copy
 import json
 from pathlib import Path
 import threading
@@ -168,7 +169,12 @@ def test_app_start_wake_records_current_user_topology(tmp_path, monkeypatch):
             / "container_audit_direct_sync_auto_bootstrap.json"
         ).read_text(encoding="utf-8")
     )
-    assert report == persisted
+    # Contract 0e: actual child stdout is a diagnostic value, while all
+    # topology, machine state and return-code fields retain their values.
+    expected = copy.deepcopy(report)
+    assert expected["result"]["stdout_tail"]
+    expected["result"]["stdout_tail"] = "SUPPORT_FAILURE"
+    assert expected == persisted
     assert report["status"] == "PASS"
     assert report["principal"] == "current_user"
     assert report["system_scheduled_task"] is False
