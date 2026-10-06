@@ -33,7 +33,7 @@ install_charset_normalizer_block()
 import requests
 
 from container_audit_product_host import dispatch_product_mode
-from native_audio import WavSound, stop_all_sounds
+from native_audio import WavSound, play_sound, record_audio_failure, stop_all_sounds, stop_sound
 from vendor.kmtech_zero_pe.raster import RasterImage
 from vendor.kmtech_zero_pe.release_signature import validate_public_key_config
 from kmtech_factory_contracts import load_and_verify_contract_lock
@@ -1414,8 +1414,8 @@ class ContainerAudit:
                 success_sound = WavSound(resource_path('assets/success.wav'))
                 error_sound = WavSound(resource_path('assets/error.wav'))
                 completion_sound = WavSound(resource_path('assets/combo.wav'))
-            except Exception as exc:
-                error_message = str(exc)
+            except Exception:
+                error_message = "AUDIO_INIT_FAILED"
 
             def finish():
                 self.success_sound = success_sound
@@ -1424,7 +1424,7 @@ class ContainerAudit:
                 self.audio_feedback_ready = all(sound is not None for sound in (success_sound, error_sound, completion_sound))
                 self.audio_feedback_error = error_message
                 if error_message:
-                    print(f"사운드 피드백 초기화 오류: {error_message}")
+                    record_audio_failure(error_message)
 
             try:
                 self.root.after(0, finish)
@@ -14155,7 +14155,7 @@ class ContainerAudit:
             self._inline_exchange_mode = ""
             if raw_barcode == previous[0] and time.monotonic() - previous[1] < 3:
                 if getattr(self, "success_sound", None):
-                    self.success_sound.play()
+                    play_sound(self.success_sound)
             elif tray.scanned_barcodes:
                 self._complete_current_tray_as_partial()
             return
@@ -14647,7 +14647,7 @@ class ContainerAudit:
         if _durable_scan_id:
             self._preflight_scan_receipts()[raw_barcode] = _durable_scan_id
         if self.success_sound:
-            self.success_sound.play()
+            play_sound(self.success_sound)
         scan_log_kwargs = {"synchronous": _durable_scan_log}
         if _durable_scan_id:
             scan_log_kwargs.update(idempotency_key=f"preflight-held-scan:{_durable_scan_id}", deduplicate=True)
@@ -15378,18 +15378,18 @@ class ContainerAudit:
         self._warning_beep_active = True
         if getattr(self, "error_sound", None):
             try:
-                self.error_sound.play(loops=-1)
-            except Exception as exc:
+                self._warning_beep_active = play_sound(self.error_sound, loops=-1)
+            except Exception:
                 self._warning_beep_active = False
-                print(f"오류음 재생 실패: {exc.__class__.__name__}")
+                record_audio_failure("AUDIO_PLAY_FAILED")
 
     def _stop_warning_beep(self):
         self._warning_beep_active = False
         if getattr(self, "error_sound", None):
             try:
-                self.error_sound.stop()
-            except Exception as exc:
-                print(f"오류음 정지 실패: {exc.__class__.__name__}")
+                stop_sound(self.error_sound)
+            except Exception:
+                record_audio_failure("AUDIO_STOP_FAILED")
 
     def _warning_state_presenter(self) -> WarningPresenter:
         presenter = getattr(self, "warning_presenter", None)
@@ -19358,7 +19358,7 @@ class ContainerAudit:
                 self._update_action_button_states()
             self.show_status_message("작업을 보류 처리했습니다. 새 현품표를 스캔하세요.", self.COLOR_PRIMARY)
             if getattr(self, "success_sound", None):
-                self.success_sound.play()
+                play_sound(self.success_sound)
             return True
 
         except Exception as e:
@@ -19741,7 +19741,7 @@ class ContainerAudit:
                 self._show_left_sidebar_view("summary")
                 self._schedule_focus_return()
                 if getattr(self, "success_sound", None):
-                    self.success_sound.play()
+                    play_sound(self.success_sound)
                 return True
 
             self._left_sidebar_view = "summary"
@@ -20332,7 +20332,7 @@ class ContainerAudit:
 
         ctx['additional_items'].append(barcode)
         if self.success_sound:
-            self.success_sound.play()
+            play_sound(self.success_sound)
 
         if len(ctx['additional_items']) >= ctx['items_needed']:
             self._finalize_replacement()
@@ -20351,7 +20351,7 @@ class ContainerAudit:
 
         ctx['removed_items'].append(barcode)
         if self.success_sound:
-            self.success_sound.play()
+            play_sound(self.success_sound)
 
         if len(ctx['removed_items']) >= ctx['items_to_remove_count']:
             self._finalize_replacement()
@@ -20574,7 +20574,7 @@ class ContainerAudit:
         if result.status != "accepted":
             return
         if result.play_success_sound and self.success_sound:
-            self.success_sound.play()
+            play_sound(self.success_sound)
 
         # UI 업데이트
         self._update_exchange_display()

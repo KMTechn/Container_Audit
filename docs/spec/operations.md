@@ -1016,6 +1016,7 @@ CA-T01의 이름 14개와 실제 register→ValueError, CA-T02의 malformed JSON
 
 G 시작 거절 대화상자는 REFUSE/UNKNOWN에 맞는 고정 한국어 원인·복구 안내만 전달한다. 임의 예외 진단은 작업자 대화상자에 전달하지 않는다. 전체 비교에서 드러난 relay 모의는 read-only Git 신원 확인을 보존하며, 실제 자료 경계/호환 판정은 동일하다.
 배포 PowerShell 파일에 비ASCII가 있으면 UTF-8 BOM을 유지한다(현장 Windows PowerShell 5.1 코드 페이지와 무관한 판독).
+소리 초기화·재생·정지 실패는 고정 AUDIO_*_FAILED 코드로만 기록하며 저장·로그·감사 투영·완료·종료 처리를 계속한다.
 
 # Installation follow-up evidence — 2026-10-02
 

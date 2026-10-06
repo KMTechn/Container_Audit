@@ -1177,7 +1177,7 @@ def test_check_and_apply_updates_skips_source_mode_before_network(monkeypatch):
     container_audit_module.check_and_apply_updates()
 
 
-def test_audio_feedback_init_failure_is_nonfatal(monkeypatch):
+def test_audio_feedback_init_failure_is_nonfatal(monkeypatch, capsys):
     import threading
 
     # This unit uses a fully mocked mixer and cannot reach the operator audio
@@ -1224,7 +1224,8 @@ def test_audio_feedback_init_failure_is_nonfatal(monkeypatch):
 
     assert app.success_sound is None
     assert app.error_sound is None
-    assert "no audio device" in app.audio_feedback_error
+    assert app.audio_feedback_error == "AUDIO_INIT_FAILED"
+    assert capsys.readouterr().out == 'CONTAINER_AUDIT_AUDIO={"code":"AUDIO_INIT_FAILED"}\n'
 
 
 def test_update_asset_lookup_requires_matching_sha256_asset():

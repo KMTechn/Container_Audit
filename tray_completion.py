@@ -9,7 +9,7 @@ from pathlib import Path
 import socket
 import tkinter as tk
 from typing import Any, Callable, Dict, Mapping, Optional
-
+from native_audio import play_sound, record_audio_failure
 from event_payloads import build_tray_complete_detail
 from label_qr import (
     TRANSITION_LOCAL_SEAL_STATUS,
@@ -911,7 +911,7 @@ def complete_tray_steps(
             "다음 현품표 전 취소 카드로 되돌릴 수 있습니다. 계속하려면 다음 현품표를 스캔하세요.",
             self.COLOR_DANGER)
         if getattr(self, "error_sound", None):
-            self.error_sound.play()
+            play_sound(self.error_sound)
     if transfer_attempt.local_completion_id and not is_test and not is_partial and transfer_attempt.status != "ACKED":
         self._schedule_scanonly_transport()
     return True
@@ -954,9 +954,9 @@ def present_completed_tray(
     sound = getattr(self, "completion_sound", None)
     if sound is not None:
         try:
-            sound.play()
-        except Exception as exc:
-            print(f"완료음 재생 실패: {exc.__class__.__name__}")
+            play_sound(sound)
+        except Exception:
+            record_audio_failure("AUDIO_PLAY_FAILED")
     self.scanned_listbox.delete(0, tk.END)
     self._update_all_summaries()
     self._reset_ui_to_waiting_state()

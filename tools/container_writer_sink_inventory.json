@@ -7608,6 +7608,7 @@
     "tray_completion": [
       "event_payloads",
       "label_qr",
+      "native_audio",
       "protected_admin",
       "session_history",
       "tk_serial_ui_lane",
@@ -7668,7 +7669,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "1143f450a596db3ff7a8cc440651fbba85fdadc0b5b1cb4cd5fa4622e3be067c",
+  "inventory_sha256": "809819eb563f291e359bd8179ef4af06f88c7a839b4d1d7ac13327ed56b7706d",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
