@@ -126,7 +126,7 @@ def test_mixed_report_serialization_keeps_authenticated_container_values(tmp_pat
              'receipt':{'error_message':'authenticated-field'},
              'identity':{'producer':'computed-identity'}, 'credential_ref':'original-reference',
              'error_message':'untrusted diagnostic'}
-    for name,writer in (('bootstrap',bootstrap._write_json),('installer',installer._write_json)):
+    for name,writer in (('bootstrap',bootstrap._write_json),):
         path=tmp_path/(name+'.json')
         writer(path,payload)
         persisted=json.loads(path.read_bytes())
@@ -134,6 +134,23 @@ def test_mixed_report_serialization_keeps_authenticated_container_values(tmp_pat
         for field in ('credential','profile','receipt','identity','credential_ref','status'):
             assert persisted[field]==payload[field]
     assert persisted['error_message']=='SUPPORT_FAILURE'
+    # e91a427: install-pack plans are public diagnostics, unlike authenticated
+    # bootstrap/operator records. Keep their machine fields and mask credentials.
+    plan_path = tmp_path / "installer-plan.json"
+    # The original credential leaf is also in non-secret receipt/profile fields;
+    # use a unique existing secret marker to prove absence from the whole plan.
+    plan_payload = {**payload, "credential": {**payload["credential"], "error_message": MARKER}}
+    installer._write_json(plan_path, plan_payload)
+    plan_bytes = plan_path.read_bytes()
+    plan = json.loads(plan_bytes)
+    assert plan.keys() == payload.keys()
+    for field in ("profile", "receipt", "identity", "status"):
+        assert plan[field] == payload[field]
+    assert plan["credential"] == "[REDACTED:field]"
+    assert plan["credential_ref"] == "[REDACTED:field]"
+    assert plan["error_message"] == "SUPPORT_FAILURE"
+    assert MARKER.encode() not in plan_bytes
+    assert payload["credential_ref"].encode() not in plan_bytes
     operator._emit(payload,str(tmp_path/'operator.json'))
     persisted=json.loads((tmp_path/'operator.json').read_bytes())
     for field in ('credential','profile','receipt','identity','credential_ref','status'):
@@ -162,6 +179,16 @@ def test_known_environment_value_in_authentication_is_rejected_before_write(tmp_
     monkeypatch.setattr(os, 'environ', {'CUSTOM_SERVICE_SECRET': MARKER})
     destination = tmp_path / 'report.json'
     before = {str(path.relative_to(tmp_path)): path.is_dir() for path in tmp_path.rglob('*')}
+    if module_name == "tools.direct_sync_relay_install_pack":
+        # e91a427 projects the public plan before opening the atomic output.
+        # No environment secret may reach its bytes, nor a leftover temp file.
+        import json
+        module._write_json.__wrapped__(destination, {"credential": {"value": MARKER}})
+        assert json.loads(destination.read_bytes()) == {"credential": "[REDACTED:field]"}
+        assert MARKER.encode() not in destination.read_bytes()
+        after = {str(path.relative_to(tmp_path)): path.is_dir() for path in tmp_path.rglob("*")}
+        assert after == {**before, str(destination.relative_to(tmp_path)): False}
+        return
     with pytest.raises(ValueError, match='MACHINE_METADATA_SECRET_DETECTED'):
         module._write_json.__wrapped__(destination, {'credential': {'value': MARKER}})
     assert {str(path.relative_to(tmp_path)): path.is_dir() for path in tmp_path.rglob('*')} == before
