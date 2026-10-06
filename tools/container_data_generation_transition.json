@@ -166,12 +166,12 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "630c59134988138d57a3c6011bf10a9f50643a88da34cd3e095b8ea1c3f8732b"
+      "after": "6b3f2796e12d64c45be7424bc321ef4889c41b14f0f105f3d881bd4278b47ad9"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
       "before": "95bb11b9fb4ed0035f229d7b6c6ca2abba17760caef15837734b7a809c52fc4c",
-      "after": "f460f3830ec1b006df6e23ad13f74f1fe53cf8dcf631dfaad6ab0398de824034"
+      "after": "5da44c661f0b7a4b76d3f01119622b745b4a6052ba8e8564de8c956228292673"
     },
     {
       "path": "app/Container_Audit.py",
@@ -4528,12 +4528,12 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "630c59134988138d57a3c6011bf10a9f50643a88da34cd3e095b8ea1c3f8732b"
+      "after": "6b3f2796e12d64c45be7424bc321ef4889c41b14f0f105f3d881bd4278b47ad9"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
       "before": "08f1bb2c468e24998460192d25b546788417d2ed1dd09d3e0ee601e826d9c909",
-      "after": "f460f3830ec1b006df6e23ad13f74f1fe53cf8dcf631dfaad6ab0398de824034"
+      "after": "5da44c661f0b7a4b76d3f01119622b745b4a6052ba8e8564de8c956228292673"
     },
     {
       "path": "container_admin_pin.py",

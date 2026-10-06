@@ -1015,6 +1015,8 @@ CA-T01의 이름 14개와 실제 register→ValueError, CA-T02의 malformed JSON
 고정 Web committed source `56c32028ce6b30ccf774e7cc635e3e4b377266ed`의 실제 Flask 서명 HTTP 진입점·SQLite 저장소와 CA 승인 진입점·내구 intent를 함께 사용했다. 성공 2건과 틀린 PIN·중앙 ADMIN 잠금·root 철회·역할 없음·잠금+root 철회 5건의 7 PASS를 확인했다. ADMIN 잠금은 서로 다른 3장치에서 5회씩 실패하여 실제 15회 한계를 충족하며 새 장치에서도 서버 `PIN_LOCKED` 감사와 CA REJECTED를 확인한다. 철회된 이전 grant는 REVOKED로 남고 redeem 거절, 원 recovery 파일 보존·PIN 미저장을 단언한다. 권한 상태 준비는 지원 store API를 이용한 격리 fixture이며 실제 root UI·production·네트워크 배포 수용은 NOT TESTED. 초기 fixture/입력 실패와 잘못된 10회 oracle을 지우지 않고 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)에 연결한다.
 
 G 시작 거절 대화상자는 REFUSE/UNKNOWN에 맞는 고정 한국어 원인·복구 안내만 전달한다. 임의 예외 진단은 작업자 대화상자에 전달하지 않는다. 전체 비교에서 드러난 relay 모의는 read-only Git 신원 확인을 보존하며, 실제 자료 경계/호환 판정은 동일하다.
+배포 PowerShell 파일에 비ASCII가 있으면 UTF-8 BOM을 유지한다(현장 Windows PowerShell 5.1 코드 페이지와 무관한 판독).
+
 # Installation follow-up evidence — 2026-10-02
 
 설치 상승 wrapper·그 안의 finite helper·일반 토큰 producer wrapper는 기존 private
