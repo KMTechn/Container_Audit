@@ -39,7 +39,10 @@ class OwnedRelay:
 
     def wait_running(self, root, process):
         status_path = user_relay_status_path(root)
-        deadline = time.monotonic() + 15
+        # RUNNING is published after the first real cycle, whose supported
+        # child request can take 45 seconds. Allow startup/fence IO as well;
+        # keep the live-process and actual RUNNING proof unchanged (sub-413).
+        deadline = time.monotonic() + 60
         while process.poll() is None and time.monotonic() < deadline:
             if status_path.exists():
                 status = json.loads(status_path.read_text(encoding='utf-8'))
