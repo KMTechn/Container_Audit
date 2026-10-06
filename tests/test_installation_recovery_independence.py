@@ -101,18 +101,21 @@ if($env:CA_BAD_PIN -ceq 'true'){
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 def test_code_and_inventory_failure_still_attempt_exact_run_preimage(tmp_path, engine):
-    result = run_functions(tmp_path, CANONICAL, ["Invoke-CanonicalRollbackRuntimePreimage"], r'''
-$blocks=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.TryStatementAst] -and $n.Body.Extent.Text.Contains("rollback.autostart_preimage") -and $n.CatchClauses.Count -eq 1 -and $n.CatchClauses[0].Body.Extent.Text.Contains('AUTOSTART_ROLLBACK_FAILED')},$true))
-if($blocks.Count -ne 1){throw 'Actual autostart rollback block missing.'}
+    result = run_functions(tmp_path, CANONICAL, ["Record-CanonicalRollbackStep"], r'''
+# sub-420 split runtime recovery into independent stages. Select its exact
+# production branch and execute every stage; preserve the original assertions.
+$blocks=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.IfStatementAst] -and $n.Clauses.Count -eq 1 -and $n.Clauses[0].Item1.Extent.Text -ceq '$mutated' -and $n.Clauses[0].Item2.Extent.Text.Contains("Record-CanonicalRollbackStep 'runtime_quiescence'") -and $n.Clauses[0].Item2.Extent.Text.Contains("Record-CanonicalRollbackStep 'run_restore_attempt'")},$true))
+if($blocks.Count -ne 1){throw 'Actual independent autostart recovery branch missing.'}
 $mutated=$true;$testMode=$true;$codeRollbackFailure='Win32Exception';$autostartRollbackFailure=''
 $currentTreeInventorySha256='a'*64;$before=@{exists=$true;kind='ExpandString';data='exact original legacy command'};$old=@()
 $install=Join-Path $env:CA_CONTRACT_ROOT 'managed/current'
 $stop=Join-Path $env:CA_CONTRACT_ROOT 'stop.json';[IO.File]::WriteAllText($stop,'{}')
-$audit=[ordered]@{rollback=[ordered]@{runtime_restored=$false}};$auditPath=Join-Path $env:CA_CONTRACT_ROOT 'audit.json';$evidenceFull=''
+$audit=[ordered]@{rollback=[ordered]@{runtime_restored=$false;steps=[ordered]@{}}};$auditPath=Join-Path $env:CA_CONTRACT_ROOT 'audit.json';$evidenceFull=''
 $Script:restored=$null;$Script:runAttempts=0
 function Set-InstallationEvidenceStage {}
 function Write-InstallationCaughtFailure {}
 function Write-InstallationEvidenceEvent {}
+function Save-CanonicalRecoveryDiagnostics {}
 function Sync-CanonicalWriterFenceInventory {throw 'inventory not restored'}
 function Product {throw 'current already removed'}
 function Assert-RollbackRelayPreimage {}
@@ -122,6 +125,7 @@ function Relays {return @()}
 Invoke-Expression $blocks[0].Extent.Text
 if($Script:runAttempts -ne 1 -or $Script:restored.data -cne $before.data -or (Test-Path -LiteralPath $stop)){throw 'Code failure skipped exact Run recovery.'}
 if($codeRollbackFailure -cne 'Win32Exception'){throw 'Code failure was hidden.'}
+if($audit.rollback.steps.runtime_quiescence.status -cne 'FAILED' -or $audit.rollback.steps.run_restore.status -cne 'PASS'){throw 'Independent recovery failure/readback was hidden.'}
 'PASS'
 ''', engine=engine)
     assert result.returncode == 0, result.stdout + result.stderr

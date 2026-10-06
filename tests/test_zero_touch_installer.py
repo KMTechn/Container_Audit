@@ -33,6 +33,29 @@ def _powershell() -> str:
     return executable
 
 
+def _assert_helper_public_refusal(completed, private_diagnostic):
+    # Contract 0 publishes fixed metadata, while refusal still preserves bytes.
+    from auto_update import PUBLIC_CODES, SAFE_MESSAGES, public_record
+
+    output = completed.stderr + completed.stdout
+    assert private_diagnostic.casefold() not in output.casefold()
+    records = []
+    for line in output.splitlines():
+        prefix, separator, payload = line.partition('=')
+        assert separator and re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', prefix)
+        try:
+            value = json.loads(payload)
+        except ValueError:
+            value = payload
+        record = value if isinstance(value, dict) else {prefix: value}
+        assert public_record(record, PUBLIC_CODES | {
+            'INSTALLER_HELPER_FAILURE', 'installer_helper', 'REPORT_UNAVAILABLE'},
+            SAFE_MESSAGES) == record
+        records.append(record)
+    assert any(record.get('reason_code') == 'INSTALLER_HELPER_FAILURE' for record in records)
+    assert any(record.get('report_status') == 'REPORT_UNAVAILABLE' for record in records)
+
+
 def _run_installer(source_root: Path, install_root: Path, *extra: str):
     environment = dict(os.environ)
     environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
@@ -1948,7 +1971,7 @@ def test_bootstrap_refuses_verified_replacement_when_existing_tree_is_tampered(t
     )
 
     assert blocked.returncode != 0
-    assert "integrity inventory differs" in (blocked.stderr + blocked.stdout)
+    _assert_helper_public_refusal(blocked, "integrity inventory differs")
     assert (install / "app" / "main.py").read_text(encoding="utf-8") == "# tampered\n"
     assert (install / "portable-manifest.json").read_bytes() == manifest_before
     assert not list(install.parent.glob(".current.rollback.*"))
@@ -2128,11 +2151,7 @@ def test_bootstrap_refuses_implicit_replacement_and_unfenced_inverse(tmp_path):
     conflict = _run_installer(source, install)
 
     assert conflict.returncode != 0
-    # Windows PowerShell may hard-wrap stderr in the middle of words.  The
-    # semantic diagnostic must still be present after removing presentation
-    # whitespace introduced by the host.
-    conflict_text = "".join((conflict.stderr + conflict.stdout).split()).lower()
-    assert "differentordamagedhardenedcodeplacementexists" in conflict_text
+    _assert_helper_public_refusal(conflict, "Different or damaged hardened code placement exists")
     removed = _run_installer(source, install, "-Uninstall")
     assert removed.returncode != 0
     assert "CONTAINER_WRITER_FENCE_PARAMETERS_INVALID" in removed.stderr
@@ -2229,7 +2248,7 @@ def test_portable_onboarding_endpoint_readback_fails_closed_on_foreign_or_missin
         "throw 'Onboarding server endpoint readback failed.'", run_readback_index
     )
     relay_pid_index = text.index(
-        "throw 'Onboarding relay process id type/readback failed.'",
+        "throw 'Onboarding relay release deferral readback failed.'",
         endpoint_readback_index,
     )
     assert onboarding_index < run_readback_index < endpoint_readback_index < relay_pid_index

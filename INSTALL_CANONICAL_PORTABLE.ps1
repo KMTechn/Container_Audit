@@ -1449,8 +1449,10 @@ function Product([string]$Root,[string]$Mode,[string]$AppRoot='') {
     # The capture waits for the host only, never its persistent relay descendant.
     $process = Invoke-InstallationEvidenceChild ('product'+$Mode.TrimStart('-')) (Join-Path $Root 'runtime\pythonw.exe') $args
     if ($process.ExitCode -ne 0) {
-        $line=ConvertTo-KmtechRedactedSinkText -Text $(if($process.Stderr){$process.Stderr}else{$process.Stdout}) -UserLine
-        throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Product mode failed: $Mode/$($process.ExitCode): $line")) -UserLine)
+        # Keep the child's protected-report pointer intact in the private failure
+        # chain. The outer canonical boundary emits its fixed public record.
+        $line=ConvertTo-KmtechRedactedSinkText -Text $(if($process.Stderr){$process.Stderr}else{$process.Stdout})
+        throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("Product mode failed: $Mode/$($process.ExitCode): $line")))
     }
 }
 function Get-CanonicalRetirementChildFailure($Child, [Collections.IDictionary]$Environment=$null) {
@@ -4540,6 +4542,7 @@ catch {
             if (-not $retirementAuditSealed) { Save $auditPath $audit $true }
         }
         catch {
+            Write-InstallationCaughtFailure $_
             $audit['diagnostic_write_failures']=@($audit.diagnostic_write_failures)+@(
                 [ordered]@{phase=$Phase;target='audit';failure_type=$_.Exception.GetType().Name})
             Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('rollback_audit_status=UNAVAILABLE')))
@@ -4547,11 +4550,14 @@ catch {
         if ($evidenceFull) {
             try { Save $evidenceFull $audit $true }
             catch {
+                Write-InstallationCaughtFailure $_
                 $audit['diagnostic_write_failures']=@($audit.diagnostic_write_failures)+@(
                     [ordered]@{phase=$Phase;target='evidence';failure_type=$_.Exception.GetType().Name})
                 Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('rollback_evidence_status=UNAVAILABLE')))
                 try { Save $evidenceFull $audit $true }
-                catch { Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('rollback_evidence_failure_record_status=UNAVAILABLE'))) }
+                catch {
+            Write-InstallationCaughtFailure $_
+ Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('rollback_evidence_failure_record_status=UNAVAILABLE'))) }
             }
         }
     }
@@ -4665,9 +4671,9 @@ catch {
                     -RemovalPath $removalPath -StopPath $stop -StartedAt $supportedRemovalProductStartedAt `
                     -ExpectedAppRoot (Join-Path $install 'app') -ExpectedStopSha256 $uninstallStopSha256
             } catch {
+                Write-InstallationCaughtFailure $_
                 $audit['removal_attempt_stop_cleanup']='FAILED_OWNERSHIP_UNPROVEN'
                 $audit['removal_attempt_stop_cleanup_failure']=Get-CanonicalFailureDetails $_
-                Write-InstallationCaughtFailure $_
             }
         }
         if($canonicalWriterFenceActive){
@@ -4714,7 +4720,9 @@ catch {
                         [void](Assert-BootstrapIntegrityRecord $install)
                         $codeAlreadyExact=((Get-InventoryAggregate @(Get-CodeInventory $install)) -ceq $uninstallAggregate -and
                             (Sha (Join-Path $install 'bootstrap-integrity.json')) -ceq $uninstallRecordSha256)
-                    } catch { $codeAlreadyExact=$false }
+                    } catch {
+            Write-InstallationCaughtFailure $_
+ $codeAlreadyExact=$false }
                 }
                 if ($uninstallCodeStarted -and -not $codeAlreadyExact) {
                     $recoverCodeArguments = @($uninstallArguments | Where-Object { $_ -cne '-Uninstall' })
@@ -4870,6 +4878,7 @@ catch {
             Record-CanonicalRollbackStep 'code_quiescence' 'PASS' ''
         }
         catch {
+            Write-InstallationCaughtFailure $_
             $codeRollbackFailure=$_.Exception.GetType().Name
             $audit.code_replacement.restore_failure_type=$codeRollbackFailure
             Record-CanonicalRollbackStep 'code_quiescence' 'FAILED' $codeRollbackFailure
@@ -4951,6 +4960,7 @@ catch {
             Record-CanonicalRollbackStep 'runtime_quiescence' 'PASS' ''
         }
         catch {
+            Write-InstallationCaughtFailure $_
             $autostartRollbackFailure=$_.Exception.GetType().Name
             Record-CanonicalRollbackStep 'runtime_quiescence' 'FAILED' $autostartRollbackFailure
         }
@@ -4959,6 +4969,7 @@ catch {
             Record-CanonicalRollbackStep 'run_restore_attempt' 'PASS' ''
         }
         catch {
+            Write-InstallationCaughtFailure $_
             $autostartRollbackFailure=$_.Exception.GetType().Name
             Record-CanonicalRollbackStep 'run_restore_attempt' 'FAILED' $autostartRollbackFailure
         }
@@ -4967,6 +4978,7 @@ catch {
             Record-CanonicalRollbackStep 'stop_marker_restore' 'PASS' ''
         }
         catch {
+            Write-InstallationCaughtFailure $_
             $autostartRollbackFailure=$_.Exception.GetType().Name
             Record-CanonicalRollbackStep 'stop_marker_restore' 'FAILED' $autostartRollbackFailure
         }
@@ -4979,6 +4991,7 @@ catch {
             Record-CanonicalRollbackStep 'run_restore' 'PASS' ''
         }
         catch {
+            Write-InstallationCaughtFailure $_
             $autostartRollbackFailure=$_.Exception.GetType().Name
             Record-CanonicalRollbackStep 'run_restore' 'FAILED' $autostartRollbackFailure
         }
@@ -5011,7 +5024,12 @@ catch {
                 -TargetSid $operatorSid -LocalAppDataRoot $lad -DataRoot $activeDataRoot -HelperRoot $source
             # The saved relay's first reader includes credential locator/nested
             # owners. Preserve its readonly admission for every surviving tree.
-            $rollbackTargetBinding=Get-CanonicalOnboardingInputBinding $source $install
+            # A freshly placed current has an authenticated installation record;
+            # the transport stock has none. Its ordinary G reader cannot prove
+            # runtime identity. Use this exact installed reader for fresh rollback.
+            $rollbackReaderRoot=if($currentAbsentBeforePlacement -and -not $RestoreVerifiedReplacement -and
+                -not $codeRestoreNeeded -and $placement -ceq 'PASS_NEW_VERIFIED'){$install}else{$source}
+            $rollbackTargetBinding=Get-CanonicalOnboardingInputBinding $rollbackReaderRoot $install
             if ($RestoreVerifiedReplacement) {
                 Assert-CanonicalRestoreCodeBinding $rollbackTargetBinding (Read-CanonicalReplacementRestore)
             }
@@ -5020,6 +5038,7 @@ catch {
         }
     }
     catch {
+        Write-InstallationCaughtFailure $_
         $autostartRollbackFailure=$_.Exception.GetType().Name
         Record-CanonicalRollbackStep 'generation_readback' 'FAILED' $autostartRollbackFailure
     }
@@ -5041,6 +5060,7 @@ catch {
         Record-CanonicalRollbackStep 'recovery_identity' $(if ($rollbackRecoveryVerified) { 'PASS' } else { 'UNPROVEN' }) ''
     }
     catch {
+        Write-InstallationCaughtFailure $_
         $autostartRollbackFailure=$_.Exception.GetType().Name
         Record-CanonicalRollbackStep 'recovery_identity' 'FAILED' $autostartRollbackFailure
     }
@@ -5072,6 +5092,7 @@ catch {
             Record-CanonicalRollbackStep 'scheduled_writer_restore' 'PASS' ''
         }
         catch {
+            Write-InstallationCaughtFailure $_
             $writerRollbackFailure=$_.Exception.GetType().Name
             $rollbackScheduledWriterVerified=$false
             $rollbackRecoveryVerified=$false
@@ -5091,7 +5112,9 @@ catch {
                         -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(20).ToString('o')) -AuthorityLease $canonicalWriterFenceAuthority)
                     $canonicalWriterFenceActive=$true
                     Record-CanonicalRollbackStep 'writer_failure_refence' 'PASS' ''
-                } catch { Record-CanonicalRollbackStep 'writer_failure_refence' 'FAILED' $_.Exception.GetType().Name }
+                } catch {
+            Write-InstallationCaughtFailure $_
+ Record-CanonicalRollbackStep 'writer_failure_refence' 'FAILED' $_.Exception.GetType().Name }
             }
         }
     }
@@ -5115,6 +5138,7 @@ catch {
                     Record-CanonicalRollbackStep 'fence_release' 'PASS' ''
                 }
                 catch {
+                    Write-InstallationCaughtFailure $_
                     $fenceReleaseFailure=$_.Exception.GetType().Name
                     Record-CanonicalRollbackStep 'fence_release' 'FAILED' $fenceReleaseFailure
                     # Existing abort verifies session authority and the exact
@@ -5128,7 +5152,9 @@ catch {
                         $canonicalWriterFenceActive=$false
                         Record-CanonicalRollbackStep 'fence_abort' 'PASS' ''
                     }
-                    catch { Record-CanonicalRollbackStep 'fence_abort' 'FAILED' $_.Exception.GetType().Name }
+                    catch {
+            Write-InstallationCaughtFailure $_
+ Record-CanonicalRollbackStep 'fence_abort' 'FAILED' $_.Exception.GetType().Name }
                 }
             }
         }
@@ -5161,6 +5187,7 @@ catch {
                         Record-CanonicalRollbackStep $relayStep 'PASS' ''
                     }
                     catch {
+                        Write-InstallationCaughtFailure $_
                         $relayRollbackFailed=$true
                         $autostartRollbackFailure=$_.Exception.GetType().Name
                         Record-CanonicalRollbackStep $relayStep 'FAILED' $autostartRollbackFailure
@@ -5168,6 +5195,7 @@ catch {
                 }
                 try { [void](Assert-RollbackRelayPreimage -ExpectedRelays $old) }
                 catch {
+                    Write-InstallationCaughtFailure $_
                     $relayRollbackFailed=$true
                     $autostartRollbackFailure=$_.Exception.GetType().Name
                 }

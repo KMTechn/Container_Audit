@@ -739,3 +739,5 @@ NOT TESTED이며 coordinator의 랩 예행과 독립 확인에 남긴다.
 - sub-405 P2 컷 뒤 — **설치기 비고급 앞단**: `INSTALL_CANONICAL_PORTABLE.ps1`, `INSTALL_THIS_PC.ps1`, `tools/provision_protected_admin_acl.ps1`의 모르는 인수는 개수만 고정 코드로 거절한다. `tools/apply_prepared_update.ps1`, `tools/container_writer_session.ps1`의 잘못된 Mode도 본문 전 binder가 외부 값을 stderr로 되찍으므로 함께 처리한다. 현재는 공식 wrapper로만 실행한다(코디 10-06 09:0x 판정).
 
 - sub-413 P2 컷 뒤 — fence/evidence 초기화 전 `CODE_PRESTATE_WRITER_SEMANTICS_DIFFER` 거절의 공개 capsule은 계약 0f `REPORT_UNAVAILABLE`·정확 throw 위치/type·exit=1을 유지하지만 개별 고정 실패 코드를 내지 않는다. 코디 10-06 16:0x 승인에 따라 원문 보호 보고서 보완 없이 현장/IT용 코드 노출만 후속 처리한다.
+
+- P2 / sub-431: unfenced inverse의 `INSTALL_THIS_PC.ps1:608`은 main catch 전 `CONTAINER_WRITER_FENCE_PARAMETERS_INVALID` 고정 코드와 PS 스크립트 위치/고정 소스만 되찍힌다(외부 입력 원문0, 기준877도 동일). 1차 msg_78ffa7a6332c에서 기존 PS 인수 처리 P2(msg_cd7f16dd1e09)와 같은 부류로 판정; 공개 경계 확장은 컷 뒤, 이번 rollback 고침에서는 유지.
