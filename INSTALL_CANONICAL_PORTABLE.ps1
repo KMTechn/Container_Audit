@@ -32,6 +32,8 @@ $Script:CanonicalWriterFenceDelegationToken = ''
 $retirementAuditSealed = $false
 $audit = $null
 $enteredPlacementTry = $false
+$Script:CanonicalPreparationAdmissionFailed = $false
+$Script:CanonicalInstallerSourceInventorySha256 = ''
 $testMode = $AllowNoncanonicalLayoutForTest -and
     [string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -ceq '1'
 if ($SkipSignatureValidationForTest -and -not $testMode) {
@@ -103,13 +105,22 @@ function Get-CanonicalInstallSuccessStatus([bool]$IsTestMode) {
     if ($IsTestMode) { return 'TEST_ONLY_PARTIAL' }
     return 'PASS'
 }
-function Write-CanonicalPreparationAdmissionFailure([string]$AuditPathValue, [string]$EvidencePathValue) {
+function Write-CanonicalPreparationAdmissionFailure([string]$AuditPathValue, [string]$EvidencePathValue,
+    [string]$SourceRootValue = '', [string]$SourceInventorySha256 = '', $Failure = $null) {
+    $typedFailure = [ordered]@{code='FAILED_PREPARATION_ADMISSION';exception_types=@();script_line=0}
+    if ($null -ne $Failure) {
+        $detail = Get-CanonicalFailureDetails $Failure 'PREPARATION'
+        $typedFailure.exception_types = @($detail.exception_types)
+        $typedFailure.script_line = [int]$detail.script_line
+    }
     $record = [ordered]@{
         schema='container-audit-canonical-portable-install-v2';operation='INSTALL'
-        run_id=[Guid]::NewGuid().ToString('N');captured_at=[DateTime]::UtcNow.ToString('o')
-        status='FAILED_PREPARATION_ADMISSION';code_placement='NOT_STARTED'
-        preparation_failure=[ordered]@{code='FAILED_PREPARATION_ADMISSION'}
-        rollback=[ordered]@{applied=$false}
+        run_id=([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')+'-'+[Guid]::NewGuid().ToString('N'));captured_at=[DateTime]::UtcNow.ToString('o')
+        status='FAILED';preparation_status='FAILED_PREPARATION_ADMISSION';code_placement='NOT_STARTED'
+        source_root=$(if($SourceRootValue){$SourceRootValue}else{$null})
+        source_inventory_sha256=$(if($SourceInventorySha256 -cmatch '^[0-9a-f]{64}$'){$SourceInventorySha256}else{$null})
+        preparation_failure=$typedFailure
+        rollback=[ordered]@{status='NOT_REQUIRED';available=$false;applied=$false;runtime_restored=$false}
     }
     try {
         if (-not $AuditPathValue) {
@@ -132,7 +143,19 @@ function Write-CanonicalPreparationAdmissionFailure([string]$AuditPathValue, [st
         }
         'audit_path='+$AuditPathValue
     } catch { 'preparation_audit_status=UNAVAILABLE' }
-    'install_status=FAILED_PREPARATION_ADMISSION'
+    'install_status=FAILED'
+}
+function Invoke-ContainerSourceDataAdmission([string]$Source, [string]$InventorySha256,
+    [string]$AuditPathValue, [string]$ExternalEvidencePath) {
+    try {
+        $Script:canonicalOnboardingInputBinding = Get-CanonicalOnboardingInputBinding $Source `
+            -InstallerSourceInventorySha256 $InventorySha256
+    } catch {
+        $admissionFailure = $_
+        $Script:CanonicalPreparationAdmissionFailed = $true
+        Write-CanonicalPreparationAdmissionFailure $AuditPathValue $ExternalEvidencePath $Source $InventorySha256 $admissionFailure
+        throw $admissionFailure
+    }
 }
 function Sha([string]$Path) {
     return Get-KmtechFileSha $Path
@@ -3190,6 +3213,9 @@ if (-not (Test-Path -LiteralPath $writerFenceHelperPath -PathType Leaf)) {
 $sourceManifestSha256 = Sha (Join-Path $source 'portable-manifest.json')
 $sourceHelperSha256 = Sha (Join-Path $source 'INSTALL_THIS_PC.ps1')
 $sourceIntegrityHelperSha256 = Sha (Join-Path $source 'tools\bootstrap_integrity.ps1')
+if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
+    $Script:CanonicalInstallerSourceInventorySha256 = Get-InventoryAggregate @(Get-CodeInventory $source)
+}
 $wanted = Command $install
 $lad = Full $env:LOCALAPPDATA 'LOCALAPPDATA'
 $operatorSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -3585,7 +3611,7 @@ $canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority `
     -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
     -WriterContractSha256 $canonicalWriterFenceContractSha256
 if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
-    $canonicalOnboardingInputBinding = Get-CanonicalOnboardingInputBinding $source -InstallerSourceInventorySha256 (Get-InventoryAggregate @(Get-CodeInventory $source))
+    Invoke-ContainerSourceDataAdmission $source $Script:CanonicalInstallerSourceInventorySha256 $auditPath $evidenceFull
 }
 elseif ($RestoreVerifiedReplacement) {
     $restoreTargetRoot = if ([string]$publicRestore.state -ceq 'RESTORED') { $install } else { [string]$publicRestore.receipt.rollback_root }
@@ -5212,8 +5238,11 @@ finally {
 } catch {
     $outputFailure=$_
     if (-not $enteredPlacementTry -and -not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
-        Write-CanonicalPreparationAdmissionFailure ([string](Get-Variable auditPath -ValueOnly -ErrorAction SilentlyContinue)) `
-            ([string](Get-Variable evidenceFull -ValueOnly -ErrorAction SilentlyContinue))
+        if (-not $Script:CanonicalPreparationAdmissionFailed) {
+            Write-CanonicalPreparationAdmissionFailure ([string](Get-Variable auditPath -ValueOnly -ErrorAction SilentlyContinue)) `
+                ([string](Get-Variable evidenceFull -ValueOnly -ErrorAction SilentlyContinue)) `
+                ([string](Get-Variable source -ValueOnly -ErrorAction SilentlyContinue)) $Script:CanonicalInstallerSourceInventorySha256 $outputFailure
+        }
         $publicMessage='FAILED_PREPARATION_ADMISSION'
     } else {
         $publicMessage=ConvertTo-KmtechRedactedSinkText -Text $outputFailure.Exception.Message -UserLine
