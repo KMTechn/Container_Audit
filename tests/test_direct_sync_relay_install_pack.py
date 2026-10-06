@@ -2,6 +2,7 @@ import argparse
 import copy
 import json
 import base64
+import hashlib
 import os
 import subprocess
 import sys
@@ -9,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import auto_update
 import direct_sync_push
 import isolated_qualification
 import writer_session_fence as writer_fence
@@ -25,6 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_PACK_SCRIPT = REPO_ROOT / "tools" / "direct_sync_relay_install_pack.py"
 
 _PRE_SINK_PLANS = {}
+_PRE_SUPPORT_RECORDS = []
 _FIELD_MARKER = "[REDACTED:field]"
 
 
@@ -32,7 +35,9 @@ _FIELD_MARKER = "[REDACTED:field]"
 def _observe_plan_before_diagnostic_sink(monkeypatch):
     """Keep preflight assertions on the original object and exercise the real sink."""
     _PRE_SINK_PLANS.clear()
+    _PRE_SUPPORT_RECORDS.clear()
     original_write = install_pack._write_json
+    original_emit = auto_update.emit_support_record
     original_run = subprocess.run
 
     def observe_write(path, payload):
@@ -45,10 +50,16 @@ def _observe_plan_before_diagnostic_sink(monkeypatch):
             command = [command[0], str(REPO_ROOT / "tests" / "install_pack_cli_fixture.py"), *command[2:]]
         return original_run(command, *args, **kwargs)
 
+    def observe_emit(fields=None, **kwargs):
+        _PRE_SUPPORT_RECORDS.append(copy.deepcopy(fields))
+        return original_emit(fields, **kwargs)
+
     monkeypatch.setattr(install_pack, "_write_json", observe_write)
+    monkeypatch.setattr(auto_update, "emit_support_record", observe_emit)
     monkeypatch.setattr(subprocess, "run", observe_cli)
     yield
     _PRE_SINK_PLANS.clear()
+    _PRE_SUPPORT_RECORDS.clear()
 
 
 def _plan_before_sink(path):
@@ -458,7 +469,17 @@ def test_install_pack_blocks_syncthing_report_path_without_writing_there(tmp_pat
     )
 
     captured = capsys.readouterr()
-    report = json.loads(captured.out)
+    assert len(_PRE_SUPPORT_RECORDS) == 1
+    report = _PRE_SUPPORT_RECORDS[0]
+    assert captured.out.startswith('CONTAINER_AUDIT_SUPPORT=')
+    public = json.loads(captured.out.strip().removeprefix('CONTAINER_AUDIT_SUPPORT='))
+    assert public['status'] == 'BLOCKED'
+    assert public['stage'] == 'relay_install'
+    assert public['reason_code'] == 'SUPPORT_RESULT'
+    assert public['report_status'] == 'REPORT_UNAVAILABLE'
+    assert 'blocked_reason' not in public and 'explicit_path_boundary' not in public
+    assert captured.err == ''
+    assert _PRE_SINK_PLANS == {}
     assert exit_code == 2
     assert report["status"] == "BLOCKED"
     assert report["explicit_path_boundary"]["status"] == "FAIL"
@@ -606,6 +627,10 @@ def test_system_task_launcher_pins_environment_without_comspec_and_records_sanit
     environment = os.environ.copy()
     environment.pop("ComSpec", None)
     environment.pop("COMSPEC", None)
+    # Register only the just-rendered owned wrapper for the task's external
+    # launch guard. Its path, bytes and cmd flags remain verified there.
+    environment['KMTECH_SUB413_OWNED_CMD_PATH'] = str(wrapper_path.resolve())
+    environment['KMTECH_SUB413_OWNED_CMD_SHA256'] = hashlib.sha256(wrapper_path.read_bytes()).hexdigest()
 
     completed = subprocess.run(
         install_pack._scheduled_task_action_parts(wrapper_path),
