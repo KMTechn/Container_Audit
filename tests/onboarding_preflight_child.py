@@ -124,7 +124,7 @@ raise SystemExit(onboarding_main(sys.argv[2:]))
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile({quote(repo/'INSTALL_CANONICAL_PORTABLE.ps1')},[ref]$tokens,[ref]$errors)
 if($errors.Count){{throw 'parse errors'}}
-foreach($name in @('Write-CanonicalInstallationPublicRecord','Arg','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic','Assert-CanonicalRestoreCodeBinding','Exit-RetirementResumeClaim')){{
+foreach($name in @('Write-CanonicalInstallationPublicRecord','Full','Arg','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalOnboardingInputBinding','Write-CanonicalPreparationAdmissionFailure','Invoke-ContainerSourceDataAdmission','Get-CanonicalFailureDetails','Assert-CanonicalRestoreCodeBinding','Exit-RetirementResumeClaim')){{
  $found=$ast.FindAll({{param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name}},$true)
  if($found.Count -ne 1){{throw 'preflight function unavailable'}}
  Invoke-Expression $found[0].Extent.Text
@@ -136,6 +136,7 @@ function Join-Path {{param($Path,$ChildPath)
 }}
 . {quote(repo/'tools/bootstrap_integrity.ps1')}
 . {quote(repo/'tools/container_writer_fence.ps1')}
+. (Get-BootstrapSharedPortableLeaf {quote(repo)})
 function Read-ContainerWriterFence {{param([switch]$AllowAbsent) return $null}}
 function Abort-ContainerWriterFence {{throw 'unexpected fence mutation'}}
 function Remove-Item {{throw 'unexpected cleanup'}}
@@ -160,7 +161,11 @@ $legacyRelayPreimage=$null;$legacyRelayRestoreNeeded=$false;$legacyRelayRestoreA
 $continuationOldClaim=$null;$original=$null
 $rollbackContinuation=$null;$abandonedPending=$null
 $canonicalWriterFenceAuthority=$null;$canonicalWriterFenceEnvironmentNames=@()
+$rollbackContinuation=$null;$continuationOldClaim=$null;$abandonedPending=$null;$original=$null
+$legacyRelayRestoreNeeded=$false;$legacyRelayRestoreAttempted=$false;$legacyRelayPreimage=$null
 $canonicalWriterFencePreparedPath={quote(root/'no-receipt.json')}
+$Script:CanonicalPreparationAdmissionFailed=$false;$Script:CanonicalInstallerSourceInventorySha256=''
+$auditPath={quote(root.parent/'preflight-admission-audit.json')};$evidenceFull={quote(root.parent/'preflight-admission-evidence.json')}
 $source={quote(packet)};$install={quote(root/'existing-code')};$old=@()
 $Uninstall=$false;$CompleteRetiredRemoval=$false;$RestoreVerifiedReplacement={'$true' if target_root is not None else '$false'}
 $publicRestore=@{{state='PENDING';receipt=@{{rollback_root={quote(target_root or root/'unused')};old=@{{source_commit='1'*40;aggregate_sha256={quote(('0'*64 if case=='restore-code-binding-wrong' else aggregate) if target_root is not None else '')};manifest_sha256={quote(hashlib.sha256(json.dumps(manifest).encode()).hexdigest() if target_root is not None else '')}}}}}}}

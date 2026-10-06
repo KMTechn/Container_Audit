@@ -829,6 +829,16 @@ def test_installers_reject_changed_writer_bytes_before_placement(tmp_path, relat
             "-InstallRoot", str(install), "-PlanOnly", "-AllowNoncanonicalLayoutForTest", "-SkipSignatureValidationForTest",
         ], env=dict(os.environ, KMTECH_FACTORY_INSTALL_TEST_MODE="1"), capture_output=True, text=True, timeout=30)
     assert result.returncode != 0
-    expected = "Portable release manifest hash readback failed" if caller == "bootstrap" else "Portable manifest readback failed"
+    # User 15:5x: canonical admission failures expose a fixed preparation code.
+    expected = "Portable release manifest hash readback failed" if caller == "bootstrap" else "FAILED_PREPARATION_ADMISSION"
     assert expected in result.stdout + result.stderr
+    if caller == "canonical":
+        assert result.stdout.count("install_status=FAILED") == 1
+        audit_path = next(line.removeprefix("audit_path=") for line in result.stdout.splitlines() if line.startswith("audit_path="))
+        audit = json.loads(Path(audit_path).read_bytes())
+        assert audit["status"] == "FAILED"
+        assert audit["preparation_status"] == "FAILED_PREPARATION_ADMISSION"
+        assert audit["code_placement"] == "NOT_STARTED"
+        assert audit["preparation_failure"]["exception_types"]
+        assert audit["rollback"]["applied"] is False
     assert not install.exists()
