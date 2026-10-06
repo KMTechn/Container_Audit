@@ -154,9 +154,11 @@ $receipts=@($mainTry.Body.Statements|Where-Object {{$_ -is [Management.Automatio
 if($receipts.Count -ne 1){{throw 'TEST_PREPARED_RECEIPT_STATEMENT_NOT_UNIQUE'}}
 $receipt=$receipts[0]
 $prefix=(@($mainTry.Body.Statements|Where-Object {{$_.Extent.StartOffset -lt $receipt.Extent.StartOffset}})|ForEach-Object {{$_.Extent.Text}})-join "`n"
+# Match the no-recovery state initialized before the product's placement try.
 $enteredPlacementTry=$false;$canonicalWriterFenceActive=$false;$audit=$null;$retirementResume=$null;$retirementResumeClaim=$null
 $legacyRelayPreimage=$null;$legacyRelayRestoreNeeded=$false;$legacyRelayRestoreAttempted=$false
 $continuationOldClaim=$null;$original=$null
+$rollbackContinuation=$null;$abandonedPending=$null
 $canonicalWriterFenceAuthority=$null;$canonicalWriterFenceEnvironmentNames=@()
 $canonicalWriterFencePreparedPath={quote(root/'no-receipt.json')}
 $source={quote(packet)};$install={quote(root/'existing-code')};$old=@()
@@ -171,15 +173,15 @@ try{{
  try{{Invoke-Expression $prefix;'preflight_status=PASS'}}
  catch{{
   $original=$_
-  $nativeErrors=@($Error|ForEach-Object {{@{{type=$_.Exception.GetType().Name;message=(ConvertTo-CanonicalSafeDiagnostic ([string]$_.Exception.Message))}}}})
+  $nativeErrors=@(@($Error)|ForEach-Object {{@{{type=$_.Exception.GetType().Name;message=(ConvertTo-CanonicalSafeDiagnostic ([string]$_.Exception.Message))}}}})
   [System.IO.File]::WriteAllText({quote(root.parent/'powershell.native-errors.json')},(ConvertTo-Json -InputObject $nativeErrors))
-  $failure=@{{type=$_.Exception.GetType().Name;message=(ConvertTo-CanonicalSafeDiagnostic ([string]$_.Exception.Message))}}
+  $failure=@{{type=$original.Exception.GetType().Name;message=(ConvertTo-CanonicalSafeDiagnostic ([string]$original.Exception.Message));script_stack=[string]$original.ScriptStackTrace}}
   [System.IO.File]::WriteAllText({quote(root.parent/'powershell.preflight.exception.json')},($failure|ConvertTo-Json))
   Invoke-Expression $earlyCatch}}
  finally{{Invoke-Expression (($mainTry.Finally.Statements|ForEach-Object {{$_.Extent.Text}})-join "`n")}}
 }}
 catch{{
- $failure=@{{type=$_.Exception.GetType().Name;message=(ConvertTo-CanonicalSafeDiagnostic ([string]$_.Exception.Message))}}
+ $failure=@{{type=$_.Exception.GetType().Name;message=(ConvertTo-CanonicalSafeDiagnostic ([string]$_.Exception.Message));script_stack=[string]$_.ScriptStackTrace}}
  [System.IO.File]::WriteAllText({quote(root.parent/'powershell.exception.json')},($failure|ConvertTo-Json))
  'preflight_status=REFUSED'
 }}
