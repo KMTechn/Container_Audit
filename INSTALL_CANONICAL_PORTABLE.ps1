@@ -5067,7 +5067,7 @@ catch {
     if ($writerRestoreNeeded) {
         try {
             $writerEnabled=Enable-CanonicalWriter $install $writerBefore
-            Assert-CanonicalWriterRestoreReadback $writerBefore $writerEnabled
+            Assert-CanonicalWriterRestoreReadback $writerBefore $writerEnabled.readback
             $audit.scheduled_writer.restore_readback=$writerEnabled
             $audit.status='ROLLBACK_WRITER_ENABLED_AWAITING_NATURAL_TRIGGER'
             Record-CanonicalRollbackStep 'scheduled_writer_enable' 'PASS' ''

@@ -54,7 +54,7 @@ current G·onboarding reader는 `NOT_APPLICABLE_NO_CURRENT`로 기록한다. 없
 이 경우 정확한 Run/task 복원과 fence 해제 뒤 `FAILED_ROLLED_BACK` 실패 감사를 남기므로
 바깥 옛 설치 복구가 원 폴더를 되돌릴 수 있다. 배치된 새 코드는 기존 G 검사를 유지한다.
 원래 있던 current의 소실·복원 미확인은 이 예외로 통과시키지 않는다.
-code·G·HKCU Run·예약 작업의 정확 복원 readback이 모두 검증된 경우에만 fence를 해제하고 옛 relay를 재시작한다. Run/task 복원 실패는 recovery identity를 무효화하며 fence와 지원 복구 기록을 유지한다.
+code·G·HKCU Run·예약 작업의 정확 복원 readback이 모두 검증된 경우에만 fence를 해제하고 옛 relay를 재시작한다. Run/task 복원 실패는 recovery identity를 무효화하며 fence와 지원 복구 기록을 유지한다. 예약 작업 복원은 `Enable-CanonicalWriter`의 증명 객체를 보존하고 그 안의 `readback`을 원 preimage와 대조한다. 작업이 없던 경우에는 복원 단계를 실행하지 않는다.
 G·quiescence를 다시 확인하고 기존 exact 복원 evidence로 code를 증명한다. 정확 code와
 relay preimage가 증명되면 finally fence 해제·relay 재시작을 시도하고 각 실패를 보존한다.
 불일치면 fence를 유지하며 자료·확인 기록 보존과 관리자 지원 복구를 안내한다.
