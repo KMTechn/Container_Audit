@@ -837,7 +837,7 @@ def test_installers_reject_changed_writer_bytes_before_placement(tmp_path, relat
         assert summary[0]['status'] == 'FAILED'
         assert summary[0]['stage'] == 'installer_helper'
         assert summary[0]['reason_code'] == 'INSTALLER_HELPER_FAILURE'
-        assert summary[0]['exit_code'] == result.returncode == 1
+        assert summary[0]['exit_code'] == result.returncode == 73
         assert summary[0]['exception_type'] == 'System.Management.Automation.RuntimeException'
         assert summary[0]['report_status'] == 'REPORT_UNAVAILABLE'
         assert result.stderr == ''
