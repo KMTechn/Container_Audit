@@ -236,8 +236,17 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
 
     # Match each UTF16 unit literally or as mixed/nested JSON unicode escapes.
     $knownPattern={param([string]$Value)
+        # A unit's JSON spellings depend only on UTF16 and this engine. Keep a
+        # bounded cache of unit fragments; never cache complete known values.
+        $unitPatterns=Get-Variable -Name InstallationKnownJsonUnitPatterns -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if($null -eq $unitPatterns){
+            $unitPatterns=[Collections.Generic.Dictionary[int,string]]::new()
+            Set-Variable -Name InstallationKnownJsonUnitPatterns -Scope Script -Value $unitPatterns
+        }
         $parts=[Collections.Generic.List[string]]::new()
         foreach($character in $Value.ToCharArray()){
+            $unit=[int]$character
+            if($unitPatterns.ContainsKey($unit)){$parts.Add($unitPatterns[$unit]);continue}
             $forms=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
             [void]$forms.Add([string]$character)
             [void]$forms.Add('\u'+([int]$character).ToString('x4'))
@@ -260,7 +269,9 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
                 }
                 [void]$chunks.Append([regex]::Escape($form.Substring($start)));$chunks.ToString()
             })
-            $parts.Add('(?:'+(($choices|Sort-Object Length -Descending) -join '|')+')')
+            $part='(?:'+(($choices|Sort-Object Length -Descending) -join '|')+')'
+            $parts.Add($part)
+            if($unitPatterns.Count -lt 256){$unitPatterns[$unit]=$part}
         }
         return $parts -join ''
     }
