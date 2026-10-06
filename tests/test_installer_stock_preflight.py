@@ -144,3 +144,24 @@ if((Get-Content -LiteralPath $auditPath -Raw) -match 'PRIVATE_DETAIL_MUST_NOT_AP
     assert result.returncode == 0
     assert result.stdout.count('install_status=FAILED_PREPARATION_ADMISSION') == 1
     assert 'PRIVATE_DETAIL_MUST_NOT_APPEAR' not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('engine', ('powershell.exe','pwsh.exe'))
+def test_uncaught_preparation_failure_uses_fixed_public_message(tmp_path, engine):
+    from tests.powershell_contracts import run_functions
+    source = Path(__file__).resolve().parents[1]/'INSTALL_CANONICAL_PORTABLE.ps1'
+    result = run_functions(tmp_path, source, ['Full','Write-CanonicalPreparationAdmissionFailure'], r'''
+$auditPath=Join-Path $env:CA_CONTRACT_ROOT 'failure.json';$evidenceFull=$null
+$enteredPlacementTry=$false;$Uninstall=$false;$RestoreVerifiedReplacement=$false;$CompleteRetiredRemoval=$false
+$ast=[Management.Automation.Language.Parser]::ParseFile($env:CA_CONTRACT_SOURCE,[ref]$null,[ref]$null)
+$boundary=@($ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.TryStatementAst]})[-1]
+try{throw [InvalidOperationException]::new('PRIVATE_ADMISSION_DETAIL_MUST_STAY_PRIVATE')}
+catch{Invoke-Expression ('& '+$boundary.CatchClauses[0].Body.Extent.Text)}
+''', engine=engine)
+    assert result.returncode != 0
+    assert result.stdout.count('install_status=FAILED_PREPARATION_ADMISSION') == 1
+    assert 'FAILED_PREPARATION_ADMISSION' in result.stderr
+    assert 'InvalidOperation' in result.stderr
+    assert 'PRIVATE_ADMISSION_DETAIL_MUST_STAY_PRIVATE' not in result.stdout + result.stderr
+    audit = json.loads((tmp_path/'failure.json').read_bytes())
+    assert audit['status'] == audit['preparation_failure']['code'] == 'FAILED_PREPARATION_ADMISSION'

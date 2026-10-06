@@ -5214,6 +5214,9 @@ finally {
     if (-not $enteredPlacementTry -and -not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
         Write-CanonicalPreparationAdmissionFailure ([string](Get-Variable auditPath -ValueOnly -ErrorAction SilentlyContinue)) `
             ([string](Get-Variable evidenceFull -ValueOnly -ErrorAction SilentlyContinue))
+        $publicMessage='FAILED_PREPARATION_ADMISSION'
+    } else {
+        $publicMessage=ConvertTo-KmtechRedactedSinkText -Text $outputFailure.Exception.Message -UserLine
     }
     if(Get-Command Write-InstallationCaughtFailure -ErrorAction SilentlyContinue){Write-InstallationCaughtFailure $outputFailure}
     Write-CanonicalInstallationPublicRecord -Failure $outputFailure -ExitCode 1
