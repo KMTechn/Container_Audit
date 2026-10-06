@@ -26,6 +26,18 @@ def cases():
             yield value, json.dumps({'message': inner}, ensure_ascii=False)
 
 
+    # Standard optional solidus escapes, including mixed Unicode and two
+    # nested JSON strings, are observed through the independent decoder.
+    value = 'Synthetic441/a/b한글ABC'
+    for mixed in (False, True):
+        text = json.dumps({'opaque': value}, ensure_ascii=False).replace('/', '\\/')
+        if mixed:
+            text = text.replace('a', '\\u0061').replace('b', '\\u0062')
+        for depth in range(3):
+            yield value, text
+            text = json.dumps({'opaque': text}, ensure_ascii=False)
+
+
 def check_bytes(raw, value):
     def visit(node):
         if isinstance(node, dict):
@@ -194,3 +206,37 @@ if(-not $Script:InstallationEvidenceFailureCodes.Contains('REPORT_UNAVAILABLE'))
             assert isinstance(json.loads(line), dict)
             for value in [value for value, _ in values] + ['OversizedOpaque429Abcd']:
                 check_bytes(line, value)
+
+
+def test_python_consumer_cap_refuses_known_value():
+    if IS_IW:
+        from core.auto_update import _failure_text
+    else:
+        from auto_update import _failure_text
+    with patch.dict(os.environ, {'FIRST_SECRET': 'TRUNCATED'}, clear=True):
+        with pytest.raises(ValueError, match='^REPORT_UNAVAILABLE$'):
+            _failure_text('z' * 60000, limit=4096)
+
+
+@pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
+def test_powershell_consumer_final_text_refuses_known_value(tmp_path, engine):
+    result = run_functions(tmp_path, ROOT / 'tools/bootstrap_integrity.ps1', ['Protect-InstallationText'], r'''
+$tree=[Management.Automation.Language.Parser]::ParseFile($env:ESC_SOURCE,[ref]$null,[ref]$null)
+foreach($node in $tree.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){
+ $parent=$node.Parent;$nested=$false
+ while($null -ne $parent){if($parent -is [Management.Automation.Language.FunctionDefinitionAst]){$nested=$true;break};$parent=$parent.Parent}
+ if(-not $nested){Invoke-Expression ($node.Extent.Text -replace '^function\s+','function global:')}
+}
+foreach($kind in 'cap','marker','private_marker'){
+ $Script:InstallationEvidenceSensitiveValues=if($kind -eq 'private_marker'){@('field','OtherOpaque441')}elseif($kind -eq 'marker'){@('OtherOpaque441')}else{@()}
+ $environment=if($kind -eq 'cap'){@{FIRST_SECRET='TRUNCATED'}}elseif($kind -eq 'marker'){@{FIRST_SECRET='field'}}else{@{}}
+ $text=if($kind -eq 'cap'){'z'*70000}else{'OtherOpaque441'}
+ $refused=$false
+ try{$safe=Protect-InstallationText -Text $text -Environment $environment}
+ catch{if($_.Exception.Message -ne 'REPORT_UNAVAILABLE'){throw 'PROBE_FINAL_CONSUMER_CODE_DIFFERS'};$refused=$true}
+ $known=if($kind -eq 'cap'){'TRUNCATED'}else{'field'}
+ if(-not $refused -and $safe.Contains($known)){throw 'PROBE_FINAL_CONSUMER_KNOWN_SURVIVED'}
+}
+''', engine=engine, values={'ESC_SOURCE': str(ROOT / 'tools/bootstrap_integrity.ps1')})
+    (tmp_path / 'consumer-stderr.log').write_text(result.stderr or '', encoding='utf-8')
+    assert result.returncode == 0, 'PowerShell consumer final check did not refuse'

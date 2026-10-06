@@ -249,6 +249,7 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
             if($unitPatterns.ContainsKey($unit)){$parts.Add($unitPatterns[$unit]);continue}
             $forms=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
             [void]$forms.Add([string]$character)
+            if($character -eq '/') {[void]$forms.Add('\/')}
             [void]$forms.Add('\u'+([int]$character).ToString('x4'))
             $encoded=ConvertTo-Json -InputObject ([string]$character) -Compress
             [void]$forms.Add($encoded.Substring(1,$encoded.Length-2))

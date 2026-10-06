@@ -61,7 +61,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '275caf90b60256ab0f9d32e6e13f0028e124acf91194ff189e0c4fa2ac744802'
+$ExpectedBootstrapIntegritySha256 = '5ea80239a43bfd736946e7009450bd535c7a645f01f7a279f9466f0e1a1e1c2d'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }

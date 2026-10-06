@@ -513,6 +513,8 @@ def _known_value_pattern(value: str) -> str:
         units = character.encode("utf-16-be", errors="surrogatepass").hex()
         forms = {character, json.dumps(character, ensure_ascii=False)[1:-1],
                  "".join("\\u" + units[i:i + 4] for i in range(0, len(units), 4))}
+        if character == "/":
+            forms.add("\\/")
         for _ in range(3):
             forms.update(json.dumps(form, ensure_ascii=False)[1:-1] for form in tuple(forms))
         choices = []
@@ -547,7 +549,7 @@ def _redact_known_values(text: str, selected, policy) -> str:
     return text
 
 
-def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit: int = 65536, _no_truncate: bool = False, _known_only: bool = False) -> str:
+def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit: int = 65536, _no_truncate: bool = False, _known_only: bool = False, _check_only: bool = False) -> str:
     policy = _sink_policy()
     text = text.decode("utf-8", errors="replace") if isinstance(text, bytes) else str(text or "")
     selected, notes = [], []
@@ -566,6 +568,8 @@ def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit
                 notes.append(policy["short_marker"].format(name=name))
             else:
                 selected.append((name, value))
+    if _check_only:
+        return _assert_final_known_values(text, selected)
     for name, value in sorted(selected, key=lambda item: (-len(item[1]), item[0])):
         variants = {value, json.dumps(value, ensure_ascii=True)[1:-1], json.dumps(value, ensure_ascii=False)[1:-1], value.replace("'", "''"), value.replace('"', '""')}
         for variant in sorted(variants, key=len, reverse=True):
@@ -1084,7 +1088,8 @@ def failure_user_line(error: object) -> str:
 
 
 def _failure_text(value, *, limit: int = 16384) -> str:
-    text = redact_for_sink(value, _no_truncate=True)
+    environment = dict(os.environ)
+    text = redact_for_sink(value, environment, _no_truncate=True)
     # Decode quoted field names/values instead of stopping at escaped quotes
     # or a comma inside a credential object. No credential store lookup.
     sensitive = r"authorization|credential|password|secret|token|signature|apikey|accesskey|privatekey"
@@ -1115,7 +1120,8 @@ def _failure_text(value, *, limit: int = 16384) -> str:
     text = re.sub(r'''(?ix)(?<![\w"])(\b[A-Za-z0-9_-]*(?:authorization|credential|password|secret|token|signature|api[_-]?key|access[_-]?key|private[_-]?key)[A-Za-z0-9_-]*'?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|[^\r\n;&}]+)''',
                   lambda match: match.group(0) if "[REDACTED:" in match.group(0) else match.group(1) + "[REDACTED:field]", text)
     text = re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+=*", "Bearer [REDACTED:field]", text)
-    return redact_for_sink(text, {}, limit=limit)
+    final = redact_for_sink(text, {}, limit=limit)
+    return redact_for_sink(final, environment, _check_only=True)
 
 
 def _failure_details(error: BaseException) -> list[dict]:
