@@ -354,7 +354,7 @@ def _ps(path, env, *args):
     return result
 
 
-def _setup(tmp_path, fault=''):
+def _setup(tmp_path, fault='', *, stock_version_identity=False):
     env = native_python_environment()
     for name in ('LOCALAPPDATA', 'APPDATA', 'PROGRAMDATA', 'TEMP', 'TMP'):
         target = tmp_path / name
@@ -378,6 +378,14 @@ def _setup(tmp_path, fault=''):
         "runpy.run_path(os.environ['CA_UNINSTALL_HOST'], run_name='__main__')\n", encoding='utf-8')
     env['CA_UNINSTALL_PREFLIGHT'] = str(preflight)
     source = _portable_release_fixture(tmp_path, directory='packet')
+    if stock_version_identity:
+        # 416 source admission reads the stock manifest/version before install.
+        # Supply real version bytes to this partial packet while retaining both
+        # admission guards and every lifecycle assertion.
+        from auto_update import source_version_literal
+
+        version_file = ROOT / 'Container_Audit.py'
+        shutil.copyfile(version_file, source / 'app/Container_Audit.py')
     canonical = source / 'INSTALL_CANONICAL_PORTABLE.ps1'
     text = canonical.read_text(encoding='utf-8-sig').replace('$wanted = Command $install', OS_BOUNDARIES + '\n$wanted = Command $install')
     audit_assignment = '$auditPath = Join-Path $auditRoot "canonical-portable-$runId.json"'
@@ -452,6 +460,8 @@ def _setup(tmp_path, fault=''):
     fence.write_text(text, encoding='utf-8-sig')
     manifest_path = source / 'portable-manifest.json'
     manifest = json.loads(manifest_path.read_text())
+    if stock_version_identity:
+        manifest['version'] = source_version_literal(version_file.read_bytes())
     for field, name in [('installer', canonical), ('helper', helper), ('writer_fence_helper', fence)]:
         manifest[field + '_sha256'] = _sha(name)
     files = [p for p in source.rglob('*') if p.is_file() and p != manifest_path]
@@ -630,7 +640,7 @@ def test_live_relay_census_rejects_pid_reuse_as_process_identity(tmp_path):
 
 @pytest.mark.parametrize('operation', ['uninstall_then_reinstall', 'reinstall_live'])
 def test_quoted_live_relay_uninstall_and_reinstall(tmp_path, operation):
-    env, source, install, protected = _setup(tmp_path)
+    env, source, install, protected = _setup(tmp_path, stock_version_identity=True)
     ready = subprocess.run([env['CA_UNINSTALL_PYTHON'], '-I', '-B', env['CA_UNINSTALL_HOST'],
                             'prepare-ready', str(install/'app')], env=env, capture_output=True, timeout=30)
     assert ready.returncode == 0, 'owned current-user state preparation failed'
