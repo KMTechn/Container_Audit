@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "809819eb563f291e359bd8179ef4af06f88c7a839b4d1d7ac13327ed56b7706d",
+  "after_inventory_sha256": "0c7d6e35c98d5f152d60a2392e77c19ea5db6d8ddb804c6cdc374f7f429e89c6",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -20,11 +20,22 @@
       },
       "after": {
         "reachable_sources": [
+          "auto_update_control",
+          "current_user_onboarding",
           "data_generation_marker",
           "persistent_relay_status",
           "session_direct_sync_process"
         ],
         "reachable_direct_mutation_functions": [
+          "auto_update.copy_prepared_file",
+          "auto_update.create_download_stage",
+          "auto_update.create_protected_stage",
+          "auto_update.publish_download",
+          "auto_update.request_bootstrap",
+          "auto_update.write_download_bytes",
+          "auto_update.write_download_chunk",
+          "auto_update.write_json_durable",
+          "current_user_onboarding._windows_acl_identity",
           "data_generation_guard._runtime_release",
           "direct_sync_auto_bootstrap._run_command",
           "kmtech_shared.data_generation.record_generation",
@@ -166,7 +177,7 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "6b3f2796e12d64c45be7424bc321ef4889c41b14f0f105f3d881bd4278b47ad9"
+      "after": "c4f1e44d674aa3c7a9b0b89b260350a5e66e2a4267b0680af8684e0110247838"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -176,7 +187,7 @@
     {
       "path": "app/Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "499559b244f690555c23b6f17bc6cdacfd589d472872a9ffef474a32953c3166"
+      "after": "2ea87cea8abcea899695a54ac7c8ff7fba21649a1b5ba097f7e2ac1145fe2ed8"
     },
     {
       "path": "app/best_time_records.py",
@@ -201,7 +212,7 @@
     {
       "path": "app/current_user_onboarding.py",
       "before": "3781e04e185b139c0bacb8b8c3bd2c69f42cc3735760d45191d851d4d98914aa",
-      "after": "edfa3ab62fa603a602bc09ca7b2b63d7ad94d33bd99cb8b70ff501c53fcadf4a"
+      "after": "0965e5f90ae14945a3c25425fac1c47798602f30837603f65c3762a673667e9e"
     },
     {
       "path": "app/data_generation_guard.py",
@@ -431,7 +442,7 @@
     {
       "path": "app/main.py",
       "before": "30327c8d7d9ff6dca0d647bf2fe7417d386b5491b635879812ddf1bb3a855013",
-      "after": "7f89c298f69aa0d360e66b90ca49e849b098fce29b7371baae5c3eca0e78591b"
+      "after": "8cfd5c92af779ac1c4d7a737c2240751dad8640bcf7e54faa788f4b9ef982945"
     },
     {
       "path": "app/native_audio.py",
@@ -1451,7 +1462,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "b3f47414008ae07b902416f7457f2c75be1cc8b168b4239520f9d92474bb2cbe"
+      "after": "24d8b94da69b28db47987168149a5b027b2903482f5413cbeaab268208530db3"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4496,12 +4507,12 @@
     {
       "path": "tools/bootstrap_integrity.ps1",
       "before": "01919751911b37dea315a412585c85ec397e479ca02df36554ca7309a27fa9ba",
-      "after": "89df450b98679a462b86b950f1476bd92efdc475d7e0c0d619ac16158ce235b9"
+      "after": "7c8cbf7f201d5ad31a02046e993833422c7fb6a2f2765607485c4f950334bf42"
     },
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "c515e6ee345be09ff677a32e91b4e0df694534186e6b53e670c9f1ca545a1801"
+      "after": "880b4648d4d6bf3a8c184c6bc9614b48009d175aae8ac0e92506865ab776a618"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4511,24 +4522,24 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "340887a14b3bf4f5cb44c99acf065b20a35db626087ffeb37b048d08115b1923"
+      "after": "177737036e28d0aca258fc52a55f6f45a7a13da9eaa43f31acc49cffed000e70"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "ac41b075ddcc93da5fce3236cfc4904cc3b1d24d11b000701eb2cc4c7a094a28"
+      "after": "bf48b7b3a0130edb58a5f546d05cacff5cebe7f3b56ee0ed682a4417936abfdb"
     }
   ],
   "source_replacements": [
     {
       "path": "Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "499559b244f690555c23b6f17bc6cdacfd589d472872a9ffef474a32953c3166"
+      "after": "2ea87cea8abcea899695a54ac7c8ff7fba21649a1b5ba097f7e2ac1145fe2ed8"
     },
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "6b3f2796e12d64c45be7424bc321ef4889c41b14f0f105f3d881bd4278b47ad9"
+      "after": "c4f1e44d674aa3c7a9b0b89b260350a5e66e2a4267b0680af8684e0110247838"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -4548,7 +4559,7 @@
     {
       "path": "current_user_onboarding.py",
       "before": "3781e04e185b139c0bacb8b8c3bd2c69f42cc3735760d45191d851d4d98914aa",
-      "after": "edfa3ab62fa603a602bc09ca7b2b63d7ad94d33bd99cb8b70ff501c53fcadf4a"
+      "after": "0965e5f90ae14945a3c25425fac1c47798602f30837603f65c3762a673667e9e"
     },
     {
       "path": "data_generation_guard.py",
@@ -4608,7 +4619,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "c515e6ee345be09ff677a32e91b4e0df694534186e6b53e670c9f1ca545a1801"
+      "after": "880b4648d4d6bf3a8c184c6bc9614b48009d175aae8ac0e92506865ab776a618"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4653,12 +4664,12 @@
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "b3f47414008ae07b902416f7457f2c75be1cc8b168b4239520f9d92474bb2cbe"
+      "after": "24d8b94da69b28db47987168149a5b027b2903482f5413cbeaab268208530db3"
     }
   ],
   "hash_provenance": {
     "before": "clean baseline stock-baseline-latest at ea566d1, Python 3.12.10",
-    "after": "Exact LF application bytes of sub-350 assembly; unchanged runtime bindings preserved from sub-272 and verified against the final clean stock.",
+    "after": "Exact integrated committed LF source bytes including shipped PowerShell UTF-8 BOM; original released before bytes retained; standard inventory regenerated.",
     "domain": "all .py/.ps1/.sql plus the two writer JSON artifacts; generated release metadata retains existing package integrity",
     "installed_release_preimages": "Actual deployed bytes only: EA stock before scalar preserved (13 CRLF source files); TEST1 E3 CA-8928228.zip SHA256 3f70a102c0e321a00708ee41921e66bfb93f8ffdfecfdc3ce0125c0043ef4886 / installed manifest dd07bd13d9f989ccfe184628a870b1a3e3f6473fb7ddb6b70c3a2203dcac95be (w9test1v3/exec/raw/{packet-pins,verify-CA,final-ca}.json); whole commit/inventory/21-file tuple, no line-ending alternatives or mixing."
   },
