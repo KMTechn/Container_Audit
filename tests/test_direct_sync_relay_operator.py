@@ -726,6 +726,11 @@ def test_operator_resume_force_removes_wrong_schema_marker(tmp_path):
     assert report["forced_invalid_marker"] is True
     assert not pause_marker.exists()
     assert "forced_invalid_marker" in audit_log_path.read_text(encoding="utf-8")
+    audit = json.loads(audit_log_path.read_text(encoding="utf-8"))
+    assert audit["forced_invalid_marker"] is True
+    assert audit["previous_marker_valid"] is False
+    assert audit["previous_paused"] is True
+    assert audit["reason_sha256"] == hashlib.sha256(b"maintenance complete").hexdigest()
 
 
 def test_operator_resume_cli_blocks_wrong_schema_marker_without_force(tmp_path, capsys):

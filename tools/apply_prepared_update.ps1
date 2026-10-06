@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$InstallRoot,
     [ValidateSet('Apply','Observe','Verify','Authority')][string]$Mode = 'Apply',

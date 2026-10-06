@@ -32,12 +32,14 @@ from direct_sync_runtime import load_credentials_from_json, prepare_credential_c
 
 @writer_sink("relay_operator_report")
 def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
+    from auto_update import assert_machine_metadata_no_secrets
+    encoded = json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    assert_machine_metadata_no_secrets(encoded)
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     temp_path = target.with_name(f"{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-        json.dump(dict(payload), handle, ensure_ascii=False, indent=2, sort_keys=True)
-        handle.write("\n")
+        handle.write(encoded)
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temp_path, target)
@@ -266,6 +268,8 @@ def main(argv: list[str] | None = None) -> int:
         print(exc.user_message)
         return 2
     except ValueError as exc:
+        if exc.args == ("MACHINE_METADATA_SECRET_DETECTED",):
+            raise
         return _emit({"status": "FAIL", "operation": args.command, "error_code": "invalid_operator_input", "error_message": str(exc)}, getattr(args, "report_path", ""))
     return _emit({"status": "FAIL", "operation": args.command, "error_code": "unknown_command"}, getattr(args, "report_path", ""))
 

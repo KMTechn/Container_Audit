@@ -943,14 +943,15 @@ def restore_raw_artifact_to_file(
 
 @writer_sink("relay_spool_storage")
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
-    from auto_update import mixed_status_record
+    from auto_update import assert_machine_metadata_no_secrets, mixed_status_record
     payload = mixed_status_record(payload)
+    encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    assert_machine_metadata_no_secrets(encoded)
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
         with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
+            handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_path, path)

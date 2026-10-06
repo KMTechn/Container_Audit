@@ -47,12 +47,14 @@ def _now() -> str:
 
 @writer_sink("persistent_relay_status")
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    from auto_update import assert_machine_metadata_no_secrets
+    encoded = json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    assert_machine_metadata_no_secrets(encoded)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-            json.dump(dict(payload), handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
+            handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)

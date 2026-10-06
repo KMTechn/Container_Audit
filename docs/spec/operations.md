@@ -1346,3 +1346,5 @@ onboarding/removal/lifecycle의 사용자 경로와 update-control에는 작업 
 Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종료 코드 23과 등록된 원인 코드(`ACTIVE_WRITER_FENCE`, `FENCE_BINDING_INVALID` 등)를 보존한다. 그 밖의 설치 실패는 기존 종료 코드 4를 유지한다. 예외 문장은 공개하지 않으며 미등록 writer 코드 문구는 보호 전문에만 남기고 공개 고정 코드 `WRITER_FENCE_FAILED`를 쓴다. 설치기 reader는 등록된 원인 코드와 4/23 조합 및 실제 자식 종료 코드가 일치하는지 확인한 뒤 고정 코드로 중단한다.
 
 배포 집합의 PowerShell 파일에 비ASCII 문자열이 있으면 UTF-8 BOM을 포함한다. Windows PowerShell 5.1의 cp949 기본 판독에서도 UTF-8로 감지되어 한국어 안내와 구문을 보존해야 한다. G after 해시와 고정 선언·pin은 BOM을 포함한 committed LF 바이트를 기준으로 확인한다.
+
+설치기는 제공된 wrapper로만 실행하며 PowerShell 진입점에 인수를 손으로 입력하지 않는다. 모르는 인수·잘못된 Mode의 앞단 binder 출력 제한은 컷 뒤 항목이다.
