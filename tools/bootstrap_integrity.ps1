@@ -274,12 +274,16 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
         $remaining.Add($pattern)
     }
     foreach($pattern in $remaining){if([regex]::IsMatch($Text,$pattern)){throw 'REPORT_UNAVAILABLE'}}
+    $assertFinalKnown={param([string]$Value)
+        foreach($pattern in $remaining){if([regex]::IsMatch($Value,$pattern)){throw 'REPORT_UNAVAILABLE'}}
+        return $Value
+    }
     if(-not $KnownOnly -and $notes.Count){$Text+="`n"+($notes -join "`n")}
-    if($NoTruncate){return $Text} # Internal in-memory envelope budgeting only.
+    if($NoTruncate){return (& $assertFinalKnown $Text)} # Internal in-memory envelope budgeting only.
     $bound=if($Limit -lt 0){$policy.full_byte_cap}else{[Math]::Min($Limit,$policy.full_byte_cap)}
     $utf8=[Text.UTF8Encoding]::new($false)
     $bytes=$utf8.GetBytes($Text)
-    if($bytes.Length -le $bound){return $Text}
+    if($bytes.Length -le $bound){return (& $assertFinalKnown $Text)}
     $headCount=[Math]::Min($policy.head_byte_cap,[int]($bound/8))
     while($headCount -gt 0 -and ($bytes[$headCount] -band 192) -eq 128){$headCount--}
     $tailCount=[Math]::Max(0,$bound-$headCount-80)
@@ -295,7 +299,7 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
     while($tailStart -lt $bytes.Length -and ($bytes[$tailStart] -band 192) -eq 128){$tailStart++}
     $tailCount=$bytes.Length-$tailStart
     $marker=$policy.truncation_marker -f ($bytes.Length-$headCount-$tailCount)
-    return $utf8.GetString($bytes,0,$headCount)+$marker+$utf8.GetString($bytes,$tailStart,$tailCount)
+    return (& $assertFinalKnown ($utf8.GetString($bytes,0,$headCount)+$marker+$utf8.GetString($bytes,$tailStart,$tailCount)))
 }
 
 function ConvertTo-KmtechRedactedSinkText {

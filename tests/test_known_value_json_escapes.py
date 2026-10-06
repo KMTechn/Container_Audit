@@ -97,6 +97,19 @@ def test_known_value_remaining_refuses_publication(tmp_path):
         assert not path.exists()
 
 
+@pytest.mark.parametrize('kind', ('note', 'cap'))
+def test_final_generated_text_refuses_known_value(kind):
+    if IS_IW:
+        from core.installation_failure_redaction import redact_for_sink
+    else:
+        from auto_update import redact_for_sink
+    environment = ({'FIRST_SECRET': 'SyntheticNote429', 'SyntheticNote429_SECRET': 'x'}
+                   if kind == 'note' else {'FIRST_SECRET': 'TRUNCATED'})
+    text = 'ordinary public input' if kind == 'note' else 'x' * 70000
+    with pytest.raises(ValueError, match='^REPORT_UNAVAILABLE$'):
+        redact_for_sink(text, environment)
+
+
 def test_python_atomic_failure_report(tmp_path):
     if IS_IW:
         from core.current_user_onboarding import _write_json_atomic as publish
@@ -143,6 +156,14 @@ foreach($case in $cases){
  [Environment]::SetEnvironmentVariable('REVIEW_SECRET',[string]$case.value,'Process')
  Write-InstallationEvidenceEvent @{failure=$case.text;fixed_count=7}
  $index++
+}
+foreach($kind in 'note','cap'){
+ $environment=if($kind -eq 'note'){@{FIRST_SECRET='SyntheticNote429';SyntheticNote429_SECRET='x'}}else{@{FIRST_SECRET='TRUNCATED'}}
+ $text=if($kind -eq 'note'){'ordinary public input'}else{'x'*70000}
+ $refused=$false
+ try{ConvertTo-KmtechRedactedSinkText -Text $text -Environment $environment | Out-Null}
+ catch{if($_.Exception.Message -ne 'REPORT_UNAVAILABLE'){throw 'PROBE_FINAL_CHECK_CODE_DIFFERS'};$refused=$true}
+ if(-not $refused){throw 'PROBE_FINAL_CHECK_EXPECTED_REFUSAL'}
 }
 $oversizedValue='OversizedOpaque429Abcd'
 [Environment]::SetEnvironmentVariable('REVIEW_SECRET',$oversizedValue,'Process')

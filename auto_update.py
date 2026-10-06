@@ -529,6 +529,14 @@ def _known_value_pattern(value: str) -> str:
     return "".join(parts)
 
 
+def _assert_final_known_values(text: str, selected) -> str:
+    # Notes and truncation metadata are generated after the replacement pass.
+    if any(re.search(_known_value_pattern(value), text)
+           for _, value in selected if len(value) >= 4):
+        raise ValueError("REPORT_UNAVAILABLE")
+    return text
+
+
 def _redact_known_values(text: str, selected, policy) -> str:
     patterns = [(_known_value_pattern(value), policy["env_marker"].format(name=name))
                 for name, value in selected]
@@ -616,10 +624,10 @@ def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit
     if notes:
         text += "\n" + "\n".join(notes)
     if _no_truncate:
-        return text
+        return _assert_final_known_values(text, selected)
     data, bound = text.encode("utf-8"), min(limit, policy["full_byte_cap"])
     if len(data) <= bound:
-        return text
+        return _assert_final_known_values(text, selected)
     head = data[:min(policy["head_byte_cap"], bound // 8)].decode("utf-8", errors="ignore").encode("utf-8")
     tail = b""
     budget = max(0, bound - len(head) - 80)
@@ -632,7 +640,7 @@ def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit
         budget = next_budget
     marker = policy["truncation_marker"].format(omitted=len(data) - len(head) - len(tail)).encode("utf-8")
     assert len(head) + len(marker) + len(tail) <= bound
-    return (head + marker + tail).decode("utf-8")
+    return _assert_final_known_values((head + marker + tail).decode("utf-8"), selected)
 
 
 def _redact_field(name, value, policy):
