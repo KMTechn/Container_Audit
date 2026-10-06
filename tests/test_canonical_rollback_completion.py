@@ -37,14 +37,30 @@ foreach($mode in @('install','rollback')) {
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 def test_timeout_reports_completed_rollback_without_success(tmp_path, engine):
     names = re.findall(r"^function\s+([^\s(]+)", SOURCE.read_text(encoding="utf-8-sig"), re.M)
+    names.append('Record-CanonicalRollbackStep')
     result = run_functions(tmp_path, SOURCE, names, r'''
-$source=Get-Content -LiteralPath $env:CA_CONTRACT_SOURCE -Raw
-$start=$source.IndexOf('    # Win32_Process.Create does not inherit this process')
-$end=$source.IndexOf('    # A fresh placement has no old code tree to restore.',$start)
-if($start -lt 0 -or $end -le $start){throw 'real final rollback sequence absent'}
+$parseErrors=$null;$parseTokens=$null
+. (Join-Path (Split-Path -Parent $env:CA_CONTRACT_SOURCE) 'tools/bootstrap_integrity.ps1')
+$ast=[Management.Automation.Language.Parser]::ParseFile($env:CA_CONTRACT_SOURCE,[ref]$parseTokens,[ref]$parseErrors)
+if($parseErrors.Count){throw 'canonical parse failed'}
+$catch=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.CatchClauseAst] -and
+    $n.Body.Extent.Text.Contains('if (-not $enteredPlacementTry)')},$true))
+if($catch.Count -ne 1){throw 'real rollback catch absent'}
+$restart=@($catch[0].FindAll({param($n)$n -is [Management.Automation.Language.IfStatementAst] -and
+    $n.Extent.Text.StartsWith('if ($mutated -and $rollbackRecoveryVerified -and -not $canonicalWriterFenceActive)')},$true))
+if($restart.Count -ne 1){throw 'real rollback restart absent'}
+$terminal=@();$collect=$false
+foreach($statement in $catch[0].Body.Statements){
+    if($statement.Extent.Text.StartsWith('if (-not [string]::IsNullOrWhiteSpace($codeRollbackFailure))')){$collect=$true}
+    if($statement.Extent.Text.StartsWith('$publicFailure=')){break}
+    if($collect){$terminal+=,$statement.Extent.Text}
+}
+if($terminal.Count -lt 6){throw 'real rollback completion absent'}
 $mutated=$true;$old=@(@{ProcessId=1234});$before=@{exists=$true;kind='String';data='isolated'}
 $install=$env:CA_CONTRACT_ROOT;$stop=Join-Path $install 'absent.stop';$auditPath=Join-Path $install 'audit.json';$evidenceFull=''
-$audit=@{status='ROLLBACK_AWAITING_FENCE_RELEASE';rollback=@{code_exact=$true;scheduled_writer_restored=$true;runtime_restored=$false}}
+$audit=@{status='ROLLBACK_AWAITING_FENCE_RELEASE';rollback=@{code_exact=$true;scheduled_writer_restored=$true;runtime_restored=$false;steps=@{}}}
+$rollbackRecoveryVerified=$true;$canonicalWriterFenceActive=$false;$RestoreVerifiedReplacement=$false
+$codeRollbackFailure='';$writerRollbackFailure='';$autostartRollbackFailure='';$fenceReleaseFailure=''
 function Start-CanonicalRelayAfterFenceRelease {throw 'CANONICAL_RELAY_READY_TIMEOUT'}
 function Snapshot {return $before}
 function Relays {return @()}
@@ -52,11 +68,16 @@ function Set-InstallationEvidenceStage {}
 function Write-InstallationCaughtFailure {}
 function Get-CanonicalFailureDetails {return @{stage='ROLLBACK_RELAY'}}
 function Save($Path,$Value) {[IO.File]::WriteAllText($Path,($Value|ConvertTo-Json -Depth 10))}
-$failure='';$line=''
-try {$line=(. ([scriptblock]::Create($source.Substring($start,$end-$start))) -WarningAction SilentlyContinue)|Out-String} catch {$failure=$_.Exception.Message}
-if($failure){throw ('rollback aborted before final state reporting: '+$failure)}
+function Save-CanonicalRecoveryDiagnostics {param($Stage);Save $auditPath $audit}
+function Assert-RollbackRelayPreimage {throw 'CANONICAL_RELAY_READY_TIMEOUT'}
+$original=[Management.Automation.ErrorRecord]::new([InvalidOperationException]::new('isolated original failure'),'IsolatedFailure',[Management.Automation.ErrorCategory]::InvalidOperation,$null)
+$failure=''
+try {. ([scriptblock]::Create($restart[0].Extent.Text+"`n"+($terminal -join "`n")))}catch{$failure=$_.Exception.GetType().Name}
+if($failure -cne 'InvalidOperationException'){throw ('timeout terminal type differs: '+$failure)}
 if($audit.status -cne 'AUTOSTART_ROLLBACK_FAILED' -or $audit.rollback.runtime_restored){throw 'timeout was reported as success'}
-if(-not(Test-Path -LiteralPath $auditPath) -or $line -notmatch 'relay.*READY' -or $line -notmatch 'Run'){throw 'exact terminal state line or durable failure missing'}
+if(-not(Test-Path -LiteralPath $auditPath) -or $audit.rollback.steps.relay_restart.status -cne 'FAILED' -or
+    $audit.rollback.steps.completion.status -cne 'FAILED' -or -not $audit.rollback.code_exact -or
+    -not $audit.rollback.scheduled_writer_restored){throw 'exact durable terminal state or preserved recovery steps missing'}
 'PASS'
 ''', engine=engine)
     assert result.returncode == 0, result.stdout + result.stderr

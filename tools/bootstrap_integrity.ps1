@@ -483,12 +483,20 @@ function Read-InstallationOwnedParentRepair([string]$InstallRoot,[string]$LocalA
     $path=Join-Path $root 'active.json'
     Assert-BootstrapNoReparsePoint $path 'owned repair fence'
     $raw=Get-Content -LiteralPath $path -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
-    $old=Get-Content -LiteralPath (Join-Path $InstallRoot 'portable-manifest.json') -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+    # A fresh placement can fail before current exists. In that state only the
+    # authenticated source inventory may bind the owned repair; an existing
+    # current still requires its manifest and exact installed inventory.
+    $oldInventorySha256=''
+    if(Test-Path -LiteralPath $InstallRoot -ErrorAction Stop){
+        $old=Get-Content -LiteralPath (Join-Path $InstallRoot 'portable-manifest.json') -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+        $oldInventorySha256=[string]$old.writer_sink_inventory_contract_sha256
+    }
     if([string]$raw.orchestrator_sha256 -cne [string]$Manifest.installer_sha256 -or
         [string]$raw.writer_contract_sha256 -cne [string]$Manifest.writer_session_contract_sha256 -or
-        [string]$raw.writer_inventory_sha256 -cnotin @([string]$Manifest.writer_sink_inventory_contract_sha256,[string]$old.writer_sink_inventory_contract_sha256)){throw 'Owned repair source/fence differs.'}
+        [string]$raw.writer_inventory_sha256 -cnotin @([string]$Manifest.writer_sink_inventory_contract_sha256,$oldInventorySha256) -or
+        [string]$raw.writer_inventory_sha256 -cnotmatch '^[0-9a-f]{64}$'){throw 'Owned repair source/fence differs.'}
     $saved=$Script:ContainerWriterFenceAcceptedInstalledInventorySha256
-    try{$Script:ContainerWriterFenceAcceptedInstalledInventorySha256=[string]$old.writer_sink_inventory_contract_sha256;$active=Read-ContainerWriterFence $root}
+    try{$Script:ContainerWriterFenceAcceptedInstalledInventorySha256=$oldInventorySha256;$active=Read-ContainerWriterFence $root}
     finally{$Script:ContainerWriterFenceAcceptedInstalledInventorySha256=$saved}
     if([string]$active.status -cne 'INSTALLING' -or [string]$active.owner_kind -cne 'canonical_installer'){throw 'Owned repair state differs.'}
     $prepared=Get-Content -LiteralPath $active.prepared_receipt_path -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson

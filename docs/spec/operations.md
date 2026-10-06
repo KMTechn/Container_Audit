@@ -47,6 +47,13 @@ preflight는 기존 exact reader의 코드/manifest 검증만 사용한다(ACL �
 직전에 대조한다. 일반 reader API의 `acl_identity_reader=None`은 거절한다.
 
 일반 rollback의 한 removal 실패는 나머지 code/Run/task 복원 시도를 막지 않는다.
+배치 전에 current가 없었고 실패 뒤에도 없으며 current의 Run·relay preimage가 없으면
+current G·onboarding reader는 `NOT_APPLICABLE_NO_CURRENT`로 기록한다. 없는 앱 부모는
+재생성하거나 다시 상승하지 않는다. 존재하는 부모의 보호 복구는 설치된 current가 없을 때
+인증된 source inventory·원 fence·prepared receipt로만 결속하며, current가 있으면 manifest를 요구한다.
+이 경우 정확한 Run/task 복원과 fence 해제 뒤 `FAILED_ROLLED_BACK` 실패 감사를 남기므로
+바깥 옛 설치 복구가 원 폴더를 되돌릴 수 있다. 배치된 새 코드는 기존 G 검사를 유지한다.
+원래 있던 current의 소실·복원 미확인은 이 예외로 통과시키지 않는다.
 code·G·HKCU Run·예약 작업의 정확 복원 readback이 모두 검증된 경우에만 fence를 해제하고 옛 relay를 재시작한다. Run/task 복원 실패는 recovery identity를 무효화하며 fence와 지원 복구 기록을 유지한다.
 G·quiescence를 다시 확인하고 기존 exact 복원 evidence로 code를 증명한다. 정확 code와
 relay preimage가 증명되면 finally fence 해제·relay 재시작을 시도하고 각 실패를 보존한다.

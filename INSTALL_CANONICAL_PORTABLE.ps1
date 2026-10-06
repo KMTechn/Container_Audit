@@ -32,6 +32,7 @@ $Script:CanonicalWriterFenceDelegationToken = ''
 $retirementAuditSealed = $false
 $audit = $null
 $enteredPlacementTry = $false
+$currentAbsentBeforePlacement = $false
 $Script:CanonicalPreparationAdmissionFailed = $false
 $Script:CanonicalInstallerSourceInventorySha256 = ''
 $testMode = $AllowNoncanonicalLayoutForTest -and
@@ -60,7 +61,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '286d6a59ded20a1651c2240eae7113e70d7a642cf531dbed61966f37c8f84d87'
+$ExpectedBootstrapIntegritySha256 = '484454180699d2422d7941eddccc11effd35fba5ff88daf3ca6f6e742b18f177'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -185,9 +186,19 @@ function Get-WriterContractSessionMutexName(
 }
 function Write-CanonicalInstallationPublicRecord($Failure=$null,[int]$ExitCode=0) {
     $guidance='자료를 보존하고 관리자 지원 복구를 요청하세요.'
+    $elevationRecovered=($ExitCode -ne 0 -and $null -ne $audit -and
+        [string]$audit.status -ceq 'FAILED_ROLLED_BACK' -and [bool]$audit.rollback.runtime_restored -and
+        -not $canonicalWriterFenceActive -and
+        [string]$audit.code_replacement.failure_code -ceq 'CONTAINER_PLACEMENT_ELEVATION_FAILED')
+    if($elevationRecovered){$guidance='관리자 권한 요청을 완료하지 못했습니다. 이번 설치의 변경을 되돌렸습니다. 관리자 실행을 다시 확인하세요.'}
     $fields=[ordered]@{status=if($ExitCode){'FAILED'}else{'PASS'};stage='canonical_install';
         reason_code=if($ExitCode){'INSTALLER_CANONICAL_FAILURE'}else{'INSTALLER_CHILD_RESULT'};
         exit_code=$ExitCode;guidance=$guidance;report_status='REPORT_UNAVAILABLE'}
+    if($elevationRecovered){
+        $fields.reason_code='CONTAINER_PLACEMENT_ELEVATION_FAILED'
+        $fields.install_status='FAILED_ROLLED_BACK'
+        $fields.runtime_restored=$true
+    }
     if($Failure){
         $exception=if($Failure -is [Exception]){$Failure}else{$Failure.Exception}
         $fields.exception_type=$exception.GetType().FullName
@@ -208,7 +219,7 @@ function Write-CanonicalInstallationPublicRecord($Failure=$null,[int]$ExitCode=0
         }
     }
     if(Get-Command ConvertTo-KmtechPublicRecord -ErrorAction SilentlyContinue){
-        $fields=ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes @('PASS','FAILED','canonical_install','INSTALLER_CANONICAL_FAILURE','INSTALLER_CHILD_RESULT','REPORT_UNAVAILABLE') -SafeMessages @($guidance)
+        $fields=ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes @('PASS','FAILED','canonical_install','INSTALLER_CANONICAL_FAILURE','INSTALLER_CHILD_RESULT','REPORT_UNAVAILABLE','CONTAINER_PLACEMENT_ELEVATION_FAILED','FAILED_ROLLED_BACK') -SafeMessages @($guidance)
     }
     Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+($fields|ConvertTo-Json -Depth 4 -Compress))
 }
@@ -743,6 +754,10 @@ function Snapshot {
 }
 function Restore-CanonicalApplicationProtection {
     $parent=Split-Path -Parent $install
+    # A cancelled fresh placement may not have created either directory. There
+    # is no application DACL to repair; do not start another elevation request.
+    if ($currentAbsentBeforePlacement -and -not (Test-Path -LiteralPath $install -ErrorAction Stop) -and
+        -not (Test-Path -LiteralPath $parent -ErrorAction Stop)) { return }
     if(Test-InstallationEvidencePrivileged){New-InstallationProtectedDirectory $parent $operatorSid -RecoverAbandoned;return}
     try{Assert-InstallationEvidenceProtectedPath $parent;return}catch{Write-InstallationCaughtFailure $_}
     $arguments=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
@@ -765,7 +780,7 @@ function Invoke-CanonicalRollbackRuntimePreimage($Before,[switch]$RemovalAlready
                     }
                 }
                 'product_removal' {
-                    if(-not $RemovalAlreadyProven){Product $install '--remove-current-user-setup'}
+                    if(-not $RemovalAlreadyProven -and (Test-Path -LiteralPath $install -ErrorAction Stop)){Product $install '--remove-current-user-setup'}
                     [void](Assert-RollbackRelayPreimage -ExpectedRelays @())
                 }
                 'run_preimage' {
@@ -3810,6 +3825,8 @@ $installedInventorySha256 = $Script:ContainerWriterFenceInventorySha256
 $currentTreeInventorySha256 = $Script:ContainerWriterFenceInventorySha256
 $audit.code_replacement.writer_inventory_transitions = @()
 $audit.code_replacement.candidate_writer_inventory_sha256 = $Script:ContainerWriterFenceInventorySha256
+$currentAbsentBeforePlacement = -not (Test-Path -LiteralPath $install -ErrorAction Stop)
+$audit.code_replacement['current_absent_before_placement'] = $currentAbsentBeforePlacement
 $enteredPlacementTry = $true
     $placement = 'INSTALL_REQUIRED'
     $existingVerified = $false
@@ -4981,17 +4998,26 @@ catch {
     $rollbackGenerationVerified=$false
     try {
         if (-not $codeRestoredExact) { throw 'ROLLBACK_CODE_IDENTITY_UNPROVEN' }
-        Assert-ContainerDataGenerationTarget -CandidateRoot $install `
-            -TargetSid $operatorSid -LocalAppDataRoot $lad -DataRoot $activeDataRoot -HelperRoot $source
-        # The saved relay's first reader includes credential locator/nested
-        # owners. Reuse the same readonly product target admission for the
-        # surviving old code; PS does not interpret those paths itself.
-        $rollbackTargetBinding=Get-CanonicalOnboardingInputBinding $source $install
-        if ($RestoreVerifiedReplacement) {
-            Assert-CanonicalRestoreCodeBinding $rollbackTargetBinding (Read-CanonicalReplacementRestore)
+        $rollbackCurrentAbsent = $currentAbsentBeforePlacement -and -not $RestoreVerifiedReplacement -and
+            -not $codeRestoreNeeded -and -not $before.exists -and $old.Count -eq 0 -and
+            -not (Test-Path -LiteralPath $install -ErrorAction Stop)
+        if ($rollbackCurrentAbsent) {
+            # The preimage and the surviving tree are both absent. No current
+            # product can read data, and no current manifest/reader exists.
+            $rollbackGenerationVerified=$true
+            Record-CanonicalRollbackStep 'generation_readback' 'NOT_APPLICABLE_NO_CURRENT' ''
+        } else {
+            Assert-ContainerDataGenerationTarget -CandidateRoot $install `
+                -TargetSid $operatorSid -LocalAppDataRoot $lad -DataRoot $activeDataRoot -HelperRoot $source
+            # The saved relay's first reader includes credential locator/nested
+            # owners. Preserve its readonly admission for every surviving tree.
+            $rollbackTargetBinding=Get-CanonicalOnboardingInputBinding $source $install
+            if ($RestoreVerifiedReplacement) {
+                Assert-CanonicalRestoreCodeBinding $rollbackTargetBinding (Read-CanonicalReplacementRestore)
+            }
+            $rollbackGenerationVerified=$true
+            Record-CanonicalRollbackStep 'generation_readback' 'PASS' ''
         }
-        $rollbackGenerationVerified=$true
-        Record-CanonicalRollbackStep 'generation_readback' 'PASS' ''
     }
     catch {
         $autostartRollbackFailure=$_.Exception.GetType().Name
