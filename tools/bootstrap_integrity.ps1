@@ -67,7 +67,7 @@ function Test-BootstrapPrivilegedOwnerSid([string]$Sid) {
     )
 }
 
-function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Configuration, [switch]$LiteralOnly, [Collections.IDictionary]$Environment, [switch]$CommonOnly, [switch]$NoTruncate) {
+function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Configuration, [switch]$LiteralOnly, [Collections.IDictionary]$Environment, [switch]$CommonOnly, [switch]$NoTruncate, [switch]$KnownOnly) {
     $policy=@{environment_names=@('DEFECT_FINAL_DEFECT_CLAIM_TOKEN','DEFECT_FINAL_DEFECT_INTAKE_CLAIM_TOKEN','DEFECT_LINKED_MANIFEST_LOCK_API_TOKEN','DEFECT_LOGISTICS_API_TOKEN','DEFECT_RETURN_MANIFEST_API_TOKEN','DEFECT_SERVER_ACTIVE_LOCK_TOKEN','DEFECT_TRANSFER_MANIFEST_API_TOKEN','INSPECTION_WORKER_WAREHOUSE_RESPONSE_EXPORT_TOKEN','KMTECH_DEFECT_WRITER_DELEGATION_TOKEN','KMTECH_REWORK_TEMP_NG_CANDIDATE_TOKEN','KMTECH_REWORK_TEMP_NG_CLAIM_TOKEN','REWORK_ENROLLMENT_RESTORE_TOKEN','REWORK_LOGISTICS_API_TOKEN','CONTAINER_AUDIT_ENROLLMENT_TOKEN','CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','CONTAINER_RUNTIME_SECRET','KM_LOGISTICS_INSTALL_BEARER_TOKEN','WORKER_ANALYSIS_LOGISTICS_API_TOKEN','KMTECH_LABEL_WRITER_DELEGATION_TOKEN','PRODUCER_SELF_ENROLL_TOKEN','DIRECT_SYNC_AUTH_TOKEN','PRODUCER_API_TOKEN','LOGISTICS_API_TOKEN');sensitive_pattern='(?i)(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_?KEY|API_?KEY|COOKIE|SESSION_?KEY|DELEGATION|BEARER|ENROLLMENT_CODE|RESTORE_CODE|ADMIN_PIN)';path_pattern='(?i)_(FILE|PATH|DIR|ROOT)$';digest_pattern='(?i)_(sha256s?|fingerprint|hash)$';short_digest_pattern='(?i)(pin|otp|password)';identifier_name_pattern='(?i)_(TRANSACTION|SESSION|ATTEMPT)_ID\z';identifier_value_pattern='^(?:[0-9A-Fa-f]{32}|[0-9A-Fa-f]{64}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\z';env_marker='[REDACTED:{0}]';field_marker='[REDACTED:field]';short_marker='[REDACTION_NOTE:short_value_skipped:{0}]';full_byte_cap=65536;head_byte_cap=8192;truncation_marker="`n[TRUNCATED: {0} bytes omitted]`n"}
     $policy.process_identifier_patterns=@{
         '(?i)_PID\z'='^[1-9][0-9]{0,9}\z'
@@ -105,7 +105,7 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
         $variants=@($entry.value,$jsonVariant,$asciiVariant,$entry.value.Replace("'","''"),$entry.value.Replace('"','""'))|Sort-Object Length -Descending -Unique
         foreach($variant in $variants){$Text=$Text.Replace($variant,$marker)}
     }
-    if(-not $LiteralOnly){
+    if(-not $LiteralOnly -and -not $KnownOnly){
         function Test-RedactedField([string]$Name,$Value){
             if($null -eq $Value -or $Value -is [bool]){return $false}
             if($Name -match $policy.path_pattern){return $false}
@@ -233,7 +233,48 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
             $Text=$Text.Substring(0,$span.start)+$policy.field_marker+$Text.Substring($span.end)
         }
     }
-    if($notes.Count){$Text+="`n"+($notes -join "`n")}
+
+    # Match each UTF16 unit literally or as mixed/nested JSON unicode escapes.
+    $knownPattern={param([string]$Value)
+        $parts=[Collections.Generic.List[string]]::new()
+        foreach($character in $Value.ToCharArray()){
+            $forms=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            [void]$forms.Add([string]$character)
+            [void]$forms.Add('\u'+([int]$character).ToString('x4'))
+            $encoded=ConvertTo-Json -InputObject ([string]$character) -Compress
+            [void]$forms.Add($encoded.Substring(1,$encoded.Length-2))
+            for($depth=0;$depth -lt 3;$depth++){
+                foreach($form in @($forms)){
+                    $encoded=ConvertTo-Json -InputObject $form -Compress
+                    [void]$forms.Add($encoded.Substring(1,$encoded.Length-2))
+                }
+            }
+            $choices=@(foreach($form in $forms){
+                $chunks=[Text.StringBuilder]::new();$start=0
+                foreach($match in [regex]::Matches($form,'\\+u([0-9a-f]{4})')){
+                    [void]$chunks.Append([regex]::Escape($form.Substring($start,$match.Index+$match.Length-4-$start)))
+                    foreach($digit in $match.Groups[1].Value.ToCharArray()){
+                        [void]$chunks.Append($(if($digit -cmatch '[a-f]'){'['+[string]$digit+([string]$digit).ToUpperInvariant()+']'}else{[string]$digit}))
+                    }
+                    $start=$match.Index+$match.Length
+                }
+                [void]$chunks.Append([regex]::Escape($form.Substring($start)));$chunks.ToString()
+            })
+            $parts.Add('(?:'+(($choices|Sort-Object Length -Descending) -join '|')+')')
+        }
+        return $parts -join ''
+    }
+
+    # Parsing and serialization above can decode an initially escaped value.
+    $remaining=[Collections.Generic.List[string]]::new()
+    foreach($entry in @($values|Sort-Object @{Expression={$_.value.Length};Descending=$true},@{Expression={$_.name}})){
+        $pattern=& $knownPattern $entry.value
+        $marker=$policy.env_marker -f $entry.name
+        $Text=[regex]::Replace($Text,$pattern,[Text.RegularExpressions.MatchEvaluator]{param($match)$marker})
+        $remaining.Add($pattern)
+    }
+    foreach($pattern in $remaining){if([regex]::IsMatch($Text,$pattern)){throw 'REPORT_UNAVAILABLE'}}
+    if(-not $KnownOnly -and $notes.Count){$Text+="`n"+($notes -join "`n")}
     if($NoTruncate){return $Text} # Internal in-memory envelope budgeting only.
     $bound=if($Limit -lt 0){$policy.full_byte_cap}else{[Math]::Min($Limit,$policy.full_byte_cap)}
     $utf8=[Text.UTF8Encoding]::new($false)
@@ -631,8 +672,9 @@ function Write-InstallationEvidenceEvent($Payload) {
         $text=Protect-InstallationText ($Payload|ConvertTo-Json -Depth 12 -Compress) -1 -NoTruncate
         if([Text.Encoding]::UTF8.GetByteCount($text)+1 -gt 65536){
             $preview=Protect-InstallationText $text 57344
-            do{$text=(@{event=$Payload.event;captured_at=$Payload.captured_at;detail_text=$preview;complete=$false}|ConvertTo-Json -Depth 6 -Compress);if([Text.Encoding]::UTF8.GetByteCount($text)+1 -gt 65536){$preview=Protect-InstallationText $preview ([Math]::Max(256,[int]([Text.Encoding]::UTF8.GetByteCount($preview)/2)))}}while([Text.Encoding]::UTF8.GetByteCount($text)+1 -gt 65536)
+            do{$text=Protect-InstallationText (@{event=$Payload.event;captured_at=$Payload.captured_at;detail_text=$preview;complete=$false}|ConvertTo-Json -Depth 6 -Compress) -1 -NoTruncate -KnownOnly;if([Text.Encoding]::UTF8.GetByteCount($text)+1 -gt 65536){$preview=Protect-InstallationText $preview ([Math]::Max(256,[int]([Text.Encoding]::UTF8.GetByteCount($preview)/2)))}}while([Text.Encoding]::UTF8.GetByteCount($text)+1 -gt 65536)
         }
+        try{$null=ConvertFrom-Json -InputObject $text -ErrorAction Stop}catch{throw 'REPORT_UNAVAILABLE'}
         $bytes=[Text.Encoding]::UTF8.GetBytes($text+"`n")
         # Each journal part is a sink capped at 64 KiB; retain the existing
         # aggregate 1 MiB budget as at most sixteen independently pinned parts.
@@ -653,7 +695,8 @@ function Write-InstallationEvidenceEvent($Payload) {
         if ($newFile) { Set-InstallationEvidenceAcl $path $Script:InstallationEvidenceSid }
     } catch {
         $Script:InstallationEvidenceFailed=$true
-        if(-not $Script:InstallationEvidenceFailureCodes.Contains('JOURNAL_IO_OR_ACL_FAILURE')){$Script:InstallationEvidenceFailureCodes.Add('JOURNAL_IO_OR_ACL_FAILURE')}
+        $failureCode=if($_.Exception.Message -ceq 'REPORT_UNAVAILABLE'){'REPORT_UNAVAILABLE'}else{'JOURNAL_IO_OR_ACL_FAILURE'}
+        if(-not $Script:InstallationEvidenceFailureCodes.Contains($failureCode)){$Script:InstallationEvidenceFailureCodes.Add($failureCode)}
     }
 }
 

@@ -506,7 +506,40 @@ def _structured_value_end(text: str, start: int) -> int:
     return len(text)
 
 
-def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit: int = 65536, _no_truncate: bool = False) -> str:
+def _known_value_pattern(value: str) -> str:
+    """Match literal/mixed JSON spellings, including nested string escapes."""
+    parts = []
+    for character in value:
+        units = character.encode("utf-16-be", errors="surrogatepass").hex()
+        forms = {character, json.dumps(character, ensure_ascii=False)[1:-1],
+                 "".join("\\u" + units[i:i + 4] for i in range(0, len(units), 4))}
+        for _ in range(3):
+            forms.update(json.dumps(form, ensure_ascii=False)[1:-1] for form in tuple(forms))
+        choices = []
+        for form in forms:
+            start, chunks = 0, []
+            for match in re.finditer(r"\\+u([0-9a-f]{4})", form):
+                chunks.append(re.escape(form[start:match.end() - 4]))
+                chunks.append("".join("[" + digit + digit.upper() + "]" if digit in "abcdef" else digit
+                                      for digit in match.group(1)))
+                start = match.end()
+            chunks.append(re.escape(form[start:]))
+            choices.append("".join(chunks))
+        parts.append("(?:" + "|".join(sorted(choices, key=len, reverse=True)) + ")")
+    return "".join(parts)
+
+
+def _redact_known_values(text: str, selected, policy) -> str:
+    patterns = [(_known_value_pattern(value), policy["env_marker"].format(name=name))
+                for name, value in selected]
+    for pattern, marker in sorted(patterns, key=lambda item: len(item[0]), reverse=True):
+        text = re.sub(pattern, lambda match: marker, text)
+    if any(re.search(pattern, text) for pattern, _ in patterns):
+        raise ValueError("REPORT_UNAVAILABLE")
+    return text
+
+
+def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit: int = 65536, _no_truncate: bool = False, _known_only: bool = False) -> str:
     policy = _sink_policy()
     text = text.decode("utf-8", errors="replace") if isinstance(text, bytes) else str(text or "")
     selected, notes = [], []
@@ -529,6 +562,8 @@ def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit
         variants = {value, json.dumps(value, ensure_ascii=True)[1:-1], json.dumps(value, ensure_ascii=False)[1:-1], value.replace("'", "''"), value.replace('"', '""')}
         for variant in sorted(variants, key=len, reverse=True):
             text = text.replace(variant, policy["env_marker"].format(name=name))
+    if _known_only:
+        return _redact_known_values(text, selected, policy)
     # Field values are removed as a whole, before any head/tail selection.
     def redact_fields(value):
         if isinstance(value, dict):
@@ -576,6 +611,8 @@ def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit
             merged.append((start, end, replacement))
     for start, end, replacement in reversed(merged):
         text = text[:start] + replacement + text[end:]
+    # Repeat known-value replacement after all parse/serialization work.
+    text = _redact_known_values(text, selected, policy)
     if notes:
         text += "\n" + "\n".join(notes)
     if _no_truncate:
@@ -665,7 +702,11 @@ def serialize_json_for_sink(payload: Mapping[str, Any]) -> str:
             for item in value:
                 yield from diagnostics(item)
     for _ in range(512):
-        encoded = json.dumps(safe, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        encoded = redact_for_sink(json.dumps(safe, sort_keys=True, separators=(",", ":"), ensure_ascii=True), _no_truncate=True, _known_only=True)
+        try:
+            json.loads(encoded)
+        except ValueError:
+            raise ValueError("REPORT_UNAVAILABLE") from None
         if len(encoded.encode("utf-8")) + 1 <= policy["full_byte_cap"]:
             return encoded
         candidates = sorted(diagnostics(safe), key=lambda row: len(row[2].encode("utf-8")), reverse=True)
