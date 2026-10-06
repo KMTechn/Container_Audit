@@ -5760,25 +5760,25 @@
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 386,
+          "line": 388,
           "operation": "path.parent.mkdir",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 389,
+          "line": 391,
           "operation": "temp_path.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 394,
+          "line": 396,
           "operation": "os.replace",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 397,
+          "line": 399,
           "operation": "temp_path.unlink",
           "writer_admission_sources": []
         }
@@ -5805,11 +5805,11 @@
       ],
       "file": "tools/direct_sync_relay_install_pack.py",
       "kind": "function",
-      "line": 569,
+      "line": 571,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 579,
+          "line": 581,
           "operation": "mkdir",
           "writer_admission_sources": []
         }
@@ -5836,12 +5836,12 @@
       ],
       "file": "tools/direct_sync_relay_install_pack.py",
       "kind": "function",
-      "line": 666,
+      "line": 668,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 685,
+          "line": 687,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -5869,12 +5869,12 @@
       ],
       "file": "tools/direct_sync_relay_install_pack.py",
       "kind": "function",
-      "line": 1223,
+      "line": 1225,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 1225,
+          "line": 1227,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -8898,7 +8898,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "725ea52a80e11942bc18a989348f546d1d83068cd7005d1bef0db2bb73e7d1c6",
+  "inventory_sha256": "567b6e29cc796ceb31f7de6c97388ce1246e966aaee5a0a67defe7150ef040ff",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -18752,7 +18752,7 @@
         ],
         "file": "tools/direct_sync_relay_install_pack.py",
         "function": "tools.direct_sync_relay_install_pack.build_install_plan",
-        "line": 1161
+        "line": 1163
       }
     ]
   },
@@ -19184,7 +19184,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/direct_sync_relay_install_pack.py",
       "function": "tools.direct_sync_relay_install_pack._apply_task_runtime_acl",
-      "line": 569,
+      "line": 571,
       "marker_kind": "decorator",
       "source": "direct_sync_install_pack"
     },
@@ -19192,7 +19192,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/direct_sync_relay_install_pack.py",
       "function": "tools.direct_sync_relay_install_pack._python_runtime_import_report",
-      "line": 666,
+      "line": 668,
       "marker_kind": "decorator",
       "source": "direct_sync_install_pack"
     },
@@ -19200,7 +19200,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/direct_sync_relay_install_pack.py",
       "function": "tools.direct_sync_relay_install_pack._run_command",
-      "line": 1223,
+      "line": 1225,
       "marker_kind": "decorator",
       "source": "direct_sync_install_pack"
     },
