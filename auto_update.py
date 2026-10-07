@@ -2412,19 +2412,24 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
             prepared = prepared_pending(control, policy, state)
             action = startup_action(state, prepared_present=prepared)
             active = read_json(control / "active.json")
+            gui_arguments = arguments[1:] if role == "relay" and arguments[:1] == ["--container-audit-user-relay"] else arguments
             if state and state["phase"] == "DEFERRED" and state.get("retained_candidate") is True:
                 if active["sha"] != recovery_sha(state, pointer_sha=active["sha"]):
                     action = "WAIT_FOR_RECOVERY"
                 else:
-                    return start_current(control, policy, state, active, arguments, code="UPDATE_TERMINAL_RECOVERED")
+                    return start_current(control, policy, state, active, gui_arguments, code="UPDATE_TERMINAL_RECOVERED")
             if state and state["phase"] in {"CONFIRMED", "ROLLED_BACK"} and saw_trial:
                 if state["phase"] == "ROLLED_BACK":
-                    return start_current(control, policy, state, active, arguments, code="UPDATE_PREVIOUS_CONFIRMED")
+                    return start_current(control, policy, state, active, gui_arguments, code="UPDATE_PREVIOUS_CONFIRMED")
                 return 0  # The already-launched GUI owns input and its ordinary relay.
             if state and state["phase"] == "DEFERRED" and requested_at and _utc(state["deferred_at"]) >= _utc(requested_at):
-                launch_version(control, active["sha"], arguments, deferred_at=state["deferred_at"])
-                return 0
+                code = state.get("reason_code")
+                if code not in {"UPDATE_PREPARATION_FAILED", "UPDATE_EXISTING_WRITER"}:
+                    code = "UPDATE_TERMINAL_RECOVERED"
+                return start_current(control, policy, state, active, arguments, code=code)
             if action == "START_CURRENT":
+                if state and state["phase"] in {"ROLLED_BACK", "DEFERRED"}:
+                    return start_current(control, policy, state, active, arguments, code="UPDATE_TERMINAL_RECOVERED")
                 launch_version(control, active["sha"], arguments)
                 return 0
             if state and state["phase"] in {"UNKNOWN", "FAILED"}:
@@ -2432,26 +2437,6 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                     return 0  # The existing single application writer owns work.
                 if current_generation_status(control, policy, active["sha"]) == "ALLOW" and not prepared:
                     return start_current(control, policy, state, active, arguments, code="UPDATE_TERMINAL_RECOVERED")
-            if action == "REQUEST_TRIAL":
-                # Both the Run relay and a launcher request this same GUI trial.
-                # The GUI's ordinary onboarding starts its single normal relay.
-                with update_lock(control, policy["operator_sid"], trial=True):
-                    state = read_json(control / "transition.json")
-                    claim = optional_record(Path(policy["staging_root"]) / "trial.json")
-                    if claim and claim.get("nonce") == state["nonce"]:
-                        saw_trial = True
-                    else:
-                        gui_arguments = arguments[1:] if role == "relay" and arguments[:1] == ["--container-audit-user-relay"] else arguments
-                        pid = launch_version(control, active["sha"], gui_arguments, nonce=state["nonce"])
-                        write_json_durable(Path(policy["staging_root"]) / "trial.json", {"pid": pid, "nonce": state["nonce"], "transition_id": state["transition_id"]})
-                        root_arguments = []
-                        if "--data-root" in gui_arguments:
-                            index = gui_arguments.index("--data-root")
-                            if index + 1 >= len(gui_arguments):
-                                raise ValueError("trial data root argument is absent")
-                            root_arguments = gui_arguments[index:index + 2]
-                        launch_version(control, active["sha"], ["--container-audit-user-relay", *root_arguments], nonce=state["nonce"])
-                        saw_trial = True
             if action in {"REQUEST_APPLY", "REQUEST_TRIAL", "WAIT_FOR_RECOVERY", "WAIT_FOR_TRIAL"} and not requested:
                 requested_at = now_utc()
                 progress_deadline = time.monotonic() + APPLY_PROGRESS_TIMEOUT
@@ -2465,6 +2450,28 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                         return start_current(control, policy, state, active, arguments, code=code)
                     raise
                 requested = True
+                # The task may already have settled or switched this journal.
+                # Release ownership and reread it before creating a trial.
+                continue
+            if action == "REQUEST_TRIAL":
+                # Both the Run relay and a launcher request this same GUI trial.
+                # The GUI's ordinary onboarding starts its single normal relay.
+                with update_lock(control, policy["operator_sid"], trial=True):
+                    state = read_json(control / "transition.json")
+                    claim = optional_record(Path(policy["staging_root"]) / "trial.json")
+                    if claim and claim.get("nonce") == state["nonce"]:
+                        saw_trial = True
+                    else:
+                        pid = launch_version(control, active["sha"], gui_arguments, nonce=state["nonce"])
+                        write_json_durable(Path(policy["staging_root"]) / "trial.json", {"pid": pid, "nonce": state["nonce"], "transition_id": state["transition_id"]})
+                        root_arguments = []
+                        if "--data-root" in gui_arguments:
+                            index = gui_arguments.index("--data-root")
+                            if index + 1 >= len(gui_arguments):
+                                raise ValueError("trial data root argument is absent")
+                            root_arguments = gui_arguments[index:index + 2]
+                        launch_version(control, active["sha"], ["--container-audit-user-relay", *root_arguments], nonce=state["nonce"])
+                        saw_trial = True
             if requested and progress_deadline is not None and time.monotonic() >= progress_deadline:
                 if not state or state["phase"] in {"PREPARED", "CONFIRMED", "ROLLED_BACK", "DEFERRED", "FAILED", "UNKNOWN", "APPLIED_PENDING_READY"}:
                     if state and state["phase"] == "APPLIED_PENDING_READY" and writer_processes(process_snapshot(control), own_pid=os.getpid()):

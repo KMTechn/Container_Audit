@@ -549,6 +549,8 @@ CA 자동 업데이트 경계: 조상/코드 사전검증과 READY 읽기 경합
 sub-455 D-16은 세대 기록 뒤 READY 실패 시 candidate 유지와 공통 SID marker 선기록을
 headless 실제 프로세스로 검증한다. 실제 GUI READY 실패·SYSTEM task·bootstrap 실물은
 NOT VERIFIED이며 랩 VM 회차에서 이어 확인한다.
+sub-458의 기준판과 후보판에 함께 남는 설치기 focused 실패는 동일 노드·단언·예외 비교를
+INHERITED-FAILURES.md에 보존한다. 이 과제에서는 변경하지 않으며 설치기 후속 작업에서 고친다.
 극단 offset의 READY 시각도 UTC 표현 가능성을 확인하며, 미확인 증거는 기한/복귀를 중단하지 않는다.
 동일 계약 예외의 실제 교환 DDL 누락도 수정했고 root/tools DDL 누락을 기계적으로 검사한다.
 합성 경계와 기존 회귀의 증거는 sub-75 보고서이며 실제 안전/위험 배치·SYSTEM·로그온은 NOT TESTED다.

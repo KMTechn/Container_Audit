@@ -64,7 +64,7 @@ def endpoint(monkeypatch, tmp_path):
     monkeypatch.setattr(updates, "process_snapshot", lambda *_: [])
     monkeypatch.setattr(updates, "request_apply_task", lambda *_: updates.apply_prepared(control))
     # Time is an OS boundary. No production test hook is added.
-    ticks = iter(range(0, 1000000, 10))
+    ticks = iter(range(0, 1000000))
     monkeypatch.setattr(time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(time, "sleep", lambda *_: None)
     child_source = '''import contextlib, json, os, sys
@@ -87,7 +87,8 @@ observed = u.read_trial_generation(policy)
 decision = g.probe_downgrade([observed["marker_path"]], release["version"],
     app_id="container_audit", subject_sid=policy["operator_sid"], target_build_id=sha)
 Path(RESULT_PATH).write_text(json.dumps(dict(sha=sha, gate=gate, status=decision["status"],
-    ordinary=not bool(os.environ.get("KMTECH_CA_UPDATE_TRIAL_NONCE")), pid=os.getpid())))
+    ordinary=not bool(os.environ.get("KMTECH_CA_UPDATE_TRIAL_NONCE")),
+    relay="--container-audit-user-relay" in sys.argv, pid=os.getpid())))
 '''
     observation = tmp_path / "ordinary-child.json"
     for sha in versions:
@@ -105,9 +106,9 @@ Path(RESULT_PATH).write_text(json.dumps(dict(sha=sha, gate=gate, status=decision
     return control, stage, policy, state, marker, observation
 
 
-def assert_ordinary(endpoint, expected):
+def assert_ordinary(endpoint, expected, *, role="gui", arguments=None):
     control, _, _, _, _, observation = endpoint
-    assert updates.bootstrap(control.parent / "current/app", [], role="gui") == 0
+    assert updates.bootstrap(control.parent / "current/app", arguments or [], role=role) == 0
     assert observation.exists(), "next bootstrap did not launch any version"
     result = json.loads(observation.read_text())
     assert result["sha"] == expected
@@ -149,13 +150,16 @@ def test_x4_prepared_failure_launches_current(endpoint, monkeypatch, failure):
     assert_ordinary(endpoint, OLD)
 
 
-def test_e7_retained_candidate_starts_in_same_bootstrap(endpoint):
+@pytest.mark.parametrize("role", ["gui", "relay"])
+def test_e7_retained_candidate_starts_in_same_bootstrap(endpoint, role):
     control, _, _, state, marker, _ = endpoint
     generation.record_generation(marker, "v2.0.99", app_id="container_audit", subject_sid=SID, build_id=NEW)
     # Start in the trial so this same bootstrap has saw_trial=True before
     # SYSTEM retains candidate. A fresh bootstrap alone misses the old E7 bug.
     updates.write_json_durable(control / "transition.json", state)
-    assert_ordinary(endpoint, NEW)
+    arguments = ["--container-audit-user-relay"] if role == "relay" else []
+    assert_ordinary(endpoint, NEW, role=role, arguments=arguments)
+    assert json.loads(endpoint[-1].read_text())["relay"] is False
 
 
 def test_x7_terminal_recovery_reopens_prepared_path(endpoint):
@@ -209,7 +213,7 @@ def test_terminal_ordinary_admission_requires_every_condition(endpoint, monkeypa
     # startup_gate is the actual CA consumer. assert_version_writer has none.
     call = lambda: updates.startup_gate(updates.version_bundle(control, NEW) / "app", [])
     if defect in {"none", "cohort"}:
-        call()
+        assert call() is None
     else:
         if defect in {"phase", "pointer"}:
             assert call() == 0  # Routed to bootstrap, never ordinary admission.
@@ -229,7 +233,7 @@ def test_e1_stalled_prepared_journal_uses_locked_ordinary_start(endpoint, monkey
 
 @pytest.mark.parametrize("record", ["policy.json", "active.json"])
 def test_e2_read_failure_is_recorded_before_next_normal_start(endpoint, monkeypatch, record):
-    control, _, _, _, _, _ = endpoint
+    control, stage, _, _, _, _ = endpoint
     (control / "transition.json").unlink()
     updates.write_json_durable(control / "active.json", {"sha": OLD})
     read = updates.read_json
@@ -242,9 +246,12 @@ def test_e2_read_failure_is_recorded_before_next_normal_start(endpoint, monkeypa
         assert updates.apply_prepared(control) == 0
     assert read(control / "transition.json")["phase"] == "DEFERRED"
     assert_ordinary(endpoint, OLD)
+    report = updates.read_json(stage / "startup-support.json")
+    assert report["transition_code"] in updates.PUBLIC_CODES
+    assert report["retained_candidate"] is False
 
 
-def hotfix_packet(endpoint, monkeypatch):
+def hotfix_packet(endpoint, monkeypatch, *, base_sha=OLD):
     """Real ES256, archive validation, contract hashing and protected copying."""
     import update_service
     from tests.test_runtime_file_inventory import packet
@@ -253,7 +260,7 @@ def hotfix_packet(endpoint, monkeypatch):
 
     control, stage, _, _, _, _ = endpoint
     hot = "8" * 40
-    base = updates.version_bundle(control, OLD)
+    base = updates.version_bundle(control, base_sha)
     with P256KeyPair.generate() as signer:
         public = json.dumps(signer.public_jwk, sort_keys=True)
         configuration = json.dumps({"manifest_public_key": public}).encode()
@@ -284,6 +291,7 @@ def hotfix_packet(endpoint, monkeypatch):
             install=dict(strategy="robocopy_backup_then_mirror", preserve_paths=["config", "logs", "ledger"],
                          restart_executable="Container_Audit.exe"))
         manifest["auto_update"]["to_commit"] = hot
+        manifest["auto_update"]["from_commit"] = base_sha
         updates.write_json_durable(stage / "manifest.json", manifest)
         (stage / "manifest.sig").write_bytes(signer.sign_es256(update_service.canonical_manifest_bytes(manifest)))
     (stage / "packet.zip").write_bytes(raw)
@@ -297,9 +305,10 @@ def hotfix_packet(endpoint, monkeypatch):
     return hot
 
 
-def test_x7_real_signed_hotfix_applies_after_terminal_recovery(endpoint, monkeypatch):
+@pytest.mark.parametrize("phase", ["FAILED", "UNKNOWN"])
+def test_x7_real_signed_hotfix_applies_after_terminal_recovery(endpoint, monkeypatch, phase):
     control, _, _, state, _, _ = endpoint
-    updates.write_json_durable(control / "transition.json", {**state, "phase": "FAILED"})
+    updates.write_json_durable(control / "transition.json", {**state, "phase": phase})
     hot = hotfix_packet(endpoint, monkeypatch)
     written = updates.write_json_durable
     def observe(path, value):
@@ -311,6 +320,21 @@ def test_x7_real_signed_hotfix_applies_after_terminal_recovery(endpoint, monkeyp
         updates.apply_prepared(control)
     assert updates.read_json(control / "active.json")["sha"] == hot
     assert updates.read_json(control / "transition.json")["phase"] == "APPLIED_PENDING_READY"
+
+
+def test_x2_retained_candidate_is_previous_for_next_signed_failure(endpoint, monkeypatch):
+    control, stage, _, _, marker, _ = endpoint
+    generation.record_generation(marker, "v2.0.99", app_id="container_audit", subject_sid=SID, build_id=NEW)
+    assert updates.apply_prepared(control) == 20
+    assert updates.read_json(control / "transition.json")["retained_candidate"] is True
+    hot = hotfix_packet(endpoint, monkeypatch, base_sha=NEW)
+    assert updates.apply_prepared(control) == 0
+    state = updates.read_json(control / "transition.json")
+    assert state["candidate_sha"] == hot
+    assert state["previous_sha"] == NEW
+    assert state["phase"] == "ROLLED_BACK"
+    assert not (stage / "ready.json").exists()
+    assert_ordinary(endpoint, NEW)
 
 
 def test_e8_unknown_generation_does_not_begin_a_trial(endpoint, monkeypatch):

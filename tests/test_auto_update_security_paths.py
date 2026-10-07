@@ -104,11 +104,21 @@ def test_readiness_io_error_keeps_normal_rollback_and_original_proof(monkeypatch
     from test_auto_update import test_engine_candidate_exit_selects_generation_compatible_code_without_reverting_data
 
     original = updates.read_json
+    write = updates.write_json_durable
+    def proof(path, value):
+        write(path, value)
+        if path.name == "trial.json" and record == "ready.json":
+            # An incomplete candidate proof is unconfirmed and must be preserved.
+            write(path.with_name("ready.json"), {**value, "sha": "2" * 40})
+    monkeypatch.setattr(updates, "write_json_durable", proof)
+    import time
+    ticks = iter(range(0, 10000, 10))
+    monkeypatch.setattr(time, "monotonic", lambda: next(ticks))
     denied = []
     def contested(path, **kwargs):
         journal = tmp_path / "managed/update-control/transition.json"
         if path.name == record and journal.exists() and not denied:
-            if original(journal)["phase"] == "ROLLBACK_PENDING_READY":
+            if original(journal)["phase"] == "APPLIED_PENDING_READY":
                 denied.append(path.read_bytes())
                 raise OSError("synthetic sharing contention")
         return original(path, **kwargs)

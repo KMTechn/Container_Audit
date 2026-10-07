@@ -21,6 +21,9 @@ def test_unrepresentable_ready_is_unconfirmed_in_both_trial_phases(timestamp, ro
         pending["failure_decision"] = {"selected_sha": OLD}
         state = updates.rollback_transition(pending,
             writers_absent=True, previous_verified=True, durable_rollback=True, nonce="8" * 32, now=NOW)
+        assert state["phase"] == "ROLLED_BACK"
+        # Legacy journals remain readable, although E6 creates no old-code trial.
+        state = {**state, "phase": "ROLLBACK_PENDING_READY"}
         state = updates.bind_trial(state, sha=OLD, pid=42, ordinary_user=True, now=NOW)
     receipt = {**ready(state), "sha": state["trial_sha"], "ready_at": timestamp}
     assert updates.ready_matches(state, receipt, process_matches=True, relay_matches=True, now=LATER) is False
@@ -53,6 +56,15 @@ def test_extreme_ready_keeps_deadline_and_code_rollback_alive(tmp_path, monkeypa
         "operator_sid": sid, "staging_root": str(stage),
         "operator_local_app_data": str(tmp_path / "user"),
     }
+    from kmtech_shared import data_generation as generation
+    from writer_session_fence import canonical_control_root
+    local = tmp_path / "user"
+    local.mkdir()
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    marker = canonical_control_root({"LOCALAPPDATA": str(local)}) / "data-generation" / (sid + ".json")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    generation.record_generation(marker, "v2.0.98", app_id="container_audit", subject_sid=sid, build_id=OLD)
+    marker_before = marker.read_bytes()
     updates.write_json_durable(control / "policy.json", policy)
     updates.write_json_durable(control / "active.json", {"schema": updates.SCHEMA, "sha": NEW})
     state = {**trial(), "generation_before": updates.read_trial_generation(policy),
@@ -90,11 +102,13 @@ def test_extreme_ready_keeps_deadline_and_code_rollback_alive(tmp_path, monkeypa
     monkeypatch.setattr(updates, "process_snapshot", snapshot)
     code = updates.apply_prepared(control)
     state = updates.read_json(control / "transition.json")
-    assert code == (0 if previous_ready else 20)
-    assert state["phase"] == ("ROLLED_BACK" if previous_ready else "FAILED")
+    assert code == 0
+    assert state["phase"] == "ROLLED_BACK"
     assert state["failed_shas"] == [NEW]
     assert updates.read_json(control / "active.json")["sha"] == OLD
-    assert "APPLIED_PENDING_READY" in phases and "ROLLBACK_PENDING" in phases and "ROLLBACK_PENDING_READY" in phases
+    assert "APPLIED_PENDING_READY" in phases and "ROLLBACK_PENDING" in phases
+    assert "ROLLBACK_PENDING_READY" not in phases
+    assert marker.read_bytes() == marker_before
     assert "Verify" in helpers
     assert business.read_bytes() == b"unchanged business state"
     assert (control / "policy.json").read_bytes() == policy_before
