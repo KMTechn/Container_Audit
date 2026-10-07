@@ -1528,6 +1528,10 @@ def test_portable_preflight_failure_removes_prepared_writer_session(tmp_path, ob
     wrapper = eval(compile(ast.Expression(wrapper_expression), "<readonly-packet-fixture>", "eval"),
                    {"repo": Path(__file__).resolve().parents[1], "repr": repr, "str": str, "sys": sys, "Path": Path})
     (source / "app" / "main.py").write_text(wrapper, encoding="utf-8")
+    # Real source admission also binds the candidate's version file/manifest.
+    # Keep that reader active so the intended injected failure is reached.
+    version_file = ROOT / 'Container_Audit.py'
+    shutil.copyfile(version_file, source / 'app/Container_Audit.py')
     python_exe = str(Path(sys.executable)).replace("'", "''")
     interpreter_adapter = (
         "$Script:ReadonlyFixturePythonExe='" + python_exe + "'\n"
@@ -1567,6 +1571,8 @@ def test_portable_preflight_failure_removes_prepared_writer_session(tmp_path, ob
     installer_path.write_text(installer, encoding="utf-8")
     manifest_path = source / "portable-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    from auto_update import source_version_literal
+    manifest['version'] = source_version_literal(version_file.read_bytes())
     manifest["installer_sha256"] = hashlib.sha256(installer_path.read_bytes()).hexdigest()
     files = [
         path
