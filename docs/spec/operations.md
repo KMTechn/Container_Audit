@@ -1366,3 +1366,5 @@ Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종�
 배포 집합의 PowerShell 파일에 비ASCII 문자열이 있으면 UTF-8 BOM을 포함한다. Windows PowerShell 5.1의 cp949 기본 판독에서도 UTF-8로 감지되어 한국어 안내와 구문을 보존해야 한다. G after 해시와 고정 선언·pin은 BOM을 포함한 committed LF 바이트를 기준으로 확인한다.
 
 설치기는 제공된 wrapper로만 실행하며 PowerShell 진입점에 인수를 손으로 입력하지 않는다. 모르는 인수·잘못된 Mode의 앞단 binder 출력 제한은 컷 뒤 항목이다.
+
+알려진 P2: 새 앱에서 드물게 스캔이 1–5초 멈출 수 있음(writer fence 대기 중 CSV drain·fsync 경합); `msg_12baf9aee551`에 따른 컷 뒤 개선 대상이며 새 스캔의 내구 기록·fsync는 유지한다.

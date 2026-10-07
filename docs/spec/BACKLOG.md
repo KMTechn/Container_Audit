@@ -741,3 +741,5 @@ NOT TESTED이며 coordinator의 랩 예행과 독립 확인에 남긴다.
 - sub-413 P2 컷 뒤 — fence/evidence 초기화 전 `CODE_PRESTATE_WRITER_SEMANTICS_DIFFER` 거절의 공개 capsule은 계약 0f `REPORT_UNAVAILABLE`·정확 throw 위치/type·exit=1을 유지하지만 개별 고정 실패 코드를 내지 않는다. 코디 10-06 16:0x 승인에 따라 원문 보호 보고서 보완 없이 현장/IT용 코드 노출만 후속 처리한다.
 
 - P2 / sub-431: unfenced inverse의 `INSTALL_THIS_PC.ps1:608`은 main catch 전 `CONTAINER_WRITER_FENCE_PARAMETERS_INVALID` 고정 코드와 PS 스크립트 위치/고정 소스만 되찍힌다(외부 입력 원문0, 기준877도 동일). 1차 msg_78ffa7a6332c에서 기존 PS 인수 처리 P2(msg_cd7f16dd1e09)와 같은 부류로 판정; 공개 경계 확장은 컷 뒤, 이번 rollback 고침에서는 유지.
+
+- P2 / sub-413 컷 뒤: 새 앱에서 드물게 스캔이 1–5초 멈출 수 있음(writer fence 대기 중 CSV drain·fsync 경합); 코디 결정 `msg_12baf9aee551`에 따라 알려진 꼬리를 기록하며 새 스캔의 내구 기록·fsync·500ms 측정 기준은 유지한다.
