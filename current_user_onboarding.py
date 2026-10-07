@@ -309,12 +309,33 @@ def _exception_chain(error: BaseException):
         error = error.__cause__ or error.__context__
 
 
+def _failure_location(error: BaseException) -> dict[str, Any]:
+    chain = list(_exception_chain(error))
+    fields = {"exception_type": type(chain[-1]).__module__ + "." + type(chain[-1]).__name__}
+    app_root = Path(__file__).resolve().parent
+    for cause in reversed(chain):
+        selected = None
+        frame = cause.__traceback__
+        while frame is not None:
+            module = frame.tb_frame.f_globals.get("__name__")
+            function = frame.tb_frame.f_code.co_name
+            if (isinstance(module, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,127}", module)
+                    and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,127}", function)
+                    and Path(frame.tb_frame.f_code.co_filename).resolve().is_relative_to(app_root)):
+                selected = {"location_module": module, "location_function": function,
+                            "location_line": frame.tb_lineno}
+            frame = frame.tb_next
+        if selected is not None:
+            fields.update(selected)
+            break
+    return fields
+
+
 def emit_installer_failure(error: BaseException, stage: str) -> int:
     """Emit one allowlisted record; never serialize an exception message."""
     from auto_update import public_record
     attempt = _FAILURE_ATTEMPT.get()
     chain = list(_exception_chain(error))
-    cause = chain[-1]
     from data_generation_guard import DataGenerationBlocked
     reason = "INSTALLER_CHILD_FAILURE"
     exit_code = ONBOARDING_EXIT_CODE
@@ -342,17 +363,10 @@ def emit_installer_failure(error: BaseException, stage: str) -> int:
                     break
     fields = {
         "status": "FAILED", "stage": stage, "reason_code": reason,
-        "exception_type": type(cause).__module__ + "." + type(cause).__name__,
         "exit_code": exit_code, "guidance": guidance,
         "attempt_id": attempt["id"] if attempt else uuid.uuid4().hex,
     }
-    frame = cause.__traceback__
-    if frame is not None:
-        while frame.tb_next is not None:
-            frame = frame.tb_next
-        fields.update(location_module=frame.tb_frame.f_globals.get("__name__"),
-                      location_function=frame.tb_frame.f_code.co_name,
-                      location_line=frame.tb_lineno)
+    fields.update(_failure_location(error))
     # These caller-selected/current-user report roots have no proven reader ACL.
     # An atomic JSON write alone does not authorize publishing original text.
     fields["report_status"] = "REPORT_UNAVAILABLE"
@@ -368,7 +382,7 @@ def _new_failure_attempt():
 
 def _persist_failure_report(path: Path, report: dict[str, Any], error: BaseException,
                             *, create_new: bool = False) -> None:
-    from auto_update import _failure_details, mixed_status_record
+    from auto_update import _failure_details, mixed_status_record, public_record
     attempt = _FAILURE_ATTEMPT.get()
     if attempt:
         attempt["publications"].pop(id(error), None)
@@ -377,6 +391,7 @@ def _persist_failure_report(path: Path, report: dict[str, Any], error: BaseExcep
     report["failure_details"] = mixed_status_record({"failure_details": _failure_details(error)})["failure_details"]
     report["failure_evidence_refs"] = []
     report["failure_evidence_status"] = "REPORT_UNAVAILABLE"
+    report.update(public_record(_failure_location(error), INSTALLER_PUBLIC_CODES, INSTALLER_SAFE_MESSAGES))
     try:
         # Only diagnostic fields are transformed; generic metadata writers keep
         # their original-byte/fail-closed contract for READY and owner records.
@@ -1853,10 +1868,10 @@ def onboard_current_user(
                 bootstrap_integrity_detail.get("status") or "UNKNOWN"
             ).lower()
             report["bootstrap_integrity_detail"] = bootstrap_integrity_detail
-            from data_generation_guard import record_before_owner_paths
+            from data_generation_guard import probe_before_owner_paths, record_before_owner_paths
             tls_ca_source, prepared_credential, _ = (prepared_inputs if prepared_inputs is not None
                 else _prepare_onboarding_inputs(paths, tls_ca_source, environ, credential_loader))
-            record_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values())
+            probe_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values())
             # Preserve the canonical installer's explicit legacy-transition
             # locator when refreshing this existing installation result. The
             # retirement controller alone validates and consumes its proof.
@@ -1953,6 +1968,10 @@ def onboard_current_user(
                 raise ValueError(
                     "configured TLS CA bundle was not persisted in the logistics profile"
                 )
+            # Registration preparation is read-only with respect to generation.
+            # READY owner/TLS readback precedes the marker; the marker precedes
+            # the first business ledger open and the public READY result.
+            record_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values())
             ledger_factory(paths.ledger_path)
             if not paths.ledger_path.is_file():
                 raise ValueError("current-user business ledger readback failed")

@@ -178,6 +178,52 @@ def test_report_reference_binds_current_atomic_utf8_publication(tmp_path, monkey
     assert not list(path.parent.glob('failure-text-*.json'))
 
 
+@pytest.mark.parametrize('stage', ('onboarding', 'current_user_removal'))
+def test_saved_failure_retains_application_location_without_private_text(tmp_path, capsys, stage):
+    path = tmp_path / 'failure.json'
+    private = secrets.token_hex(20)
+    try:
+        onboarding._read_json(tmp_path / (private + '.json'), 'private ' + private)
+    except ValueError as error:
+        report = {'status': 'FAILED'}
+        onboarding._persist_failure_report(path, report, error)
+        onboarding.emit_installer_failure(error, stage)
+    record = _public(capsys.readouterr().err, private)
+    saved = json.loads(path.read_bytes())
+    assert saved['exception_type'] == record['exception_type']
+    assert saved['location_module'] == record['location_module'] == 'current_user_onboarding'
+    assert saved['location_function'] == record['location_function'] == '_read_json'
+    assert saved['location_line'] == record['location_line'] > 0
+    assert private not in path.read_text(encoding='utf-8')
+
+
+def test_unraised_cause_still_reports_application_failure_location(tmp_path, capsys):
+    private = secrets.token_hex(20)
+    try:
+        raise onboarding.CurrentUserOnboardingError(private, report_path=tmp_path / 'report.json') from ValueError(private)
+    except onboarding.CurrentUserOnboardingError as error:
+        onboarding.emit_installer_failure(error, 'onboarding')
+    record = _public(capsys.readouterr().err, private)
+    assert record['location_module'] == __name__
+    assert record['location_function'] == 'test_unraised_cause_still_reports_application_failure_location'
+    assert record['location_line'] > 0
+
+
+def test_json_decoder_failure_reports_innermost_application_frame(tmp_path, capsys):
+    private = secrets.token_hex(20)
+    path = tmp_path / 'bad.json'
+    path.write_text('{"private":"' + private + '"', encoding='utf-8')
+    try:
+        onboarding._read_json(path, 'synthetic input')
+    except ValueError as error:
+        onboarding.emit_installer_failure(error, 'onboarding')
+    record = _public(capsys.readouterr().err, private)
+    assert record['exception_type'] == 'json.decoder.JSONDecodeError'
+    assert record['location_module'] == 'direct_sync_push'
+    assert record['location_function'] == 'load_json_no_duplicate_keys'
+    assert record['location_line'] > 0
+
+
 def test_failed_publication_has_no_reference_to_preexisting_report(tmp_path, monkeypatch, capsys):
     _, path, old, failure, _ = _published_failure(monkeypatch, tmp_path, capsys, reject=True)
     if 'report_path' in failure or failure.get('report_status') != 'REPORT_UNAVAILABLE' or path.read_bytes() != old:

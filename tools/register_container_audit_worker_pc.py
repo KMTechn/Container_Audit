@@ -2930,8 +2930,8 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
     with writer_admission("worker_pc_registration"):
         hostname = args.hostname or socket.gethostname()
         storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
-        from data_generation_guard import record_before_owner_paths
-        record_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
+        from data_generation_guard import probe_before_owner_paths
+        probe_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
         ensure_container_audit_storage_dirs(storage_paths)
         identity = _resolve_producer_identity(
             args,
@@ -3275,8 +3275,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.verify_manifest_hash:
         try:
             with writer_admission("worker_pc_registration"):
-                from data_generation_guard import record_before_owner_paths
-                record_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
+                from data_generation_guard import probe_before_owner_paths
+                probe_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
             manifest_path = Path(args.manifest_path).expanduser()
             if not args.manifest_path or not manifest_path.is_file():
                 raise DirectSyncPushError("producer manifest is absent")
@@ -3294,8 +3294,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if bool(getattr(args, "admin_recovery_two_phase", False)):
         with writer_admission("worker_pc_registration"):
-            from data_generation_guard import record_before_owner_paths
-            record_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
+            from data_generation_guard import probe_before_owner_paths
+            probe_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
         resume_storage_paths = build_container_audit_storage_paths(
             application_path=args.app_root
         )
@@ -3334,6 +3334,11 @@ def main(argv: list[str] | None = None) -> int:
                     _write_registration_report(
                         str(completed_report_path), completed_report, indent=2
                     )
+                    from auto_update import mixed_status_record
+                    if not _strict_json_value_equal(load_json_no_duplicate_keys(completed_report_path.read_bytes()), mixed_status_record(completed_report)):
+                        raise DirectSyncPushError("persisted registration report exact readback differs")
+                    from data_generation_guard import record_before_owner_paths
+                    record_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
                     resume_journal.remove_sealed_package_after_complete()
                     emit_support_record({'status_file_path': str(completed_report_path.resolve())}, stage='registration')
                     return 0
@@ -3498,6 +3503,12 @@ def main(argv: list[str] | None = None) -> int:
             report["recovery_two_phase_complete"] = True
             _write_registration_report(str(report_path), report, indent=2)
             two_phase_journal.remove_sealed_package_after_complete()
+        if report.get("server_registration_verified") is True:
+            from auto_update import mixed_status_record
+            if not _strict_json_value_equal(load_json_no_duplicate_keys(report_path.read_bytes()), mixed_status_record(report)):
+                raise DirectSyncPushError("persisted registration report exact readback differs")
+            from data_generation_guard import record_before_owner_paths
+            record_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
         emit_support_record({'status_file_path': str(report_path.resolve())}, stage='registration')
         return 0
 

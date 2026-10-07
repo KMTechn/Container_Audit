@@ -15,6 +15,12 @@ G의 REFUSE/UNKNOWN은 직접 등록·지원 명령과 앱 하위 모드에서�
 예약 작업, 실행 중 relay를 변경하지 않고 고정 한국어 원인과 복구 안내를 출력한다.
 정상 허용은 기존 자료-open admission·등록·quantity/membership·ACK 순서를 유지한다.
 
+온보딩과 직접 등록의 준비·실패·manifest 검증은 세대 표시를 새로 확정하지 않는다.
+등록은 서버 확인과 문서·최종 보고서 readback 뒤, 온보딩은 READY owner/TLS readback
+뒤이자 업무 ledger를 열기 전에 기존 owner root의 세대를 내구 기록한다. READY 공개
+결과도 이 기록 뒤다. 이 사이 중단에는 새 업무 ledger가 없으며, 업무 자료가 열린
+뒤에는 기존 G 표시와 startup guard가 옛 판의 자료 접근을 계속 거절한다.
+
 Canonical 설치는 fence·placement·Run/task·relay 변경 전에 기존 onboarding의
 `--preflight-only` 호출로 credential locator와 nested owner의 G를 모두 끝낸다.
 설치 source는 canonical이 검증한 stock의 기존 전체 코드 inventory SHA를 명시적으로 전달한다.

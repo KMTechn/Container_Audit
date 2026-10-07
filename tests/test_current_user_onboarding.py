@@ -1383,6 +1383,74 @@ def test_missing_registration_result_is_unknown_not_success(tmp_path):
     assert report["action"] == "UNKNOWN"
 
 
+def _generation_packet(tmp_path, monkeypatch):
+    import data_generation_guard as guard
+    from tests.test_canonical_stock_rollback import _packet
+    packet = tmp_path / 'packet'
+    _packet(packet, installed=True)
+    monkeypatch.setattr(guard, '__file__', str(packet / 'app/data_generation_guard.py'))
+    return packet / 'app'
+
+
+@pytest.mark.usefixtures('existing_possession_key_contract')
+def test_registration_failure_keeps_old_generation_rollback_open(tmp_path, monkeypatch):
+    from kmtech_shared import data_generation as generation
+    app_root = _generation_packet(tmp_path, monkeypatch)
+    data = tmp_path / 'state'
+    with pytest.raises(CurrentUserOnboardingError):
+        onboard_current_user(app_root, environ={'CONTAINER_AUDIT_DATA_ROOT': str(data)},
+                             registration_runner=lambda paths: 2)
+    assert not list(data.rglob('data-generation.json'))
+    assert not (data / 'transfer_seal/transfer_seal.db').exists()
+    decision = generation.probe_downgrade([data / 'data-generation.json'], 'v2.0.4',
+        app_id='container_audit', subject_sid=registration._current_user_sid(), target_build_id='b' * 40)
+    assert decision['status'] == 'ALLOW'
+
+
+@pytest.mark.usefixtures('existing_possession_key_contract')
+def test_ready_generation_is_durable_before_first_business_ledger_open(tmp_path, monkeypatch):
+    from kmtech_shared import data_generation as generation
+    app_root = _generation_packet(tmp_path, monkeypatch)
+    data = tmp_path / 'state'
+    paths = resolve_current_user_onboarding_paths(app_root, environ={'CONTAINER_AUDIT_DATA_ROOT': str(data)})
+    def register(selected):
+        _ready_state(selected)
+        return 0
+    def ledger(path):
+        markers = list(data.rglob('data-generation.json'))
+        assert markers
+        assert inspect_current_user_state(paths, profile_loader=_profile_loader,
+                                          credential_loader=_credential_loader)['status'] == 'READY'
+        decision = generation.probe_downgrade(markers, 'v2.0.4', app_id='container_audit',
+            subject_sid=registration._current_user_sid(), target_build_id='b' * 40)
+        assert decision['status'] == 'REFUSE'
+        raise SystemExit('synthetic interruption before ledger open')
+    with pytest.raises(SystemExit):
+        onboard_current_user(app_root, environ={'CONTAINER_AUDIT_DATA_ROOT': str(data)},
+            registration_runner=register, profile_loader=_profile_loader,
+            credential_loader=_credential_loader, ledger_factory=ledger)
+    assert not paths.ledger_path.exists()
+    assert not paths.onboarding_report_path.exists()
+    assert list(data.rglob('data-generation.json'))
+
+
+@pytest.mark.usefixtures('existing_possession_key_contract')
+def test_ready_registration_interruption_precedes_all_business_data(tmp_path, monkeypatch):
+    app_root = _generation_packet(tmp_path, monkeypatch)
+    data = tmp_path / 'state'
+    paths = resolve_current_user_onboarding_paths(app_root, environ={'CONTAINER_AUDIT_DATA_ROOT': str(data)})
+    def register(selected):
+        _ready_state(selected)
+        raise SystemExit('synthetic interruption after registration documents')
+    with pytest.raises(SystemExit):
+        onboard_current_user(app_root, environ={'CONTAINER_AUDIT_DATA_ROOT': str(data)},
+            registration_runner=register, profile_loader=_profile_loader, credential_loader=_credential_loader)
+    assert inspect_current_user_state(paths, profile_loader=_profile_loader,
+                                      credential_loader=_credential_loader)['status'] == 'READY'
+    assert not paths.ledger_path.exists()
+    assert not list(data.rglob('data-generation.json'))
+
+
 @pytest.mark.usefixtures("existing_possession_key_contract")
 def test_missing_bootstrap_integrity_is_diagnostic_warning_not_startup_failure(
     tmp_path,
