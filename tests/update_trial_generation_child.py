@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -45,6 +46,24 @@ def run(mode, scenario, role, root):
             mark(path, NEW_VERSION, NEW, **options)
             if index == 0 and scenario == "shared":
                 os._exit(17)  # Durable shared marker, no owner marker or data write.
+        if scenario == "ready":
+            # A real child publishes a headless READY receipt and remains alive
+            # until the actual confirmation/pointer readback has completed.
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                state = updates.read_json(root / "control/transition.json")
+                if state.get("trial_pid") == os.getpid():
+                    break
+                time.sleep(0.01)
+            else:
+                raise RuntimeError("ready child was not bound to its real PID")
+            proof = {**{name: True for name in updates.READY_CHECKS}, "pid": os.getpid(),
+                "sha": NEW, "nonce": state["nonce"], "transition_id": state["transition_id"],
+                "ready_at": updates.now_utc()}
+            updates.write_json_durable(root / "ready.json", proof)
+            while not (root / "release-child").exists():
+                time.sleep(0.01)
+            return
         if scenario == "unknown":
             slots[0].write_bytes(b"{unreadable-generation")
         (root / "business.bin").write_bytes(b"candidate data preserved")
@@ -69,15 +88,38 @@ def run(mode, scenario, role, root):
         state = updates.apply_transition(state, writers_absent=True, packet_verified=True,
                                          durable_prepared=True, now=updates.now_utc())
         updates.persist_switch(control, state, NEW)
-        result = subprocess.run([sys.executable, "-B", __file__, "candidate", scenario, role, str(root)],
-            capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        if result.returncode != 17:
-            raise RuntimeError("candidate harness did not reach the injected exit")
-        state = updates.request_rollback(state, reason="candidate startup failed or readiness timed out")
-        updates.write_json_durable(control / "transition.json", state)
-        if hasattr(updates, "decide_trial_failure"):
-            state = updates.decide_trial_failure(state, policy)
+        command = [sys.executable, "-B", __file__, "candidate", scenario, role, str(root)]
+        if scenario == "ready":
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            try:
+                state = updates.bind_trial(state, sha=NEW, pid=process.pid,
+                    ordinary_user=True, now=updates.now_utc())
+                updates.write_json_durable(control / "transition.json", state)
+                deadline = time.monotonic() + 10
+                while not (root / "ready.json").exists() and time.monotonic() < deadline:
+                    if process.poll() is not None:
+                        raise RuntimeError("ready child exited before its receipt")
+                    time.sleep(0.01)
+                proof = updates.read_json(root / "ready.json")
+                state = updates.confirm_transition(state, proof,
+                    process_matches=process.poll() is None and proof["pid"] == process.pid,
+                    relay_matches=proof["ordinary_user_relay"] is True, now=updates.now_utc())
+            finally:
+                (root / "release-child").write_bytes(b"normal child stop")
+                output, errors = process.communicate()
+            if process.returncode:
+                raise RuntimeError("ready child failed its normal stop")
+        else:
+            result = subprocess.run(command, capture_output=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if result.returncode != 17:
+                raise RuntimeError("candidate harness did not reach the injected exit")
+            state = updates.request_rollback(state, reason="candidate startup failed or readiness timed out")
             updates.write_json_durable(control / "transition.json", state)
+            if hasattr(updates, "decide_trial_failure"):
+                state = updates.decide_trial_failure(state, policy)
+                updates.write_json_durable(control / "transition.json", state)
         if mode == "interrupt":
             os._exit(19)  # Decision is durable; active still points to candidate.
     else:

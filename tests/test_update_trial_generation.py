@@ -76,6 +76,15 @@ def test_unknown_generation_next_attempt_keeps_support_guidance_and_all_evidence
         assert {path: path.read_bytes() for path in root.rglob("*") if path.is_file()} == evidence
 
 
+@pytest.mark.parametrize("role", ["gui", "relay"])
+def test_successful_ready_still_confirms_candidate_after_generation(tmp_path, role):
+    result = child(tmp_path / "trial", "ready", role)
+    assert result["phase"] == "CONFIRMED"
+    assert result["selected_sha"] == NEW and result["candidate_status"] == "ALLOW"
+    assert result["shared_build"] == result["owner_build"] == NEW
+    assert result["decision"] is None
+
+
 @pytest.mark.parametrize("shell", ["powershell", "pwsh"])
 def test_powershell_file_child_retains_candidate_after_generation(tmp_path, shell):
     executable = shutil.which(shell)
