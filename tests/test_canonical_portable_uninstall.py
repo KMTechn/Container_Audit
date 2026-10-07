@@ -407,12 +407,12 @@ def _setup(tmp_path, fault='', *, stock_version_identity=False):
         assert text.count(retired_target) == 1
         text = text.replace(retired_target, "        if($env:CA_UNINSTALL_INJECT -ceq '1'){throw ('AFTER_REMOVAL_INJECTED_FAILURE'+$env:CUSTOM_REMOVAL_SECRET)}\n" + retired_target)
     elif fault in {'final_evidence', 'audit_unavailable'}:
-        condition = "$Value['status'] -ceq 'PASS_UNINSTALLED_DATA_PRESERVED' -and $Path -ceq $EvidencePath"
+        condition = "$Value.status -ceq 'PASS_UNINSTALLED_DATA_PRESERVED' -and $Path -ceq $EvidencePath"
         if fault == 'audit_unavailable':
-            condition = "($Value['status'] -ceq 'UNINSTALL_AWAITING_FENCE_RELEASE' -or $Value['status'] -ceq 'FAILED_REMOVAL_INCOMPLETE' -or $Value['status'] -ceq 'FAILED_ROLLED_BACK')"
+            condition = "($Value.status -ceq 'UNINSTALL_AWAITING_FENCE_RELEASE' -or $Value.status -ceq 'FAILED_REMOVAL_INCOMPLETE' -or $Value.status -ceq 'FAILED_ROLLED_BACK')"
         target = 'function Save([string]$Path, $Value, [bool]$SanitizeDiagnostics=$false) {'
         assert text.count(target) == 1
-        text = text.replace(target, target + "\n    if ($env:CA_UNINSTALL_INJECT -ceq '1' -and $Value -is [Collections.IDictionary] -and $Value.Contains('status') -and (" + condition + ")) { throw ('AUDIT_INJECTED_FAILURE'+$env:CUSTOM_REMOVAL_SECRET) }")
+        text = text.replace(target, target + "\n    if ($env:CA_UNINSTALL_INJECT -ceq '1' -and (($Value -is [Collections.IDictionary] -and $Value.Contains('status')) -or ($null -ne $Value.PSObject.Properties['status'])) -and (" + condition + ")) { throw ('AUDIT_INJECTED_FAILURE'+$env:CUSTOM_REMOVAL_SECRET) }")
     elif fault == 'forged':
         target = "$child=Invoke-InstallationEvidenceChild 'supported-content-removal' $winps $args"
         assert text.count(target) == 1

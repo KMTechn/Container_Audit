@@ -1,8 +1,9 @@
 # CA port of sub-291 rollback-sink-probe: actual catch/finally and isolated native boundaries.
-param([string]$Source,[string]$Output,[string]$Python,[string]$Child,[string]$Root,[string]$RecoveryCase='normal')
+param([string]$CanonicalSource,[string]$Output,[string]$Python,[string]$Child,[string]$Root,[string]$RecoveryCase='normal')
 $ErrorActionPreference='Stop'
 $tokens=$null;$errors=$null
-$ast=[Management.Automation.Language.Parser]::ParseFile($Source,[ref]$tokens,[ref]$errors)
+$ast=[Management.Automation.Language.Parser]::ParseFile($CanonicalSource,[ref]$tokens,[ref]$errors)
+$source=Split-Path -Parent $CanonicalSource
 if($errors.Count){throw 'parse errors'}
 $clauses=$ast.FindAll({param($n) $n -is [Management.Automation.Language.CatchClauseAst] -and $n.Body.Extent.Text.Contains('if (-not $enteredPlacementTry)')},$true)
 if($clauses.Count -ne 1){throw 'exact catch not found'}
@@ -33,7 +34,7 @@ foreach($definition in $readerDefinitions) {
 $body=$clauses[0].Body.Extent.Text
 $script:state=@{code='before';data='before';run='before';task='before';relay='before'}
 $script:observed=[ordered]@{product_removal=0;code_restore=0;run_restore=0;task_restore=0;relay_start=0;fence_release=0;audit=0}
-. (Join-Path (Split-Path -Parent $Source) 'tools/bootstrap_integrity.ps1')
+. (Join-Path $source 'tools/bootstrap_integrity.ps1')
 
 # The lifecycle assembly captures finite children and proves READY through this
 # adapter; retain the existing native-free restore/restart observations.
@@ -68,19 +69,19 @@ $script:actualGenerationProbe = ${function:Assert-ContainerDataGenerationTarget}
 function Assert-ContainerDataGenerationTarget {
  param([string]$CandidateRoot,[string]$TargetSid,[string]$LocalAppDataRoot,[string]$DataRoot,[string]$HelperRoot)
  $script:actualGCalls++
- $PSBoundParameters['HelperRoot'] = Split-Path -Parent $Source
+  $PSBoundParameters['HelperRoot'] = $source
  try { & $script:actualGenerationProbe @PSBoundParameters; $script:actualGPassed++ }
  catch { $script:actualGBlocked++; $script:actualGErrorId=$_.FullyQualifiedErrorId; $script:actualGCommand=$_.Exception.CommandName; throw }
 }
 
-# Source is the installer file in this AST fixture. Bind its containing packet
-# root exactly as the actual-G adapter does; execute the real commit-point reader.
+# CanonicalSource is the installer file; source is its containing packet root.
+# Keep the real commit-point reader and its recovery observation counter.
 $script:actualCommitPoint = ${function:Get-CanonicalInstallationCommitPoint}
 $script:actualCommitPointCalls = 0
 function Get-CanonicalInstallationCommitPoint {
  param($Manifest,[string]$TargetSid,[string]$LocalAppDataRoot,[string]$DataRoot,[string]$HelperRoot)
  $script:actualCommitPointCalls++
- $PSBoundParameters['HelperRoot'] = Split-Path -Parent $Source
+ $PSBoundParameters['HelperRoot'] = $source
  & $script:actualCommitPoint @PSBoundParameters
 }
 
@@ -125,7 +126,7 @@ $lad = Join-Path $Root 'actual-g-local'
 $activeDataRoot = Join-Path $Root 'actual-g-data'
 # These are lifecycle doubles: the original catch is executed, not a native install.
 $script:state.code='changed';$script:state.run='changed';$script:state.task='changed';$script:state.relay='absent'
-$processSource=Split-Path -Parent $Source
+$processSource=$source
 $readerScenario=if($RecoveryCase -ceq 'nested-high'){'nested-onboard-secret-explicit'}else{'nested-readonly'}
 $readerGeneration=if($RecoveryCase -ceq 'nested-high'){'newer'}else{'missing'}
 $script:RollbackSource=$processSource

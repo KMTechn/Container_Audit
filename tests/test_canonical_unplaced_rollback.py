@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
 @pytest.mark.parametrize('stage', ('before-placement', 'elevation-cancelled',
     'placement-failed', 'placed-before-onboarding', 'onboarding-failed',
-    'existing-current-missing', 'orphaned-run', 'orphaned-relay', 'run-restore-failed'))
+    'existing-current-missing', 'orphaned-run', 'orphaned-relay', 'run-restore-failed',
+    'generation-committed', 'generation-unknown'))
 def test_placement_failure_restores_absent_current_preimage(tmp_path, engine, stage):
     legacy = tmp_path / 'legacy'
     legacy.mkdir()
@@ -22,13 +23,15 @@ def test_placement_failure_restores_absent_current_preimage(tmp_path, engine, st
     backup = tmp_path / 'legacy.backup'
     legacy.rename(backup)
     result = run_functions(tmp_path, ROOT / 'INSTALL_CANONICAL_PORTABLE.ps1',
-        ['Restore-CanonicalApplicationProtection'], r'''
+        ['Restore-CanonicalApplicationProtection', 'Get-CanonicalInstallationCommitPoint',
+         'Get-CanonicalRollbackSuccessStatus'], r'''
 $script:observed=@{g=0;reader=0;remove=0;restore=0;release=0;elevation=0;transport_cleanup=0;parent_repair=0}
 $install=Join-Path $env:CA_CONTRACT_ROOT 'apps/current'
 $source=Split-Path -Parent $env:CA_CONTRACT_SOURCE
 $operatorSid='S-1-5-21-420-420-420-1001'
 $lad=Join-Path $env:CA_CONTRACT_ROOT 'local'
 $activeDataRoot=Join-Path $env:CA_CONTRACT_ROOT 'data'
+$sourceManifest=[pscustomobject]@{version='v2.0.5';source_commit=('a'*40)}
 $stage=$env:CA_ROLLBACK_STAGE
 $currentAbsentBeforePlacement=($stage -cne 'existing-current-missing')
 $placement='INSTALL_REQUIRED';$existingVerified=(-not $currentAbsentBeforePlacement)
@@ -45,10 +48,20 @@ $auditPath=Join-Path $env:CA_CONTRACT_ROOT 'audit.json';$evidenceFull=''
 $stop=Join-Path $env:CA_CONTRACT_ROOT 'absent-stop'
 $currentTreeInventorySha256='a'*64;$installedInventorySha256='a'*64
 $rollbackCompleteAuthorizationPath='isolated-release'
-if($stage -cin @('placed-before-onboarding','onboarding-failed')){
+if($stage -cin @('placed-before-onboarding','onboarding-failed','generation-committed','generation-unknown')){
     [void][IO.Directory]::CreateDirectory($install)
     [IO.File]::WriteAllText((Join-Path $install 'portable-manifest.json'),'{}')
     $placement='PASS_NEW_VERIFIED'
+}
+if($stage -cin @('generation-committed','generation-unknown')){
+    . (Get-BootstrapSharedPortableLeaf $source 'data_generation.ps1')
+    [void][IO.Directory]::CreateDirectory($activeDataRoot)
+    $marker=Join-Path $activeDataRoot 'data-generation.json'
+    if($stage -ceq 'generation-committed'){
+        [void](Write-KmtechDataGeneration $marker $sourceManifest.version 'container_audit' $operatorSid -BuildId $sourceManifest.source_commit)
+    }else{
+        [IO.File]::WriteAllText($marker,'{"schema":"broken"}',[Text.UTF8Encoding]::new($false))
+    }
 }
 if($stage -ceq 'placement-failed'){[void][IO.Directory]::CreateDirectory((Split-Path -Parent $install))}
 if($mutated){$script:run=@{exists=$true;kind='String';data='isolated-new-command'}}
@@ -106,16 +119,44 @@ if($stage -ceq 'elevation-cancelled'){
 }
 $clauses=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.CatchClauseAst] -and $n.Body.Extent.Text.Contains('if (-not $enteredPlacementTry)')},$true))
 if($clauses.Count -ne 1){throw 'actual canonical catch missing'}
-$failureType=''
+$failureType='';$originalFailureRetained=$false
 try {. ([ScriptBlock]::Create("try {throw [InvalidOperationException]::new('CONTAINER_PLACEMENT_ELEVATION_FAILED')} catch "+$clauses[0].Body.Extent.Text))}
-catch {$failureType=$_.Exception.GetType().Name}
+catch {
+    $failureType=$_.Exception.GetType().Name
+    $originalFailureRetained=($null -ne $_.Exception.InnerException -and
+        $_.Exception.InnerException.Message -ceq 'CONTAINER_PLACEMENT_ELEVATION_FAILED')
+}
 [ordered]@{status=$audit.status;steps=$audit.rollback.steps;runtime_restored=$audit.rollback.runtime_restored;
     fence_active=$canonicalWriterFenceActive;run_restored=([bool]$script:run.exists -eq [bool]$before.exists);
-    observed=$script:observed;failure_type=$failureType;app_protection_failed=$audit.rollback.Contains('app_protection_failure')}|ConvertTo-Json -Depth 20 -Compress
+    observed=$script:observed;failure_type=$failureType;app_protection_failed=$audit.rollback.Contains('app_protection_failure');
+    commit_point=$audit.rollback.commit_point_status;current_present=(Test-Path -LiteralPath $install);
+    original_failure_retained=$originalFailureRetained}|ConvertTo-Json -Depth 20 -Compress
 ''', engine=engine, values={'CA_ROLLBACK_STAGE': stage})
     assert result.returncode == 0, 'isolated rollback probe failed; inspect captured result'
     observed = json.loads(result.stdout.splitlines()[-1])
     (tmp_path / 'observed.json').write_text(json.dumps(observed, indent=2), encoding='utf-8')
+    expected_point = ('REACHED' if stage == 'generation-committed' else
+                      'UNKNOWN' if stage == 'generation-unknown' else 'NOT_REACHED')
+    assert observed['commit_point'] == expected_point
+    assert observed['original_failure_retained'] is True
+    assert {p.name: p.read_bytes() for p in backup.iterdir()} == before
+    if stage in ('placed-before-onboarding', 'onboarding-failed', 'generation-unknown'):
+        # No helper compensation is executed by this catch-only fixture. The
+        # surviving fresh tree must remain fenced until its removal is proven.
+        assert observed['status'] == 'CODE_ROLLBACK_FAILED'
+        assert observed['current_present'] is True
+        assert observed['fence_active'] is True
+        assert observed['observed']['release'] == 0
+        assert observed['observed']['g'] == observed['observed']['reader'] == 0
+        step = ('commit_point_readback' if stage == 'generation-unknown' else 'code_restore')
+        failure = ('COMMIT_POINT_UNKNOWN' if stage == 'generation-unknown' else
+                   'ROLLBACK_NEW_CODE_REMOVAL_UNPROVEN')
+        assert observed['steps'][step] == {'status': 'UNPROVEN_FENCE_RETAINED',
+                                          'failure_type': failure}
+        assert observed['steps']['generation_readback']['status'] == 'FAILED'
+        assert observed['steps']['recovery_identity']['status'] == 'UNPROVEN'
+        assert not legacy.exists()
+        return
     if stage in ('existing-current-missing', 'orphaned-run', 'orphaned-relay', 'run-restore-failed'):
         assert observed['status'] == 'AUTOSTART_ROLLBACK_FAILED'
         assert observed['fence_active'] is True
@@ -126,8 +167,8 @@ catch {$failureType=$_.Exception.GetType().Name}
             assert observed['steps']['generation_readback']['status'] == 'FAILED'
         assert not legacy.exists() and backup.is_dir()
         return
-    expected = ('FAILED_RUNTIME_RESTORED_CODE_RETAINED' if stage in
-                ('placed-before-onboarding', 'onboarding-failed') else 'FAILED_ROLLED_BACK')
+    expected = ('FAILED_RUNTIME_RESTORED_CODE_RETAINED' if stage == 'generation-committed'
+                else 'FAILED_ROLLED_BACK')
     assert observed['status'] == expected
     assert observed['fence_active'] is False
     assert observed['runtime_restored'] is True
