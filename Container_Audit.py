@@ -213,7 +213,7 @@ from tk_serial_ui_lane import (
     LaneTask,
     TkSerialUiLane,
 )
-from writer_session_fence import WriterFencedError, writer_admission, writer_sink
+from writer_session_fence import _WRITER_LOCAL, WriterFencedError, writer_admission, writer_sink
 from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, record_before_owner_paths, resolve_owner_path
 from tray_state import (
     ACTIVATION_EVENT_STATE_KEY,
@@ -16252,6 +16252,8 @@ class ContainerAudit:
             staged = self._recover_checkpoint_audit_events() if getattr(self, 'save_folder', '') else []
             store = store or self._event_log_outbox(str(getattr(self, 'log_file_path', '') or ''))
             store.drain()
+            if store.has_unstaged or next(store.directory.glob('*.json'), None) is not None:
+                return False  # Keep checkpoint originals while projection is pending.
             self._clear_projected_checkpoint_audits(staged)
         except Exception as exc:
             message = f"로그 파일 쓰기 오류: {exc.__class__.__name__}"
@@ -16648,6 +16650,17 @@ class ContainerAudit:
             self._event_log_notice = "로그 저장 실패 · 재시도 중입니다. 저장 공간을 확인하고 이 PC를 종료하지 마세요."
             return False
         if synchronous:
+            if int(getattr(_WRITER_LOCAL, 'depth', 0)) > 0:
+                self._last_log_event_projection_pending = True
+                self._last_log_event_was_replay = False
+                print('EVENT_CSV_PROJECTION_PENDING')
+                if hasattr(self, 'log_queue'):
+                    queued = {'log_file_path': target_log_file_path, 'log_entry': log_entry}
+                    if not payload['local_only'] and log_entry['event'] == 'PRODUCT_EXCHANGE_COMPLETED':
+                        queued['direct_sync_event'] = 'PRODUCT_EXCHANGE_COMPLETED'
+                    self.log_queue.put(queued)
+                return True  # Original durable acceptance, without claiming CSV completion.
+            self._last_log_event_projection_pending = False
             try:
                 if log_entry['event'] == 'SCAN_OK':
                     # Retain held-scan FIFO audit ACK, without waiting for rows

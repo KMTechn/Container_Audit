@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict
 
-from writer_session_fence import writer_admission, writer_sink
+from writer_session_fence import _WRITER_LOCAL, writer_admission, writer_sink
 from storage_utils import atomic_write_json
 
 
@@ -90,7 +90,12 @@ class EventLogOutbox:
         append = append or append_event_log_entry_idempotent
         if through is not None and through.parent != self.directory:
             raise ValueError("projection target must belong to this outbox")
-        self._persist_unstaged()
+        nested = int(getattr(_WRITER_LOCAL, "depth", 0)) > 0
+        if nested:
+            if self.has_unstaged:
+                return projected
+        else:
+            self._persist_unstaged()
         paths = sorted(self.directory.glob("*.json"))
         if through is not None and through not in paths:
             return projected
@@ -114,16 +119,22 @@ class EventLogOutbox:
                                     payload["log_file_path"], entry,
                                     event_type=entry["event"], idempotency_key=detail["idempotency_key"],
                                     durable=False,
+                                    defer_repair=nested,
                                 )
                                 handle = open(payload["log_file_path"], "ab")
                                 stat = os.fstat(handle.fileno())
                                 projection_signature = (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+                            elif nested:
+                                return projected  # The background worker needs the outer admission for ACK.
                     if not reserved:
                         # Never pass an earlier row still being synced. Both
                         # admission and the RLock are released while waiting.
                         with self._projection_condition:
                             self._projection_condition.wait_for(lambda: path not in self._projecting)
                 if reserved:
+                    if nested:
+                        handle.close()
+                        return projected  # Append only; sync and ACK belong to a nonnested drain.
                     try:
                         # A readable row may not have survived a prior fsync.
                         handle.flush()
@@ -151,6 +162,8 @@ class EventLogOutbox:
                             self._projection_results[key] = appended
                             while len(self._projection_results) > 256:
                                 self._projection_results.pop(next(iter(self._projection_results)))
+            except _ProjectionPending:
+                return projected
             finally:
                 if reserved:
                     with self._projection_condition:
