@@ -8,7 +8,8 @@ if($clauses.Count -ne 1){throw 'exact catch not found'}
 
 $script:RollbackPython=$Python
 $script:RollbackChild=$Child
-$readerDefinitions=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalFailureDetails','Assert-CanonicalWriterRestoreReadback')},$true)
+# Commit-point decisions remain actual product code, alongside actual G.
+$readerDefinitions=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalFailureDetails','Assert-CanonicalWriterRestoreReadback','Get-CanonicalInstallationCommitPoint','Get-CanonicalRollbackSuccessStatus')},$true)
 foreach($definition in $readerDefinitions) {
     $readerBody=$definition.Extent.Text
     if($definition.Name -ceq 'Get-CanonicalOnboardingInputBinding') {
@@ -68,6 +69,14 @@ function Assert-ContainerDataGenerationTarget {
  $PSBoundParameters['HelperRoot'] = Split-Path -Parent $Source
  try { & $script:actualGenerationProbe @PSBoundParameters; $script:actualGPassed++ }
  catch { $script:actualGBlocked++; $script:actualGErrorId=$_.FullyQualifiedErrorId; $script:actualGCommand=$_.Exception.CommandName; throw }
+}
+
+# Keep the real commit-point readback; Source is this fixture's installer file.
+$script:actualCommitPoint = ${function:Get-CanonicalInstallationCommitPoint}
+function Get-CanonicalInstallationCommitPoint {
+ param($Manifest,[string]$TargetSid,[string]$LocalAppDataRoot,[string]$DataRoot,[string]$HelperRoot)
+ $PSBoundParameters['HelperRoot'] = Split-Path -Parent $Source
+ & $script:actualCommitPoint @PSBoundParameters
 }
 
 function ReadReplacementRestoreEvidence {param($Path,$ExpectedTransactionId,$ExpectedReceiptPath,$ExpectedReceiptSha256,$ExpectedInstallRoot) return @{}}

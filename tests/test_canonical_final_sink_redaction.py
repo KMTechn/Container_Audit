@@ -20,10 +20,13 @@ def _assert_recovery_preserves_state(result, case):
             'product_removal', 'code_restore', 'run_restore', 'task_restore', 'relay_start', 'fence_release'))
         assert recovery['state'] == dict(code='changed', data='before', run='changed', task='changed', relay='absent')
         assert recovery['actual_g_calls'] == 0
+        assert recovery['actual_commit_point_calls'] == 0
         assert not recovery['fence_active_after']
         return
 
     assert counts['product_removal'] == 1
+    assert recovery['actual_commit_point_calls'] == 1
+    assert recovery['commit_point_status'] == 'NOT_REACHED'
     assert all(counts[name] == 1 for name in (
         'code_restore', 'run_restore', 'task_restore', 'relay_start', 'fence_release'))
     assert recovery['state'] == dict.fromkeys(('code', 'data', 'run', 'task', 'relay'), 'before')

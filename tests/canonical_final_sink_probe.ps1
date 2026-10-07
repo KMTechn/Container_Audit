@@ -9,7 +9,9 @@ if($clauses.Count -ne 1){throw 'exact catch not found'}
 
 $script:RollbackPython=$Python
 $script:RollbackChild=$Child
-$readerDefinitions=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Write-CanonicalInstallationPublicRecord','Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalFailureDetails','Assert-CanonicalWriterRestoreReadback')},$true)
+# Execute the new commit-point readback and status selection from the actual
+# product catch; keep all generation and original-exception assertions intact.
+$readerDefinitions=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Write-CanonicalInstallationPublicRecord','Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalFailureDetails','Assert-CanonicalWriterRestoreReadback','Get-CanonicalInstallationCommitPoint','Get-CanonicalRollbackSuccessStatus')},$true)
 foreach($definition in $readerDefinitions) {
     $readerBody=$definition.Extent.Text
     if($definition.Name -ceq 'Get-CanonicalOnboardingInputBinding') {
@@ -69,6 +71,17 @@ function Assert-ContainerDataGenerationTarget {
  $PSBoundParameters['HelperRoot'] = Split-Path -Parent $Source
  try { & $script:actualGenerationProbe @PSBoundParameters; $script:actualGPassed++ }
  catch { $script:actualGBlocked++; $script:actualGErrorId=$_.FullyQualifiedErrorId; $script:actualGCommand=$_.Exception.CommandName; throw }
+}
+
+# Source is the installer file in this AST fixture. Bind its containing packet
+# root exactly as the actual-G adapter does; execute the real commit-point reader.
+$script:actualCommitPoint = ${function:Get-CanonicalInstallationCommitPoint}
+$script:actualCommitPointCalls = 0
+function Get-CanonicalInstallationCommitPoint {
+ param($Manifest,[string]$TargetSid,[string]$LocalAppDataRoot,[string]$DataRoot,[string]$HelperRoot)
+ $script:actualCommitPointCalls++
+ $PSBoundParameters['HelperRoot'] = Split-Path -Parent $Source
+ & $script:actualCommitPoint @PSBoundParameters
 }
 
 function ReadReplacementRestoreEvidence {param($Path,$ExpectedTransactionId,$ExpectedReceiptPath,$ExpectedReceiptSha256,$ExpectedInstallRoot) return @{}}
@@ -167,6 +180,7 @@ $console=(& {
  $script:originalPreserved=$null -ne $original -and [object]::ReferenceEquals($original.Exception,$script:forwardException)
  $script:RecoveryObservation=@{fence_active_after=$canonicalWriterFenceActive;rollback_status=$audit.status;
   recovery_verified=[bool]$rollbackRecoveryVerified;steps=$audit.rollback.steps;
+  actual_commit_point_calls=$script:actualCommitPointCalls;commit_point_status=$audit.rollback.commit_point_status;
   code_exact=[bool]$audit.rollback.code_exact;runtime_restored=[bool]$audit.rollback.runtime_restored;
   actual_g_calls=$script:actualGCalls;actual_g_passed=$script:actualGPassed;actual_g_blocked=$script:actualGBlocked;
   state=$script:state}
