@@ -37,6 +37,32 @@ foreach($definition in @($ast.EndBlock.Statements|Where-Object {$_ -is [Manageme
     Invoke-Expression $definition.Extent.Text
 }
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+# Preserve the actual production profile while the fixture selects its own root.
+# All three actors must derive the same case-scoped admission mutex.
+$productionLocalAppData=Get-ContainerWriterFenceProfileLocalAppDataRoot $sid
+$Script:ContainerWriterFenceAdmissionProductionRoot=Join-Path $productionLocalAppData 'KMTech\DirectSync\container_audit\control\writer-session'
+$fixtureControlRoot=Get-ContainerWriterFenceControlRoot
+$fixtureAdmissionName=Get-ContainerWriterAdmissionMutexName
+if($fixtureAdmissionName -ceq $Script:ContainerWriterFenceAdmissionMutexName){throw 'Fixture did not isolate its admission mutex.'}
+$script:actualTransactionWrapperSource=${function:Get-InstallationTransactionWrapperSource}
+function Get-InstallationTransactionWrapperSource {
+    $wrapper=& $script:actualTransactionWrapperSource
+    $entry='Invoke-InstallationTransactionCoordinator $configuration'
+    $adapter=@'
+# The pinned product is loaded unchanged; initialize only fixture profile scope
+# after its fence definitions initialize their production-root default.
+$actualCoordinator=${function:Invoke-InstallationTransactionCoordinator}.ToString()
+$anchor='. (Get-InstallationVerifiedScript (Join-Path $source ''tools\container_writer_fence.ps1'') ([string]$Configuration.fence_helper_sha256))'
+if($actualCoordinator.Split(@($anchor),[StringSplitOptions]::None).Count -ne 2){throw 'Fixture coordinator anchor differs.'}
+$initialization='$Script:ContainerWriterFenceAdmissionProductionRoot=[string]$Configuration.context.fixture_production_control_root'+"`n"+
+    'if((Get-ContainerWriterAdmissionMutexName) -cne [string]$Configuration.context.fixture_admission_mutex_name){throw ''Fixture helper admission mutex differs.''}'
+$actualCoordinator=$actualCoordinator.Replace($anchor,($anchor+"`n"+$initialization))
+. ([scriptblock]::Create('function Invoke-InstallationTransactionCoordinator {'+$actualCoordinator+'}'))
+Invoke-InstallationTransactionCoordinator $configuration
+'@
+    if($wrapper.Split(@($entry),[StringSplitOptions]::None).Count -ne 2){throw 'Fixture wrapper entry differs.'}
+    return $wrapper.Replace($entry,$adapter)
+}
 $session=[Guid]::NewGuid().ToString('N');$attempt=[Guid]::NewGuid().ToString('N');$transaction=[Guid]::NewGuid().ToString('N')
 $orchestrator=Get-FileSha256 (Join-Path $Source 'INSTALL_CANONICAL_PORTABLE.ps1')
 $contract=Get-FileSha256 (Join-Path $Source 'tools\container_writer_session_contract.json')
@@ -60,7 +86,8 @@ $context=@{RunKey='Software\Microsoft\Windows\CurrentVersion\Run';RunName=$runNa
     currentAbsentBeforePlacement=$true;before=@{exists=$false;kind='';data=''};old=@();writerBefore=@{restore_required=$false};
     legacyRelayPreimage=$null;supportedPlacement=$false;SkipSignatureValidationForTest=$false;testMode=$true;wanted='';candidate=$null;
     canonicalWriterFenceStartedAtUtc=([DateTime]::UtcNow.ToString('o'));canonicalWriterFenceOrchestratorSha256=$orchestrator;
-    canonicalWriterFenceContractSha256=$contract;canonicalWriterFencePreparedReceipt=$prepared;canonicalWriterFenceDelegatedSources=@('current_user_onboarding')}
+    canonicalWriterFenceContractSha256=$contract;canonicalWriterFencePreparedReceipt=$prepared;canonicalWriterFenceDelegatedSources=@('current_user_onboarding');
+    fixture_production_control_root=$Script:ContainerWriterFenceAdmissionProductionRoot;fixture_admission_mutex_name=$fixtureAdmissionName}
 $configuration=[ordered]@{source_root=$Source;install_root=$context.install;operator_sid=$sid;local_appdata_root=$env:LOCALAPPDATA;
     data_root=$env:CONTAINER_AUDIT_DATA_ROOT;source_manifest=$manifest;context=$context;operator_security=(Get-BootstrapRelaySecurity $PID);
     child_environment=@{LOCALAPPDATA=$env:LOCALAPPDATA;APPDATA=$env:APPDATA;CONTAINER_AUDIT_DATA_ROOT=$env:CONTAINER_AUDIT_DATA_ROOT};
@@ -81,28 +108,35 @@ $launch={param($request)
     $probe=Join-Path $Root 'gap.py'
     $Script:gapProbePath=$probe
     [IO.File]::WriteAllText($probe,@'
-import json,sys
+import json,os,sys
 sys.path.insert(0,sys.argv[1])
 import writer_session_fence as fence
+values=dict(os.environ,LOCALAPPDATA=sys.argv[2])
+control_root=sys.argv[3]
+admission_name=fence.writer_admission_mutex_name(control_root,environ=values)
+denied_code=''
 try:
-    with fence.writer_admission('current_user_onboarding'):
+    with fence.writer_admission('current_user_onboarding',control_root=control_root,environ=values):
         denied=False
-except fence.WriterFenceError:
+except fence.WriterFenceError as failure:
     denied=True
-active=fence.active_fence()
-print(json.dumps({'denied':denied,'primary_held':fence._named_mutex_held_by_other(active['session_authority_mutex_name'])}))
+    denied_code=failure.code
+active=fence.active_fence(control_root=control_root)
+print(json.dumps({'denied':denied,'denied_code':denied_code,'admission_name':admission_name,'primary_held':fence._named_mutex_held_by_other(active['session_authority_mutex_name'])}))
 '@,[Text.UTF8Encoding]::new($false))
-    $gap=& $Python -I -B $probe $Source
+    $gap=& $Python -I -B $probe $Source $productionLocalAppData $fixtureControlRoot
     $gapProof=$gap|ConvertFrom-Json
     $Script:gapDenied=[bool]$gapProof.denied
     if($gapProof.primary_held){throw 'The probe did not run inside the actual primary ownership gap.'}
     if(-not $Script:gapDenied){throw 'Actual writer admitted during authority handover gap.'}
+    if($gapProof.admission_name -cne $fixtureAdmissionName -or $gapProof.denied_code -cne 'ACTIVE_WRITER_FENCE'){throw 'Gap denial did not exercise the same fixture fence mutex.'}
     Start-Process -FilePath $request.FilePath -ArgumentList $request.ArgumentList -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $Root 'helper.stdout.log') -RedirectStandardError (Join-Path $Root 'helper.stderr.log')
 }
 $job=Start-InstallationTransaction $configuration $lease $launch
-$readyAdmission=(& $Python -I -B $Script:gapProbePath $Source)|ConvertFrom-Json
+$readyAdmission=(& $Python -I -B $Script:gapProbePath $Source $productionLocalAppData $fixtureControlRoot)|ConvertFrom-Json
 if($readyAdmission.denied -or -not $readyAdmission.primary_held){throw 'Valid delegated writer did not admit under the helper primary owner.'}
+if($readyAdmission.admission_name -cne $fixtureAdmissionName){throw 'READY writer admission mutex differs.'}
 $info=@{protected_root=$configuration.protected_root;request_root=$configuration.request_root;helper_pid=$job.Process.Id;
     launch_count=$Script:launchCount;consent_requests=$Script:consentRequests;writer_admitted_after_ready=(-not $readyAdmission.denied);gap_denied=$Script:gapDenied;fence_path=(Get-ContainerWriterFenceActivePath);case=$Case;
     expected_consent_requests=[int](-not ([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator));
