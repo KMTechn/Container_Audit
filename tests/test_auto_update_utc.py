@@ -16,7 +16,10 @@ EXTREMES = ("0001-01-01T00:00:00+14:00", "9999-12-31T23:59:59-14:00")
 def test_unrepresentable_ready_is_unconfirmed_in_both_trial_phases(timestamp, rollback):
     state = trial()
     if rollback:
-        state = updates.rollback_transition(updates.request_rollback(state, reason="candidate failed"),
+        pending = updates.request_rollback(state, reason="candidate failed")
+        # D-16 requires an observed unchanged G before the old-code trial.
+        pending["failure_decision"] = {"selected_sha": OLD}
+        state = updates.rollback_transition(pending,
             writers_absent=True, previous_verified=True, durable_rollback=True, nonce="8" * 32, now=NOW)
         state = updates.bind_trial(state, sha=OLD, pid=42, ordinary_user=True, now=NOW)
     receipt = {**ready(state), "sha": state["trial_sha"], "ready_at": timestamp}
@@ -45,12 +48,17 @@ def test_extreme_ready_keeps_deadline_and_code_rollback_alive(tmp_path, monkeypa
     control, stage = tmp_path / "control", tmp_path / "stage"
     control.mkdir()
     stage.mkdir()
-    updates.write_json_durable(control / "policy.json", {
-        "operator_sid": "operator", "staging_root": str(stage),
+    sid = "S-1-5-21-455"
+    policy = {
+        "operator_sid": sid, "staging_root": str(stage),
         "operator_local_app_data": str(tmp_path / "user"),
-    })
+    }
+    updates.write_json_durable(control / "policy.json", policy)
     updates.write_json_durable(control / "active.json", {"schema": updates.SCHEMA, "sha": NEW})
-    updates.write_json_durable(control / "transition.json", trial())
+    state = {**trial(), "generation_before": updates.read_trial_generation(policy),
+             "generation_previous_release": {"version": "v2.0.98", "source_commit": OLD},
+             "generation_candidate_release": {"version": "v2.0.99", "source_commit": NEW}}
+    updates.write_json_durable(control / "transition.json", state)
     business = tmp_path / "unfinished-and-ledger.bin"
     business.write_bytes(b"unchanged business state")
     policy_before = (control / "policy.json").read_bytes()
@@ -75,7 +83,7 @@ def test_extreme_ready_keeps_deadline_and_code_rollback_alive(tmp_path, monkeypa
         updates.write_json_durable(stage / "trial.json", {
             "nonce": state["nonce"], "transition_id": state["transition_id"], "pid": pid,
         })
-        return [dict(pid=value, observable=True, sha=sha, sid="operator", role=role,
+        return [dict(pid=value, observable=True, sha=sha, sid=sid, role=role,
             ordinary_user=True, created_at=NOW if not rollback else LATER)
             for value, role in ((pid, "gui"), (pid + 1, "relay"))]
 

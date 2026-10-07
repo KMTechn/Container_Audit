@@ -101,7 +101,7 @@ catch { if($_.Exception.Message -cne 'Update storage owner is not privileged.') 
 @pytest.mark.parametrize("record", ["trial.json", "ready.json"])
 def test_readiness_io_error_keeps_normal_rollback_and_original_proof(monkeypatch, tmp_path, record):
     import auto_update as updates
-    from test_auto_update import test_engine_candidate_exit_restarts_previous_version_without_reverting_data
+    from test_auto_update import test_engine_candidate_exit_selects_generation_compatible_code_without_reverting_data
 
     original = updates.read_json
     denied = []
@@ -113,7 +113,7 @@ def test_readiness_io_error_keeps_normal_rollback_and_original_proof(monkeypatch
                 raise OSError("synthetic sharing contention")
         return original(path, **kwargs)
     monkeypatch.setattr(updates, "read_json", contested)
-    test_engine_candidate_exit_restarts_previous_version_without_reverting_data(monkeypatch, tmp_path)
+    test_engine_candidate_exit_selects_generation_compatible_code_without_reverting_data(monkeypatch, tmp_path, "unchanged")
     assert denied
     assert (tmp_path / "operator/updates" / record).read_bytes() == denied[0]
     state = original(tmp_path / "managed/update-control/transition.json")

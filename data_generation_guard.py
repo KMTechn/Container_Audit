@@ -146,8 +146,10 @@ def _runtime_release():
 
 
 def marker_paths(data_root, subject_sid, *, environ=None):
-    return (resolve_owner_path(data_root) / "data-generation.json",
-            canonical_control_root(environ) / "data-generation" / (subject_sid + ".json"))
+    # The shared slot is the commit point, including for external owner roots.
+    # A crash before it changes must imply that no owner generation was raised.
+    return (canonical_control_root(environ) / "data-generation" / (subject_sid + ".json"),
+            resolve_owner_path(data_root) / "data-generation.json")
 
 
 def resolve_owner_path(value):

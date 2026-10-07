@@ -545,7 +545,10 @@ CA 설치 runtime 종료/복구: 옛 stop receipt 뒤 실제 process exit를 별
 시작의 MethodInvocationException을 각각 보존한다. sub-84는 호출명/Win32 오류 증거와
 정확 Run 복원 뒤 다음 로그온 상태를 분리한다. 호스트 주입/선언/stock 증거와 실제
 native 시작 진단·재설치 수용은 [sub-84 보고](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-84/REPORT.md)를 따른다.
-CA 자동 업데이트 경계: 조상/코드 사전검증과 READY 읽기 경합 복귀를 보완했다.
+CA 자동 업데이트 경계: 조상/코드 사전검증과 READY 읽기 경합 처리를 보완했다.
+sub-455 D-16은 세대 기록 뒤 READY 실패 시 candidate 유지와 공통 SID marker 선기록을
+headless 실제 프로세스로 검증한다. 실제 GUI READY 실패·SYSTEM task·bootstrap 실물은
+NOT VERIFIED이며 랩 VM 회차에서 이어 확인한다.
 극단 offset의 READY 시각도 UTC 표현 가능성을 확인하며, 미확인 증거는 기한/복귀를 중단하지 않는다.
 동일 계약 예외의 실제 교환 DDL 누락도 수정했고 root/tools DDL 누락을 기계적으로 검사한다.
 합성 경계와 기존 회귀의 증거는 sub-75 보고서이며 실제 안전/위험 배치·SYSTEM·로그온은 NOT TESTED다.

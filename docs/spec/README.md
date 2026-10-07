@@ -16,6 +16,11 @@ relay 읽기 실패는 서버 끊김과 구별한다. 마지막으로 읽은 대
 승격할 수 있다. 작업자 SID·프로필 루트·이번 prepared receipt·fence를 결속하며
 교차 계정 guest 실물 설치는 [CA-G15](BACKLOG.md#ca-g15)의 미검증 항목이다.
 
+업데이트 시험 기동이 READY 전에 실패하면 실제 G 관측이 이전 그대로일 때만
+옛 판으로 복귀한다. G가 올라갔거나 확인 불가이면 candidate를 유지하고 결정을
+포인터보다 먼저 내구 기록한다. 확인 불가의 다음 시작은 기존 guard가 지원 복구를
+안내하며, GUI·SYSTEM 실제 수명주기 검증은 [남은 작업](BACKLOG.md)에 기록한다.
+
 기본 루트 제거 후 custom 루트를 채택한 설치의 은퇴 마감은
 [`CompleteRetiredRemoval`](operations.md#ca-retired-removal)을 사용한다.
 검증한 관리 패키지와 exact old 패키지를 구별하며 은퇴 marker·업무·신원은 보존한다.

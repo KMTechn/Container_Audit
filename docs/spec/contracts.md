@@ -169,6 +169,13 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 
 `auto_update.py`의 프로토콜 1은 `PREPARED → APPLIED_PENDING_READY → CONFIRMED`와
 실패 시 `ROLLBACK_PENDING → ROLLBACK_PENDING_READY → ROLLED_BACK`을 기록한다.
+시험 기동 실패는 정상 writer 종료 뒤 실제 공통 SID 자료 세대를 다시 읽어 판정한다.
+PREPARED의 before와 같고 옛 판 guard가 ALLOW일 때만 복귀한다. candidate 세대가
+기록됐거나 before/after가 미확인이면 candidate를 유지하고 DEFERRED에
+`retained_candidate`, `failure_decision`(before/after·READY 실패·선택 SHA·guard 결과)을
+내구 기록한다. 다음 시작도 candidate를 사용하며 새 세대 자료를 지우거나 guard를 완화하지 않는다.
+공통 SID marker는 모든 owner-root marker보다 먼저 기록하는 세대 확정점이다.
+결정은 포인터보다 먼저 저장하고 중단 뒤 같은 결정으로 재개하며 포인터를 다시 읽어 확인한다.
 canonical 교체 전 HKCU Run·실행 중 relay는 설치된 판의 정확한 명령으로 검증한다.
 Run이 `current/app/auto_update.py --bootstrap --role relay --`이면 실행 중 relay의
 실제 경로는 보호된 active 포인터와 해당 version의 manifest·bootstrap aggregate에서 구한다.
@@ -191,7 +198,7 @@ SYSTEM이 신뢰하는 bootstrap·control·version은 파일과 모든 조상의
 `C:\KMTech`와 `C:\KMTech\Apps`는 default/goal 모양을 둘 다 선검사한 뒤 AU self
 권한만 `0x1301BF → 0x1200AF`로 보호한다. owner/group·child-only 상속을 보존하고
 unsupported owner/deny/custom/reparse는 변경 전에 거절한다. 이 보호는 제거·rollback 뒤에도 유지한다.
-READY/trial 읽기 I/O 오류는 미확인 증거로 기록하고 원 기한·정상 복귀를 유지한다.
+READY/trial 읽기 I/O 오류는 미확인 증거로 기록하고 원 기한·정상 종료 및 자료 세대 판정을 유지한다.
 원본은 보존하며 atomic JSON 읽기의 일시적 PermissionError만 3회/0.05초 간격으로 재시도한다.
 SYSTEM은 사용자 staging의 고정 세 파일을 보호된 작업 폴더로 복사한 다음 기존
 ES256 검증기로 manifest 서명, ZIP 크기·SHA, portable source SHA와 공개 설정 일치를 다시 확인한다.

@@ -264,6 +264,17 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 <a id="ca-startup-update"></a>
 ## 로그온 자동 갱신 운영
 
+READY 실패 뒤 `update-control/transition.json`의 `retained_candidate=true`이면
+새 판을 current로 유지한 상태다. `failure_decision.code`가
+`TRIAL_GENERATION_ADVANCED`이면 새 판 세대가 기록됐고,
+`TRIAL_GENERATION_UNKNOWN`이면 자료 세대를 판정하지 못했다.
+다음 시작은 같은 candidate를 사용한다. 판정 불가 자료는 보존하고 지원 담당자가
+확인한다. 판정 불가에서는 candidate도 기존 guard가 UNKNOWN으로 중단하며 기동을
+보장하지 않는다. 다음 시도에도 같은 고정 지원 복구 안내를 내고 자료와 판정 기록을
+보존한다. 임의 옛 판 복귀·marker 삭제·자료 복원으로 우회하지 않는다.
+세대가 변하지 않았고 옛 판이 허용된 경우만 `ROLLBACK_PENDING_READY`로 복귀한다.
+GUI와 relay는 같은 판정 함수를 사용한다.
+
 첫 설치는 자료 판 검증 뒤 옛 relay의 작업과 실행 연결을 확인하고 보호 바탕을 준비한다.
 옛 relay 작업이 없으면 launcher를 요구하지 않는다. 작업이 있으면 공식 정체성의 정확한
 launcher 경로와 실제 파일·재분석 여부를 확인한다. 연결이 맞지 않으면 변경 전에 거절하고
