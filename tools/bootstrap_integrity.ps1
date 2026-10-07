@@ -212,9 +212,7 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
         }
         # Discover overlapping assignments so a non-sensitive exception prefix
         # cannot consume a later sensitive key/value. Redact before byte bounding.
-        $assignmentPattern=@'
-(?=(?<![\w"'])(?<quote>["']?)(?<key>[A-Za-z_][A-Za-z0-9_.-]*)\k<quote>\s*[:=]\s*(?<value>"(?:\\.|[^"\\])*(?:"|$)|'(?:''|\\.|[^'\\])*(?:'|$)|[^\s,;}\]"']+))
-'@
+        $assignmentPattern='(?=(?<![\w"''])(?<quote>["'']?)(?<key>[A-Za-z_][A-Za-z0-9_.-]*)\k<quote>\s*[:=]\s*(?<value>"(?:\\.|[^"\\])*(?:"|$)|''(?:''''|\\.|[^''\\])*(?:''|$)|[^\s,;}\]"'']+))'
         $spans=@()
         foreach($match in [regex]::Matches($Text,$assignmentPattern)){
             $value=$match.Groups['value'].Value
@@ -235,7 +233,7 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
     }
 
     # Match each UTF16 unit literally or as mixed/nested JSON unicode escapes.
-    $knownPattern={param([string]$Value)
+    function Get-InstallationKnownValuePattern {param([string]$Value)
         # A unit's JSON spellings depend only on UTF16 and this engine. Keep a
         # bounded cache of unit fragments; never cache complete known values.
         $unitPatterns=Get-Variable -Name InstallationKnownJsonUnitPatterns -Scope Script -ValueOnly -ErrorAction SilentlyContinue
@@ -280,22 +278,22 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
     # Parsing and serialization above can decode an initially escaped value.
     $remaining=[Collections.Generic.List[string]]::new()
     foreach($entry in @($values|Sort-Object @{Expression={$_.value.Length};Descending=$true},@{Expression={$_.name}})){
-        $pattern=& $knownPattern $entry.value
+        $pattern=Get-InstallationKnownValuePattern -Value $entry.value
         $marker=$policy.env_marker -f $entry.name
         $Text=[regex]::Replace($Text,$pattern,[Text.RegularExpressions.MatchEvaluator]{param($match)$marker})
         $remaining.Add($pattern)
     }
     foreach($pattern in $remaining){if([regex]::IsMatch($Text,$pattern)){throw 'REPORT_UNAVAILABLE'}}
-    $assertFinalKnown={param([string]$Value)
+    function Assert-InstallationFinalKnownText {param([string]$Value)
         foreach($pattern in $remaining){if([regex]::IsMatch($Value,$pattern)){throw 'REPORT_UNAVAILABLE'}}
         return $Value
     }
     if(-not $KnownOnly -and $notes.Count){$Text+="`n"+($notes -join "`n")}
-    if($NoTruncate){return (& $assertFinalKnown $Text)} # Internal in-memory envelope budgeting only.
+    if($NoTruncate){return (Assert-InstallationFinalKnownText -Value $Text)} # Internal in-memory envelope budgeting only.
     $bound=if($Limit -lt 0){$policy.full_byte_cap}else{[Math]::Min($Limit,$policy.full_byte_cap)}
     $utf8=[Text.UTF8Encoding]::new($false)
     $bytes=$utf8.GetBytes($Text)
-    if($bytes.Length -le $bound){return (& $assertFinalKnown $Text)}
+    if($bytes.Length -le $bound){return (Assert-InstallationFinalKnownText -Value $Text)}
     $headCount=[Math]::Min($policy.head_byte_cap,[int]($bound/8))
     while($headCount -gt 0 -and ($bytes[$headCount] -band 192) -eq 128){$headCount--}
     $tailCount=[Math]::Max(0,$bound-$headCount-80)
@@ -311,7 +309,7 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
     while($tailStart -lt $bytes.Length -and ($bytes[$tailStart] -band 192) -eq 128){$tailStart++}
     $tailCount=$bytes.Length-$tailStart
     $marker=$policy.truncation_marker -f ($bytes.Length-$headCount-$tailCount)
-    return (& $assertFinalKnown ($utf8.GetString($bytes,0,$headCount)+$marker+$utf8.GetString($bytes,$tailStart,$tailCount)))
+    return (Assert-InstallationFinalKnownText -Value ($utf8.GetString($bytes,0,$headCount)+$marker+$utf8.GetString($bytes,$tailStart,$tailCount)))
 }
 
 function ConvertTo-KmtechRedactedSinkText {

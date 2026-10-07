@@ -8214,9 +8214,9 @@
     "closure_module_count": 108,
     "external_process_mutation_site_count": 18,
     "powershell_direct_mutation_site_count": 99,
-    "powershell_execution_site_count": 70,
+    "powershell_execution_site_count": 66,
     "powershell_execution_site_counts_by_kind": {
-      "call_operator": 21,
+      "call_operator": 17,
       "com_wmi_process_create": 5,
       "dot_source": 24,
       "dotnet_process_start": 2,
@@ -8226,7 +8226,7 @@
       "scheduler_com": 5,
       "start_process": 2
     },
-    "powershell_mutation_scope_count": 66,
+    "powershell_mutation_scope_count": 65,
     "powershell_sink_count": 2,
     "python_external_control_literal_site_count": 5,
     "scheduled_task_mutation_site_count": 12,
@@ -8900,7 +8900,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "1ba384178a935ddb110bdb896e86e78b28f90533493be7ddc95483c056b1b350",
+  "inventory_sha256": "17771df2b6a4fc4f64625d58e3d1d4ec54c7154b61be4a3ef7efcb4dca2e325b",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -10419,54 +10419,6 @@
         "target_static": false
       },
       {
-        "command": "&",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "call_operator",
-        "line": 283,
-        "target": "$knownPattern",
-        "target_static": false
-      },
-      {
-        "command": "&",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "call_operator",
-        "line": 294,
-        "target": "$assertFinalKnown",
-        "target_static": false
-      },
-      {
-        "command": "&",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "call_operator",
-        "line": 298,
-        "target": "$assertFinalKnown",
-        "target_static": false
-      },
-      {
-        "command": "&",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "call_operator",
-        "line": 314,
-        "target": "$assertFinalKnown",
-        "target_static": false
-      },
-      {
         "command": "Set-Acl",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Set-InstallationEvidenceAcl",
@@ -10474,7 +10426,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 362,
+        "line": 360,
         "target": "",
         "target_static": true
       },
@@ -10486,7 +10438,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 611,
+        "line": 609,
         "target": "",
         "target_static": true
       },
@@ -10498,7 +10450,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 732,
+        "line": 730,
         "target": "",
         "target_static": true
       },
@@ -10510,7 +10462,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 739,
+        "line": 737,
         "target": "",
         "target_static": true
       },
@@ -10518,11 +10470,11 @@
         "command": "Remove-Item",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Remove-InstallationMemoryTransport",
-        "guard_line": 950,
+        "guard_line": 948,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 866,
+        "line": 864,
         "target": "",
         "target_static": true
       },
@@ -10530,11 +10482,11 @@
         "command": "&",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "New-InstallationMemoryTransport",
-        "guard_line": 1026,
+        "guard_line": 1024,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "call_operator",
-        "line": 941,
+        "line": 939,
         "target": "$block",
         "target_static": false
       },
@@ -10542,11 +10494,11 @@
         "command": ".",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationHelperMemorySource",
-        "guard_line": 1025,
+        "guard_line": 1023,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "dot_source",
-        "line": 960,
+        "line": 958,
         "target": "$libraryBlock",
         "target_static": false
       },
@@ -10554,11 +10506,11 @@
         "command": "&",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationHelperMemorySource",
-        "guard_line": 1025,
+        "guard_line": 1023,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "call_operator",
-        "line": 972,
+        "line": 970,
         "target": "$helperBlock",
         "target_static": false
       },
@@ -10566,11 +10518,11 @@
         "command": ".",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationElevationWrapperSource",
-        "guard_line": 1080,
+        "guard_line": 1078,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "dot_source",
-        "line": 991,
+        "line": 989,
         "target": "$libraryBlock",
         "target_static": false
       },
@@ -10578,11 +10530,11 @@
         "command": ".",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationElevationWrapperSource",
-        "guard_line": 1080,
+        "guard_line": 1078,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "dot_source",
-        "line": 1005,
+        "line": 1003,
         "target": "(Get-InstallationVerifiedScript $writerFenceHelperPath ([string]$repairManifest.writer_fence_helper_sha256))",
         "target_static": false
       },
@@ -10590,11 +10542,11 @@
         "command": ".NET File mutation",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationElevationWrapperSource",
-        "guard_line": 1080,
+        "guard_line": 1078,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1046,
+        "line": 1044,
         "target": "",
         "target_static": true
       },
@@ -10606,7 +10558,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "start_process",
-        "line": 1087,
+        "line": 1085,
         "target": "$winps",
         "target_static": false
       },
@@ -10618,7 +10570,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1108,
+        "line": 1106,
         "target": "",
         "target_static": true
       },
@@ -10630,7 +10582,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1112,
+        "line": 1110,
         "target": "",
         "target_static": true
       },
@@ -10642,7 +10594,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1125,
+        "line": 1123,
         "target": "",
         "target_static": true
       },
@@ -10650,11 +10602,11 @@
         "command": "Invoke-Expression",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Import-BootstrapCanonicalUserProcessApi",
-        "guard_line": 1199,
+        "guard_line": 1197,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "invoke_expression",
-        "line": 1143,
+        "line": 1141,
         "target": "",
         "target_static": false
       },
@@ -10662,11 +10614,11 @@
         "command": "reflection invoke",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Import-BootstrapCanonicalUserProcessApi",
-        "guard_line": 1199,
+        "guard_line": 1197,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "reflective_invocation",
-        "line": 1145,
+        "line": 1143,
         "target": "",
         "target_static": false
       },
@@ -10674,11 +10626,11 @@
         "command": ".",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationNormalProducerWrapperSource",
-        "guard_line": 1206,
+        "guard_line": 1204,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "dot_source",
-        "line": 1156,
+        "line": 1154,
         "target": "$libraryBlock",
         "target_static": false
       },
@@ -10686,11 +10638,11 @@
         "command": ".NET File mutation",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationNormalProducerWrapperSource",
-        "guard_line": 1206,
+        "guard_line": 1204,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1175,
+        "line": 1173,
         "target": "",
         "target_static": true
       },
@@ -10698,11 +10650,11 @@
         "command": "ContainerAuditCanonicalUserProcess.StartLimited",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Start-BootstrapNormalProducerWrapper",
-        "guard_line": 1210,
+        "guard_line": 1208,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "native_process_api",
-        "line": 1182,
+        "line": 1180,
         "target": "",
         "target_static": false
       },
@@ -10714,7 +10666,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 1314,
+        "line": 1312,
         "target": "",
         "target_static": true
       },
@@ -10726,7 +10678,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 1328,
+        "line": 1326,
         "target": "",
         "target_static": true
       },
@@ -10734,11 +10686,11 @@
         "command": "reflection invoke",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Initialize-InstallationChildCapture",
-        "guard_line": 1417,
+        "guard_line": 1415,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "reflective_invocation",
-        "line": 1350,
+        "line": 1348,
         "target": "",
         "target_static": false
       },
@@ -10746,11 +10698,11 @@
         "command": "System.Diagnostics.Process.Start",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Initialize-InstallationChildCapture",
-        "guard_line": 1417,
+        "guard_line": 1415,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "dotnet_process_start",
-        "line": 1368,
+        "line": 1366,
         "target": "",
         "target_static": false
       },
@@ -10762,7 +10714,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "dotnet_process_start",
-        "line": 1421,
+        "line": 1419,
         "target": "",
         "target_static": false
       },
@@ -10774,7 +10726,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1440,
+        "line": 1438,
         "target": "",
         "target_static": true
       },
@@ -10786,7 +10738,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 1621,
+        "line": 1619,
         "target": "",
         "target_static": true
       },
@@ -10794,11 +10746,11 @@
         "command": ".",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Assert-ContainerDataGenerationTarget",
-        "guard_line": 1727,
+        "guard_line": 1725,
         "guard_name": "byte_pinned_function_library",
         "guarded": true,
         "kind": "dot_source",
-        "line": 1727,
+        "line": 1725,
         "target": "$dataGenerationLeaf",
         "target_static": false
       },
@@ -10810,7 +10762,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 1817,
+        "line": 1815,
         "target": "",
         "target_static": true
       },
@@ -10822,7 +10774,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 1818,
+        "line": 1816,
         "target": "",
         "target_static": true
       },
@@ -10830,11 +10782,11 @@
         "command": "reflection invoke",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Initialize-BootstrapRelaySecurity",
-        "guard_line": 1997,
+        "guard_line": 1995,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "reflective_invocation",
-        "line": 1978,
+        "line": 1976,
         "target": "",
         "target_static": false
       },
@@ -10846,7 +10798,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2375,
+        "line": 2373,
         "target": "",
         "target_static": true
       },
@@ -10858,7 +10810,19 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2881,
+        "line": 2879,
+        "target": "",
+        "target_static": true
+      },
+      {
+        "command": "Move-Item",
+        "file": "tools/bootstrap_integrity.ps1",
+        "function": "Invoke-BootstrapVerifiedReplacementRestore",
+        "guard_line": 1568,
+        "guard_name": "byte_pinned_installer_caller_closure",
+        "guarded": true,
+        "kind": "filesystem_mutation",
+        "line": 2899,
         "target": "",
         "target_static": true
       },
@@ -10882,7 +10846,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2903,
+        "line": 2925,
         "target": "",
         "target_static": true
       },
@@ -10894,19 +10858,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2927,
-        "target": "",
-        "target_static": true
-      },
-      {
-        "command": "Move-Item",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "Invoke-BootstrapVerifiedReplacementRestore",
-        "guard_line": 1568,
-        "guard_name": "byte_pinned_installer_caller_closure",
-        "guarded": true,
-        "kind": "filesystem_mutation",
-        "line": 2933,
+        "line": 2931,
         "target": "",
         "target_static": true
       },
@@ -12011,7 +11963,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 362,
+        "line": 360,
         "target": "",
         "target_static": true
       },
@@ -12023,7 +11975,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 611,
+        "line": 609,
         "target": "",
         "target_static": true
       },
@@ -12035,7 +11987,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 732,
+        "line": 730,
         "target": "",
         "target_static": true
       },
@@ -12047,7 +11999,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 739,
+        "line": 737,
         "target": "",
         "target_static": true
       },
@@ -12055,11 +12007,11 @@
         "command": "Remove-Item",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Remove-InstallationMemoryTransport",
-        "guard_line": 950,
+        "guard_line": 948,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 866,
+        "line": 864,
         "target": "",
         "target_static": true
       },
@@ -12067,11 +12019,11 @@
         "command": ".NET File mutation",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationElevationWrapperSource",
-        "guard_line": 1080,
+        "guard_line": 1078,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1046,
+        "line": 1044,
         "target": "",
         "target_static": true
       },
@@ -12083,7 +12035,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1108,
+        "line": 1106,
         "target": "",
         "target_static": true
       },
@@ -12095,7 +12047,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1112,
+        "line": 1110,
         "target": "",
         "target_static": true
       },
@@ -12107,7 +12059,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1125,
+        "line": 1123,
         "target": "",
         "target_static": true
       },
@@ -12115,11 +12067,11 @@
         "command": ".NET File mutation",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationNormalProducerWrapperSource",
-        "guard_line": 1206,
+        "guard_line": 1204,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1175,
+        "line": 1173,
         "target": "",
         "target_static": true
       },
@@ -12131,7 +12083,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 1314,
+        "line": 1312,
         "target": "",
         "target_static": true
       },
@@ -12143,7 +12095,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 1328,
+        "line": 1326,
         "target": "",
         "target_static": true
       },
@@ -12155,7 +12107,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 1440,
+        "line": 1438,
         "target": "",
         "target_static": true
       },
@@ -12167,7 +12119,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 1621,
+        "line": 1619,
         "target": "",
         "target_static": true
       },
@@ -12179,7 +12131,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 1817,
+        "line": 1815,
         "target": "",
         "target_static": true
       },
@@ -12191,7 +12143,7 @@
         "guard_name": "",
         "guarded": false,
         "kind": "filesystem_mutation",
-        "line": 1818,
+        "line": 1816,
         "target": "",
         "target_static": true
       },
@@ -12203,7 +12155,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2375,
+        "line": 2373,
         "target": "",
         "target_static": true
       },
@@ -12215,7 +12167,19 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2881,
+        "line": 2879,
+        "target": "",
+        "target_static": true
+      },
+      {
+        "command": "Move-Item",
+        "file": "tools/bootstrap_integrity.ps1",
+        "function": "Invoke-BootstrapVerifiedReplacementRestore",
+        "guard_line": 1568,
+        "guard_name": "byte_pinned_installer_caller_closure",
+        "guarded": true,
+        "kind": "filesystem_mutation",
+        "line": 2899,
         "target": "",
         "target_static": true
       },
@@ -12239,7 +12203,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2903,
+        "line": 2925,
         "target": "",
         "target_static": true
       },
@@ -12251,19 +12215,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2927,
-        "target": "",
-        "target_static": true
-      },
-      {
-        "command": "Move-Item",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "Invoke-BootstrapVerifiedReplacementRestore",
-        "guard_line": 1568,
-        "guard_name": "byte_pinned_installer_caller_closure",
-        "guarded": true,
-        "kind": "filesystem_mutation",
-        "line": 2933,
+        "line": 2931,
         "target": "",
         "target_static": true
       },
@@ -12980,60 +12932,12 @@
       {
         "command": "&",
         "file": "tools/bootstrap_integrity.ps1",
-        "function": "",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "call_operator",
-        "line": 283,
-        "target": "$knownPattern",
-        "target_static": false
-      },
-      {
-        "command": "&",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "call_operator",
-        "line": 294,
-        "target": "$assertFinalKnown",
-        "target_static": false
-      },
-      {
-        "command": "&",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "call_operator",
-        "line": 298,
-        "target": "$assertFinalKnown",
-        "target_static": false
-      },
-      {
-        "command": "&",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "call_operator",
-        "line": 314,
-        "target": "$assertFinalKnown",
-        "target_static": false
-      },
-      {
-        "command": "&",
-        "file": "tools/bootstrap_integrity.ps1",
         "function": "New-InstallationMemoryTransport",
-        "guard_line": 1026,
+        "guard_line": 1024,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "call_operator",
-        "line": 941,
+        "line": 939,
         "target": "$block",
         "target_static": false
       },
@@ -13041,11 +12945,11 @@
         "command": ".",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationHelperMemorySource",
-        "guard_line": 1025,
+        "guard_line": 1023,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "dot_source",
-        "line": 960,
+        "line": 958,
         "target": "$libraryBlock",
         "target_static": false
       },
@@ -13053,11 +12957,11 @@
         "command": "&",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationHelperMemorySource",
-        "guard_line": 1025,
+        "guard_line": 1023,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "call_operator",
-        "line": 972,
+        "line": 970,
         "target": "$helperBlock",
         "target_static": false
       },
@@ -13065,11 +12969,11 @@
         "command": ".",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationElevationWrapperSource",
-        "guard_line": 1080,
+        "guard_line": 1078,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "dot_source",
-        "line": 991,
+        "line": 989,
         "target": "$libraryBlock",
         "target_static": false
       },
@@ -13077,11 +12981,11 @@
         "command": ".",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationElevationWrapperSource",
-        "guard_line": 1080,
+        "guard_line": 1078,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "dot_source",
-        "line": 1005,
+        "line": 1003,
         "target": "(Get-InstallationVerifiedScript $writerFenceHelperPath ([string]$repairManifest.writer_fence_helper_sha256))",
         "target_static": false
       },
@@ -13093,7 +12997,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "start_process",
-        "line": 1087,
+        "line": 1085,
         "target": "$winps",
         "target_static": false
       },
@@ -13101,11 +13005,11 @@
         "command": "Invoke-Expression",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Import-BootstrapCanonicalUserProcessApi",
-        "guard_line": 1199,
+        "guard_line": 1197,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "invoke_expression",
-        "line": 1143,
+        "line": 1141,
         "target": "",
         "target_static": false
       },
@@ -13113,11 +13017,11 @@
         "command": "reflection invoke",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Import-BootstrapCanonicalUserProcessApi",
-        "guard_line": 1199,
+        "guard_line": 1197,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "reflective_invocation",
-        "line": 1145,
+        "line": 1143,
         "target": "",
         "target_static": false
       },
@@ -13125,11 +13029,11 @@
         "command": ".",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationNormalProducerWrapperSource",
-        "guard_line": 1206,
+        "guard_line": 1204,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "dot_source",
-        "line": 1156,
+        "line": 1154,
         "target": "$libraryBlock",
         "target_static": false
       },
@@ -13137,11 +13041,11 @@
         "command": "ContainerAuditCanonicalUserProcess.StartLimited",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Start-BootstrapNormalProducerWrapper",
-        "guard_line": 1210,
+        "guard_line": 1208,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "native_process_api",
-        "line": 1182,
+        "line": 1180,
         "target": "",
         "target_static": false
       },
@@ -13149,11 +13053,11 @@
         "command": "reflection invoke",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Initialize-InstallationChildCapture",
-        "guard_line": 1417,
+        "guard_line": 1415,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "reflective_invocation",
-        "line": 1350,
+        "line": 1348,
         "target": "",
         "target_static": false
       },
@@ -13161,11 +13065,11 @@
         "command": "System.Diagnostics.Process.Start",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Initialize-InstallationChildCapture",
-        "guard_line": 1417,
+        "guard_line": 1415,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "dotnet_process_start",
-        "line": 1368,
+        "line": 1366,
         "target": "",
         "target_static": false
       },
@@ -13177,7 +13081,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "dotnet_process_start",
-        "line": 1421,
+        "line": 1419,
         "target": "",
         "target_static": false
       },
@@ -13185,11 +13089,11 @@
         "command": ".",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Assert-ContainerDataGenerationTarget",
-        "guard_line": 1727,
+        "guard_line": 1725,
         "guard_name": "byte_pinned_function_library",
         "guarded": true,
         "kind": "dot_source",
-        "line": 1727,
+        "line": 1725,
         "target": "$dataGenerationLeaf",
         "target_static": false
       },
@@ -13197,11 +13101,11 @@
         "command": "reflection invoke",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Initialize-BootstrapRelaySecurity",
-        "guard_line": 1997,
+        "guard_line": 1995,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "reflective_invocation",
-        "line": 1978,
+        "line": 1976,
         "target": "",
         "target_static": false
       },
@@ -14569,54 +14473,6 @@
         "file": "tools/bootstrap_integrity.ps1",
         "sites": [
           {
-            "command": "&",
-            "file": "tools/bootstrap_integrity.ps1",
-            "function": "",
-            "guard_line": null,
-            "guard_name": "",
-            "guarded": false,
-            "kind": "call_operator",
-            "line": 283,
-            "target": "$knownPattern",
-            "target_static": false
-          },
-          {
-            "command": "&",
-            "file": "tools/bootstrap_integrity.ps1",
-            "function": "",
-            "guard_line": null,
-            "guard_name": "",
-            "guarded": false,
-            "kind": "call_operator",
-            "line": 294,
-            "target": "$assertFinalKnown",
-            "target_static": false
-          },
-          {
-            "command": "&",
-            "file": "tools/bootstrap_integrity.ps1",
-            "function": "",
-            "guard_line": null,
-            "guard_name": "",
-            "guarded": false,
-            "kind": "call_operator",
-            "line": 298,
-            "target": "$assertFinalKnown",
-            "target_static": false
-          },
-          {
-            "command": "&",
-            "file": "tools/bootstrap_integrity.ps1",
-            "function": "",
-            "guard_line": null,
-            "guard_name": "",
-            "guarded": false,
-            "kind": "call_operator",
-            "line": 314,
-            "target": "$assertFinalKnown",
-            "target_static": false
-          },
-          {
             "command": "Set-Acl",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Set-InstallationEvidenceAcl",
@@ -14624,7 +14480,7 @@
             "guard_name": "",
             "guarded": false,
             "kind": "filesystem_mutation",
-            "line": 362,
+            "line": 360,
             "target": "",
             "target_static": true
           },
@@ -14636,7 +14492,7 @@
             "guard_name": "",
             "guarded": false,
             "kind": "filesystem_mutation",
-            "line": 611,
+            "line": 609,
             "target": "",
             "target_static": true
           },
@@ -14648,7 +14504,7 @@
             "guard_name": "",
             "guarded": false,
             "kind": "filesystem_mutation",
-            "line": 732,
+            "line": 730,
             "target": "",
             "target_static": true
           },
@@ -14660,7 +14516,7 @@
             "guard_name": "",
             "guarded": false,
             "kind": "filesystem_mutation",
-            "line": 739,
+            "line": 737,
             "target": "",
             "target_static": true
           },
@@ -14668,11 +14524,11 @@
             "command": "Remove-Item",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Remove-InstallationMemoryTransport",
-            "guard_line": 950,
+            "guard_line": 948,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 866,
+            "line": 864,
             "target": "",
             "target_static": true
           },
@@ -14680,11 +14536,11 @@
             "command": "&",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "New-InstallationMemoryTransport",
-            "guard_line": 1026,
+            "guard_line": 1024,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "call_operator",
-            "line": 941,
+            "line": 939,
             "target": "$block",
             "target_static": false
           },
@@ -14692,11 +14548,11 @@
             "command": ".",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Get-InstallationHelperMemorySource",
-            "guard_line": 1025,
+            "guard_line": 1023,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "dot_source",
-            "line": 960,
+            "line": 958,
             "target": "$libraryBlock",
             "target_static": false
           },
@@ -14704,11 +14560,11 @@
             "command": "&",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Get-InstallationHelperMemorySource",
-            "guard_line": 1025,
+            "guard_line": 1023,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "call_operator",
-            "line": 972,
+            "line": 970,
             "target": "$helperBlock",
             "target_static": false
           },
@@ -14716,11 +14572,11 @@
             "command": ".",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Get-InstallationElevationWrapperSource",
-            "guard_line": 1080,
+            "guard_line": 1078,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "dot_source",
-            "line": 991,
+            "line": 989,
             "target": "$libraryBlock",
             "target_static": false
           },
@@ -14728,11 +14584,11 @@
             "command": ".",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Get-InstallationElevationWrapperSource",
-            "guard_line": 1080,
+            "guard_line": 1078,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "dot_source",
-            "line": 1005,
+            "line": 1003,
             "target": "(Get-InstallationVerifiedScript $writerFenceHelperPath ([string]$repairManifest.writer_fence_helper_sha256))",
             "target_static": false
           },
@@ -14740,11 +14596,11 @@
             "command": ".NET File mutation",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Get-InstallationElevationWrapperSource",
-            "guard_line": 1080,
+            "guard_line": 1078,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 1046,
+            "line": 1044,
             "target": "",
             "target_static": true
           },
@@ -14756,7 +14612,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "start_process",
-            "line": 1087,
+            "line": 1085,
             "target": "$winps",
             "target_static": false
           },
@@ -14768,7 +14624,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 1108,
+            "line": 1106,
             "target": "",
             "target_static": true
           },
@@ -14780,7 +14636,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 1112,
+            "line": 1110,
             "target": "",
             "target_static": true
           },
@@ -14792,7 +14648,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 1125,
+            "line": 1123,
             "target": "",
             "target_static": true
           },
@@ -14800,11 +14656,11 @@
             "command": "Invoke-Expression",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Import-BootstrapCanonicalUserProcessApi",
-            "guard_line": 1199,
+            "guard_line": 1197,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "invoke_expression",
-            "line": 1143,
+            "line": 1141,
             "target": "",
             "target_static": false
           },
@@ -14812,11 +14668,11 @@
             "command": "reflection invoke",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Import-BootstrapCanonicalUserProcessApi",
-            "guard_line": 1199,
+            "guard_line": 1197,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "reflective_invocation",
-            "line": 1145,
+            "line": 1143,
             "target": "",
             "target_static": false
           },
@@ -14824,11 +14680,11 @@
             "command": ".",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Get-InstallationNormalProducerWrapperSource",
-            "guard_line": 1206,
+            "guard_line": 1204,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "dot_source",
-            "line": 1156,
+            "line": 1154,
             "target": "$libraryBlock",
             "target_static": false
           },
@@ -14836,11 +14692,11 @@
             "command": ".NET File mutation",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Get-InstallationNormalProducerWrapperSource",
-            "guard_line": 1206,
+            "guard_line": 1204,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 1175,
+            "line": 1173,
             "target": "",
             "target_static": true
           },
@@ -14848,11 +14704,11 @@
             "command": "ContainerAuditCanonicalUserProcess.StartLimited",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Start-BootstrapNormalProducerWrapper",
-            "guard_line": 1210,
+            "guard_line": 1208,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "native_process_api",
-            "line": 1182,
+            "line": 1180,
             "target": "",
             "target_static": false
           },
@@ -14864,7 +14720,7 @@
             "guard_name": "",
             "guarded": false,
             "kind": "filesystem_mutation",
-            "line": 1314,
+            "line": 1312,
             "target": "",
             "target_static": true
           },
@@ -14876,7 +14732,7 @@
             "guard_name": "",
             "guarded": false,
             "kind": "filesystem_mutation",
-            "line": 1328,
+            "line": 1326,
             "target": "",
             "target_static": true
           },
@@ -14884,11 +14740,11 @@
             "command": "reflection invoke",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Initialize-InstallationChildCapture",
-            "guard_line": 1417,
+            "guard_line": 1415,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "reflective_invocation",
-            "line": 1350,
+            "line": 1348,
             "target": "",
             "target_static": false
           },
@@ -14896,11 +14752,11 @@
             "command": "System.Diagnostics.Process.Start",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Initialize-InstallationChildCapture",
-            "guard_line": 1417,
+            "guard_line": 1415,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "dotnet_process_start",
-            "line": 1368,
+            "line": 1366,
             "target": "",
             "target_static": false
           },
@@ -14912,7 +14768,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "dotnet_process_start",
-            "line": 1421,
+            "line": 1419,
             "target": "",
             "target_static": false
           },
@@ -14924,7 +14780,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 1440,
+            "line": 1438,
             "target": "",
             "target_static": true
           },
@@ -14936,7 +14792,7 @@
             "guard_name": "",
             "guarded": false,
             "kind": "filesystem_mutation",
-            "line": 1621,
+            "line": 1619,
             "target": "",
             "target_static": true
           },
@@ -14944,11 +14800,11 @@
             "command": ".",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Assert-ContainerDataGenerationTarget",
-            "guard_line": 1727,
+            "guard_line": 1725,
             "guard_name": "byte_pinned_function_library",
             "guarded": true,
             "kind": "dot_source",
-            "line": 1727,
+            "line": 1725,
             "target": "$dataGenerationLeaf",
             "target_static": false
           },
@@ -14960,7 +14816,7 @@
             "guard_name": "",
             "guarded": false,
             "kind": "filesystem_mutation",
-            "line": 1817,
+            "line": 1815,
             "target": "",
             "target_static": true
           },
@@ -14972,7 +14828,7 @@
             "guard_name": "",
             "guarded": false,
             "kind": "filesystem_mutation",
-            "line": 1818,
+            "line": 1816,
             "target": "",
             "target_static": true
           },
@@ -14980,11 +14836,11 @@
             "command": "reflection invoke",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Initialize-BootstrapRelaySecurity",
-            "guard_line": 1997,
+            "guard_line": 1995,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "reflective_invocation",
-            "line": 1978,
+            "line": 1976,
             "target": "",
             "target_static": false
           },
@@ -14996,7 +14852,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2375,
+            "line": 2373,
             "target": "",
             "target_static": true
           },
@@ -15008,7 +14864,19 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2881,
+            "line": 2879,
+            "target": "",
+            "target_static": true
+          },
+          {
+            "command": "Move-Item",
+            "file": "tools/bootstrap_integrity.ps1",
+            "function": "Invoke-BootstrapVerifiedReplacementRestore",
+            "guard_line": 1568,
+            "guard_name": "byte_pinned_installer_caller_closure",
+            "guarded": true,
+            "kind": "filesystem_mutation",
+            "line": 2899,
             "target": "",
             "target_static": true
           },
@@ -15032,7 +14900,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2903,
+            "line": 2925,
             "target": "",
             "target_static": true
           },
@@ -15044,19 +14912,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2927,
-            "target": "",
-            "target_static": true
-          },
-          {
-            "command": "Move-Item",
-            "file": "tools/bootstrap_integrity.ps1",
-            "function": "Invoke-BootstrapVerifiedReplacementRestore",
-            "guard_line": 1568,
-            "guard_name": "byte_pinned_installer_caller_closure",
-            "guarded": true,
-            "kind": "filesystem_mutation",
-            "line": 2933,
+            "line": 2931,
             "target": "",
             "target_static": true
           }
@@ -16585,31 +16441,31 @@
           {
             "caller": "Get-InstallationElevationWrapperSource",
             "guarded_top_level": false,
-            "line": 1038,
+            "line": 1036,
             "non_production_mode": ""
           },
           {
             "caller": "Get-InstallationNormalProducerWrapperSource",
             "guarded_top_level": false,
-            "line": 1168,
+            "line": 1166,
             "non_production_mode": ""
           },
           {
             "caller": "Invoke-BootstrapNormalFiniteProducer",
             "guarded_top_level": false,
-            "line": 1195,
+            "line": 1193,
             "non_production_mode": ""
           },
           {
             "caller": "Invoke-BootstrapNormalFiniteProducer",
             "guarded_top_level": false,
-            "line": 1238,
+            "line": 1236,
             "non_production_mode": ""
           },
           {
             "caller": "Invoke-BootstrapNormalFiniteProducer",
             "guarded_top_level": false,
-            "line": 1242,
+            "line": 1240,
             "non_production_mode": ""
           }
         ],
@@ -16630,12 +16486,12 @@
             "caller": "Invoke-InstallationElevationCapture",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 1080
+            "line": 1078
           }
         ],
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationElevationWrapperSource",
-        "guard_line": 1080,
+        "guard_line": 1078,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "non_production_only": false,
@@ -16650,12 +16506,12 @@
             "caller": "Get-InstallationElevationWrapperSource",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 1025
+            "line": 1023
           }
         ],
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationHelperMemorySource",
-        "guard_line": 1025,
+        "guard_line": 1023,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "non_production_only": false,
@@ -16670,12 +16526,12 @@
             "caller": "Invoke-BootstrapNormalFiniteProducer",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 1206
+            "line": 1204
           }
         ],
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-InstallationNormalProducerWrapperSource",
-        "guard_line": 1206,
+        "guard_line": 1204,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "non_production_only": false,
@@ -16690,12 +16546,12 @@
             "caller": "Invoke-BootstrapNormalFiniteProducer",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 1199
+            "line": 1197
           }
         ],
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Import-BootstrapCanonicalUserProcessApi",
-        "guard_line": 1199,
+        "guard_line": 1197,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "non_production_only": false,
@@ -16710,12 +16566,12 @@
             "caller": "Get-BootstrapRelaySecurity",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 1997
+            "line": 1995
           }
         ],
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Initialize-BootstrapRelaySecurity",
-        "guard_line": 1997,
+        "guard_line": 1995,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "non_production_only": false,
@@ -16730,12 +16586,12 @@
             "caller": "Invoke-InstallationEvidenceChild",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 1417
+            "line": 1415
           }
         ],
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Initialize-InstallationChildCapture",
-        "guard_line": 1417,
+        "guard_line": 1415,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "non_production_only": false,
@@ -16904,19 +16760,19 @@
             "caller": "Get-InstallationElevationWrapperSource",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 1027
+            "line": 1025
           },
           {
             "caller": "Get-InstallationNormalProducerWrapperSource",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 1164
+            "line": 1162
           },
           {
             "caller": "Invoke-BootstrapNormalFiniteProducer",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 1194
+            "line": 1192
           }
         ],
         "file": "tools/bootstrap_integrity.ps1",
@@ -16936,24 +16792,24 @@
             "caller": "Get-InstallationElevationWrapperSource",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 1026
+            "line": 1024
           },
           {
             "caller": "Invoke-InstallationElevationCapture",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 1080
+            "line": 1078
           },
           {
             "caller": "Invoke-BootstrapNormalFiniteProducer",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 1206
+            "line": 1204
           }
         ],
         "file": "tools/bootstrap_integrity.ps1",
         "function": "New-InstallationMemoryTransport",
-        "guard_line": 1026,
+        "guard_line": 1024,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "non_production_only": false,
@@ -16967,7 +16823,7 @@
           {
             "caller": "Initialize-InstallationEvidence",
             "guarded_top_level": false,
-            "line": 646,
+            "line": 644,
             "non_production_mode": ""
           }
         ],
@@ -16987,19 +16843,19 @@
           {
             "caller": "Initialize-InstallationProtectedBase",
             "guarded_top_level": false,
-            "line": 572,
+            "line": 570,
             "non_production_mode": ""
           },
           {
             "caller": "Assert-BootstrapProtectedRelayPath",
             "guarded_top_level": false,
-            "line": 1920,
+            "line": 1918,
             "non_production_mode": ""
           },
           {
             "caller": "Assert-BootstrapProtectedRelayPath",
             "guarded_top_level": false,
-            "line": 1939,
+            "line": 1937,
             "non_production_mode": ""
           }
         ],
@@ -17020,30 +16876,30 @@
             "caller": "New-InstallationMemoryTransport",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 950
+            "line": 948
           },
           {
             "caller": "Get-InstallationElevationWrapperSource",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 1037
+            "line": 1035
           },
           {
             "caller": "Invoke-InstallationElevationCapture",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 1132
+            "line": 1130
           },
           {
             "caller": "Invoke-BootstrapNormalFiniteProducer",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 1242
+            "line": 1240
           }
         ],
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Remove-InstallationMemoryTransport",
-        "guard_line": 950,
+        "guard_line": 948,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "non_production_only": false,
@@ -17057,73 +16913,73 @@
           {
             "caller": "New-InstallationProtectedDirectory",
             "guarded_top_level": false,
-            "line": 427,
+            "line": 425,
             "non_production_mode": ""
           },
           {
             "caller": "New-InstallationProtectedDirectory",
             "guarded_top_level": false,
-            "line": 435,
+            "line": 433,
             "non_production_mode": ""
           },
           {
             "caller": "New-InstallationProtectedEvidenceRun",
             "guarded_top_level": false,
-            "line": 627,
+            "line": 625,
             "non_production_mode": ""
           },
           {
             "caller": "Initialize-InstallationEvidence",
             "guarded_top_level": false,
-            "line": 656,
+            "line": 654,
             "non_production_mode": ""
           },
           {
             "caller": "Write-InstallationEvidenceEvent",
             "guarded_top_level": false,
-            "line": 711,
+            "line": 709,
             "non_production_mode": ""
           },
           {
             "caller": "Complete-InstallationEvidence",
             "guarded_top_level": false,
-            "line": 733,
+            "line": 731,
             "non_production_mode": ""
           },
           {
             "caller": "Get-InstallationElevationWrapperSource",
             "guarded_top_level": false,
-            "line": 1047,
+            "line": 1045,
             "non_production_mode": ""
           },
           {
             "caller": "Invoke-InstallationElevationCapture",
             "guarded_top_level": false,
-            "line": 1109,
+            "line": 1107,
             "non_production_mode": ""
           },
           {
             "caller": "Invoke-InstallationElevationCapture",
             "guarded_top_level": false,
-            "line": 1126,
+            "line": 1124,
             "non_production_mode": ""
           },
           {
             "caller": "Get-InstallationNormalProducerWrapperSource",
             "guarded_top_level": false,
-            "line": 1176,
+            "line": 1174,
             "non_production_mode": ""
           },
           {
             "caller": "Write-InstallationCaughtFailure",
             "guarded_top_level": false,
-            "line": 1312,
+            "line": 1310,
             "non_production_mode": ""
           },
           {
             "caller": "Invoke-InstallationEvidenceChild",
             "guarded_top_level": false,
-            "line": 1441,
+            "line": 1439,
             "non_production_mode": ""
           }
         ],
@@ -17144,12 +17000,12 @@
             "caller": "Invoke-BootstrapNormalFiniteProducer",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 1210
+            "line": 1208
           }
         ],
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Start-BootstrapNormalProducerWrapper",
-        "guard_line": 1210,
+        "guard_line": 1208,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "non_production_only": false,
@@ -17219,25 +17075,25 @@
           {
             "caller": "Assert-InstallationEvidenceProtectedPath",
             "guarded_top_level": false,
-            "line": 382,
+            "line": 380,
             "non_production_mode": ""
           },
           {
             "caller": "Fail-InstallationEvidenceStages",
             "guarded_top_level": false,
-            "line": 1343,
+            "line": 1341,
             "non_production_mode": ""
           },
           {
             "caller": "Invoke-InstallationEvidenceChild",
             "guarded_top_level": false,
-            "line": 1471,
+            "line": 1469,
             "non_production_mode": ""
           },
           {
             "caller": "Protect-KmtechCodeAncestors",
             "guarded_top_level": false,
-            "line": 1636,
+            "line": 1634,
             "non_production_mode": ""
           }
         ],
@@ -17257,13 +17113,13 @@
           {
             "caller": "Write-BootstrapIntegrityRecord",
             "guarded_top_level": false,
-            "line": 1845,
+            "line": 1843,
             "non_production_mode": ""
           },
           {
             "caller": "Write-BootstrapReplacementReceipt",
             "guarded_top_level": false,
-            "line": 2380,
+            "line": 2378,
             "non_production_mode": ""
           }
         ],
@@ -17846,104 +17702,7 @@
         "unsafe_reachable": false
       }
     ],
-    "guard_failures": [
-      {
-        "command": "&",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "call_operator",
-        "line": 283,
-        "target": "$knownPattern",
-        "target_static": false
-      },
-      {
-        "command": "&",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "library_top_level_writer",
-        "line": 283,
-        "target": "$knownPattern",
-        "target_static": false
-      },
-      {
-        "command": "&",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "call_operator",
-        "line": 294,
-        "target": "$assertFinalKnown",
-        "target_static": false
-      },
-      {
-        "command": "&",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "library_top_level_writer",
-        "line": 294,
-        "target": "$assertFinalKnown",
-        "target_static": false
-      },
-      {
-        "command": "&",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "call_operator",
-        "line": 298,
-        "target": "$assertFinalKnown",
-        "target_static": false
-      },
-      {
-        "command": "&",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "library_top_level_writer",
-        "line": 298,
-        "target": "$assertFinalKnown",
-        "target_static": false
-      },
-      {
-        "command": "&",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "call_operator",
-        "line": 314,
-        "target": "$assertFinalKnown",
-        "target_static": false
-      },
-      {
-        "command": "&",
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "",
-        "guard_line": null,
-        "guard_name": "",
-        "guarded": false,
-        "kind": "library_top_level_writer",
-        "line": 314,
-        "target": "$assertFinalKnown",
-        "target_static": false
-      }
-    ],
+    "guard_failures": [],
     "installer_delegated_sources": [
       "__INVENTORY_ALL_SOURCES__"
     ],
@@ -18218,15 +17977,6 @@
         "site_kinds": [
           "call_operator",
           "reflective_invocation"
-        ]
-      },
-      {
-        "file": "tools/bootstrap_integrity.ps1",
-        "function": "__script__",
-        "guarded": false,
-        "site_count": 4,
-        "site_kinds": [
-          "call_operator"
         ]
       },
       {
@@ -18764,7 +18514,7 @@
       }
     ],
     "site_counts_by_kind": {
-      "call_operator": 21,
+      "call_operator": 17,
       "com_wmi_process_create": 5,
       "dot_source": 24,
       "dotnet_process_start": 2,
@@ -18811,104 +18561,7 @@
       }
     ]
   },
-  "powershell_guard_failures": [
-    {
-      "command": "&",
-      "file": "tools/bootstrap_integrity.ps1",
-      "function": "",
-      "guard_line": null,
-      "guard_name": "",
-      "guarded": false,
-      "kind": "call_operator",
-      "line": 283,
-      "target": "$knownPattern",
-      "target_static": false
-    },
-    {
-      "command": "&",
-      "file": "tools/bootstrap_integrity.ps1",
-      "function": "",
-      "guard_line": null,
-      "guard_name": "",
-      "guarded": false,
-      "kind": "library_top_level_writer",
-      "line": 283,
-      "target": "$knownPattern",
-      "target_static": false
-    },
-    {
-      "command": "&",
-      "file": "tools/bootstrap_integrity.ps1",
-      "function": "",
-      "guard_line": null,
-      "guard_name": "",
-      "guarded": false,
-      "kind": "call_operator",
-      "line": 294,
-      "target": "$assertFinalKnown",
-      "target_static": false
-    },
-    {
-      "command": "&",
-      "file": "tools/bootstrap_integrity.ps1",
-      "function": "",
-      "guard_line": null,
-      "guard_name": "",
-      "guarded": false,
-      "kind": "library_top_level_writer",
-      "line": 294,
-      "target": "$assertFinalKnown",
-      "target_static": false
-    },
-    {
-      "command": "&",
-      "file": "tools/bootstrap_integrity.ps1",
-      "function": "",
-      "guard_line": null,
-      "guard_name": "",
-      "guarded": false,
-      "kind": "call_operator",
-      "line": 298,
-      "target": "$assertFinalKnown",
-      "target_static": false
-    },
-    {
-      "command": "&",
-      "file": "tools/bootstrap_integrity.ps1",
-      "function": "",
-      "guard_line": null,
-      "guard_name": "",
-      "guarded": false,
-      "kind": "library_top_level_writer",
-      "line": 298,
-      "target": "$assertFinalKnown",
-      "target_static": false
-    },
-    {
-      "command": "&",
-      "file": "tools/bootstrap_integrity.ps1",
-      "function": "",
-      "guard_line": null,
-      "guard_name": "",
-      "guarded": false,
-      "kind": "call_operator",
-      "line": 314,
-      "target": "$assertFinalKnown",
-      "target_static": false
-    },
-    {
-      "command": "&",
-      "file": "tools/bootstrap_integrity.ps1",
-      "function": "",
-      "guard_line": null,
-      "guard_name": "",
-      "guarded": false,
-      "kind": "library_top_level_writer",
-      "line": 314,
-      "target": "$assertFinalKnown",
-      "target_static": false
-    }
-  ],
+  "powershell_guard_failures": [],
   "powershell_writer_sinks": [
     {
       "file": "INSTALL_THIS_PC.ps1",
