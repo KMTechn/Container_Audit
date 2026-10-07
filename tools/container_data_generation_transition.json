@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "17771df2b6a4fc4f64625d58e3d1d4ec54c7154b61be4a3ef7efcb4dca2e325b",
+  "after_inventory_sha256": "b58e2434ad2dd6afc8d50321d79fddbb7acd542bfcd545a2d25c303f7cf1b7fb",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -217,7 +217,7 @@
     {
       "path": "app/data_generation_guard.py",
       "before": "e16d1f3c75c5897d9fa3a9c51ee00a1d6bc94b7d47b49c4ca994f81d6778da27",
-      "after": "2805a7ceca6204263581ccee25f63f3d05b235b75ac715af1b862354b859c602"
+      "after": "c640666fc3db8ac49575a7492cdf1a3de1506bb7fa55c4cc58514dc23b110938"
     },
     {
       "path": "app/direct_sync_auto_bootstrap.py",
@@ -4527,7 +4527,7 @@
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "b9f65db9e499fa7f079d4800b95f40dab54d8d0ab8756f5f9407ce4e8989deb9"
+      "after": "de9b0051fedfb61c2b7a01b52ec215928f9a30e0e3c9d319ef2ad117db0ae499"
     }
   ],
   "source_replacements": [
@@ -4564,7 +4564,7 @@
     {
       "path": "data_generation_guard.py",
       "before": "e16d1f3c75c5897d9fa3a9c51ee00a1d6bc94b7d47b49c4ca994f81d6778da27",
-      "after": "2805a7ceca6204263581ccee25f63f3d05b235b75ac715af1b862354b859c602"
+      "after": "c640666fc3db8ac49575a7492cdf1a3de1506bb7fa55c4cc58514dc23b110938"
     },
     {
       "path": "direct_sync_auto_bootstrap.py",
