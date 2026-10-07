@@ -1,5 +1,6 @@
 """Interrupted projections retain their original durable events."""
 import json
+import builtins
 import os
 from pathlib import Path
 import subprocess
@@ -81,3 +82,27 @@ def test_changed_csv_after_sync_keeps_original_until_repaired_and_resynced(tmp_p
     store.drain()
     assert not target.exists()
     assert [json.loads(row["details"])["idempotency_key"] for row in rows(csv_path)] == ["first"]
+
+
+def test_missing_csv_after_sync_does_not_claim_projection(tmp_path, monkeypatch):
+    csv_path = tmp_path / "events.csv"
+    store = logs.EventLogOutbox(tmp_path / "outbox")
+    target = store.stage(str(csv_path), entry("first"))
+    class RemovedAfterClose:
+        def __init__(self, handle):
+            self.handle = handle
+        def __getattr__(self, name):
+            return getattr(self.handle, name)
+        def close(self):
+            self.handle.close()
+            csv_path.unlink()
+    def opened(path, mode="r", *args, **kwargs):
+        handle = builtins.open(path, mode, *args, **kwargs)
+        return RemovedAfterClose(handle) if Path(path) == csv_path and mode == "ab" else handle
+    with monkeypatch.context() as fault:
+        fault.setattr(logs, "open", opened, raising=False)
+        assert store.drain() == {}
+        assert target.exists()
+    store.drain()
+    assert not target.exists()
+    assert len(rows(csv_path)) == 1

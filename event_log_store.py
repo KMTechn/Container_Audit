@@ -158,13 +158,16 @@ class EventLogOutbox:
                             if should_stop is not None and should_stop():
                                 return projected
                             try:
+                                stat = os.stat(payload["log_file_path"])
+                            except FileNotFoundError:
+                                return projected  # A removed CSV is not an acknowledged outbox row.
+                            if (stat.st_size, stat.st_mtime_ns, stat.st_ino) != projection_signature:
+                                # This receipt synced an earlier file image.
+                                # Revalidate/re-sync on the next drain before ACK.
+                                return projected
+                            try:
                                 if path.read_text(encoding="utf-8") != original:
                                     raise ValueError("event outbox payload changed during projection")
-                                stat = os.stat(payload["log_file_path"])
-                                if (stat.st_size, stat.st_mtime_ns, stat.st_ino) != projection_signature:
-                                    # This receipt synced an earlier file image.
-                                    # Revalidate/re-sync on the next drain before ACK.
-                                    return projected
                                 path.unlink()
                             except FileNotFoundError:
                                 pass
