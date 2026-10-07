@@ -24,6 +24,12 @@ $ErrorActionPreference='Stop'
 . (Join-Path $Source 'tools/bootstrap_integrity.ps1')
 . (Get-BootstrapSharedPortableLeaf $Source)
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $Source 'INSTALL_CANONICAL_PORTABLE.ps1'),[ref]$null,[ref]$null)
+Set-StrictMode -Version Latest
+foreach($initialization in @($ast.EndBlock.Statements | Where-Object {
+    $_ -is [Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -ceq '$outputFailure'
+})){
+    Invoke-Expression $initialization.Extent.Text
+}
 foreach($definition in @($ast.EndBlock.Statements | Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst]})){
     Invoke-Expression $definition.Extent.Text
 }

@@ -31,6 +31,7 @@ $Script:CanonicalWriterFenceTransactionId = ''
 $Script:CanonicalWriterFenceDelegationToken = ''
 $retirementAuditSealed = $false
 $audit = $null
+$outputFailure = $null
 $enteredPlacementTry = $false
 $currentAbsentBeforePlacement = $false
 $Script:CanonicalPreparationAdmissionFailed = $false
