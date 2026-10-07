@@ -143,13 +143,21 @@ function Remove-Item {{throw 'unexpected cleanup'}}
 function StartRaw {{throw 'unexpected relay change'}}
 $mainCandidates=@($ast.FindAll({{param($n)
  $n -is [Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally -and
- $n.Finally.Extent.Text -match 'Exit-ContainerWriterSessionAuthority' -and
+ @($n.CatchClauses|Where-Object {{$_.Body.Extent.Text.Contains('if (-not $enteredPlacementTry)')}}).Count -eq 1 -and
  @($n.Body.Statements|Where-Object {{$_ -is [Management.Automation.Language.AssignmentStatementAst] -and
    $_.Left.Extent.Text -ceq '$canonicalWriterFencePreparedReceipt' -and
    $_.Extent.Text -match 'New-CanonicalWriterFencePreparedReceipt'}}).Count -eq 1
 }},$true))
 if($mainCandidates.Count -ne 1){{throw 'TEST_MAIN_PLACEMENT_BLOCK_NOT_UNIQUE'}}
 $mainTry=$mainCandidates[0]
+# T7 disposes authority after outer diagnostics and the single journal seal.
+# Execute the actual outer cleanup to prove release of the acquired authority.
+$outerCleanup=@($ast.FindAll({{param($n)
+ $n -is [Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally -and
+ $n.Finally.Extent.Text.Contains('Complete-InstallationEvidence') -and
+ $n.Finally.Extent.Text.Contains('Exit-ContainerWriterSessionAuthority')
+}},$true))
+if($outerCleanup.Count -ne 1){{throw 'TEST_OUTER_CLEANUP_NOT_UNIQUE'}}
 $receipts=@($mainTry.Body.Statements|Where-Object {{$_ -is [Management.Automation.Language.AssignmentStatementAst] -and
  $_.Left.Extent.Text -ceq '$canonicalWriterFencePreparedReceipt' -and $_.Extent.Text -match 'New-CanonicalWriterFencePreparedReceipt'}})
 if($receipts.Count -ne 1){{throw 'TEST_PREPARED_RECEIPT_STATEMENT_NOT_UNIQUE'}}
@@ -183,7 +191,10 @@ try{{
   $failure=@{{type=$original.Exception.GetType().Name;message=(ConvertTo-CanonicalSafeDiagnostic ([string]$original.Exception.Message));script_stack=[string]$original.ScriptStackTrace}}
   [System.IO.File]::WriteAllText({quote(root.parent/'powershell.preflight.exception.json')},($failure|ConvertTo-Json))
   Invoke-Expression $earlyCatch}}
- finally{{Invoke-Expression (($mainTry.Finally.Statements|ForEach-Object {{$_.Extent.Text}})-join "`n")}}
+  finally{{
+   try{{Invoke-Expression (($mainTry.Finally.Statements|ForEach-Object {{$_.Extent.Text}})-join "`n")}}
+   finally{{Invoke-Expression (($outerCleanup[0].Finally.Statements|ForEach-Object {{$_.Extent.Text}})-join "`n")}}
+  }}
 }}
 catch{{
  $failure=@{{type=$_.Exception.GetType().Name;message=(ConvertTo-CanonicalSafeDiagnostic ([string]$_.Exception.Message));script_stack=[string]$_.ScriptStackTrace}}
