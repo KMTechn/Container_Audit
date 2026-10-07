@@ -1284,6 +1284,11 @@ sub-265 REPORT에 기록하며 실제 task 제거/전체 설치의 랩 수용과
 
 ## 설치 실패 기록과 공식 옛 relay (sub-273)
 
+Canonical journal의 봉인은 outer catch·실패 보상·감사 진단 기록 뒤 마지막에
+수행하며 audit 게시까지 기존 authority를 유지한다. 최종 audit/evidence에는 동일한 journal 부분 파일 SHA256을 게시하고
+그 뒤 journal에 줄을 덧붙이지 않는다. 성공·실패·부분 파일 회전 경로를 PS5.1/7
+실제 기록 함수로 확인하며 관리자 승인·현장 설치 검증은 별도다.
+
 공통 redactor는 모든 sink 직전에 ENV 원문/escape와 JSON 비밀 필드를 가리고 typed 메타데이터·지문·경로를 보존한다. 64 KiB는 잘림 표식을 포함한다. child는 디스크에 원문을 쓰지 않고 RAM에서 가린 뒤 저장한다. 32 MiB RAM 입력 초과는 전문 불가를 명시하고 부분 원문을 저장하지 않는다. journal은 64 KiB 부분 파일 최대16개와 지문 참조를 쓴다.
 
 onboarding·제거·복원 보고서와 DirectSync 보고서도 임시 파일 생성 전에 같은 가림과 유효 JSON 상한을 적용한다. 실패의 원 예외/child 출력은 보호된 별도 JSON과 SHA256 참조로 보존하며 저장 실패를 원 오류로 바꾸지 않는다. 사용자 예외는 가린 마지막 줄 300자와 별도의 가린 전문을 가진다. owner artifact의 내부 경로·지문 비교는 그대로 두고, 보고서 직렬화에서는 경로/지문 이름에 `_path`/`_sha256`를 붙여 공통 메타데이터 계약을 지킨다.

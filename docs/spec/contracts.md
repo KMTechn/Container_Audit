@@ -8,6 +8,10 @@
 
 # 데이터·상태·통합 계약
 
+Canonical 설치 journal은 outer failure와 정리·감사 진단을 모두 기록한 뒤 한 번
+봉인한다. audit와 evidence-status의 부분 파일 SHA256은 최종 저장 바이트를
+가리키며, 봉인 뒤 audit 게시에는 이미 기록한 진단의 공개 형태를 사용한다.
+
 유지보수 active fence가 있으면 중앙 봉인·임대·PIN·등록·relay 전송은 첫 HTTP 전에 거절한다. 원 명령과 멱등 키, pending 임대 요청, UNKNOWN 및 복구 원본은 보존하며 해제 뒤 같은 내구 요청을 재시도한다. 원격 전송은 admission 확인 뒤 쓰기 mutex를 반환한다.
 
 G의 REFUSE/UNKNOWN은 직접 등록·지원 명령과 앱 하위 모드에서도 최초 기존 신원·자료

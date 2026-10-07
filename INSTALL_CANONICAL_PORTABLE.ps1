@@ -979,7 +979,6 @@ function Resume-CanonicalAbandonedRollback {
         Write-InstallationCaughtFailure $_
         throw [InvalidOperationException]::new('이전 설치 복구 상태를 확인할 수 없습니다. 지원 담당자에게 문의하세요.',$_.Exception)
     }finally{
-        [void](Complete-InstallationEvidence)
         if($null -ne $admission){Exit-ContainerWriterAdmission $admission}
         if($null -ne $claim){Exit-ContainerWriterSessionAuthority $claim}
         $Script:ContainerWriterFenceAcceptedInstalledInventorySha256=$savedInventory
@@ -5261,32 +5260,7 @@ finally {
         }catch{Write-InstallationCaughtFailure $_;$audit.rollback['official_legacy_relay_restored']=$false;$audit.scheduled_writer.official_legacy.status='FAILED_RESTORE_FINALLY'}
         try{Save $auditPath $audit}catch{Write-InstallationCaughtFailure $_}
     }
-    Complete-InstallationEvidenceStage 'forward'
-    $evidenceRollbackFailure=$null
-    if($null -ne $original -and ($null -eq $audit -or -not $audit.rollback.runtime_restored)){$evidenceRollbackFailure=$original}
-    Complete-InstallationEvidenceStage 'rollback' $evidenceRollbackFailure
-    $finalEvidence=Complete-InstallationEvidence
-    if($null -ne $audit){
-        $audit['installation_evidence']=$finalEvidence
-        try {
-            if (-not $retirementAuditSealed) { Save $auditPath $audit $true }
-        }catch{Write-Warning (ConvertTo-KmtechRedactedSinkText -Text ([string]('INSTALLATION_EVIDENCE_FINAL_AUDIT_SAVE_FAILED')) -UserLine)}
-        if($evidenceFull){
-            try {Save $evidenceFull $audit $true}
-            catch{Write-Warning (ConvertTo-KmtechRedactedSinkText -Text ([string]('INSTALLATION_EVIDENCE_FINAL_EVIDENCE_SAVE_FAILED')) -UserLine)}
-        }
-    }
-    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_status='+[string]$finalEvidence.status))))
-    Write-CanonicalInstallationPublicRecord
-    $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''
-    foreach ($name in $canonicalWriterFenceEnvironmentNames) {
-        [Environment]::SetEnvironmentVariable($name, $canonicalWriterFenceEnvironmentBefore[$name], 'Process')
-    }
-    if ($null -ne $canonicalWriterFenceAuthority) {
-        Exit-ContainerWriterSessionAuthority $canonicalWriterFenceAuthority
-    }
-    Exit-RetirementResumeClaim $retirementResumeClaim
-    if ($null -ne $continuationOldClaim) {Exit-CanonicalRollbackContinuationClaim $continuationOldClaim}
+
 }
 
 } catch {
@@ -5304,4 +5278,44 @@ finally {
     if(Get-Command Write-InstallationCaughtFailure -ErrorAction SilentlyContinue){Write-InstallationCaughtFailure $outputFailure}
     Write-CanonicalInstallationPublicRecord -Failure $outputFailure -ExitCode 1
     exit 1
+} finally {
+    try {
+    # Record the outer failure and caller-selected audit diagnostics before the
+    # single journal seal. Keep the deployment authority through audit publication.
+    if(Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue){
+    $finalAudit=$null
+    if($null -ne $audit){
+        $finalAudit=(ConvertTo-CanonicalAuditJson $audit)|ConvertFrom-Json
+    }
+    Complete-InstallationEvidenceStage 'forward'
+    $evidenceRollbackFailure=$null
+    if($null -ne $original -and ($null -eq $audit -or -not $audit.rollback.runtime_restored)){$evidenceRollbackFailure=$original}
+    Complete-InstallationEvidenceStage 'rollback' $evidenceRollbackFailure
+    $finalEvidence=Complete-InstallationEvidence
+    if($null -ne $finalAudit){
+        $finalAudit|Add-Member -NotePropertyName installation_evidence -NotePropertyValue $finalEvidence -Force
+        # These diagnostic leaves already have their protected journal records.
+        # Saving their public forms cannot append another event after the seal.
+        try {
+            if (-not $retirementAuditSealed) { Save $auditPath $finalAudit $true }
+        }catch{Write-Warning (ConvertTo-KmtechRedactedSinkText -Text ([string]('INSTALLATION_EVIDENCE_FINAL_AUDIT_SAVE_FAILED')) -UserLine)}
+        if($evidenceFull){
+            try {Save $evidenceFull $finalAudit $true}
+            catch{Write-Warning (ConvertTo-KmtechRedactedSinkText -Text ([string]('INSTALLATION_EVIDENCE_FINAL_EVIDENCE_SAVE_FAILED')) -UserLine)}
+        }
+    }
+    Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('installation_evidence_status='+[string]$finalEvidence.status))))
+    if($null -eq $outputFailure){Write-CanonicalInstallationPublicRecord}
+    }
+    } finally {
+    $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''
+    foreach ($name in $canonicalWriterFenceEnvironmentNames) {
+        [Environment]::SetEnvironmentVariable($name, $canonicalWriterFenceEnvironmentBefore[$name], 'Process')
+    }
+    if ($null -ne $canonicalWriterFenceAuthority) {
+        Exit-ContainerWriterSessionAuthority $canonicalWriterFenceAuthority
+    }
+    Exit-RetirementResumeClaim $retirementResumeClaim
+    if ($null -ne $continuationOldClaim) {Exit-CanonicalRollbackContinuationClaim $continuationOldClaim}
+    }
 }
