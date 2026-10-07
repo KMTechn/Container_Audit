@@ -80,3 +80,28 @@ Invoke-Expression $code
         assert sum(event["event"] == "CAUGHT_FAILURE" for event in events) == 2
     if case == "rotated-failure":
         assert len(summary["journal_parts"]) > 1
+
+
+@pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
+def test_canonical_final_cleanup_accepts_preflight_without_acquired_resources(tmp_path, engine):
+    executable = shutil.which(engine)
+    assert executable
+    driver = tmp_path / 'preflight-cleanup.ps1'
+    driver.write_text(r'''
+param([string]$Source)
+$ErrorActionPreference='Stop'
+Set-StrictMode -Version Latest
+$ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $Source 'INSTALL_CANONICAL_PORTABLE.ps1'),[ref]$null,[ref]$null)
+foreach($definition in @($ast.EndBlock.Statements | Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst]})){
+    Invoke-Expression $definition.Extent.Text
+}
+$outer=@($ast.EndBlock.Statements | Where-Object {$_ -is [Management.Automation.Language.TryStatementAst] -and $_.Body.Extent.Text.Contains('$enteredPlacementTry')})
+$cleanup=@($outer[0].Finally.Statements | Where-Object {$_ -is [Management.Automation.Language.TryStatementAst]})[0].Finally
+& (Invoke-Expression $cleanup.Extent.Text)
+''', encoding='utf-8-sig')
+    result = subprocess.run([executable, '-NoLogo', '-NoProfile', '-NonInteractive', '-File', str(driver),
+                             '-Source', str(ROOT)], capture_output=True, creationflags=0x08000000)
+    (tmp_path / 'stdout.log').write_bytes(result.stdout)
+    (tmp_path / 'stderr.log').write_bytes(result.stderr)
+    assert result.returncode == 0
+    assert result.stderr == b''

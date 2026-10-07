@@ -5290,7 +5290,8 @@ finally {
     }
     Complete-InstallationEvidenceStage 'forward'
     $evidenceRollbackFailure=$null
-    if($null -ne $original -and ($null -eq $audit -or -not $audit.rollback.runtime_restored)){$evidenceRollbackFailure=$original}
+    $finalOriginal=Get-Variable -Name original -ValueOnly -ErrorAction SilentlyContinue
+    if($null -ne $finalOriginal -and ($null -eq $audit -or -not $audit.rollback.runtime_restored)){$evidenceRollbackFailure=$finalOriginal}
     Complete-InstallationEvidenceStage 'rollback' $evidenceRollbackFailure
     $finalEvidence=Complete-InstallationEvidence
     if($null -ne $finalAudit){
@@ -5310,13 +5311,16 @@ finally {
     }
     } finally {
     $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''
-    foreach ($name in $canonicalWriterFenceEnvironmentNames) {
+    $finalEnvironmentNames=Get-Variable -Name canonicalWriterFenceEnvironmentNames -ValueOnly -ErrorAction SilentlyContinue
+    foreach ($name in $finalEnvironmentNames) {
         [Environment]::SetEnvironmentVariable($name, $canonicalWriterFenceEnvironmentBefore[$name], 'Process')
     }
-    if ($null -ne $canonicalWriterFenceAuthority) {
-        Exit-ContainerWriterSessionAuthority $canonicalWriterFenceAuthority
+    $finalAuthority=Get-Variable -Name canonicalWriterFenceAuthority -ValueOnly -ErrorAction SilentlyContinue
+    if ($null -ne $finalAuthority) {
+        Exit-ContainerWriterSessionAuthority $finalAuthority
     }
-    Exit-RetirementResumeClaim $retirementResumeClaim
-    if ($null -ne $continuationOldClaim) {Exit-CanonicalRollbackContinuationClaim $continuationOldClaim}
+    Exit-RetirementResumeClaim (Get-Variable -Name retirementResumeClaim -ValueOnly -ErrorAction SilentlyContinue)
+    $finalContinuationClaim=Get-Variable -Name continuationOldClaim -ValueOnly -ErrorAction SilentlyContinue
+    if ($null -ne $finalContinuationClaim) {Exit-CanonicalRollbackContinuationClaim $finalContinuationClaim}
     }
 }
