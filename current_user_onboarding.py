@@ -320,10 +320,15 @@ def _failure_location(error: BaseException) -> dict[str, Any]:
             module = frame.tb_frame.f_globals.get("__name__")
             function = frame.tb_frame.f_code.co_name
             if (isinstance(module, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,127}", module)
-                    and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,127}", function)
-                    and Path(frame.tb_frame.f_code.co_filename).resolve().is_relative_to(app_root)):
-                selected = {"location_module": module, "location_function": function,
-                            "location_line": frame.tb_lineno}
+                    and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,127}", function)):
+                try:
+                    relative = Path(frame.tb_frame.f_code.co_filename).resolve().relative_to(app_root)
+                except (OSError, ValueError):
+                    pass
+                else:
+                    if relative.parts and relative.parts[0].casefold() != 'site-packages':
+                        selected = {"location_module": module, "location_function": function,
+                                    "location_line": frame.tb_lineno}
             frame = frame.tb_next
         if selected is not None:
             fields.update(selected)

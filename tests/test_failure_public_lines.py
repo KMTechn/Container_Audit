@@ -313,3 +313,20 @@ def test_failure_report_preserves_owner_metadata_fields(tmp_path):
             pytest.fail('Failure publication changed owner metadata field names or bytes', pytrace=False)
     if private.encode() in raw:
         pytest.fail('Protected report original-count=' + str(raw.count(private.encode())), pytrace=False)
+def test_packaged_dependency_trace_reports_the_application_caller(tmp_path, monkeypatch):
+    import current_user_onboarding as onboarding
+
+    app_root = tmp_path / 'app'
+    monkeypatch.setattr(onboarding, '__file__', str(app_root / 'current_user_onboarding.py'))
+    dependency = {'__name__': 'packaged_dependency'}
+    exec(compile('def fail():\n    raise ValueError("PRIVATE_DIAGNOSTIC")\n',
+                 str(app_root / 'site-packages/dependency.py'), 'exec'), dependency)
+    application = {'__name__': 'owned_application', 'dependency': dependency['fail']}
+    exec(compile('def fail():\n    dependency()\n', str(app_root / 'owned_application.py'), 'exec'), application)
+    try:
+        application['fail']()
+    except ValueError as error:
+        fields = onboarding._failure_location(error)
+    assert fields == {'exception_type': 'builtins.ValueError',
+                      'location_module': 'owned_application',
+                      'location_function': 'fail', 'location_line': 2}
