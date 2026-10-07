@@ -291,8 +291,17 @@ READY 실패 뒤 `update-control/transition.json`의 `retained_candidate=true`�
 확인한다. 판정 불가에서는 candidate도 기존 guard가 UNKNOWN으로 중단하며 기동을
 보장하지 않는다. 다음 시도에도 같은 고정 지원 복구 안내를 내고 자료와 판정 기록을
 보존한다. 임의 옛 판 복귀·marker 삭제·자료 복원으로 우회하지 않는다.
-세대가 변하지 않았고 옛 판이 허용된 경우만 `ROLLBACK_PENDING_READY`로 복귀한다.
+세대가 변하지 않았고 옛 판이 허용된 경우만 이미 확인된 옛 판으로 `ROLLED_BACK` 복귀한다.
 GUI와 relay는 같은 판정 함수를 사용한다.
+준비된 갱신의 SYSTEM 요청 실패 또는 60초 무진전은 현재 판을 일반 실행한다.
+FAILED/UNKNOWN에서도 active 판이 G ALLOW면 일반 실행하며, writer가 사라진 뒤 SYSTEM이
+같은 결정표로 종점을 정착시켜 다음 prepared를 처리한다. 새 판 유지 결정 뒤에도 같은
+bootstrap에서 바로 일반 실행한다. 자료 판정 불가 안내는 기존 guard가 담당한다.
+APPLIED 후 감독이 없고 trial 자식도 없으면 후보를 일반 실행하고
+`UPDATE_SUPERVISION_UNAVAILABLE`을 기록한다. 전환 잠금이 사용 중이면 고정 진행 안내를
+내고 다음 시작에서 다시 확인한다. 기존 writer를 종료하거나 사용자 쪽에서 확정하지 않는다.
+사용자 staging의 `startup-support.json`은 허용 코드 `transition_code`와
+`retained_candidate`를 포함한다. 예외 문장·외부 입력값을 공개 보고서에 넣지 않는다.
 
 첫 설치는 자료 판 검증 뒤 옛 relay의 작업과 실행 연결을 확인하고 보호 바탕을 준비한다.
 옛 relay 작업이 없으면 launcher를 요구하지 않는다. 작업이 있으면 공식 정체성의 정확한

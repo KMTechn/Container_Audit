@@ -190,7 +190,8 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 ## 로그온 자동 갱신 계약
 
 `auto_update.py`의 프로토콜 1은 `PREPARED → APPLIED_PENDING_READY → CONFIRMED`와
-실패 시 `ROLLBACK_PENDING → ROLLBACK_PENDING_READY → ROLLED_BACK`을 기록한다.
+실패 시 `ROLLBACK_PENDING → ROLLED_BACK`을 기록한다. 복귀 대상은 이미 확인된 이전
+판이므로 READY 재시험을 요구하지 않는다(기존 ROLLBACK_PENDING_READY도 정착 가능).
 시험 기동 실패는 정상 writer 종료 뒤 실제 공통 SID 자료 세대를 다시 읽어 판정한다.
 PREPARED의 before와 같고 옛 판 guard가 ALLOW일 때만 복귀한다. candidate 세대가
 기록됐거나 before/after가 미확인이면 candidate를 유지하고 DEFERRED에
@@ -198,6 +199,15 @@ PREPARED의 before와 같고 옛 판 guard가 ALLOW일 때만 복귀한다. cand
 내구 기록한다. 다음 시작도 candidate를 사용하며 새 세대 자료를 지우거나 guard를 완화하지 않는다.
 공통 SID marker는 모든 owner-root marker보다 먼저 기록하는 세대 확정점이다.
 결정은 포인터보다 먼저 저장하고 중단 뒤 같은 결정으로 재개하며 포인터를 다시 읽어 확인한다.
+FAILED/UNKNOWN은 writer가 없을 때 SYSTEM이 같은 G 결정으로 정착하며 다음 prepared를
+처리한다. 사용자 bootstrap은 포인터를 바꾸지 않는다. 실패 종점의 일반 쓰기는 정확한
+active SHA·실제 일반 진입 때의 G ALLOW·시작 표지 이전 writer 부재를 모두 요구한다. 표지 뒤의
+같은 active SHA·operator SID·비승격 GUI/relay만 공존하며 관측 실패는 거절한다.
+generation_before가 UNKNOWN이면 새 시험을 시작하지 않고 DEFERRED로 기록한다.
+APPLIED_PENDING_READY에서 SYSTEM 감독과 trial writer가 모두 사라져도 같은 조건으로
+active 후보를 일반 실행한다. 사용자 쪽은 CONFIRMED나 포인터를 쓰지 않는다. 일반 시작과
+SYSTEM의 writer 재확인·전환은 같은 update 잠금으로 배제하며 늦은 SYSTEM은 기존 writer에
+DEFERRED한다. 감독 소실은 `UPDATE_SUPERVISION_UNAVAILABLE` 코드로 보고한다.
 canonical 교체 전 HKCU Run·실행 중 relay는 설치된 판의 정확한 명령으로 검증한다.
 Run이 `current/app/auto_update.py --bootstrap --role relay --`이면 실행 중 relay의
 실제 경로는 보호된 active 포인터와 해당 version의 manifest·bootstrap aggregate에서 구한다.

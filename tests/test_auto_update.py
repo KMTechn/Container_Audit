@@ -80,10 +80,9 @@ def test_startup_failure_returns_to_previous_code_only_after_writer_absence():
     rollback = updates.rollback_transition(state, writers_absent=True, previous_verified=True, durable_rollback=True, nonce="8" * 32, now=LATER)
     assert rollback["trial_sha"] is None
     assert rollback["trial_started_at"] is None
-    rollback = updates.bind_trial(rollback, sha=OLD, pid=43, ordinary_user=True, now=LATER)
+    # D-16/E6: the confirmed previous version requires no second READY trial.
     assert updates.recovery_sha(rollback, pointer_sha=NEW) == OLD
-    receipt = {**ready(rollback), "sha": OLD}
-    result = updates.confirm_transition(rollback, receipt, process_matches=True, relay_matches=True, now=LATER)
+    result = rollback
     assert result["phase"] == "ROLLED_BACK"
     assert result["failed_shas"] == [NEW]
     with pytest.raises(ValueError, match="failed version"):
@@ -321,8 +320,9 @@ def test_engine_candidate_exit_selects_generation_compatible_code_without_revert
     assert result["failed_shas"] == [NEW]
     assert updates.read_json(control / "active.json")["sha"] == (OLD if generation_case == "unchanged" else NEW)
     if generation_case == "unchanged":
-        assert nonces[0] != nonces[-1]
-        assert result["trial_sha"] == OLD
+        # E6 removes the old READY trial; only candidate was trial-launched.
+        assert len(nonces) == 1
+        assert result["trial_sha"] is None
     else:
         assert result["retained_candidate"] is True
         assert result["failure_decision"]["code"] == ("TRIAL_GENERATION_ADVANCED" if generation_case == "advanced" else "TRIAL_GENERATION_UNKNOWN")
@@ -358,6 +358,8 @@ def test_relay_logon_launches_gui_and_ordinary_trial_relay_on_the_same_data_root
     monkeypatch.setattr(updates, "ordinary_user_context", lambda _sid=None: True)
     monkeypatch.setattr(updates, "update_lock", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(updates, "prepared_pending", lambda *_args: False)
+    # E1 supervises a resumed REQUEST_TRIAL even when the old task disappeared.
+    monkeypatch.setattr(updates, "request_apply_task", lambda *_args: None)
     launched = []
     monkeypatch.setattr(updates, "launch_version", lambda _control, sha, args, **kwargs: launched.append((sha, args, kwargs)) or 42)
     def complete(_seconds):
