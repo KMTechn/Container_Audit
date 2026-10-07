@@ -54,8 +54,9 @@ class EventLogOutbox:
 
     @property
     def has_unstaged(self) -> bool:
-        with self._lock:
-            return bool(self._unstaged)
+        # A deque item is removed only after its original is durable. This
+        # atomic snapshot also lets close inspect it during a slow file sync.
+        return bool(self._unstaged)
 
     def stage(self, log_file_path: str, log_entry: Dict[str, Any], *, worker_record=None) -> Path | None:
         with self._lock:
@@ -85,11 +86,13 @@ class EventLogOutbox:
                 self._staged_paths[encoded] = path
                 self._unstaged.popleft()
 
-    def drain(self, *, append=None, through: Path | None = None) -> dict[tuple[str, str, str], bool]:
+    def drain(self, *, append=None, through: Path | None = None, should_stop=None) -> dict[tuple[str, str, str], bool]:
         projected = {}
         append = append or append_event_log_entry_idempotent
         if through is not None and through.parent != self.directory:
             raise ValueError("projection target must belong to this outbox")
+        if should_stop is not None and should_stop():
+            return projected
         nested = int(getattr(_WRITER_LOCAL, "depth", 0)) > 0
         if nested:
             if self.has_unstaged:
@@ -103,8 +106,12 @@ class EventLogOutbox:
             reserved = False
             try:
                 while not reserved:
+                    if should_stop is not None and should_stop():
+                        return projected
                     with writer_admission("event_outbox_project"):
                         with self._lock:
+                            if should_stop is not None and should_stop():
+                                return projected
                             try:
                                 original = path.read_text(encoding="utf-8")
                             except FileNotFoundError:
@@ -130,9 +137,12 @@ class EventLogOutbox:
                         # Never pass an earlier row still being synced. Both
                         # admission and the RLock are released while waiting.
                         with self._projection_condition:
-                            self._projection_condition.wait_for(lambda: path not in self._projecting)
+                            self._projection_condition.wait_for(
+                                lambda: path not in self._projecting or (should_stop is not None and should_stop()),
+                                timeout=.05 if should_stop is not None else None,
+                            )
                 if reserved:
-                    if nested:
+                    if nested or (should_stop is not None and should_stop()):
                         handle.close()
                         return projected  # Append only; sync and ACK belong to a nonnested drain.
                     try:
@@ -141,8 +151,12 @@ class EventLogOutbox:
                         os.fsync(handle.fileno())
                     finally:
                         handle.close()
+                    if should_stop is not None and should_stop():
+                        return projected
                     with writer_admission("event_outbox_project"):
                         with self._lock:
+                            if should_stop is not None and should_stop():
+                                return projected
                             try:
                                 if path.read_text(encoding="utf-8") != original:
                                     raise ValueError("event outbox payload changed during projection")

@@ -16172,6 +16172,8 @@ class ContainerAudit:
         self._finalize_application_close()
 
     def _finalize_application_close(self) -> None:
+        if getattr(self, "_application_close_complete", False):
+            return
         lane = getattr(self, "_ui_lane", None)
         if lane is not None:
             lane.close_idle()
@@ -16180,6 +16182,9 @@ class ContainerAudit:
             self._cancel_all_jobs()
             self.log_queue.put(None)
             self._event_log_close_requested = True
+            self._event_log_close_deadline = time.monotonic() + (
+                self.EVENT_LOG_CLOSE_JOIN_TIMEOUT_SECONDS * self.EVENT_LOG_CLOSE_MAX_JOIN_ATTEMPTS
+            )
         if self.log_thread.is_alive():
             attempts = int(
                 getattr(self, "_event_log_close_join_attempts", 0) or 0
@@ -16199,29 +16204,11 @@ class ContainerAudit:
                 except (AttributeError, tk.TclError):
                     pass
                 return
-            if lane is not None:
-                try:
-                    lane.mark_broken(
-                        RuntimeError(
-                            "event log writer exceeded the bounded close budget"
-                        )
-                    )
-                except (AttributeError, RuntimeError):
-                    pass
-            self._ui_close_requested = False
-            try:
-                self.show_status_message(
-                    "종료 정리 지연 · 현재 상태를 유지합니다. 다시 종료해 주세요.",
-                    self.COLOR_DANGER,
-                    duration=0,
-                )
-            except (AttributeError, tk.TclError):
-                pass
-            return
         self._event_log_close_join_attempts = 0
         outbox = getattr(self, "_event_log_outbox_instance", None)
         if outbox is not None and outbox.has_unstaged:
             self._event_log_close_requested = False
+            self._event_log_close_deadline = None
             self._ui_close_requested = False
             self.log_thread = threading.Thread(target=self._event_log_writer, daemon=True)
             self.log_thread.start()
@@ -16246,12 +16233,16 @@ class ContainerAudit:
 
     def _flush_pending_event_logs(self) -> bool:
         try:
+            should_stop = lambda: ((deadline := getattr(self, '_event_log_close_deadline', None)) is not None
+                                   and time.monotonic() >= deadline)
+            if should_stop():
+                return False
             store = getattr(self, '_event_log_outbox_instance', None)
             if not getattr(self, 'save_folder', '') and store is None:
                 return True
             staged = self._recover_checkpoint_audit_events() if getattr(self, 'save_folder', '') else []
             store = store or self._event_log_outbox(str(getattr(self, 'log_file_path', '') or ''))
-            store.drain()
+            store.drain(should_stop=should_stop)
             if store.has_unstaged or next(store.directory.glob('*.json'), None) is not None:
                 return False  # Keep checkpoint originals while projection is pending.
             self._clear_projected_checkpoint_audits(staged)

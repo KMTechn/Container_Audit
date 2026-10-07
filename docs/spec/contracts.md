@@ -12,6 +12,8 @@
 
 이미 writer admission을 쥔 drain은 완결 행 append만 하고 fsync·ACK·진행 중 행 대기를 배경에 맡긴다. 손상 꼬리의 복구도 중첩 밖에서만 한다(끊김 복구의 truncate/fsync는 파일 잠금과 admission 안에서 한 번 수행하는 예외). 중첩 동기 감사의 True는 원본 내구 접수이며 내부 projection-pending으로 CSV 대기를 구별한다. 미투영 outbox가 있으면 checkpoint 감사 목록을 지우지 않는다.
 
+종료는 한 번 정한 CSV 대기 기한을 공유한다. 기한을 넘긴 행은 새로운 fsync·ACK를 시작하지 않으며, 진행 중 fsync가 돌아와도 원본을 ACK하지 않는다. 내구 원본은 다음 프로세스에서 재생한다. checkpoint 감사 목록도 투영이 남아 있으면 보존한다.
+
 Canonical 설치 journal은 outer failure와 정리·감사 진단을 모두 기록한 뒤 한 번
 봉인한다. audit와 evidence-status의 부분 파일 SHA256은 최종 저장 바이트를
 가리키며, 봉인 뒤 audit 게시에는 이미 기록한 진단의 공개 형태를 사용한다.
