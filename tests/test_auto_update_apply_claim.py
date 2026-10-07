@@ -91,8 +91,22 @@ def test_e1_absent_or_reused_apply_owner_starts_current(endpoint, monkeypatch, o
     else:
         claim['creation_identity'] = '0'  # Same live PID, an earlier creation identity.
     updates.write_json_durable(control/'apply-claim.json', claim)
-    monkeypatch.setattr(updates, 'request_apply_task', lambda *_: None)
+    requests, reports = [], []
+    written = updates.write_json_durable
+    def record_write(path, value):
+        if path == endpoint[1]/'startup-support.json':
+            reports.append(value)
+        written(path, value)
+    monkeypatch.setattr(updates, 'write_json_durable', record_write)
+    monkeypatch.setattr(updates, 'request_apply_task', lambda *_: requests.append(True))
     assert_ordinary(endpoint, OLD)
+    first_pid = json.loads(endpoint[5].read_text())['pid']
+    endpoint[5].unlink()
+    assert_ordinary(endpoint, OLD)
+    assert json.loads(endpoint[5].read_text())['pid'] != first_pid
+    assert not requests, 'same-session recovery must not repeatedly restart the dead SYSTEM task'
+    assert len(reports) == 1, 'same dead claim must publish the support code once'
+    assert reports[0]['reason_code'] == 'UPDATE_SUPERVISION_UNAVAILABLE'
     assert updates.apply_claim_status(control) == 'ABSENT'
     assert updates.read_json(control/'active.json')['sha'] == OLD
 
@@ -119,3 +133,22 @@ def test_e1_normal_apply_exit_durably_retires_only_its_claim(endpoint, monkeypat
     assert updates.apply_prepared(control) == 0
     assert updates.read_json(control/'apply-claim.json')['status'] == 'SETTLED'
     assert updates.apply_claim_status(control) == 'NONE'
+
+
+def test_e1_next_logon_system_replaces_absent_claim_and_applies(endpoint, monkeypatch):
+    control = endpoint[0]
+    updates.write_json_durable(control/'apply-claim.json', {**own_claim(), 'creation_identity': '0'})
+    assert updates.apply_claim_status(control) == 'ABSENT'
+    written, started = updates.write_json_durable, []
+    def observe(path, value):
+        written(path, value)
+        if path == control/'apply-claim.json' and value['status'] == 'RUNNING':
+            started.append(value)
+            assert updates.apply_claim_status(control) == 'LIVE'
+    monkeypatch.setattr(updates, 'write_json_durable', observe)
+    # Existing logon-trigger task invokes the real SYSTEM apply entrypoint.
+    assert updates.apply_prepared(control) == 0
+    assert len(started) == 1 and started[0]['creation_identity'] == own_claim()['creation_identity']
+    assert updates.read_json(control/'transition.json')['phase'] == 'ROLLED_BACK'
+    assert updates.read_json(control/'apply-claim.json')['status'] == 'SETTLED'
+    assert_ordinary(endpoint, OLD)

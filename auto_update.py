@@ -927,7 +927,7 @@ def support_record(fields=None, *, stage, error=None):
     permitted = {'status', 'code', 'reason_code', 'error_code', 'operation_code',
                  'exit_code', 'exception_type', 'location_module',
                  'location_function', 'location_line', 'audit_write_status',
-                 'audit_write_error_code', 'transition_code', 'retained_candidate'}
+                 'audit_write_error_code', 'transition_code', 'retained_candidate', 'apply_claim_sha256'}
     values = {name: value for name, value in dict(fields or {}).items()
               if name in permitted}
     values.update(stage=stage, report_status='REPORT_UNAVAILABLE')
@@ -2456,14 +2456,22 @@ def assert_ordinary_recovery(control: Path, policy: Mapping[str, Any], sha: str,
             raise ValueError("an earlier or unrelated writer prevents ordinary recovery")
 
 
-def start_current(control: Path, policy: Mapping[str, Any], state, active, arguments, *, code: str) -> int:
+def start_current(control: Path, policy: Mapping[str, Any], state, active, arguments, *, code: str, report_once: bool = False) -> int:
     """Reuse ordinary launch and publish only the E9 allowlisted support fields."""
     report = support_record({"reason_code": code,
         "transition_code": (state or {}).get("failure_decision", {}).get("code", code),
         "retained_candidate": (state or {}).get("retained_candidate") is True}, stage="update_apply")
     try:
-        write_json_durable(Path(policy["staging_root"]) / "startup-support.json", report)
-    except OSError:
+        report_path = Path(policy["staging_root"]) / "startup-support.json"
+        previous = None
+        if report_once:
+            claim_hash = hashlib.sha256((control / "apply-claim.json").read_bytes()).hexdigest()
+            report = support_record({**report, "apply_claim_sha256": claim_hash}, stage="update_apply")
+            previous = optional_record(report_path)
+        if not (report_once and previous and previous.get("reason_code") == code
+                and previous.get("apply_claim_sha256") == report["apply_claim_sha256"]):
+            write_json_durable(report_path, report)
+    except (OSError, ValueError, TypeError):
         # A support sink failure cannot turn a safe ordinary launch into a stop.
         emit_support_record({"reason_code": "REPORT_UNAVAILABLE"}, stage="update_apply")
     started_at = now_utc()
@@ -2535,7 +2543,7 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                     if current_generation_status(control, policy, active["sha"]) != "ALLOW":
                         emit_progress_guidance()
                         return 20
-                    return start_current(control, policy, state, active, arguments, code="UPDATE_SUPERVISION_UNAVAILABLE")
+                    return start_current(control, policy, state, active, arguments, code="UPDATE_SUPERVISION_UNAVAILABLE", report_once=True)
                 if action == "START_CURRENT":
                     if state and state["phase"] in {"ROLLED_BACK", "DEFERRED"}:
                         return start_current(control, policy, state, active, arguments, code="UPDATE_TERMINAL_RECOVERED")
@@ -2593,7 +2601,7 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                     if claim_status == "ABSENT":
                         if state and state["phase"] == "APPLIED_PENDING_READY" and writer_processes(process_snapshot(control), own_pid=os.getpid()):
                             return 0
-                        return start_current(control, policy, state, active, arguments, code="UPDATE_SUPERVISION_UNAVAILABLE")
+                        return start_current(control, policy, state, active, arguments, code="UPDATE_SUPERVISION_UNAVAILABLE", report_once=True)
                     if claim_status in {"LIVE", "UNKNOWN"}:
                         apply_started = True
                     if not apply_started and time.monotonic() >= progress_deadline:
