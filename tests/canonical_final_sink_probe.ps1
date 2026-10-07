@@ -82,7 +82,8 @@ function Enable-CanonicalWriter {
  $script:observed.task_restore++
  if($RecoveryCase -ceq 'task-restore-failure'){throw [IO.IOException]::new('SYNTHETIC_TASK_RESTORE_FAILURE')}
  $script:state.task='before'
- return @{present=$true;classification='CANONICAL_QUIESCE_RESTORE';enabled=$true;binding_sha256=('a'*64)}
+ return @{status='PASS';binding_sha256_exact=$true;future_natural_trigger_utc=[DateTime]::UtcNow.AddSeconds(20).ToString('o');
+  readback=@{present=$true;classification='CANONICAL_QUIESCE_RESTORE';enabled=$true;binding_sha256=('a'*64)}}
 }
 function Confirm-CanonicalWriterRunning {param($Install,$Enabled) return @{}}
 function StartRaw {param($Command) $script:observed.relay_start++;$script:state.relay='before';return 42}
@@ -164,6 +165,11 @@ $script:originalPreserved=$false
 $console=(& {
  try{. ([ScriptBlock]::Create($executeText))}catch{$script:finalError=$_;Write-Output ([string]$_.Exception.Message)}
  $script:originalPreserved=$null -ne $original -and [object]::ReferenceEquals($original.Exception,$script:forwardException)
+ $script:RecoveryObservation=@{fence_active_after=$canonicalWriterFenceActive;rollback_status=$audit.status;
+  recovery_verified=[bool]$rollbackRecoveryVerified;steps=$audit.rollback.steps;
+  code_exact=[bool]$audit.rollback.code_exact;runtime_restored=[bool]$audit.rollback.runtime_restored;
+  actual_g_calls=$script:actualGCalls;actual_g_passed=$script:actualGPassed;actual_g_blocked=$script:actualGBlocked;
+  state=$script:state}
 } *>&1|Out-String)
 $finalMessage=if($null -ne $script:finalError){[string]$script:finalError.Exception.Message}else{''}
 $originalPreserved=$script:originalPreserved
@@ -175,6 +181,6 @@ for($depth=0;$null -ne $exception -and $depth -lt 12;$depth++){
 }
 $record=@{case=$RecoveryCase;engine=$PSVersionTable.PSVersion.ToString();console_raw_hits=[int]$console.Contains($script:SyntheticSinkSecret);
  exception_raw_hits=[int]$finalMessage.Contains($script:SyntheticSinkSecret);original_object_preserved=$originalPreserved;inner_chain_preserved=$chainPreserved;
- real_product_catch_and_finally=$true;native_host_calls=0;final_message=(ConvertTo-KmtechRedactedSinkText -Text $finalMessage -UserLine);failed=($null -ne $script:finalError);counts=$script:observed}
+ real_product_catch_and_finally=$true;native_host_calls=0;final_message=(ConvertTo-KmtechRedactedSinkText -Text $finalMessage -UserLine);failed=($null -ne $script:finalError);counts=$script:observed;recovery=$script:RecoveryObservation}
 [IO.File]::WriteAllText($Output,($record|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
 $record|ConvertTo-Json -Depth 5 -Compress
