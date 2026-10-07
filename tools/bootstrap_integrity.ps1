@@ -1810,7 +1810,10 @@ function Invoke-InstallationElevationCapture([string]$Target,[string[]]$Argument
 function Import-BootstrapCanonicalUserProcessApi([string]$VerifiedProducerRoot) {
     $path=Join-Path $VerifiedProducerRoot 'INSTALL_CANONICAL_PORTABLE.ps1'
     Assert-BootstrapNoReparsePoint $path 'verified normal-user process API' -PathOnly
-    $manifest=Read-KmtechPortableManifest $VerifiedProducerRoot
+    # This standalone bootstrap context does not load the shared installer leaf.
+    $manifestPath=Join-Path $VerifiedProducerRoot 'portable-manifest.json'
+    if((Get-Item $manifestPath).Length -gt 65536){throw 'Portable manifest is oversized.'}
+    $manifest=Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if([string]$manifest.installer_sha256 -cnotmatch '^[0-9a-f]{64}$'){throw 'Normal-user process API byte pin differs.'}
     $tree=(Get-InstallationVerifiedScript $path ([string]$manifest.installer_sha256) 'Normal-user process API byte pin differs.').Ast
     $functions=@($tree.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq 'Initialize-CanonicalUserProcessApi'})
@@ -2698,7 +2701,10 @@ function Get-BootstrapRelayExpectedIdentity([string]$Root,[string]$RunCommand) {
         if([string]$active.schema -cne 'container-audit-startup-update-v1' -or $active.sha -isnot [string] -or $active.sha -cnotmatch '^[0-9a-f]{40}$'){throw 'Relay active version identity is invalid.'}
         $sha=[string]$active.sha;$bundle=Join-Path (Split-Path -Parent $rootFull) ('versions\'+$sha)
         foreach($path in @($bundle,(Join-Path $bundle 'portable-manifest.json'),(Join-Path $bundle 'runtime\pythonw.exe'),(Join-Path $bundle 'app\main.py'),(Join-Path $bundle 'bootstrap-integrity.json'))){Assert-BootstrapProtectedRelayPath $path}
-        $manifest=Read-KmtechPortableManifest $bundle
+        # Preserve the shared reader's bound and assigned JSON shape locally.
+        $manifestPath=Join-Path $bundle 'portable-manifest.json'
+        if((Get-Item $manifestPath).Length -gt 65536){throw 'Portable manifest is oversized.'}
+        $manifest=Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if($manifest.source_commit -isnot [string] -or $manifest.source_commit -cne $sha -or
             -not(Test-BootstrapJsonInteger $manifest.startup_update_protocol) -or [int64]$manifest.startup_update_protocol -ne 1){throw 'Relay active manifest binding differs.'}
         if(@($manifest.PSObject.Properties.Name) -ccontains 'relay_identity_protocol') {
