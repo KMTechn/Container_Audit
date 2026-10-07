@@ -5,6 +5,25 @@ bound evidence root·journal SHA로 읽는다. 일반 caller 사본의 존재를
 startup preimage 두 필드는 한 쌍으로 검증하며 원 preimage.json의 SHA가 같아야 한다.
 PS5.1/7 실제 소비자·기존 export/startup 34 PASS, 랩 G 기록은 보존하고 native 복구는 별도 판정이다.
 
+일반 설치는 authority 인계 전에 코드/runtime 변경을 시작하지 않는다. helper가
+같은 tuple을 인수한 뒤 배치와 onboarding 결과를 기다리고, 필요한 보상과 readback,
+마지막 fence 해제를 맡는다. 기본 launcher는 RunAs이며 이미 상승된 관리자 셸·SSH
+토큰에서는 직접 실행한다. 실패 시 두 번째 RunAs로 복구하지 않는다. 승인 횟수는
+factory/noncanonical 전용 launcher 주입점 하나에서 계측한다. 수동 지원 복구는
+기존 경로를 사용한다.
+
+handover/ready와 결과는 보호된 보통 파일의 SHA, 준비 receipt, 부모 PID·생성 시각과
+같은 거래 ID를 확인한다. 원 operator SID만 mutex를 관측할 최소 Synchronize/Modify
+권한을 받는다. Modify는 기존 unowned 관측의 ReleaseMutex 반환에 필요하며 소유권은
+이동하지 않는다. helper가 사라졌거나 코드·G·Run·writer·전역 relay 복원이 미확인이면
+fence를 보존하고 관리자 지원 복구로 나간다. 격리 HKCU 시험 결과는 실제 HKCU/랩
+VM 수용 결과와 따로 기록한다.
+
+확정 전 fresh 제거는 보호 handover의 helper PID·생성 시각·명령 SHA를 실제 직계
+부모와 대조한 뒤 이번 current의 기록된 파일만 이동한다. 조상 불일치는 파일
+변경 전에 거절한다. 이 attempt의 startup preimage만 복원하고 readback하며,
+공식 legacy 예약 writer와 다른 버전·설치의 파일은 이 제거 경로에서 변경하지 않는다.
+
 설치와 되돌리기의 resident relay READY 대기는 같은 기본 360초(상한 600초)를 쓴다.
 G 요청부터 첫 기록된 READY까지 275.561초라는 관측 상한에 84.439초 여유를 더했다.
 시간 초과는 되돌리기의 나머지 기록·끝 상태 저장을 계속하되 실패를 유지한다.

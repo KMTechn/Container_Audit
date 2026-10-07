@@ -13,7 +13,7 @@ SOURCE = Path(os.environ.get("CA_RUNTIME_INSTALLER_SOURCE", ROOT / "INSTALL_CANO
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 @pytest.mark.parametrize("scenario", ("elevated", "normal", "wrong_sid", "wrong_session", "still_elevated", "launch_error", "query_error", "session_zero"))
 def test_start_raw_requires_same_user_session_and_normal_token(tmp_path, engine, scenario):
-    result = run_functions(tmp_path, SOURCE, ["StartRaw"], r'''
+    result = run_functions(tmp_path, SOURCE, ["StartRaw", "Get-CanonicalOperatorSecurity"], r'''
 $script:cim=0; $script:limited=0
 $command='C:\KMTech\Apps\Container_Audit\current\runtime\pythonw.exe -I -B C:\KMTech\Apps\Container_Audit\current\app\main.py --container-audit-user-relay'
 function Get-CanonicalRelaySecurity([int]$ProcessId) {

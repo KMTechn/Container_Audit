@@ -161,9 +161,10 @@ if($payload.Count -ne 1){throw 'actual replacement receipt payload is unavailabl
 $table=@($payload[0].Right.FindAll({param($node) $node -is [Management.Automation.Language.HashtableAst]},$true))[0]
 $pathValue=@($table.KeyValuePairs|Where-Object {$_.Item1.SafeGetValue() -ceq 'receipt_path'})
 if($pathValue.Count -ne 1){throw 'actual replacement receipt path binding is unavailable'}
-# Execute only the real parameter/evidence initialization boundary, then a
-# harmless result writer with the real payload path expression; never placement.
-$helperSource=$installer.ParamBlock.Extent.Text+"`n"+'$BootstrapBoundParameters=@{ReplacementReceiptPath=$ReplacementReceiptPath}'+"`n"+$initializer[0].Extent.Text+"`n"+'$replacementReceiptFull=$ReplacementReceiptPath'+"`n"+'$boundReceiptPath='+$pathValue[0].Item2.Extent.Text+"`n"+@'
+# The existing RunAs substitute below runs an ordinary process. Simulate only
+# its protected evidence routing in this harmless fixture; the product wrapper
+# derives its privilege from the actual token and receives no extra test hook.
+$helperSource=$installer.ParamBlock.Extent.Text+"`n"+'$Script:InstallationEvidencePrivileged=$true'+"`n"+'$BootstrapBoundParameters=@{ReplacementReceiptPath=$ReplacementReceiptPath}'+"`n"+$initializer[0].Extent.Text+"`n"+'$replacementReceiptFull=$ReplacementReceiptPath'+"`n"+'$boundReceiptPath='+$pathValue[0].Item2.Extent.Text+"`n"+@'
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 Write-Output '{"authorization":"Bearer synthetic-child-value","credential":"synthetic-child-credential"}'
 [void](Write-BootstrapReplacementReceipt $ReplacementReceiptPath @{status='REPLACEMENT_READY';receipt_path=$boundReceiptPath})

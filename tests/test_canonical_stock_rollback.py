@@ -82,13 +82,23 @@ def test_post_placement_stock_failure_preserves_exact_legacy_preimage(tmp_path, 
             generation.record_generation(marker, app_id='container_audit', subject_sid=SID,
                 version='v99.0.0', build_id='a' * 40,
                 data_compatible_min_version='v99.0.0', compatibility_verified=False)
+    else:
+        from kmtech_shared import data_generation as generation
+        (tmp_path / 'data').mkdir()
+        generation.record_generation(tmp_path / 'data/data-generation.json',
+            app_id='container_audit', subject_sid=SID, version='v2.0.99',
+            build_id='a' * 40, data_compatible_min_version='v2.0.99',
+            compatibility_verified=False)
     immutable = {str(p.relative_to(tmp_path)): p.read_bytes()
                  for root in (source, install, backup, tmp_path / 'data') if root.exists()
                  for p in root.rglob('*') if p.is_file()}
     result = run_functions(tmp_path, ROOT / 'INSTALL_CANONICAL_PORTABLE.ps1',
-        ['Restore-CanonicalApplicationProtection', 'Get-CanonicalOnboardingInputBinding', 'Product'], r'''
+        ['Restore-CanonicalApplicationProtection', 'Get-CanonicalOnboardingInputBinding', 'Product',
+         'Get-CanonicalInstallationCommitPoint', 'Get-CanonicalRollbackSuccessStatus',
+         'Get-CanonicalOperatorSecurity'], r'''
 $script:observed=@{g=0;remove=0;restore=0;release=0}
 $source=$env:CA_STOCK_ROOT;$install=Join-Path $env:CA_CONTRACT_ROOT 'apps/current'
+$sourceManifest=Get-Content -LiteralPath (Join-Path $source 'portable-manifest.json') -Raw | ConvertFrom-Json
 $operatorSid='S-1-5-21-431-431-431-1001'
 $lad=Join-Path $env:CA_CONTRACT_ROOT 'local';$activeDataRoot=Join-Path $env:CA_CONTRACT_ROOT 'data'
 $env:CONTAINER_AUDIT_DATA_ROOT=$activeDataRoot
@@ -108,6 +118,14 @@ $stop=Join-Path $env:CA_CONTRACT_ROOT 'absent-stop'
 $currentTreeInventorySha256='a'*64;$installedInventorySha256='a'*64
 $rollbackCompleteAuthorizationPath='isolated-release'
 $script:actualG=${function:Assert-ContainerDataGenerationTarget}
+$script:actualCommitPoint=${function:Get-CanonicalInstallationCommitPoint}
+function Get-CanonicalInstallationCommitPoint {
+    param($Manifest,$TargetSid,$LocalAppDataRoot,$DataRoot,$HelperRoot)
+    # The small packet omits shared libraries. Route to the real pinned reader
+    # while retaining its actual marker/manifest classification and all checks.
+    $PSBoundParameters.HelperRoot=Split-Path -Parent $env:CA_CONTRACT_SOURCE
+    & $script:actualCommitPoint @PSBoundParameters
+}
 if($env:CA_STOCK_PRODUCT_INPUT){
     $productAst=[Management.Automation.Language.Parser]::ParseFile($env:CA_STOCK_PRODUCT_INPUT,[ref]$null,[ref]$null)
     $product=@($productAst.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Product'},$true))
@@ -187,13 +205,16 @@ catch {}
                    for d in failures), 'retain the original ValueError location in the protected parent report'
         assert any(observed['child_report_sha256'] in str(d['failure']['exception_chain'])
                    for d in failures), 'retain the full child report pointer beyond the former 240-byte cut'
-    assert observed['observed']['g'] == 1
+    assert observed['observed']['g'] == (0 if failure.endswith('generation') else 1)
     assert observed['run'] == {'exists': False, 'kind': '', 'data': ''}
     for name, raw in immutable.items():
         assert (tmp_path / name).read_bytes() == raw
     if failure.endswith('generation'):
         assert len(private_reports) >= 2, 'a recovery failure needs its own protected report'
-        assert observed['status'] == 'AUTOSTART_ROLLBACK_FAILED'
+        # Future or malformed G prevents code identity proof before reader
+        # admission; retain the fence rather than inventing a G readback.
+        assert observed['status'] == 'CODE_ROLLBACK_FAILED'
+        assert observed['steps']['commit_point_readback']['failure_type'] == 'COMMIT_POINT_UNKNOWN'
         assert observed['fence_active'] is True
         assert observed['observed']['release'] == 0
         assert not legacy.exists() and backup.is_dir()

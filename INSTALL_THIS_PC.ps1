@@ -2,6 +2,11 @@
 param(
     [switch]$DryRun,
     [switch]$Uninstall,
+    [switch]$RemoveUncommittedPlacement,
+    [string]$TransactionHandoverPath = '',
+    [string]$TransactionHandoverSha256 = '',
+    [string]$TransactionStartupPreimagePath = '',
+    [string]$TransactionStartupPreimageSha256 = '',
     [string]$SourceRoot = "",
     [string]$InstallRoot = "C:\KMTech\Apps\Container_Audit\current",
     [string]$TlsCaBundlePath = "",
@@ -1396,6 +1401,9 @@ if ($ApplyHardenedAclForTest.IsPresent -and -not $testOverride) {
 if ($InjectRestoreFailureAfterDisplaceForTest.IsPresent -and -not $testOverride) {
     throw 'InjectRestoreFailureAfterDisplaceForTest requires the guarded noncanonical test layout.'
 }
+if($RemoveUncommittedPlacement.IsPresent -and -not $Uninstall.IsPresent){
+    throw 'RemoveUncommittedPlacement requires Uninstall and the protected transaction handover.'
+}
 if ($RestoreUninstallRecordPath -and ($Uninstall -or $ReplaceExistingVerifiedPortable -or $RestoreVerifiedReplacement -or $TlsCaBundlePath)) {
     throw 'Uninstall recovery accepts only exact fenced code placement.'
 }
@@ -1651,7 +1659,45 @@ function Assert-ContainerRemovalBoundary([string]$Path) {
     }
 }
 
+function Get-ContainerTransactionRemovalControllerProcessId([object[]]$ProcessRows) {
+    if($null -eq $placementWriterFenceLease){throw 'TRANSACTION_REMOVAL_ADMISSION_REQUIRED'}
+    if(-not $testOverride){Assert-InstallationEvidenceProtectedPath $TransactionHandoverPath}
+    $handover=(Read-InstallationTransactionFile $TransactionHandoverPath $TransactionHandoverSha256).Record
+    $active=Read-ContainerWriterFence -ControlRoot $Script:ContainerWriterFenceAdmissionProductionRoot
+    Assert-ContainerWriterSessionAuthority $active
+    if([string]$handover.session_id -cne $WriterFenceSessionId -or [string]$handover.attempt_id -cne $WriterFenceAttemptId -or
+        [string]$handover.transaction_id -cne $WriterFenceReplacementTransactionId -or
+        [string]$active.session_id -cne $WriterFenceSessionId -or [string]$active.attempt_id -cne $WriterFenceAttemptId -or
+        [string]$active.replacement_transaction_id -cne $WriterFenceReplacementTransactionId -or
+        [string]$active.prepared_receipt_path -cne $WriterFencePreparedReceiptPath -or
+        [string]$active.prepared_receipt_sha256 -cne $WriterFencePreparedReceiptSha256 -or
+        [string]$handover.prepared_path -cne $WriterFencePreparedReceiptPath -or
+        [string]$handover.prepared_sha256 -cne $WriterFencePreparedReceiptSha256 -or
+        (Get-ContainerWriterFenceFileSha256 $WriterFencePreparedReceiptPath 65536) -cne $WriterFencePreparedReceiptSha256){
+        throw 'TRANSACTION_REMOVAL_AUTHORITY_BINDING_DIFFERS'
+    }
+    $own=@($ProcessRows|Where-Object {[int]$_.ProcessId -eq $PID})
+    $owner=@($ProcessRows|Where-Object {[int]$_.ProcessId -eq [int]$handover.helper_process_id})
+    if($own.Count -ne 1 -or $owner.Count -ne 1 -or [int]$own[0].ParentProcessId -ne [int]$handover.helper_process_id -or
+        -not(Test-SamePath ([string]$owner[0].ExecutablePath) (Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe')) -or
+        [string]$handover.helper_command_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        (Get-BootstrapStringSha256 ([string]$owner[0].CommandLine)) -cne [string]$handover.helper_command_sha256 -or
+        (Get-Process -Id ([int]$handover.helper_process_id)).StartTime.ToUniversalTime().ToString('o') -cne [string]$handover.helper_started_at_utc){
+        throw 'TRANSACTION_REMOVAL_DIRECT_PARENT_DIFFERS'
+    }
+    $ids=@([int]$handover.helper_process_id)
+    # The bound ordinary controller can mention InstallRoot in its command line.
+    # Parent loss is allowed; a surviving PID must retain its creation identity.
+    $parent=Get-Process -Id ([int]$handover.parent_process_id) -ErrorAction SilentlyContinue
+    if($null -ne $parent){
+        if($parent.StartTime.ToUniversalTime().ToString('o') -cne [string]$handover.parent_started_at_utc){throw 'TRANSACTION_REMOVAL_PARENT_IDENTITY_DIFFERS'}
+        $ids += [int]$handover.parent_process_id
+    }
+    return $ids
+}
+
 function Get-ContainerRemovalControllerProcessId([object[]]$ProcessRows) {
+    if($RemoveUncommittedPlacement){return Get-ContainerTransactionRemovalControllerProcessId $ProcessRows}
     # A delegated helper may exclude only its verified canonical controller.
     # The caller already holds the placement admission; retain that admission
     # and recheck the existing session authority before reading its binding.
@@ -1949,7 +1995,8 @@ function Remove-ContainerEmptiedParents([string]$Path, [string[]]$Directories) {
     }
 }
 
-function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [int[]]$ExcludeProcessIds = @()) {
+function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [int[]]$ExcludeProcessIds = @(),[switch]$OnlyUncommittedCurrent) {
+    if($OnlyUncommittedCurrent -and $null -ne $TaskFolder){throw 'TRANSACTION_REMOVAL_TASK_CENSUS_FORBIDDEN'}
     $current = Get-StrictFullPath $InstallRoot 'removal current'
     if ((Split-Path -Leaf $current) -cne 'current') { throw 'REMOVAL_CURRENT_PATH_INVALID' }
     $application = Get-StrictFullPath (Split-Path -Parent $current) 'removal application'
@@ -1972,11 +2019,11 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
     $evidence = Join-Path $evidenceParent ([Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $evidence | Out-Null
     if (-not $testOverride) { Set-HardenedCodeAcl $evidence }
-    if ($null -eq $TaskFolder -and -not $testOverride) { throw 'REMOVAL_TASK_OBSERVATION_UNKNOWN' }
+    if ($null -eq $TaskFolder -and -not $testOverride -and -not $OnlyUncommittedCurrent) { throw 'REMOVAL_TASK_OBSERVATION_UNKNOWN' }
     if ($null -ne $TaskFolder) { Remove-ContainerScheduledTasks $TaskFolder $evidence $current }
     Assert-ContainerRemovalQuiescent $application $ExcludeProcessIds
-    $plan = Get-ContainerRemovalArtifacts $application
-    if (Test-Path -LiteralPath $markerPath) { $plan.artifacts += $markerPath }
+    $plan = if($OnlyUncommittedCurrent){Get-ContainerArtifactFilePlan $current}else{Get-ContainerRemovalArtifacts $application}
+    if (-not $OnlyUncommittedCurrent -and (Test-Path -LiteralPath $markerPath)) { $plan.artifacts += $markerPath }
     $changedMetadataRoots = @(); $cleanupRetained = @()
     foreach ($path in $plan.artifacts) {
         $prefix = $application.TrimEnd('\') + '\'
@@ -2008,13 +2055,19 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
             }
         }
     }
-    $remaining = Get-ContainerRemovalArtifacts $application -RetainedArtifactRoots $changedMetadataRoots
+    $remaining = if($OnlyUncommittedCurrent){
+        if(Test-Path -LiteralPath $current){Get-ContainerArtifactFilePlan $current}else{@{artifacts=@();retained_paths=@()}}
+    }else{Get-ContainerRemovalArtifacts $application -RetainedArtifactRoots $changedMetadataRoots}
     if ($remaining.artifacts.Count) { throw 'REMOVAL_MACHINE_ARTIFACT_REMAINS' }
     foreach ($path in @($cleanupRetained | Sort-Object -Unique)) {
         if (Test-Path -LiteralPath (Get-ContainerRemovalIoPath $path) -ErrorAction Stop) {
             $remaining.retained_paths += $path
             $plan.decisions += @{path=$path;disposition='EMPTY_OWNED_PARENT_RETAINED'}
         }
+    }
+    if($OnlyUncommittedCurrent){
+        if(Test-Path -LiteralPath $current){throw 'TRANSACTION_REMOVAL_CODE_PREIMAGE_NOT_ABSENT'}
+        return @{status='PASS';lifecycle_state='UNCOMMITTED_PLACEMENT_REMOVED';evidence_root=$evidence;retained_paths=@($remaining.retained_paths)}
     }
     Write-ContainerStartupUpdateRecord -Path $markerPath -Payload @{
         schema='container-audit-supported-removal-v1'; lifecycle_state='REMOVED';
@@ -2029,6 +2082,24 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
 
 if ($Uninstall.IsPresent) {
     if ($DryRun.IsPresent) { 'uninstall_status=DRY_RUN_CODE_ONLY'; 'user_state_preserved=true'; exit 0 }
+    if($RemoveUncommittedPlacement){
+        if($null -eq $placementWriterFenceLease){throw 'Uncommitted placement removal requires delegated writer admission.'}
+        if(-not $testOverride){Assert-InstallationEvidenceProtectedPath $TransactionHandoverPath}
+        $handover=(Read-InstallationTransactionFile $TransactionHandoverPath $TransactionHandoverSha256).Record
+        if([string]$handover.schema -cne 'container-audit-installation-transaction-handover-v1' -or
+            [string]$handover.session_id -cne $WriterFenceSessionId -or [string]$handover.attempt_id -cne $WriterFenceAttemptId -or
+            [string]$handover.transaction_id -cne $WriterFenceReplacementTransactionId -or
+            [string]$handover.operator_sid -cne $OperatorSid -or
+            -not(Test-SamePath ([string]$handover.install_root) $installRootFull) -or
+            $handover.context.currentAbsentBeforePlacement -isnot [bool] -or -not $handover.context.currentAbsentBeforePlacement){
+            throw 'Uncommitted placement removal handover differs.'
+        }
+        # This read is inside the same admission lease as the actual removal.
+        # An onboarding writer cannot publish G between the check and mutation.
+        if((Get-BootstrapInstallationCommitPoint $handover.source_manifest $OperatorSid $OperatorLocalAppDataRoot $OperatorDataRoot $PSScriptRoot) -cne 'NOT_REACHED'){
+            throw 'Uncommitted placement removal commit point is unproven.'
+        }
+    }
     $uninstallSource = Get-StrictFullPath $SourceRoot 'supported removal source'
     $application = Split-Path -Parent $installRootFull
     if ((Test-SamePath $uninstallSource $application) -or (Test-PathWithin $uninstallSource $application) -or
@@ -2039,6 +2110,10 @@ if ($Uninstall.IsPresent) {
         throw 'Removal helper must execute from the admitted external SourceRoot.'
     }
     if (-not $testOverride) { Assert-ProtectedCodeAncestors $application }
+    if($RemoveUncommittedPlacement){
+        $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+        $excluded = @(Get-ContainerRemovalControllerProcessId $rows)
+    }
     $quiesceFull = Get-StrictFullPath $QuiesceReceiptPath 'current-user removal receipt'
     Assert-NoReparsePoint $quiesceFull 'current-user removal receipt'
     if ($ExpectedQuiesceReceiptSha256 -cnotmatch '^[0-9a-f]{64}$' -or
@@ -2053,9 +2128,32 @@ if ($Uninstall.IsPresent) {
     }
     # Only actual ancestors running the admitted external canonical source can
     # be excluded. Installed code and unrelated processes cannot claim this.
-    $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop)
-    $excluded = @(Get-ContainerRemovalControllerProcessId $rows)
-    $scheduler = New-Object -ComObject 'Schedule.Service'; $scheduler.Connect(); $folder = $scheduler.GetFolder('\')
+    if(-not $RemoveUncommittedPlacement){
+        $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+        $excluded = @(Get-ContainerRemovalControllerProcessId $rows)
+    }
+    $folder=$null
+    if($RemoveUncommittedPlacement){
+        $expectedStartup=Join-Path $application ('.startup-update-install.'+$WriterFenceAttemptId)
+        $savedStartup=Join-Path $expectedStartup 'preimage.json'
+        if(Test-Path -LiteralPath $savedStartup){
+            if(-not(Test-SamePath $TransactionStartupPreimagePath $expectedStartup) -or
+                $TransactionStartupPreimageSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+                (Get-FileSha256 $savedStartup) -cne $TransactionStartupPreimageSha256){throw 'TRANSACTION_REMOVAL_STARTUP_PREIMAGE_PIN_DIFFERS'}
+            Restore-ContainerStartupUpdatePreimage $installRootFull $expectedStartup $TransactionStartupPreimageSha256
+            $saved=(Read-InstallationTransactionFile $savedStartup $TransactionStartupPreimageSha256).Record
+            foreach($item in @($saved.files)){
+                $target=Join-Path (Join-Path $application 'update-control') ([string]$item.name)
+                if([bool]$item.exists -ne (Test-Path -LiteralPath $target) -or
+                    ($item.exists -and (Get-FileSha256 $target) -cne [string]$item.sha256)){throw 'TRANSACTION_REMOVAL_STARTUP_FILE_READBACK_DIFFERS'}
+            }
+            $task=Get-ContainerStartupUpdateTaskPreimage $installRootFull
+            if([bool]$task.exists -ne [bool]$saved.task.exists -or [string]$task.xml -cne [string]$saved.task.xml -or
+                [string]$task.sddl -cne [string]$saved.task.sddl){throw 'TRANSACTION_REMOVAL_STARTUP_TASK_READBACK_DIFFERS'}
+        }elseif($TransactionStartupPreimagePath -or $TransactionStartupPreimageSha256){throw 'TRANSACTION_REMOVAL_STARTUP_PREIMAGE_ABSENT'}
+    }else{
+        $scheduler = New-Object -ComObject 'Schedule.Service'; $scheduler.Connect(); $folder = $scheduler.GetFolder('\')
+    }
     $control = Join-Path $application 'update-control'
     $identity = Get-ContainerWriterFenceStringSha256 $control.ToLowerInvariant()
     $gate = New-Object Threading.Mutex($false,('Global\KMTech.ContainerAudit.Update.'+$identity.Substring(0,24)))
@@ -2064,7 +2162,7 @@ if ($Uninstall.IsPresent) {
         try { $gateHeld=$gate.WaitOne(5000) } catch [Threading.AbandonedMutexException] { $gateHeld=$true; throw 'REMOVAL_UPDATE_GATE_ABANDONED' }
         if (-not $gateHeld) { throw 'REMOVAL_UPDATE_GATE_BUSY' }
         if ($UninstallAuditPath) { Write-ContainerSupportedRemovalJournal $excluded }
-        $removed = Invoke-ContainerConvergentRemoval -InstallRoot $installRootFull -TaskFolder $folder -ExcludeProcessIds $excluded
+        $removed = Invoke-ContainerConvergentRemoval -InstallRoot $installRootFull -TaskFolder $folder -ExcludeProcessIds $excluded -OnlyUncommittedCurrent:$RemoveUncommittedPlacement
         'uninstall_status=PASS_KNOWN_FILES_REMOVED_STATE_PRESERVED'
         'lifecycle_state=REMOVED'
         ConvertTo-KmtechRedactedSinkText -Text ('removal_evidence_root='+[string]$removed.evidence_root)

@@ -297,11 +297,29 @@ function Enter-ContainerWriterSessionAuthority {
         [string]$AttemptId,
         [string]$OrchestratorSha256,
         [string]$ReplacementTransactionId,
-        [string]$WriterContractSha256
+        [string]$WriterContractSha256,
+        [string]$ObserverSid = ''
     )
     $name = Get-ContainerWriterSessionAuthorityMutexName $SessionId $AttemptId $OrchestratorSha256 $ReplacementTransactionId $WriterContractSha256
     $created = $false
-    $mutex = New-Object Threading.Mutex($true, $name, [ref]$created)
+    if($ObserverSid){
+        try{$observer=[Security.Principal.SecurityIdentifier]::new($ObserverSid)}catch{throw 'CONTAINER_WRITER_SESSION_OBSERVER_SID_INVALID'}
+        if($ObserverSid -cin @('S-1-1-0','S-1-5-11','S-1-5-18','S-1-5-32-544','S-1-5-32-545')){throw 'CONTAINER_WRITER_SESSION_OBSERVER_SID_INVALID'}
+        $security=[Security.AccessControl.MutexSecurity]::new()
+        $security.SetAccessRuleProtection($true,$false)
+        foreach($sid in @('S-1-5-18','S-1-5-32-544')){
+            $security.AddAccessRule([Security.AccessControl.MutexAccessRule]::new(
+                [Security.Principal.SecurityIdentifier]::new($sid),[Security.AccessControl.MutexRights]::FullControl,'Allow'))
+        }
+        # HeldByOther opens Synchronize|Modify and returns any unowned probe by
+        # ReleaseMutex (lines in that function above). Synchronize alone cannot
+        # release that acquisition. It never transfers the primary ownership.
+        $rights=[Security.AccessControl.MutexRights]::Synchronize -bor [Security.AccessControl.MutexRights]::Modify
+        $security.AddAccessRule([Security.AccessControl.MutexAccessRule]::new($observer,$rights,'Allow'))
+        if($PSVersionTable.PSEdition -ceq 'Desktop'){
+            $mutex=[Threading.Mutex]::new($true,$name,[ref]$created,$security)
+        }else{$mutex=[Threading.MutexAcl]::Create($true,$name,[ref]$created,$security)}
+    }else{$mutex = New-Object Threading.Mutex($true, $name, [ref]$created)}
     if (-not $created) {
         $mutex.Dispose()
         throw 'CONTAINER_WRITER_SESSION_AUTHORITY_ALREADY_EXISTS'

@@ -858,15 +858,24 @@ function Assert-InstallationMemoryCommandBound([string]$Encoded) {
     if($line.Length -gt 16000){throw 'Installation launcher command exceeds the supported caller budget.'}
 }
 
-function Remove-InstallationMemoryTransport($Transport) {
+function Write-InstallationTransactionTerminalFailure {
+    $fields=ConvertTo-KmtechPublicRecord -Fields ([ordered]@{status='FAILED';stage='canonical_install';
+        reason_code='INSTALLER_CANONICAL_FAILURE';exit_code=1;report_status='REPORT_UNAVAILABLE'}) `
+        -AllowedCodes @('FAILED','canonical_install','INSTALLER_CANONICAL_FAILURE','REPORT_UNAVAILABLE') -SafeMessages @()
+    Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+($fields|ConvertTo-Json -Compress))
+}
+
+function Remove-InstallationMemoryTransport($Transport,[switch]$AfterSeal) {
     if($null -eq $Transport){return}
     foreach($path in $Transport.Paths){
         try{if([IO.File]::Exists($path)){Remove-Item -LiteralPath $path -ErrorAction Stop}}
         catch{
             # Cleanup must not replace the original child/cancellation/rollback
             # error. Retain incomplete evidence and the private file on failure.
-            $Script:InstallationEvidenceFailed=$true
-            Write-InstallationEvidenceEvent ([ordered]@{event='TRANSPORT_CLEANUP_FAILED';raw_arguments_recorded=$false})
+            if($AfterSeal){Write-InstallationTransactionTerminalFailure}else{
+                $Script:InstallationEvidenceFailed=$true
+                Write-InstallationEvidenceEvent ([ordered]@{event='TRANSPORT_CLEANUP_FAILED';raw_arguments_recorded=$false})
+            }
         }
     }
 }
@@ -909,11 +918,12 @@ function New-InstallationMemoryTransport([string]$Source,[string[]]$Arguments,[s
         $bootstrap=@'
 $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 $streams=[Collections.Generic.List[IO.Stream]]::new()
+$Script:InstallationOwnedMemoryTransportPaths=@('@@code-path@@','@@data-path@@')
 function ReadPinned([string]$path,[string]$expected){
  for($p=[IO.Path]::GetFullPath($path);$p;$p=[IO.Path]::GetDirectoryName($p)){
   if([IO.File]::GetAttributes($p) -band [IO.FileAttributes]::ReparsePoint){throw 'Installation transport reparse point.'}
  }
- $s=[IO.File]::Open($path,'Open','Read','Read');$streams.Add($s)
+  $s=[IO.File]::Open($path,'Open','Read',([IO.FileShare]::Read -bor [IO.FileShare]::Delete));$streams.Add($s)
  if($s.Length -le 0 -or $s.Length -gt 16777216){throw 'Installation transport size is invalid.'}
  [byte[]]$b=([IO.BinaryReader]::new($s)).ReadBytes([int]$s.Length)
  if($b.Length -ne $s.Length -or $s.ReadByte() -ne -1){throw 'Installation transport read is incomplete.'}
@@ -952,7 +962,9 @@ function Get-InstallationHelperMemorySource {
     return @'
 $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 $target=$args[0];$targetSha=$args[1];$library=$args[2];$librarySha=$args[3]
-$Script:InstallationEvidencePrivileged=$true;$Script:InstallationProtectedRunRoot=$args[4]
+$identity=[Security.Principal.WindowsIdentity]::GetCurrent()
+$Script:InstallationEvidencePrivileged=([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+$Script:InstallationProtectedRunRoot=$args[4]
 $libraryBlock=Get-InstallationVerifiedScript $library $librarySha
 $helperBlock=Get-InstallationVerifiedScript $target $targetSha
 . $libraryBlock
@@ -1045,6 +1057,671 @@ if(Test-Path -LiteralPath $resultPath){throw 'Elevation result already exists.'}
 Set-InstallationEvidenceAcl $resultPath $sid
 exit $exitCode
 '@)
+}
+
+function Get-BootstrapInstallationCommitPoint($Manifest,[string]$TargetSid,[string]$LocalAppDataRoot,[string]$DataRoot,[string]$HelperRoot) {
+    try{
+        . (Get-BootstrapSharedPortableLeaf $HelperRoot 'data_generation.ps1')
+        Assert-KmtechDataIdentity 'container_audit' $TargetSid
+        $local=Get-StrictFullPath $LocalAppDataRoot 'operator LOCALAPPDATA'
+        if(-not $DataRoot){$DataRoot=Join-Path $local 'KMTech\ContainerAudit'}
+        $data=Get-StrictFullPath $DataRoot 'operator data root';$records=@()
+        foreach($marker in @((Join-Path $data 'data-generation.json'),
+            (Join-Path $local ('KMTech\DirectSync\container_audit\control\writer-session\data-generation\'+$TargetSid+'.json')))){
+            $record=Read-KmtechDataGeneration $marker 'container_audit' $TargetSid
+            if($null -ne $record){$records+=,$record}
+        }
+        if($records.Count -eq 0){return 'NOT_REACHED'}
+        $version=ConvertTo-KmtechDataVersion ([string]$Manifest.version);$build=[string]$Manifest.source_commit
+        Assert-KmtechDataBuildIdentity $build;$reached=$false
+        foreach($record in $records){
+            $comparison=(ConvertTo-KmtechDataVersion ([string]$record.version)).CompareTo($version)
+            if($comparison -gt 0){return 'UNKNOWN'}
+            if($comparison -eq 0 -and [string]$record.build_id -ceq $build){$reached=$true}
+        }
+        if($reached){return 'REACHED'}
+        return 'NOT_REACHED'
+    }catch{return 'UNKNOWN'}
+}
+
+function Get-InstallationTransactionBytes($Identity,[string]$Decision) {
+    if($Decision -cnotin @('PLACE','COMMIT','ROLLBACK','CLOSE')){throw 'Installation transaction decision is invalid.'}
+    $record=[ordered]@{schema='container-audit-installation-transaction-request-v1';
+        session_id=[string]$Identity.session_id;attempt_id=[string]$Identity.attempt_id;
+        transaction_id=[string]$Identity.transaction_id;parent_process_id=[int]$Identity.parent_process_id;
+        parent_started_at_utc=[string]$Identity.parent_started_at_utc;decision=$Decision}
+    return ,[Text.UTF8Encoding]::new($false).GetBytes(($record|ConvertTo-Json -Compress))
+}
+
+function Get-InstallationTransactionDigest([byte[]]$Bytes) {
+    $hash=[Security.Cryptography.SHA256]::Create()
+    try{return ([BitConverter]::ToString($hash.ComputeHash($Bytes))).Replace('-','').ToLowerInvariant()}
+    finally{$hash.Dispose()}
+}
+
+function ConvertFrom-InstallationTransactionJson([string]$Text) {
+    if((Get-Command Microsoft.PowerShell.Utility\ConvertFrom-Json).Parameters.ContainsKey('DateKind')){
+        return Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Text -DateKind String
+    }
+    return Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Text
+}
+
+function Read-InstallationTransactionFile([string]$Path,[string]$ExpectedSha256='') {
+    Assert-BootstrapNoReparsePoint $Path 'installation transaction record' -PathOnly
+    $stream=[IO.File]::Open($Path,'Open','Read','Read')
+    try{
+        if($stream.Length -lt 1 -or $stream.Length -gt 65536){throw 'Installation transaction record size is invalid.'}
+        [byte[]]$bytes=([IO.BinaryReader]::new($stream)).ReadBytes([int]$stream.Length)
+        if($bytes.Length -ne $stream.Length -or $stream.ReadByte() -ne -1){throw 'Installation transaction record read is incomplete.'}
+    }finally{$stream.Dispose()}
+    $digest=Get-InstallationTransactionDigest $bytes
+    if($ExpectedSha256 -and $digest -cne $ExpectedSha256){throw 'Installation transaction record SHA differs.'}
+    $text=[Text.UTF8Encoding]::new($false,$true).GetString($bytes)
+    $record=ConvertFrom-InstallationTransactionJson $text
+    return [pscustomobject]@{Record=$record;Sha256=$digest;Bytes=$bytes}
+}
+
+function Assert-InstallationTransactionIdentity($Record,$Identity) {
+    if([string]$Record.session_id -cne [string]$Identity.session_id -or
+        [string]$Record.attempt_id -cne [string]$Identity.attempt_id -or
+        [string]$Record.transaction_id -cne [string]$Identity.transaction_id -or
+        -not(Test-BootstrapJsonInteger $Record.parent_process_id) -or
+        [int64]$Record.parent_process_id -ne [int64]$Identity.parent_process_id -or
+        [string]$Record.parent_started_at_utc -cne [string]$Identity.parent_started_at_utc){
+        throw 'Installation transaction identity differs.'
+    }
+}
+
+function Test-InstallationTransactionParent($Identity) {
+    $process=$null
+    try{
+        $process=[Diagnostics.Process]::GetProcessById([int]$Identity.parent_process_id)
+        return (-not $process.HasExited -and
+            $process.StartTime.ToUniversalTime().ToString('o') -ceq [string]$Identity.parent_started_at_utc)
+    }catch{return $false}finally{if($null -ne $process){$process.Dispose()}}
+}
+
+function Write-InstallationTransactionFile([string]$Path,[byte[]]$Bytes,[string]$Sid) {
+    if($Bytes.Length -lt 1 -or $Bytes.Length -gt 65536){throw 'Installation transaction record size is invalid.'}
+    $parent=Split-Path -Parent $Path
+    Assert-InstallationEvidenceWriteRoot $parent
+    Assert-BootstrapNoReparsePoint $parent 'installation transaction record parent' -PathOnly
+    if(Test-Path -LiteralPath $Path){throw 'Installation transaction record already exists.'}
+    $temporary=$Path+'.tmp'
+    $stream=[IO.File]::Open($temporary,'CreateNew','Write','None')
+    try{$stream.Write($Bytes,0,$Bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
+    Set-InstallationEvidenceAcl $temporary $Sid
+    [IO.File]::Move($temporary,$Path)
+    if((Get-FileSha256 $Path) -cne (Get-InstallationTransactionDigest $Bytes)){throw 'Installation transaction publication SHA differs.'}
+}
+
+function Start-InstallationTransactionProcess([string]$Encoded,[bool]$TestMode,[string]$InstallRoot,[scriptblock]$LaunchForTest=$null) {
+    # This is the sole injection point. Tests count launch/consent requests here;
+    # no product environment variable can select a launcher or change privilege.
+    $winps=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+    $argv=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',$Encoded)
+    $line=($argv|ForEach-Object {ConvertTo-BootstrapRelayArgument ([string]$_)}) -join ' '
+    $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
+    $elevated=([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    $request=[pscustomobject]@{FilePath=$winps;ArgumentList=$line;RequiresConsent=(-not $elevated);WindowStyle='Hidden'}
+    if($null -ne $LaunchForTest){
+        if(-not $TestMode -or [string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -cne '1' -or
+            (Test-BootstrapSamePath $InstallRoot 'C:\KMTech\Apps\Container_Audit\current')){throw 'Installation transaction launcher injection is test-only.'}
+        return & $LaunchForTest $request
+    }
+    if($elevated){return Start-Process -FilePath $winps -ArgumentList $line -WindowStyle Hidden -PassThru}
+    return Start-Process -FilePath $winps -Verb RunAs -ArgumentList $line -WindowStyle Hidden -PassThru
+}
+
+function Get-InstallationTransactionWrapperSource {
+    return ('function Get-InstallationVerifiedScript {'+${function:Get-InstallationVerifiedScript}.ToString()+"}`n"+@'
+$ErrorActionPreference='Stop';Set-StrictMode -Version Latest
+if($args.Count -ne 3){exit 1}
+$library=[string]$args[0];$librarySha=[string]$args[1];$configuration=[string]$args[2]
+$libraryBlock=Get-InstallationVerifiedScript $library $librarySha
+. $libraryBlock
+$configuration=ConvertFrom-InstallationTransactionJson $configuration
+Invoke-InstallationTransactionCoordinator $configuration
+'@)
+}
+
+function Get-InstallationTransactionProtectedHandover($Configuration) {
+    # Delegation travels in the short-lived pinned IPC payload and stays in the
+    # coordinator's memory. Durable recovery metadata retains only redacted
+    # capability fields, alongside the original preimages and source bindings.
+    $record=ConvertFrom-InstallationTransactionJson ($Configuration|ConvertTo-Json -Depth 40 -Compress)
+    $record.delegation='[REDACTED]'
+    $capability=$record.child_environment.PSObject.Properties['CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN']
+    if($null -ne $capability){$capability.Value='[REDACTED]'}
+    foreach($name in @('base_arguments','placement_arguments')){
+        $property=$record.PSObject.Properties[$name]
+        if($null -eq $property){continue}
+        $values=@($property.Value)
+        for($index=0;$index -lt $values.Count-1;$index++){
+            if([string]$values[$index] -ceq '-WriterFenceDelegationToken'){$values[$index+1]='[REDACTED]'}
+        }
+        $property.Value=$values
+    }
+    return $record
+}
+
+function Start-InstallationTransaction($Configuration,$AuthorityLease,[scriptblock]$LaunchForTest=$null) {
+    if($null -eq $AuthorityLease){throw 'Installation transaction authority is absent.'}
+    $root=Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction Stop
+    $configuration.parent_process_id=$PID
+    $configuration.parent_started_at_utc=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
+    $configuration.schema='container-audit-installation-transaction-handover-v1'
+    $configuration.request_root=Join-Path $root ('transaction-'+[Guid]::NewGuid().ToString('N'))
+    $configuration.test_transport=($null -ne $LaunchForTest)
+    $configuration.protected_root=if($configuration.test_transport){Join-Path $configuration.request_root 'protected'}else{
+        Join-Path (Join-Path (Get-InstallationEvidenceControlRoot) 'installation-evidence') ('run-'+[Guid]::NewGuid().ToString('N'))}
+    $configuration.outcome_hashes=[ordered]@{}
+    foreach($decision in @('PLACE','COMMIT','ROLLBACK','CLOSE')){
+        $configuration.outcome_hashes[$decision]=Get-InstallationTransactionDigest (Get-InstallationTransactionBytes $configuration $decision)
+    }
+    [void][IO.Directory]::CreateDirectory($configuration.request_root)
+    Set-InstallationEvidenceAcl $configuration.request_root ([string]$configuration.operator_sid) -Directory
+    $library=Join-Path ([string]$configuration.source_root) 'tools\bootstrap_integrity.ps1'
+    $text=$configuration|ConvertTo-Json -Depth 40 -Compress
+    if([Text.Encoding]::UTF8.GetByteCount($text) -gt 65536){throw 'Installation transaction handover is oversized.'}
+    $transport=New-InstallationMemoryTransport (Get-InstallationTransactionWrapperSource) @($library,(Get-FileSha256 $library),$text) $root
+    $process=$null
+    try{
+        # The active deployment fence stays closed while the old named mutex
+        # disappears. Enter in the coordinator must create the same name anew.
+        Exit-ContainerWriterSessionAuthority $AuthorityLease
+        $AuthorityLease.acquired=$false
+        $process=Start-InstallationTransactionProcess $transport.Encoded ([bool]$configuration.test_mode) ([string]$configuration.install_root) $LaunchForTest
+        $job=[pscustomobject]@{Process=$process;Configuration=$configuration;Transport=$transport;Placement=$null;Closed=$false;Ready=$false;CommitAcknowledged=$false}
+        $ready=Wait-InstallationTransactionResponse $job 'authority-ready' 120
+        if([string]$ready.status -cne 'AUTHORITY_READY'){throw 'Installation transaction authority was not acquired.'}
+        $handoverPath=Join-Path ([string]$configuration.protected_root) 'handover.json'
+        if(-not [bool]$configuration.test_transport){Assert-InstallationEvidenceProtectedPath $handoverPath}
+        $handover=Read-InstallationTransactionFile $handoverPath ([string]$ready.handover_sha256)
+        Assert-InstallationTransactionIdentity $handover.Record $configuration
+        $expectedHandover=Get-InstallationTransactionProtectedHandover $configuration
+        $expectedHandover|Add-Member -NotePropertyName helper_process_id -NotePropertyValue ([int]$process.Id)
+        $expectedHandover|Add-Member -NotePropertyName helper_started_at_utc -NotePropertyValue $process.StartTime.ToUniversalTime().ToString('o')
+        if([string]$handover.Record.helper_command_sha256 -cnotmatch '^[0-9a-f]{64}$'){throw 'Installation transaction helper command binding differs.'}
+        # The ordinary operator need not inspect a different administrator's
+        # command line. Protected publication binds the digest; the finite child
+        # compares it to its actual direct parent before any removal.
+        $expectedHandover|Add-Member -NotePropertyName helper_command_sha256 -NotePropertyValue ([string]$handover.Record.helper_command_sha256)
+        $expectedBytes=[Text.UTF8Encoding]::new($false).GetBytes(($expectedHandover|ConvertTo-Json -Depth 40 -Compress))
+        if([string]$ready.prepared_sha256 -cne [string]$configuration.prepared_sha256 -or
+            [string]$ready.authority_mutex_name -cne [string]$AuthorityLease.name -or
+            $handover.Sha256 -cne (Get-InstallationTransactionDigest $expectedBytes)){
+            throw 'Installation transaction READY handover binding differs.'
+        }
+        $job.Ready=$true
+        return $job
+    }catch{
+        if($null -ne $process){$_.Exception.Data['installation_transaction_job']=$job}
+        if($null -eq $process){
+            $claim=Enter-ContainerWriterSessionAuthority -SessionId ([string]$configuration.session_id) -AttemptId ([string]$configuration.attempt_id) `
+                -OrchestratorSha256 ([string]$configuration.orchestrator_sha256) -ReplacementTransactionId ([string]$configuration.transaction_id) `
+                -WriterContractSha256 ([string]$configuration.writer_contract_sha256)
+            $AuthorityLease.mutex=$claim.mutex;$AuthorityLease.name=$claim.name;$AuthorityLease.acquired=$true
+            Remove-InstallationMemoryTransport $transport
+        }
+        throw
+    }
+}
+
+function Assert-InstallationTransactionAlive($Job) {
+    $Job.Process.Refresh()
+    if($Job.Process.HasExited){throw 'Installation transaction helper exited; authority and result are unknown.'}
+}
+
+function Wait-InstallationTransactionResponse($Job,[string]$Phase,[int]$TimeoutSeconds=900) {
+    if($TimeoutSeconds -lt 1 -or $TimeoutSeconds -gt 900 -or $Phase -cnotmatch '^[a-z-]+$'){throw 'Installation transaction wait is invalid.'}
+    $root=[string]$Job.Configuration.protected_root
+    $path=Join-Path $root ($Phase+'.json');$pin=$path+'.sha256'
+    $watch=[Diagnostics.Stopwatch]::StartNew()
+    while($watch.Elapsed.TotalSeconds -lt $TimeoutSeconds){
+        if([IO.File]::Exists($pin)){
+            Assert-BootstrapNoReparsePoint $pin 'installation transaction response pin' -PathOnly
+            if((Get-Item -LiteralPath $pin).Length -ne 64){throw 'Installation transaction response pin size differs.'}
+            if(-not [bool]$Job.Configuration.test_transport){Assert-InstallationEvidenceProtectedPath $root;Assert-InstallationEvidenceProtectedPath $path;Assert-InstallationEvidenceProtectedPath $pin}
+            $digest=[IO.File]::ReadAllText($pin)
+            if($digest -cnotmatch '^[0-9a-f]{64}$'){throw 'Installation transaction response pin differs.'}
+            $record=(Read-InstallationTransactionFile $path $digest).Record
+            Assert-InstallationTransactionIdentity $record $Job.Configuration
+            if([string]$record.phase -cne $Phase -or [int]$record.helper_process_id -ne [int]$Job.Process.Id){throw 'Installation transaction response process/phase differs.'}
+            return $record
+        }
+        Assert-InstallationTransactionAlive $Job
+        Start-Sleep -Milliseconds 100
+    }
+    throw 'Installation transaction helper wait timed out.'
+}
+
+function Send-InstallationTransactionDecision($Job,[string]$Decision) {
+    Assert-InstallationTransactionAlive $Job
+    $path=Join-Path ([string]$Job.Configuration.request_root) ($Decision.ToLowerInvariant()+'.request')
+    Write-InstallationTransactionFile $path (Get-InstallationTransactionBytes $Job.Configuration $Decision) ([string]$Job.Configuration.operator_sid)
+}
+
+function Invoke-InstallationTransactionPlacement($Job) {
+    Send-InstallationTransactionDecision $Job 'PLACE'
+    $record=Wait-InstallationTransactionResponse $Job 'placement-ready'
+    $Job.Placement=$record
+    $child=$record.child
+    $texts=@{stdout='';stderr=''}
+    foreach($name in @('stdout','stderr')){
+        $stream=$child.streams.$name
+        Assert-BootstrapNoReparsePoint ([string]$stream.path) 'installation transaction child stream' -PathOnly
+        if((Get-Item -LiteralPath ([string]$stream.path)).Length -gt 1048576 -or (Get-FileSha256 ([string]$stream.path)) -cne [string]$stream.sha256){throw 'Installation transaction child stream SHA/size differs.'}
+        $texts[$name]=[Text.Encoding]::GetEncoding([string]$stream.encoding).GetString([IO.File]::ReadAllBytes([string]$stream.path))
+    }
+    return [pscustomobject]@{ExitCode=[int]$child.exit_code;ProcessId=[int]$child.process_id;Stdout=$texts.stdout;Stderr=$texts.stderr;
+        Streams=$child.streams;FailureDiagnostic=$child.failure;TransactionBinding=$record.binding}
+}
+
+function Publish-InstallationTransactionResponse($Configuration,[string]$Phase,[string]$Status,$Fields=$null) {
+    $record=[ordered]@{schema='container-audit-installation-transaction-response-v1';phase=$Phase;status=$Status;
+        session_id=[string]$Configuration.session_id;attempt_id=[string]$Configuration.attempt_id;transaction_id=[string]$Configuration.transaction_id;
+        parent_process_id=[int]$Configuration.parent_process_id;parent_started_at_utc=[string]$Configuration.parent_started_at_utc;helper_process_id=$PID}
+    if($null -ne $Fields){foreach($name in $Fields.Keys){$record[$name]=$Fields[$name]}}
+    $path=Join-Path ([string]$Configuration.protected_root) ($Phase+'.json')
+    [byte[]]$bytes=[Text.UTF8Encoding]::new($false).GetBytes(($record|ConvertTo-Json -Depth 20 -Compress))
+    Write-InstallationTransactionFile $path $bytes ([string]$Configuration.operator_sid)
+    Write-InstallationTransactionFile ($path+'.sha256') ([Text.Encoding]::ASCII.GetBytes((Get-InstallationTransactionDigest $bytes))) ([string]$Configuration.operator_sid)
+}
+
+function Invoke-InstallationTransactionHelper($Configuration,[string[]]$Arguments,[string]$Stage) {
+    $source=[string]$Configuration.source_root
+    $target=Join-Path $source 'INSTALL_THIS_PC.ps1';$library=Join-Path $source 'tools\bootstrap_integrity.ps1'
+    $fileIndex=[Array]::IndexOf($Arguments,'-File')
+    if($fileIndex -lt 0 -or $fileIndex+1 -ge $Arguments.Count -or
+        -not(Test-BootstrapSamePath $Arguments[$fileIndex+1] $target)){throw 'Installation transaction child source differs.'}
+    $helperSource='function Get-InstallationVerifiedScript {'+${function:Get-InstallationVerifiedScript}.ToString()+"}`n"+(Get-InstallationHelperMemorySource)
+    $parameters=[string[]]@($Arguments|Select-Object -Skip ($fileIndex+2))
+    $transport=New-InstallationMemoryTransport $helperSource (@($target,[string]$Configuration.helper_sha256,$library,
+        [string]$Configuration.library_sha256,[string]$Configuration.protected_root)+$parameters) $Script:InstallationEvidenceRoot
+    try{
+        $winps=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+        $child=Invoke-InstallationEvidenceChild $Stage $winps @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',$transport.Encoded)
+        $roots=@($child.Stdout -split "`r?`n"|Where-Object {$_ -cmatch '^installation_stage_evidence_root=.+$'}|
+            ForEach-Object {$_.Substring('installation_stage_evidence_root='.Length)})
+        $helperRoot=if($roots.Count){[string]$roots[-1]}else{''}
+        if($helperRoot -and -not(Test-BootstrapSamePath $helperRoot ((Join-Path ([string]$Configuration.protected_root) 'helper-audit')+'.evidence.'+$child.ProcessId))){throw 'Installation transaction child journal identity differs.'}
+        $childSummary=if($helperRoot){Read-InstallationEvidenceChildSummary $helperRoot}else{$null}
+        Register-InstallationChildEvidenceSummary $childSummary
+        $startup=$null
+        $startupPath=Join-Path (Split-Path -Parent ([string]$Configuration.install_root)) ('.startup-update-install.'+[string]$Configuration.attempt_id)
+        $startupRecord=Join-Path $startupPath 'preimage.json'
+        if(Test-Path -LiteralPath $startupRecord){
+            if(-not [bool]$Configuration.test_transport){Assert-InstallationEvidenceProtectedPath $startupPath;Assert-InstallationEvidenceProtectedPath $startupRecord}
+            $saved=Read-InstallationTransactionFile $startupRecord
+            if([string]$saved.Record.attempt_id -cne [string]$Configuration.attempt_id -or
+                [string]$saved.Record.operator_sid -cne [string]$Configuration.operator_sid -or
+                -not(Test-BootstrapSamePath ([string]$saved.Record.root) ([string]$Configuration.install_root))){throw 'Installation transaction startup preimage differs.'}
+            $startup=@{path=$startupPath;sha256=$saved.Sha256}
+        }
+        return [pscustomobject]@{Child=$child;Binding=[ordered]@{status=if($helperRoot){'BOUND_DIRECT_CHILD'}else{'NOT_RECORDED'};
+            helper_process_id=$child.ProcessId;stage_evidence_root=$helperRoot;streams=$child.Streams;child_stage_evidence_summary=$childSummary};StartupPreimage=$startup}
+    }finally{Remove-InstallationMemoryTransport $transport}
+}
+
+function Invoke-CanonicalTransactionCompensation($Configuration,$Placement,$Lease) {
+    # Restore only the launch-pinned snapshot. The ordinary result record never
+    # supplies paths, preimages, manifests, privilege or a compensation command.
+    foreach($property in $Configuration.context.PSObject.Properties){Set-Variable -Name $property.Name -Value $property.Value}
+    $canonicalWriterFenceAuthority=$Lease;$canonicalTransactionJob=$null
+    $audit=[ordered]@{status='ROLLBACK_STARTED';code_replacement=@{writer_inventory_transitions=@()};rollback=@{};scheduled_writer=@{}}
+    $auditPath=Join-Path ([string]$Configuration.protected_root) 'transaction-rollback-audit.json'
+    $steps=[Collections.Generic.List[object]]::new();$codeExact=$false;$runtimeExact=$false;$writerExact=$false;$generationExact=$false
+    $point=Get-CanonicalInstallationCommitPoint $sourceManifest $operatorSid $lad $activeDataRoot $source
+    $active=Read-ContainerWriterFence -AllowAbsent
+    if($null -eq $active){
+        [void](Start-ContainerWriterFence -Status 'RESTORING' -OwnerKind 'canonical_installer' `
+            -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId -SessionStartedAtUtc $canonicalWriterFenceStartedAtUtc `
+            -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 -WriterContractSha256 $canonicalWriterFenceContractSha256 `
+            -PreparedReceiptPath ([string]$canonicalWriterFencePreparedReceipt.path) -PreparedReceiptSha256 ([string]$canonicalWriterFencePreparedReceipt.sha256) `
+            -DelegationToken $Script:CanonicalWriterFenceDelegationToken -DelegatedSources $canonicalWriterFenceDelegatedSources `
+            -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(20).ToString('o')) -AuthorityLease $Lease)
+    }else{Assert-ContainerWriterSessionAuthority $active $Lease}
+    foreach($step in @('runtime_quiescence','code_preimage','run_preimage','legacy_writer_preimage','scheduled_writer_preimage','generation_readback')){
+        $failure=$null
+        try{
+            Set-InstallationEvidenceStage ('rollback.transaction.'+$step) 'rollback'
+            switch($step){
+                'runtime_quiescence' {
+                    if(-not $testMode){Restore-CanonicalApplicationProtection}
+                    Sync-CanonicalWriterFenceInventory $Script:ContainerWriterFenceInventorySha256
+                    if(Test-Path -LiteralPath $install){
+                        [void](Assert-BootstrapIntegrityRecord $installedCodeRoot)
+                        if($supportedPlacement){Product $source '--remove-current-user-setup' (Join-Path $install 'app')}else{Product $install '--remove-current-user-setup'}
+                    }
+                    [void](Assert-CanonicalTransactionRelayPreimage $Configuration)
+                    if((Snapshot).exists){throw 'Transaction runtime Run quiescence is unproven.'}
+                }
+                'code_preimage' {
+                    $point=Get-CanonicalInstallationCommitPoint $sourceManifest $operatorSid $lad $activeDataRoot $source
+                    if($point -ceq 'UNKNOWN'){throw 'COMMIT_POINT_UNKNOWN'}
+                    if($point -ceq 'REACHED'){
+                        Assert-CanonicalTransactionInstalledCandidate $Configuration
+                        $codeExact=$true;break
+                    }
+                    if($null -ne $Placement -and $Placement.Binding.stage_evidence_root){
+                        $receiptPath=Join-Path ([string]$Placement.Binding.stage_evidence_root) 'replacement-receipt.json'
+                        if(Test-Path -LiteralPath $receiptPath){
+                            if(-not $testMode){$receiptPath=Read-CanonicalHelperArtifact $Placement.Binding 'replacement-receipt.json' 'REPLACEMENT_RECEIPT_READY'}
+                            $receipt=ReadReplacementReceipt $receiptPath ([string]$Configuration.transaction_id) $install $sourceManifest $sourceManifestSha256 $sourceHelperSha256 $sourceIntegrityHelperSha256
+                            Assert-ContainerDataGenerationTarget ([string]$receipt.rollback_root) $operatorSid $lad $activeDataRoot $source
+                            [void](Assert-CanonicalTransactionRelayPreimage $Configuration)
+                            if((Snapshot).exists){throw 'Transaction code restore quiescence is unproven.'}
+                            $restore=@($Configuration.base_arguments)+@('-RestoreVerifiedReplacement','-ReplacementTransactionId',([string]$Configuration.transaction_id),
+                                '-ReplacementReceiptPath',$receiptPath,'-ReplacementReceiptSha256',(Sha $receiptPath),
+                                '-RestoreEvidencePath',(Join-Path ([string]$Configuration.protected_root) 'restore-evidence.json'))
+                            $restored=Invoke-InstallationTransactionHelper $Configuration $restore 'transaction-code-restore'
+                            if($restored.Child.ExitCode -ne 0){throw 'Transaction prior-code restore failed.'}
+                            $proofPath=Join-Path ([string]$restored.Binding.stage_evidence_root) 'restore-evidence.json'
+                            $proof=ReadReplacementRestoreEvidence $proofPath ([string]$Configuration.transaction_id) $receiptPath (Sha $receiptPath) $install
+                            $codeExact=[bool]$proof.prior_code_exact;break
+                        }
+                    }
+                    if($currentAbsentBeforePlacement){
+                        if(Test-Path -LiteralPath $install){
+                            Assert-CanonicalTransactionInstalledCandidate $Configuration
+                            [void](Assert-CanonicalTransactionRelayPreimage $Configuration)
+                            if((Snapshot).exists){throw 'Transaction new-code removal quiescence is unproven.'}
+                            $handoverPath=Join-Path ([string]$Configuration.protected_root) 'handover.json'
+                            $remove=@($Configuration.base_arguments)+@('-Uninstall','-RemoveUncommittedPlacement',
+                                '-TransactionHandoverPath',$handoverPath,'-TransactionHandoverSha256',(Sha $handoverPath),
+                                '-QuiesceReceiptPath',$removalPath,'-ExpectedQuiesceReceiptSha256',(Sha $removalPath))
+                            if($null -ne $Placement -and $null -ne $Placement.StartupPreimage){
+                                $remove+=@('-TransactionStartupPreimagePath',([string]$Placement.StartupPreimage.path),
+                                    '-TransactionStartupPreimageSha256',([string]$Placement.StartupPreimage.sha256))
+                            }
+                            $removed=Invoke-InstallationTransactionHelper $Configuration $remove 'transaction-new-code-remove'
+                            if($removed.Child.ExitCode -ne 0){throw 'Transaction new-code removal failed.'}
+                        }
+                        if(Test-Path -LiteralPath $install -ErrorAction Stop){throw 'Transaction absent code preimage readback failed.'}
+                        $codeExact=$true
+                    }else{
+                        $surviving=InstalledManifest $installedCodeRoot $SkipSignatureValidationForTest
+                        if([string]$surviving.source_commit -cne [string]$candidate.source_commit -or
+                            [string]$surviving.source_tree -cne [string]$candidate.source_tree){throw 'Transaction unchanged code preimage differs.'}
+                        $codeExact=$true
+                    }
+                }
+                'run_preimage' {
+                    Restore $before
+                    if(Test-Path -LiteralPath $stop){Remove-Item -LiteralPath $stop -ErrorAction Stop}
+                    $check=Snapshot
+                    if([bool]$check.exists -ne [bool]$before.exists -or [string]$check.kind -cne [string]$before.kind -or
+                        [string]$check.data -cne [string]$before.data -or (Test-Path -LiteralPath $stop)){throw 'Transaction Run/stop preimage readback differs.'}
+                    $runtimeExact=$true
+                }
+                'legacy_writer_preimage' {if($null -ne $legacyRelayPreimage){[void](Restore-CanonicalOfficialLegacyRelay $legacyRelayPreimage)}}
+                'scheduled_writer_preimage' {
+                    if([bool]$writerBefore.restore_required){
+                        $enabled=Enable-CanonicalWriter $install $writerBefore
+                        Assert-CanonicalWriterRestoreReadback $writerBefore $enabled.readback
+                    }
+                    $writerExact=$true
+                }
+                'generation_readback' {
+                    if(-not $codeExact -or $point -ceq 'UNKNOWN'){throw 'Transaction code/G readback is unproven.'}
+                    if(Test-Path -LiteralPath $install){
+                        $readerRoot=if($supportedPlacement){$installedCodeRoot}else{$install}
+                        Assert-ContainerDataGenerationTarget $readerRoot $operatorSid $lad $activeDataRoot $source
+                    }elseif(-not $currentAbsentBeforePlacement){throw 'Transaction prior code is absent.'}
+                    $generationExact=$true
+                }
+            }
+        }catch{$failure=Get-InstallationFailureDetails $_;Write-InstallationCaughtFailure $_}
+        $record=[ordered]@{step=$step;status=if($null -eq $failure){'PROVEN'}else{'FAILED'};failure=$failure}
+        $steps.Add($record);Write-InstallationEvidenceEvent @{event='ROLLBACK_STEP';detail=$record}
+    }
+    $proven=($codeExact -and $runtimeExact -and $writerExact -and $generationExact -and
+        @($steps|Where-Object {$_.status -cne 'PROVEN'}).Count -eq 0)
+    $audit.rollback=@{code_exact=$codeExact;runtime_restored=$runtimeExact;scheduled_writer_restored=$writerExact;commit_point_status=$point;steps=$steps.ToArray()}
+    $audit.status=if($proven){'ROLLBACK_AWAITING_FENCE_RELEASE'}else{'CODE_ROLLBACK_FAILED'}
+    Save $auditPath $audit
+    $released=$false
+    if($proven){
+        try{
+            $authorization=New-CanonicalWriterFenceReleaseAuthorization (Join-Path ([string]$Configuration.protected_root) 'rollback-release.json') 'ROLLBACK_COMPLETE' $auditPath
+            Set-CanonicalWriterFenceReleaseAuthorization $authorization
+            Clear-CanonicalWriterFenceReleaseDelegation
+            Stop-CanonicalWriterFenceRelease $authorization
+            $released=$true
+            if(@($old).Count){[void](Start-CanonicalRelayAfterFenceRelease $install ([string]$before.data))}
+            [void](Assert-CanonicalTransactionRelayPreimage $Configuration -AfterRestore)
+            if([bool]$writerBefore.restore_required){[void](Confirm-CanonicalWriterRunning $install $enabled)}
+        }catch{
+            Write-InstallationCaughtFailure $_;$proven=$false
+            if($released){
+                [void](Start-ContainerWriterFence -Status 'RESTORE_FAILED' -OwnerKind 'canonical_installer' `
+                    -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
+                    -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId -SessionStartedAtUtc $canonicalWriterFenceStartedAtUtc `
+                    -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 -WriterContractSha256 $canonicalWriterFenceContractSha256 `
+                    -PreparedReceiptPath ([string]$canonicalWriterFencePreparedReceipt.path) -PreparedReceiptSha256 ([string]$canonicalWriterFencePreparedReceipt.sha256) `
+                    -AuthorityLease $Lease)
+                $released=$false
+            }
+        }
+    }
+    $audit.status=if($proven){Get-CanonicalRollbackSuccessStatus $false $point}else{'CODE_ROLLBACK_FAILED'}
+    Save $auditPath $audit
+    return [ordered]@{status=$audit.status;commit_point=$point;code_exact=$codeExact;runtime_restored=($proven -and $runtimeExact);
+        scheduled_writer_restored=($proven -and $writerExact);fence_released=$released;audit_path=$auditPath;audit_sha256=Sha $auditPath;steps=$steps.ToArray()}
+}
+
+
+function Invoke-InstallationTransactionCoordinator($Configuration) {
+    $lease=$null;$placement=$null;$finished=$false;$reason='PREPARATION_FAILED';$exitCode=1
+    $transactionFailure=$null;$captureSealed=$true
+    try{
+        if([string]$Configuration.schema -cne 'container-audit-installation-transaction-handover-v1' -or
+            [string]$Configuration.session_id -cnotmatch '^[0-9a-f]{32}$' -or
+            [string]$Configuration.attempt_id -cnotmatch '^[0-9a-f]{32}$' -or
+            [string]$Configuration.transaction_id -cnotmatch '^[0-9a-f]{32}$' -or
+            [int]$Configuration.timeout_seconds -lt 1 -or [int]$Configuration.timeout_seconds -gt 900){throw 'Installation transaction handover binding differs.'}
+        if([bool]$Configuration.test_transport -and (-not [bool]$Configuration.test_mode -or
+            [string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -cne '1' -or
+            (Test-BootstrapSamePath ([string]$Configuration.install_root) 'C:\KMTech\Apps\Container_Audit\current'))){throw 'Installation transaction test transport is forbidden.'}
+        if(-not [bool]$Configuration.test_transport -and -not(Test-InstallationEvidencePrivileged)){throw 'Installation transaction coordinator requires the elevated token.'}
+        foreach($decision in @('PLACE','COMMIT','ROLLBACK','CLOSE')){
+            if([string]$Configuration.outcome_hashes.$decision -cne (Get-InstallationTransactionDigest (Get-InstallationTransactionBytes $Configuration $decision))){throw 'Installation transaction fixed outcome SHA differs.'}
+        }
+        $source=[string]$Configuration.source_root
+        $canonical=Get-InstallationVerifiedScript (Join-Path $source 'INSTALL_CANONICAL_PORTABLE.ps1') ([string]$Configuration.orchestrator_sha256)
+        $definitions=@($canonical.Ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst]}|
+            ForEach-Object {$_.Extent.Text})
+        . ([scriptblock]::Create(($definitions -join "`n")))
+        . (Get-BootstrapSharedPortableLeaf $source)
+        . (Get-InstallationVerifiedScript (Join-Path $source 'tools\container_writer_fence.ps1') ([string]$Configuration.fence_helper_sha256))
+        if(-not [bool]$Configuration.test_transport){
+            if(-not(Test-BootstrapSamePath ([string]$Configuration.install_root) 'C:\KMTech\Apps\Container_Audit\current') -or
+                [bool]$Configuration.context.testMode -or [bool]$Configuration.context.SkipSignatureValidationForTest){throw 'Production installation transaction layout/verification differs.'}
+            $actualManifest=Manifest $source $false
+            if((Get-FileSha256 (Join-Path $source 'portable-manifest.json')) -cne [string]$Configuration.context.sourceManifestSha256 -or
+                [string]$actualManifest.installer_sha256 -cne [string]$Configuration.orchestrator_sha256 -or
+                [string]$actualManifest.helper_sha256 -cne [string]$Configuration.helper_sha256 -or
+                [string]$actualManifest.integrity_helper_sha256 -cne [string]$Configuration.library_sha256){throw 'Production installation transaction source pins differ.'}
+        }
+        foreach($binding in @(@('source','source_root'),@('install','install_root'),@('operatorSid','operator_sid'),
+            @('lad','local_appdata_root'),@('activeDataRoot','data_root'))){
+            if([string]$Configuration.context.($binding[0]) -cne [string]$Configuration.($binding[1])){throw 'Installation transaction context binding differs.'}
+        }
+        $Script:ContainerWriterFenceAcceptedInstalledInventorySha256=[string]$Configuration.installed_inventory_sha256
+        $Script:CanonicalWriterFenceSessionId=[string]$Configuration.session_id
+        $Script:CanonicalWriterFenceAttemptId=[string]$Configuration.attempt_id
+        $Script:CanonicalWriterFenceTransactionId=[string]$Configuration.transaction_id
+        $Script:CanonicalWriterFenceDelegationToken=[string]$Configuration.delegation
+        $Script:InstallationTransactionConfiguration=$Configuration
+        $Script:InstallationTransactionOperator=$Configuration.operator_security
+        # Only these named delegation/profile values cross to the owned children.
+        foreach($property in $Configuration.child_environment.PSObject.Properties){
+            if($property.Name -cnotin @('LOCALAPPDATA','APPDATA','CONTAINER_AUDIT_DATA_ROOT',
+                'CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID',
+                'CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID','CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID')){throw 'Installation transaction child environment name differs.'}
+            [Environment]::SetEnvironmentVariable($property.Name,[string]$property.Value,'Process')
+        }
+        $active=Read-ContainerWriterFence
+        $prepared=(Read-InstallationTransactionFile ([string]$Configuration.prepared_path) ([string]$Configuration.prepared_sha256)).Record
+        $parentSecurity=Get-BootstrapRelaySecurity ([int]$Configuration.parent_process_id)
+        if([string]$prepared.schema -cne 'container-audit-canonical-writer-prepared-v1' -or
+            [string]$prepared.operator_sid -cne [string]$Configuration.operator_sid -or
+            [string]$prepared.session_id -cne [string]$Configuration.session_id -or
+            [string]$prepared.attempt_id -cne [string]$Configuration.attempt_id -or
+            [string]$prepared.replacement_transaction_id -cne [string]$Configuration.transaction_id -or
+            [string]$prepared.orchestrator_sha256 -cne [string]$Configuration.orchestrator_sha256 -or
+            [string]$prepared.source_manifest_sha256 -cne [string]$Configuration.context.sourceManifestSha256 -or
+            [string]$parentSecurity.sid -cne [string]$Configuration.operator_sid -or
+            [int]$parentSecurity.session_id -ne [int]$Configuration.operator_security.session_id){throw 'Installation transaction operator/prepared identity differs.'}
+        if([string]$active.session_id -cne [string]$Configuration.session_id -or
+            [string]$active.attempt_id -cne [string]$Configuration.attempt_id -or
+            [string]$active.replacement_transaction_id -cne [string]$Configuration.transaction_id -or
+            [string]$active.prepared_receipt_path -cne [string]$Configuration.prepared_path -or
+            [string]$active.prepared_receipt_sha256 -cne [string]$Configuration.prepared_sha256 -or
+            (Get-ContainerWriterFenceFileSha256 ([string]$Configuration.prepared_path) 65536) -cne [string]$Configuration.prepared_sha256 -or
+            -not(Test-InstallationTransactionParent $Configuration)){throw 'Installation transaction active/prepared/parent binding differs.'}
+        $lease=Enter-ContainerWriterSessionAuthority -SessionId ([string]$Configuration.session_id) -AttemptId ([string]$Configuration.attempt_id) `
+            -OrchestratorSha256 ([string]$Configuration.orchestrator_sha256) -ReplacementTransactionId ([string]$Configuration.transaction_id) `
+            -WriterContractSha256 ([string]$Configuration.writer_contract_sha256) -ObserverSid ([string]$Configuration.operator_sid)
+        Assert-ContainerWriterSessionAuthority $active $lease
+        $Script:InstallationProtectedRunRoot=[string]$Configuration.protected_root
+        if([bool]$Configuration.test_transport){
+            [void][IO.Directory]::CreateDirectory($Script:InstallationProtectedRunRoot)
+            Set-InstallationEvidenceAcl $Script:InstallationProtectedRunRoot ([string]$Configuration.operator_sid) -Directory
+        }else{[void](New-InstallationProtectedEvidenceRun ([string]$Configuration.operator_sid) $Script:InstallationProtectedRunRoot)}
+        # The handover is copied before READY. Its immutable protected bytes bind
+        # the preimages used even after the ordinary canonical process is gone.
+        $handoverRecord=Get-InstallationTransactionProtectedHandover $Configuration
+        $ownProcess=Get-CimInstance Win32_Process -Filter "ProcessId = $PID" -ErrorAction Stop
+        $handoverRecord|Add-Member -NotePropertyName helper_process_id -NotePropertyValue ([int]$PID)
+        $handoverRecord|Add-Member -NotePropertyName helper_started_at_utc -NotePropertyValue (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
+        $handoverRecord|Add-Member -NotePropertyName helper_command_sha256 -NotePropertyValue (Get-BootstrapStringSha256 ([string]$ownProcess.CommandLine))
+        $handoverText=$handoverRecord|ConvertTo-Json -Depth 40 -Compress
+        Assert-InstallationMachineMetadataNoSecrets $handoverText
+        $handover=[Text.UTF8Encoding]::new($false).GetBytes($handoverText)
+        Write-InstallationTransactionFile (Join-Path $Script:InstallationProtectedRunRoot 'handover.json') $handover ([string]$Configuration.operator_sid)
+        Publish-InstallationTransactionResponse $Configuration 'authority-ready' 'AUTHORITY_READY' @{
+            handover_sha256=(Get-InstallationTransactionDigest $handover);prepared_sha256=[string]$Configuration.prepared_sha256;authority_mutex_name=[string]$lease.name}
+        $watch=[Diagnostics.Stopwatch]::StartNew();$released=$false;$releaseSeen=$false
+        while($watch.Elapsed.TotalSeconds -lt [int]$Configuration.timeout_seconds){
+            if(-not(Test-InstallationTransactionParent $Configuration)){$reason='PARENT_GONE';break}
+            $rollback=Join-Path ([string]$Configuration.request_root) 'rollback.request'
+            $commit=Join-Path ([string]$Configuration.request_root) 'commit.request'
+            $place=Join-Path ([string]$Configuration.request_root) 'place.request'
+            if([IO.File]::Exists($rollback)){
+                $request=(Read-InstallationTransactionFile $rollback ([string]$Configuration.outcome_hashes.ROLLBACK)).Record
+                Assert-InstallationTransactionIdentity $request $Configuration
+                $reason='ROLLBACK_REQUESTED';break
+            }
+            if([IO.File]::Exists($commit)){
+                $request=(Read-InstallationTransactionFile $commit ([string]$Configuration.outcome_hashes.COMMIT)).Record
+                Assert-InstallationTransactionIdentity $request $Configuration
+                $point=Get-CanonicalInstallationCommitPoint $Configuration.source_manifest ([string]$Configuration.operator_sid) `
+                    ([string]$Configuration.local_appdata_root) ([string]$Configuration.data_root) $source
+                if($point -cne 'REACHED'){throw 'Installation transaction commit point is unproven.'}
+                if(-not $released){throw 'Installation transaction runtime release is unproven.'}
+                Assert-CanonicalTransactionCommit $Configuration
+                $finished=$true;$reason='COMMITTED';$exitCode=0;break
+            }
+            if($null -eq $placement -and [IO.File]::Exists($place)){
+                $request=(Read-InstallationTransactionFile $place ([string]$Configuration.outcome_hashes.PLACE)).Record
+                Assert-InstallationTransactionIdentity $request $Configuration
+                [void](Initialize-InstallationEvidence (Join-Path $Script:InstallationProtectedRunRoot 'placement-capture') ([string]$Configuration.operator_sid) @([string]$Configuration.delegation))
+                $captureSealed=$false
+                $placement=Invoke-InstallationTransactionHelper $Configuration ([string[]]$Configuration.placement_arguments) 'transaction-placement'
+                Complete-InstallationEvidenceStage 'forward'
+                $summary=Complete-InstallationEvidence
+                $captureSealed=$true
+                Publish-InstallationTransactionResponse $Configuration 'placement-ready' 'PLACEMENT_FINISHED' @{
+                    child=@{process_id=$placement.Child.ProcessId;exit_code=$placement.Child.ExitCode;streams=$placement.Child.Streams;failure=$placement.Child.FailureDiagnostic};
+                    binding=$placement.Binding;evidence_summary=$summary}
+            }
+            $releasePath=Join-Path ([string]$Configuration.request_root) 'release.request'
+            if(-not $releaseSeen -and [IO.File]::Exists($releasePath)){
+                $release=(Read-InstallationTransactionFile $releasePath).Record
+                Assert-InstallationTransactionIdentity $release $Configuration
+                if([string]$release.authorization_path -cne [string]$Configuration.release_paths.product_complete -and
+                    [string]$release.authorization_path -cne [string]$Configuration.release_paths.product_natural){throw 'Installation transaction release path differs.'}
+                [void](Stop-ContainerWriterFence -SessionId ([string]$Configuration.session_id) -AttemptId ([string]$Configuration.attempt_id) `
+                    -ReplacementTransactionId ([string]$Configuration.transaction_id) -ReleaseAuthorizationPath ([string]$release.authorization_path) `
+                    -ReleaseAuthorizationSha256 ([string]$release.authorization_sha256) -AuthorityLease $lease)
+                $released=$true;$releaseSeen=$true
+                Publish-InstallationTransactionResponse $Configuration 'release-ready' 'FENCE_RELEASED'
+            }
+            Start-Sleep -Milliseconds 100
+        }
+        if(-not $finished -and $reason -ceq 'PREPARATION_FAILED'){$reason='OUTCOME_TIMEOUT'}
+    }catch{
+        $reason=if($null -ne $lease){'OUTCOME_RECORD_REJECTED'}else{'AUTHORITY_NOT_ACQUIRED'}
+        $transactionFailure=$_
+    }
+    try{
+        if($null -ne $lease -and -not $finished){
+            [void](Initialize-InstallationEvidence (Join-Path ([string]$Configuration.protected_root) 'rollback-capture') ([string]$Configuration.operator_sid) @([string]$Configuration.delegation))
+            $captureSealed=$false
+            if($null -ne $transactionFailure){Write-InstallationCaughtFailure $transactionFailure}
+            $compensation=Invoke-CanonicalTransactionCompensation $Configuration $placement $lease
+            Complete-InstallationEvidenceStage 'forward';Complete-InstallationEvidenceStage 'rollback'
+            $summary=Complete-InstallationEvidence
+            $captureSealed=$true
+            Publish-InstallationTransactionResponse $Configuration 'outcome-ready' ([string]$compensation.status) @{
+                reason=$reason;compensation=$compensation;evidence_summary=$summary}
+        }elseif($finished){Publish-InstallationTransactionResponse $Configuration 'outcome-ready' 'COMMITTED' @{reason=$reason}}
+        if($null -ne $lease){
+            # Keep the authority alive through the parent's final audit seal. A
+            # dead parent cannot acknowledge; compensation has already read back.
+            $closeWatch=[Diagnostics.Stopwatch]::StartNew();$close=Join-Path ([string]$Configuration.request_root) 'close.request'
+            while((Test-InstallationTransactionParent $Configuration) -and $closeWatch.Elapsed.TotalSeconds -lt 120){
+                if([IO.File]::Exists($close)){
+                    $request=(Read-InstallationTransactionFile $close ([string]$Configuration.outcome_hashes.CLOSE)).Record
+                    Assert-InstallationTransactionIdentity $request $Configuration;break
+                }
+                Start-Sleep -Milliseconds 100
+            }
+        }
+    }catch{
+        if($captureSealed){Write-InstallationTransactionTerminalFailure}else{Write-InstallationCaughtFailure $_}
+        $exitCode=1
+    }
+    finally{
+        $ownPaths=Get-Variable -Name InstallationOwnedMemoryTransportPaths -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if($null -ne $ownPaths){Remove-InstallationMemoryTransport ([pscustomobject]@{Paths=$ownPaths}) -AfterSeal}
+        if($null -ne $lease){Exit-ContainerWriterSessionAuthority $lease}
+    }
+    exit $exitCode
+}
+
+function Stop-InstallationTransactionFence($Job,$Authorization) {
+    Assert-InstallationTransactionAlive $Job
+    $record=[ordered]@{session_id=[string]$Job.Configuration.session_id;attempt_id=[string]$Job.Configuration.attempt_id;
+        transaction_id=[string]$Job.Configuration.transaction_id;parent_process_id=[int]$Job.Configuration.parent_process_id;
+        parent_started_at_utc=[string]$Job.Configuration.parent_started_at_utc;
+        authorization_path=[string]$Authorization.path;authorization_sha256=[string]$Authorization.sha256}
+    [byte[]]$bytes=[Text.UTF8Encoding]::new($false).GetBytes(($record|ConvertTo-Json -Compress))
+    Write-InstallationTransactionFile (Join-Path ([string]$Job.Configuration.request_root) 'release.request') $bytes ([string]$Job.Configuration.operator_sid)
+    $response=Wait-InstallationTransactionResponse $Job 'release-ready'
+    if([string]$response.status -cne 'FENCE_RELEASED'){throw 'Installation transaction fence release is unproven.'}
+}
+
+function Complete-InstallationTransaction($Job,[string]$Decision) {
+    if($Decision -cnotin @('COMMIT','ROLLBACK')){throw 'Installation transaction outcome is invalid.'}
+    Send-InstallationTransactionDecision $Job $Decision
+    $response=Wait-InstallationTransactionResponse $Job 'outcome-ready'
+    $Job.CommitAcknowledged=([string]$response.status -ceq 'COMMITTED')
+    if($null -ne $response.PSObject.Properties['evidence_summary']){Register-InstallationChildEvidenceSummary $response.evidence_summary}
+    return $response
+}
+
+function Close-InstallationTransaction($Job) {
+    if($null -eq $Job -or $Job.Closed){return}
+    try{
+        Send-InstallationTransactionDecision $Job 'CLOSE'
+        if(-not $Job.Process.WaitForExit(15000)){throw 'Installation transaction helper close timed out.'}
+        if($Job.CommitAcknowledged -and $Job.Process.ExitCode -ne 0){throw 'Installation transaction committed helper close failed.'}
+        $Job.Closed=$true
+    }finally{if($Job.Process.HasExited){Remove-InstallationMemoryTransport $Job.Transport -AfterSeal}}
 }
 
 function Invoke-InstallationElevationCapture([string]$Target,[string[]]$Arguments,[string]$AuditBase,[string]$OperatorSid,$AuthorityLease=$null) {
@@ -1182,6 +1859,11 @@ function Start-BootstrapNormalProducerWrapper([string]$Line,$Caller,[string[]]$E
 
 function Invoke-BootstrapNormalFiniteProducer([string]$VerifiedProducerRoot,[string]$Executable,[string[]]$Arguments,[string]$EvidenceBase) {
     $caller=Get-BootstrapRelaySecurity $PID
+    $transactionOperator=Get-Variable -Name InstallationTransactionOperator -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if($null -ne $transactionOperator){
+        if(-not(Test-InstallationEvidencePrivileged)){throw 'Transaction operator dispatch requires the privileged coordinator.'}
+        $caller=[pscustomobject]@{sid=[string]$transactionOperator.sid;session_id=[int]$transactionOperator.session_id;elevated=$true}
+    }
     if([int]$caller.session_id -le 0){throw 'Lifecycle producer requires the operator interactive session.'}
     $root=Initialize-InstallationEvidence ($EvidenceBase+'.normal') ([string]$caller.sid) @([Environment]::GetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','Process'))
     Set-InstallationEvidenceStage 'lifecycle.normal_producer_prepare'
@@ -1233,11 +1915,12 @@ function Invoke-BootstrapNormalFiniteProducer([string]$VerifiedProducerRoot,[str
     }}
     Write-InstallationEvidenceEvent ([ordered]@{event='NORMAL_FINITE_PRODUCER';wrapper_pid=$wrapperPid;producer_pid=[int]$result.producer_process_id;exit_code=[int]$result.exit_code;result_path=$resultPath;result_sha256=Get-FileSha256 $resultPath})
     Register-InstallationChildEvidenceSummary $result.evidence_summary
-    Complete-InstallationEvidenceStage 'forward';$summary=Complete-InstallationEvidence
+    Complete-InstallationEvidenceStage 'forward'
+    $summary=if($null -eq $transactionOperator){Complete-InstallationEvidence}else{$null}
     return [pscustomobject]@{ExitCode=[int]$result.exit_code;ProcessId=[int]$result.producer_process_id;Stdout=$texts.stdout;Stderr=$texts.stderr;
         Streams=$result.streams;EvidenceSummary=$summary;Failure=$result.failure;NormalProducerResultPath=$resultPath}
     }catch{Fail-InstallationEvidenceStages $_;throw}
-    finally{Remove-InstallationMemoryTransport $transport;[void](Complete-InstallationEvidence)}
+    finally{Remove-InstallationMemoryTransport $transport;if($null -eq $transactionOperator){[void](Complete-InstallationEvidence)}}
 }
 
 function Complete-InstallationEvidenceStage([string]$Lane, $Failure=$null) {

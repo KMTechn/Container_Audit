@@ -132,14 +132,14 @@ def test_preverification_fault_never_executes_source(tmp_path, engine, target, f
 @pytest.mark.parametrize("engine", ENGINES)
 @pytest.mark.parametrize("target", (0, 1))
 @pytest.mark.parametrize("operation", ("write", "replace"))
-def test_verified_handle_denies_changes_and_executes_original_memory(tmp_path, engine, target, operation):
+def test_verified_handle_keeps_original_bytes_during_write_and_replace(tmp_path, engine, target, operation):
     # The pinned script itself attempts mutation after both handles opened.
     # Paths are supplied as argv, so preparation needs no assumed filenames.
     source = r'''
 $denied=$false
 try{if($args[2] -ceq 'write'){[IO.File]::WriteAllText($args[0],'bad')}
 else{[IO.File]::Delete($args[0]);[IO.File]::Move($args[1],$args[0])}}catch [IO.IOException]{$denied=$true}
-if(-not $denied){exit 8};[Console]::Out.WriteLine('ORIGINAL_BYTES');exit 0
+if($denied -ne ($args[2] -ceq 'write')){exit 8};[Console]::Out.WriteLine('ORIGINAL_BYTES');exit 0
 '''
     # A deterministic path supplied by the test targets the transport opened
     # by its production bootstrap, without changing its verified code buffer.
@@ -154,6 +154,8 @@ if(-not $denied){exit 8};[Console]::Out.WriteLine('ORIGINAL_BYTES');exit 0
     result = child(engine, base64.b64encode(decoded.encode("utf-16-le")).decode("ascii"))
     assert result.returncode == 0, result.stderr.decode(errors="replace")
     assert b"ORIGINAL_BYTES" in result.stdout
+    if operation == "replace":
+        assert path.read_bytes() == b"bad"
 
 
 @pytest.mark.parametrize("engine", ENGINES)

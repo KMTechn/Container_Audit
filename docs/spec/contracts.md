@@ -12,6 +12,18 @@ Canonical 설치 journal은 outer failure와 정리·감사 진단을 모두 기
 봉인한다. audit와 evidence-status의 부분 파일 SHA256은 최종 저장 바이트를
 가리키며, 봉인 뒤 audit 게시에는 이미 기록한 진단의 공개 형태를 사용한다.
 
+Canonical 일반 설치의 상승 helper는 배치 뒤에도 같은 session/attempt/거래 tuple의
+유일한 authority를 보유한다. 인계 사이에도 active fence를 유지하며, 일반 caller와
+유한 배치·복원 자식은 기존 위임 검사를 따른다. 부모 종료, 15분 결과 대기 초과,
+64KiB 초과·SHA 불일치·다른 거래 ID는 같은 helper의 보상 사유다. G 도달은 코드
+유지, 미도달은 보호 preimage로 코드 복원 또는 새 배치 제거, 미확인은 fence 유지다.
+helper 소멸도 판정 불가이며 성공이나 보상 완료로 추정하지 않는다.
+
+보상은 거래 전 전역 relay 집합을 실행 파일·명령·PID·생성 시각·SID/session으로
+결속한다. 거래 밖 relay는 그대로 보존하며, 명시적 quiesce 목록의 old relay만
+원 실행 identity와 새 PID·생성 시각 및 READY 확인으로 복원한다. 거래가 시작한
+relay가 남거나 preimage 집합이 달라지면 writer fence를 해제하지 않는다.
+
 유지보수 active fence가 있으면 중앙 봉인·임대·PIN·등록·relay 전송은 첫 HTTP 전에 거절한다. 원 명령과 멱등 키, pending 임대 요청, UNKNOWN 및 복구 원본은 보존하며 해제 뒤 같은 내구 요청을 재시도한다. 원격 전송은 admission 확인 뒤 쓰기 mutex를 반환한다.
 
 G의 REFUSE/UNKNOWN은 직접 등록·지원 명령과 앱 하위 모드에서도 최초 기존 신원·자료
