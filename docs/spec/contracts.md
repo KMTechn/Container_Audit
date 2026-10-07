@@ -203,6 +203,11 @@ FAILED/UNKNOWN은 writer가 없을 때 SYSTEM이 같은 G 결정으로 정착하
 처리한다. 사용자 bootstrap은 포인터를 바꾸지 않는다. 실패 종점의 일반 쓰기는 정확한
 active SHA·실제 일반 진입 때의 G ALLOW·시작 표지 이전 writer 부재를 모두 요구한다. 표지 뒤의
 같은 active SHA·operator SID·비승격 GUI/relay만 공존하며 관측 실패는 거절한다.
+시험을 본 같은 bootstrap도 정착한 NONE/ABSENT claim의 실패 종점에서 이 허가를 사용한다.
+UNKNOWN claim은 기존240초 창 뒤 update_lock 안에서 수정 시각을 재검증하며 15분을
+넘긴 경우에만 일반 writer 부재·live G ALLOW·prepared 부재로 현재 판을 일반 실행한다.
+LIVE·신선한 UNKNOWN·수정 시각 읽기 실패는 안내+20을 유지한다. 이 경로는 포인터와
+시험/READY/CONFIRMED를 쓰지 않으며 지원 코드는 같은 claim hash에 한 번 게시한다.
 generation_before가 UNKNOWN이면 새 시험을 시작하지 않고 DEFERRED로 기록한다.
 APPLIED_PENDING_READY에서 SYSTEM 감독과 trial writer가 모두 사라져도 같은 조건으로
 active 후보를 일반 실행한다. 사용자 쪽은 CONFIRMED나 포인터를 쓰지 않는다. 일반 시작과
