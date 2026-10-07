@@ -9,7 +9,8 @@ import subprocess
 import pytest
 
 
-def run_powershell(arguments, *, check=False, capture_output=True, text=True, **kwargs):
+def run_powershell(arguments, *, check=False, capture_output=True, text=True,
+                   original_failure_path=None, **kwargs):
     """Use a strict UTF-8 text protocol for owned PowerShell test invocations.
 
     -File scripts still run in their own script scope with named parameters.
@@ -33,6 +34,26 @@ def run_powershell(arguments, *, check=False, capture_output=True, text=True, **
                       for value in argv[mode + 2:]]
         command = '& ' + literal(argv[mode + 1]) + ' ' + ' '.join(parameters)
         command += '; if (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }; exit 0'
+    if original_failure_path is not None:
+        # Harness-only observation: the product's public sink remains intact.
+        # Capture caught ErrorRecords privately, even when its script exits.
+        path_literal = "'" + str(original_failure_path).replace("'", "''") + "'"
+        command = 'try { ' + command + r''' } finally {
+    $observedErrors=@($Error | Group-Object -Property {
+        $_.Exception.GetType().FullName+'|'+$_.Exception.Message+'|'+$_.InvocationInfo.ScriptLineNumber
+    } | ForEach-Object { $_.Group[0] } | Select-Object -First 48 | ForEach-Object {
+        [ordered]@{exception_type=$_.Exception.GetType().FullName;
+            message=([string]$_.Exception.Message).Substring(0,[Math]::Min(256,([string]$_.Exception.Message).Length));
+            script_file=[IO.Path]::GetFileName($_.InvocationInfo.ScriptName);
+            script_line=$_.InvocationInfo.ScriptLineNumber}
+    })
+    $observedJson=ConvertTo-Json -InputObject $observedErrors -Depth 5 -Compress
+    while([Text.Encoding]::UTF8.GetByteCount($observedJson) -gt 65536){
+        $observedErrors=@($observedErrors | Select-Object -First ($observedErrors.Count-1))
+        $observedJson=ConvertTo-Json -InputObject $observedErrors -Depth 5 -Compress
+    }
+    [IO.File]::WriteAllText(''' + path_literal + r''', $observedJson, [Text.UTF8Encoding]::new($false))
+}'''
     completed = subprocess.run(
         [*argv[:mode], '-Command', prefix + command],
         capture_output=True, creationflags=0x08000000, **kwargs,
@@ -45,6 +66,8 @@ def run_powershell(arguments, *, check=False, capture_output=True, text=True, **
         arguments, completed.returncode,
         decode(completed.stdout), decode(completed.stderr),
     )
+    if original_failure_path is not None:
+        result.original_failure_path = Path(original_failure_path)
     if check:
         result.check_returncode()
     return result

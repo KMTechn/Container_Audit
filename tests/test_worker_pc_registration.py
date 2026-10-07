@@ -252,7 +252,7 @@ def test_worker_pc_registration_emits_catalog_order_raw_event_names_not_gui_orde
 
 
 @pytest.mark.usefixtures("registration_possession_key_contract")
-def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, monkeypatch):
+def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, monkeypatch, original_registration_reports):
     local_app_data = tmp_path / "LocalAppData"
     program_data = tmp_path / "ProgramData"
     report_path = tmp_path / "registration-self-enroll-report.json"
@@ -316,6 +316,7 @@ def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, mo
 
     assert exit_code == 0
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    report = _observed_registration_report(original_registration_reports, report)
     credential = json.loads(Path(report["credential_path"]).read_text(encoding="utf-8"))
 
     assert report["status"] == "SELF_ENROLLMENT_REGISTERED"
@@ -590,7 +591,7 @@ def test_worker_pc_registration_current_user_dpapi_roundtrip():
 
 
 @pytest.mark.usefixtures("registration_possession_key_contract")
-def test_worker_pc_registration_blocks_manifest_hash_mismatch_before_secret_write(tmp_path, monkeypatch):
+def test_worker_pc_registration_blocks_manifest_hash_mismatch_before_secret_write(tmp_path, monkeypatch, original_registration_reports):
     report_path = tmp_path / "registration-manifest-hash-mismatch.json"
     writes = []
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
@@ -634,6 +635,7 @@ def test_worker_pc_registration_blocks_manifest_hash_mismatch_before_secret_writ
     )
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    report = _observed_registration_report(original_registration_reports, report)
     assert exit_code == 2
     assert report["status"] == "BLOCKED"
     assert "does not authorize the requested manifest hash" in report["blocked_reason"]
@@ -641,7 +643,7 @@ def test_worker_pc_registration_blocks_manifest_hash_mismatch_before_secret_writ
 
 
 @pytest.mark.usefixtures("registration_possession_key_contract")
-def test_worker_pc_registration_preserves_safe_server_rejection_detail(tmp_path, monkeypatch):
+def test_worker_pc_registration_preserves_safe_server_rejection_detail(tmp_path, monkeypatch, original_registration_reports):
     report_path = tmp_path / "registration-server-rejection.json"
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
     monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
@@ -677,6 +679,7 @@ def test_worker_pc_registration_preserves_safe_server_rejection_detail(tmp_path,
     )
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    report = _observed_registration_report(original_registration_reports, report)
     assert exit_code == 2
     assert report["blocked_reason"].endswith(
         "manifest_invalid: Enrollment manifest failed validation: SYNC_TARGET_INVALID"
@@ -778,7 +781,7 @@ def test_manifest_hash_verification_uses_canonical_json_and_fails_closed(tmp_pat
 
 
 @pytest.mark.usefixtures("registration_possession_key_contract")
-def test_worker_pc_registration_blocks_cross_origin_self_enroll_before_token_post(tmp_path, monkeypatch):
+def test_worker_pc_registration_blocks_cross_origin_self_enroll_before_token_post(tmp_path, monkeypatch, original_registration_reports):
     report_path = tmp_path / "registration-self-enroll-blocked-report.json"
     calls = []
     writes = []
@@ -813,6 +816,7 @@ def test_worker_pc_registration_blocks_cross_origin_self_enroll_before_token_pos
     )
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    report = _observed_registration_report(original_registration_reports, report)
     assert exit_code == 2
     assert calls == []
     assert writes == []
@@ -822,7 +826,7 @@ def test_worker_pc_registration_blocks_cross_origin_self_enroll_before_token_pos
 
 
 @pytest.mark.usefixtures("registration_possession_key_contract")
-def test_worker_pc_registration_blocks_explicit_syncthing_output_paths_before_writes(tmp_path, monkeypatch):
+def test_worker_pc_registration_blocks_explicit_syncthing_output_paths_before_writes(tmp_path, monkeypatch, original_registration_reports):
     report_path = tmp_path / "registration-output-path-blocked.json"
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
     monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
@@ -840,6 +844,7 @@ def test_worker_pc_registration_blocks_explicit_syncthing_output_paths_before_wr
     )
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    report = _observed_registration_report(original_registration_reports, report)
     assert exit_code == 2
     assert report["status"] == "BLOCKED"
     assert report["raw_secret_written"] is False
@@ -849,7 +854,7 @@ def test_worker_pc_registration_blocks_explicit_syncthing_output_paths_before_wr
 
 
 @pytest.mark.usefixtures("registration_possession_key_contract")
-def test_worker_pc_registration_blocks_syncthing_report_path_without_writing_there(tmp_path, monkeypatch, capsys):
+def test_worker_pc_registration_blocks_syncthing_report_path_without_writing_there(tmp_path, monkeypatch, capsys, original_registration_reports):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
     monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
     monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
@@ -857,7 +862,9 @@ def test_worker_pc_registration_blocks_syncthing_report_path_without_writing_the
     exit_code = registration.main(["--report-path", r"C:\Sync\registration-report.json"])
 
     captured = capsys.readouterr()
-    report = json.loads(captured.out)
+    assert captured.out.strip().startswith('CONTAINER_AUDIT_SUPPORT=')
+    report = json.loads(captured.out.strip().split('=', 1)[1])
+    report = _observed_registration_report(original_registration_reports, report, support=True)
     assert exit_code == 2
     assert report["status"] == "BLOCKED"
     assert report["raw_secret_written"] is False
@@ -921,6 +928,7 @@ def _run_generated_identity_probe(
     hostname,
     machine_guid,
     user_sid,
+    original_registration_reports=None,
 ):
     local_app_data = tmp_path / name / "LocalAppData"
     report_path = tmp_path / name / "registration.json"
@@ -940,6 +948,8 @@ def _run_generated_identity_probe(
         ]
     ) == 0
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    if original_registration_reports is not None:
+        report = _observed_registration_report(original_registration_reports, report)
     manifest = json.loads(
         Path(report["producer_manifest_path"]).read_text(encoding="utf-8")
     )
@@ -953,6 +963,7 @@ def _run_generated_identity_probe(
 def test_generated_runtime_identities_do_not_collide_on_same_hostname(
     tmp_path,
     monkeypatch,
+    original_registration_reports,
 ):
     first = _run_generated_identity_probe(
         tmp_path,
@@ -961,6 +972,7 @@ def test_generated_runtime_identities_do_not_collide_on_same_hostname(
         hostname="SHARED-PC-NAME",
         machine_guid="00112233-4455-6677-8899-aabbccddeeff",
         user_sid="S-1-5-21-100-200-300-1001",
+        original_registration_reports=original_registration_reports,
     )
     second = _run_generated_identity_probe(
         tmp_path,
@@ -969,6 +981,7 @@ def test_generated_runtime_identities_do_not_collide_on_same_hostname(
         hostname="SHARED-PC-NAME",
         machine_guid="10112233-4455-6677-8899-aabbccddeeff",
         user_sid="S-1-5-21-100-200-300-1002",
+        original_registration_reports=original_registration_reports,
     )
 
     for report, manifest, credential in (first, second):
@@ -2291,7 +2304,7 @@ def test_worker_pc_registration_persists_identity_after_self_enroll_success(tmp_
 @pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_blocks_legacy_identity_without_key_or_http(
     tmp_path, monkeypatch
-):
+, original_registration_reports):
     local_app_data, _program_data = _self_enroll_env(tmp_path, monkeypatch)
     identity_path = local_app_data / "KMTech" / "DirectSync" / "container_audit" / "producer_identity.json"
     identity_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2354,6 +2367,7 @@ def test_worker_pc_registration_blocks_legacy_identity_without_key_or_http(
     )
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    report = _observed_registration_report(original_registration_reports, report)
     persisted = json.loads(identity_path.read_text(encoding="utf-8"))
     assert exit_code == 2
     assert report["status"] == registration.ADMIN_RECOVERY_ACTION
@@ -2480,7 +2494,7 @@ def test_worker_pc_registration_seeded_legacy_identity_requires_admin_recovery(
 @pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_identity_conflict_fail_closed_without_reuse_evidence(
     tmp_path, monkeypatch
-):
+, original_registration_reports):
     local_app_data, _program_data = _self_enroll_env(tmp_path, monkeypatch)
     report_path = tmp_path / "registration-identity-conflict-report.json"
     captured = {}
@@ -2514,6 +2528,7 @@ def test_worker_pc_registration_identity_conflict_fail_closed_without_reuse_evid
     )
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    report = _observed_registration_report(original_registration_reports, report)
     assert exit_code == 2
     assert report["status"] == registration.ADMIN_RECOVERY_ACTION
     assert report["recovery_action"] == registration.ADMIN_RECOVERY_ACTION
@@ -2532,7 +2547,7 @@ def test_worker_pc_registration_identity_conflict_fail_closed_without_reuse_evid
 
 
 @pytest.mark.usefixtures("registration_possession_key_contract")
-def test_worker_pc_registration_blocks_malformed_identity_file_before_enroll(tmp_path, monkeypatch):
+def test_worker_pc_registration_blocks_malformed_identity_file_before_enroll(tmp_path, monkeypatch, original_registration_reports):
     _self_enroll_env(tmp_path, monkeypatch)
     seed_path = tmp_path / "bad-identity.json"
     seed_path.write_text("{}\n", encoding="utf-8")
@@ -2561,6 +2576,7 @@ def test_worker_pc_registration_blocks_malformed_identity_file_before_enroll(tmp
     )
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    report = _observed_registration_report(original_registration_reports, report)
     assert exit_code == 2
     assert calls == []
     assert report["status"] == "BLOCKED"
@@ -2568,7 +2584,7 @@ def test_worker_pc_registration_blocks_malformed_identity_file_before_enroll(tmp
 
 
 @pytest.mark.usefixtures("registration_possession_key_contract")
-def test_worker_pc_registration_blocks_syncthing_identity_path(tmp_path, monkeypatch):
+def test_worker_pc_registration_blocks_syncthing_identity_path(tmp_path, monkeypatch, original_registration_reports):
     _self_enroll_env(tmp_path, monkeypatch)
     report_path = tmp_path / "registration-identity-syncthing-report.json"
 
@@ -2582,6 +2598,7 @@ def test_worker_pc_registration_blocks_syncthing_identity_path(tmp_path, monkeyp
     )
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    report = _observed_registration_report(original_registration_reports, report)
     assert exit_code == 2
     assert report["status"] == "BLOCKED"
     assert "producer_identity_path must not point at the legacy Syncthing folder" in report[
@@ -2590,7 +2607,7 @@ def test_worker_pc_registration_blocks_syncthing_identity_path(tmp_path, monkeyp
 
 
 @pytest.mark.usefixtures("registration_possession_key_contract")
-def test_worker_pc_registration_blocks_syncthing_data_root(tmp_path, monkeypatch):
+def test_worker_pc_registration_blocks_syncthing_data_root(tmp_path, monkeypatch, original_registration_reports):
     report_path = tmp_path / "registration-blocked.json"
     monkeypatch.setenv(DATA_ROOT_ENV, r"C:\Sync")
 
@@ -2598,6 +2615,7 @@ def test_worker_pc_registration_blocks_syncthing_data_root(tmp_path, monkeypatch
 
     assert exit_code == 2
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    report = _observed_registration_report(original_registration_reports, report)
     assert report["status"] == "BLOCKED"
     assert report["raw_secret_written"] is False
     assert "legacy Syncthing folder" in report["blocked_reason"]
@@ -2617,3 +2635,36 @@ def _reject_implicit_contract_boundary(monkeypatch, request):
     monkeypatch.setattr(registration.PersistentPossessionKey, "open_existing", classmethod(deny))
     yield
     assert not calls, 'explicit fixture required: registration_possession_key_contract'
+
+
+@pytest.fixture
+def original_registration_reports(monkeypatch):
+    """Observe private report inputs while the real public masking still runs."""
+    import copy
+    import auto_update
+    records = []
+    write = registration._write_registration_report
+    emit = auto_update.emit_support_record
+
+    def observe_write(path, payload, **kwargs):
+        records.append(copy.deepcopy(payload))
+        return write(path, payload, **kwargs)
+
+    def observe_emit(fields=None, **kwargs):
+        if isinstance(fields, dict) and 'report_version' in fields:
+            records.append(copy.deepcopy(fields))
+        return emit(fields, **kwargs)
+
+    monkeypatch.setattr(registration, '_write_registration_report', observe_write)
+    monkeypatch.setattr(auto_update, 'emit_support_record', observe_emit)
+    return records
+
+
+def _observed_registration_report(records, public_report, *, support=False):
+    from auto_update import mixed_status_record, support_record
+    assert records, 'private report input was not observed'
+    original = records[-1]
+    expected = (support_record(original, stage='registration') if support
+                else mixed_status_record(original))
+    assert public_report == expected, 'public report differs from contract masking'
+    return original

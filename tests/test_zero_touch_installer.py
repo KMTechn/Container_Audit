@@ -132,8 +132,66 @@ def _run_restore(
 def _output_value(output: str, name: str) -> str:
     prefix = f"{name}="
     values = [line[len(prefix) :] for line in output.splitlines() if line.startswith(prefix)]
+    for line in output.splitlines():
+        _, separator, payload = line.partition('=')
+        if not separator:
+            continue
+        try:
+            record = json.loads(payload)
+        except ValueError:
+            continue
+        if isinstance(record, dict) and name in record:
+            values.append(record[name])
     assert len(values) == 1, (name, output)
     return values[0]
+
+
+@pytest.fixture
+def observe_installer_failures(tmp_path, monkeypatch):
+    """Keep original ErrorRecords in this test's isolated harness directory."""
+    import itertools
+    import sys
+    original = run_powershell
+    sequence = itertools.count()
+
+    def observe(arguments, **kwargs):
+        path = tmp_path / ('private-errors-' + str(next(sequence)) + '.json')
+        return original(arguments, original_failure_path=path, **kwargs)
+
+    monkeypatch.setattr(sys.modules[__name__], 'run_powershell', observe)
+
+
+def _assert_private_refusal(completed, expected):
+    import hashlib
+    from auto_update import PUBLIC_CODES, SAFE_MESSAGES, public_record
+    assert completed.returncode != 0
+    output = completed.stderr + completed.stdout
+    assert expected not in output, 'original diagnostic reached the public stream'
+    records = json.loads(completed.original_failure_path.read_text(encoding='utf-8'))
+    original_observed = any(expected in item['message'] for item in records)
+    failures = []
+    for line in output.splitlines():
+        _, separator, payload = line.partition('=')
+        if not separator:
+            continue
+        try:
+            record = json.loads(payload)
+        except ValueError:
+            continue
+        if isinstance(record, dict) and record.get('reason_code') in {
+                'INSTALLER_HELPER_FAILURE', 'INSTALLER_CANONICAL_FAILURE'}:
+            assert public_record(record, PUBLIC_CODES | {
+                'INSTALLER_HELPER_FAILURE', 'INSTALLER_CANONICAL_FAILURE',
+                'installer_helper', 'canonical_install', 'REPORT_UNAVAILABLE'}, SAFE_MESSAGES) == record
+            failures.append(record)
+            if 'report_path' in record and 'report_sha256' in record:
+                path = Path(record['report_path']).resolve()
+                assert path.is_relative_to(completed.original_failure_path.parent.resolve())
+                data = path.read_bytes()
+                assert hashlib.sha256(data).hexdigest() == record['report_sha256']
+                original_observed |= expected in json.dumps(json.loads(data), ensure_ascii=False)
+    assert failures, 'allowlisted public failure was not emitted'
+    assert original_observed, 'original refusal cause was not observed'
 
 
 def _release_fixture(root: Path) -> Path:
@@ -1158,7 +1216,7 @@ exit 0
 @pytest.mark.parametrize(
     "metric_field", ("file_count_before_manifest", "byte_count_before_manifest")
 )
-def test_portable_plan_rejects_stringized_manifest_metrics(tmp_path, metric_field):
+def test_portable_plan_rejects_stringized_manifest_metrics(tmp_path, metric_field, observe_installer_failures):
     source = _portable_release_fixture(tmp_path)
     manifest_path = source / "portable-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1201,9 +1259,7 @@ def test_portable_plan_rejects_stringized_manifest_metrics(tmp_path, metric_fiel
     )
 
     assert completed.returncode != 0
-    assert "Portable tree metrics differ from the manifest" in (
-        completed.stderr + completed.stdout
-    )
+    _assert_private_refusal(completed, 'Portable tree metrics differ from the manifest')
     assert not install.exists()
 
 
@@ -1220,7 +1276,7 @@ def test_portable_plan_rejects_stringized_manifest_metrics(tmp_path, metric_fiel
 )
 def test_portable_plan_rejects_string_false_public_contract_booleans(
     tmp_path, section, field
-):
+, observe_installer_failures):
     source = _portable_release_fixture(tmp_path)
     contract_path = source / "tools" / "container_writer_session_contract.json"
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
@@ -1283,9 +1339,7 @@ def test_portable_plan_rejects_string_false_public_contract_booleans(
     )
 
     assert completed.returncode != 0
-    assert "Writer session public contract semantics differ" in (
-        completed.stderr + completed.stdout
-    )
+    _assert_private_refusal(completed, 'Writer session public contract semantics differ')
     assert not install.exists()
 
 
@@ -1421,7 +1475,7 @@ exit 0
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
-def test_portable_preflight_failure_removes_prepared_writer_session(tmp_path):
+def test_portable_preflight_failure_removes_prepared_writer_session(tmp_path, observe_installer_failures):
     source = _portable_release_fixture(tmp_path)
     installer_path = source / "INSTALL_CANONICAL_PORTABLE.ps1"
     installer = installer_path.read_text(encoding="utf-8")
@@ -1519,7 +1573,7 @@ def test_portable_preflight_failure_removes_prepared_writer_session(tmp_path):
     (tmp_path / "prepared-fixture.stderr.txt").write_text(
         _redact_install_diagnostic(completed.stderr), encoding="utf-8")
     assert completed.returncode != 0
-    assert "TEST_INJECTED_PREFLIGHT_FAILURE" in (completed.stderr + completed.stdout)
+    _assert_private_refusal(completed, 'TEST_INJECTED_PREFLIGHT_FAILURE')
     control_root = (
         local_app_data / "KMTech" / "DirectSync" / "container_audit" / "control" / "writer-session"
     )
@@ -1572,7 +1626,7 @@ def test_portable_plan_quotes_space_and_unicode_paths_without_registry_mutation(
     assert not install.exists()
 
 
-def test_portable_scripts_refuse_mixed_executable_and_source_packets(tmp_path):
+def test_portable_scripts_refuse_mixed_executable_and_source_packets(tmp_path, observe_installer_failures):
     source = _portable_release_fixture(tmp_path)
     install = tmp_path / "apps" / "current"
     environment = dict(os.environ)
@@ -1623,13 +1677,13 @@ def test_portable_scripts_refuse_mixed_executable_and_source_packets(tmp_path):
     )
 
     assert top.returncode != 0
-    assert "admitted SourceRoot" in (top.stderr + top.stdout)
+    _assert_private_refusal(top, 'admitted SourceRoot')
     assert helper.returncode != 0
-    assert "admitted SourceRoot" in (helper.stderr + helper.stdout)
+    _assert_private_refusal(helper, 'admitted SourceRoot')
     assert not install.exists()
 
 
-def test_portable_plan_rejects_wrong_entrypoint_before_mutation(tmp_path):
+def test_portable_plan_rejects_wrong_entrypoint_before_mutation(tmp_path, observe_installer_failures):
     source = _portable_release_fixture(tmp_path)
     manifest_path = source / "portable-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1663,7 +1717,7 @@ def test_portable_plan_rejects_wrong_entrypoint_before_mutation(tmp_path):
     )
 
     assert completed.returncode != 0
-    assert "Portable manifest readback failed" in (completed.stderr + completed.stdout)
+    _assert_private_refusal(completed, 'Portable manifest readback failed')
     assert not install.exists()
 
 
@@ -1702,7 +1756,7 @@ def test_bootstrap_accepts_portable_tree_and_integrity_readback(tmp_path):
     assert verified.returncode == 0, verified.stderr or verified.stdout
 
 
-def test_bootstrap_replaces_only_an_integrity_verified_portable_tree(tmp_path):
+def test_bootstrap_replaces_only_an_integrity_verified_portable_tree(tmp_path, observe_installer_failures):
     first_source = _portable_release_fixture(
         tmp_path,
         directory="portable first",
@@ -1821,7 +1875,7 @@ def test_bootstrap_later_restore_is_receipt_bound_resumable_and_preserves_failed
 
 
 @pytest.mark.parametrize('boundary', ['historical_junction', 'selected_rollback_junction', 'wrong_transaction_rollback'])
-def test_bootstrap_restore_scopes_history_but_binds_selected_paths(tmp_path, boundary):
+def test_bootstrap_restore_scopes_history_but_binds_selected_paths(tmp_path, boundary, observe_installer_failures):
     first = _portable_release_fixture(tmp_path, directory='first', source_commit='a' * 40)
     second = _portable_release_fixture(tmp_path, directory='second', source_commit='b' * 40,
                                        main_payload='# successor\n')
@@ -1878,7 +1932,7 @@ def test_bootstrap_restore_scopes_history_but_binds_selected_paths(tmp_path, bou
             assert (install / 'app/main.py').read_bytes() == current_main
             assert not Path(payload['failed_root']).exists()
             expected = 'reparse point' if boundary == 'selected_rollback_junction' else 'identity or path binding'
-            assert expected in restored.stderr
+            _assert_private_refusal(restored, expected)
         assert (history / 'custody.txt').read_bytes() == b'preserve unrelated history'
         assert (target / 'sentinel.txt').read_bytes() == b'never follow or mutate this target'
     finally:
@@ -2077,7 +2131,7 @@ def test_bootstrap_dry_run_does_not_create_identity_profile_or_target(tmp_path):
     assert list(tmp_path.rglob("runtime-profile.json")) == []
 
 
-def test_bootstrap_places_exact_bytes_records_integrity_and_reuses(tmp_path):
+def test_bootstrap_places_exact_bytes_records_integrity_and_reuses(tmp_path, observe_installer_failures):
     source = _release_fixture(tmp_path)
     install = tmp_path / "apps" / "current"
 
@@ -2107,12 +2161,10 @@ def test_bootstrap_places_exact_bytes_records_integrity_and_reuses(tmp_path):
     (install / "runtime.dll").write_bytes(b"tampered-after-placement")
     damaged = _run_installer(source, install)
     assert damaged.returncode != 0
-    assert "different or damaged hardened code placement" in (
-        damaged.stderr + damaged.stdout
-    )
+    _assert_private_refusal(damaged, 'different or damaged hardened code placement')
 
 
-def test_bootstrap_copies_opt_in_tls_ca_for_current_user_onboarding(tmp_path):
+def test_bootstrap_copies_opt_in_tls_ca_for_current_user_onboarding(tmp_path, observe_installer_failures):
     source = _release_fixture(tmp_path)
     install = tmp_path / "apps" / "current"
     local_app_data = tmp_path / "operator" / "LocalAppData"
@@ -2135,7 +2187,7 @@ def test_bootstrap_copies_opt_in_tls_ca_for_current_user_onboarding(tmp_path):
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "tls_ca_bootstrap_status=PASS" in completed.stdout
-    assert f"tls_ca_bootstrap_path={expected}" in completed.stdout
+    assert _output_value(completed.stdout, 'tls_ca_bootstrap_path') == str(expected)
     assert expected.read_bytes() == ca_payload
 
 
