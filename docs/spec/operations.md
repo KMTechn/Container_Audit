@@ -1385,6 +1385,8 @@ onboarding/removal/lifecycle의 사용자 경로와 update-control에는 작업 
 
 설치기 private evidence는 기존 `Initialize-InstallationEvidence`/`Set-InstallationEvidenceAcl`의 보호 root를 같은 프로세스와 같은 시도에서 재사용한다. 원문은 공통 가림과 UTF-8 64 KiB 상한 뒤 임시 파일에 쓰고 flush·기존 ACL 검증·원자 이름 변경·실제 바이트 SHA256 readback을 마친다. 해당 writer가 만든 객체와 같은 참조일 때만 공개 `report_path`/`report_sha256`을 포함한다. caller가 예외 Data에 넣은 경로·옛 참조·게시 실패에는 `REPORT_UNAVAILABLE`을 표시한다. 새 ACL 위치나 새 ACL 증명 함수는 만들지 않는다.
 
+보호 진단 JSON의 65,536바이트 상한은 이스케이프·필수 필드·writer가 덧붙이는 LF까지 포함한 최종 UTF-8 저장 바이트로 판정한다. Python `serialize_json_for_sink`와 PowerShell `Write-InstallationOriginalFailure`/private `ConvertTo-CanonicalAuditJson`은 직렬화 크기를 확인하며 진단 문자열만 더 줄여 유효 JSON·앞뒤 원인 맥락·잘림 표식을 유지한다. 상태·인증 metadata는 이 진단 상한의 대상이 아니며 원 바이트와 비밀 검사를 유지한다. onboarding의 replace/create-new 실패 보고서는 원 예외 대신 기존 `SUPPORT_FAILURE` 코드와 원 metadata를 기록한다.
+
 현장 지원 도구의 (가) 출력은 `CONTAINER_AUDIT_SUPPORT=`, lower helper는 `CONTAINER_AUDIT_INSTALL_HELPER=`, canonical 설치기는 `CONTAINER_AUDIT_INSTALL_CANONICAL=`, 적용기는 `CONTAINER_AUDIT_UPDATE=` 뒤 compact JSON으로 내보낸다. 같은 보호 writer가 없는 도구의 원문은 버린다. 기존 고정 문구와 우리 코드가 계산한 개수·상태 코드·ID·시각·버전·SHA는 safe_messages/allowed_codes에 등록하며 그 출력 형식은 유지한다. authenticated task-spec/lifecycle/onboarding-input/Observe 프로토콜은 기존 수신·검증 계약을 유지한다.
 
 | 코드/단계 | 고정 안내 |
