@@ -388,6 +388,10 @@ builder `--auto-update-settings <JSON>`은 HTTPS `feed_url`, `channel`,
 `profile_auth=true`는 현재 사용자의 기존 물류 profile을 쓰되 feed와 같은 인증 원본에만
 bearer를 전달한다. redirect·cookie 재사용은 거절한다. 새 credential 저장소를 만들지 않는다.
 실제 feed·인증은 코디네이터가 정한 뒤 보호된 설치 입력으로 제공한다.
+컷 stock의 feed 있음/빈 값 두 판은 같은 committed `update-manifest-key-config.json`을
+쓴다. 보관 공개 설정 SHA256 `d7fb6ecb06b23ecf2fceea6c893c8d1162dad302720ab0e97d19dfae6368d1e5`와
+원본·packet 바이트 일치를 확인하고 빌더의 공개 키 override 인수는 생략한다.
+랩 검증용 공개 키 override로 만든 packet은 현장 컷 stock으로 사용하지 않는다.
 자동 갱신의 양방향 승인은 앱 키로 서명한 manifest 안의 정확한 현재/후보 SHA와
 실제 writer 계약 해시 두 방향에만 둔다. 별도 설정·다른 키·다른 출발점은 거절한다.
 writer 및 데이터/API 계약이 같은 판은 추가 승인 없이 기존 호환 규칙을 따른다.
