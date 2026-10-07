@@ -749,3 +749,7 @@ NOT TESTED이며 coordinator의 랩 예행과 독립 확인에 남긴다.
 
 - P2 / sub-413 컷 뒤: 새 앱에서 드물게 스캔이 1–5초 멈출 수 있음(writer fence 대기 중 CSV drain·fsync 경합); 코디 결정 `msg_12baf9aee551`에 따라 알려진 꼬리를 기록하며 새 스캔의 내구 기록·fsync·500ms 측정 기준은 유지한다.
 - P2 / sub-451: `next-logon relay 복원`은 기준 1811fce·ba2d75a 모두 미구현 설계이며 후속 결정으로 남긴다. 현재 I1은 실제 relay READY 증명 실패 시 재봉쇄하고 최초 설치 실패를 보존한다.
+
+### D-16 E1 · apply 시작 증거(23:0x 정정)
+
+60초는 SYSTEM apply 시작 claim이 없는 상한이다. Authority 뒤 보호 apply-claim에 PID·native creation identity를 기록한다. LIVE/UNKNOWN 소유자는 기존240초 창에서 기다리며 느린90초 apply 동안 일반 실행을 시작하지 않는다. 프로세스 부재·PID 생성 identity 불일치가 증명될 때만 복귀하고, UNKNOWN은 창 끝에 진행 안내·코드를 남긴다. 정상 종료는 기존 guarded sink로 claim을 SETTLED 기록해 증거를 보존한다. 같은 bootstrap에서 실패한 trial의 UNKNOWN 거부와 다음 fresh 시작의 E3/E4 회복은 구별한다.

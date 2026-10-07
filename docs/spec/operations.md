@@ -293,7 +293,7 @@ READY 실패 뒤 `update-control/transition.json`의 `retained_candidate=true`�
 보존한다. 임의 옛 판 복귀·marker 삭제·자료 복원으로 우회하지 않는다.
 세대가 변하지 않았고 옛 판이 허용된 경우만 이미 확인된 옛 판으로 `ROLLED_BACK` 복귀한다.
 GUI와 relay는 같은 판정 함수를 사용한다.
-준비된 갱신의 SYSTEM 요청 실패 또는 60초 무진전은 현재 판을 일반 실행한다.
+준비된 갱신의 SYSTEM 요청 실패 또는 60초 안에 apply 시작 증거가 나타나지 않음은 현재 판을 일반 실행한다.
 FAILED/UNKNOWN에서도 active 판이 G ALLOW면 일반 실행하며, writer가 사라진 뒤 SYSTEM이
 같은 결정표로 종점을 정착시켜 다음 prepared를 처리한다. 새 판 유지 결정 뒤에도 같은
 bootstrap에서 바로 일반 실행한다. 자료 판정 불가 안내는 기존 guard가 담당한다.
@@ -1421,3 +1421,7 @@ Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종�
 설치기는 제공된 wrapper로만 실행하며 PowerShell 진입점에 인수를 손으로 입력하지 않는다. 모르는 인수·잘못된 Mode의 앞단 binder 출력 제한은 컷 뒤 항목이다.
 
 알려진 P2: 새 앱에서 드물게 스캔이 1–5초 멈출 수 있음(writer fence 대기 중 CSV drain·fsync 경합); `msg_12baf9aee551`에 따른 컷 뒤 개선 대상이며 새 스캔의 내구 기록·fsync는 유지한다.
+
+### D-16 E1 · apply 시작 증거(23:0x 정정)
+
+60초는 SYSTEM apply 시작 claim이 없는 상한이다. Authority 뒤 보호 apply-claim에 PID·native creation identity를 기록한다. LIVE/UNKNOWN 소유자는 기존240초 창에서 기다리며 느린90초 apply 동안 일반 실행을 시작하지 않는다. 프로세스 부재·PID 생성 identity 불일치가 증명될 때만 복귀하고, UNKNOWN은 창 끝에 진행 안내·코드를 남긴다. 정상 종료는 기존 guarded sink로 claim을 SETTLED 기록해 증거를 보존한다. 같은 bootstrap에서 실패한 trial의 UNKNOWN 거부와 다음 fresh 시작의 E3/E4 회복은 구별한다.

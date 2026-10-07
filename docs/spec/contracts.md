@@ -658,3 +658,7 @@ locator를 준비하므로, owner가 높은 판으로 바뀌면 locator 재판�
 관리자 relay resume 감사는 공통 가림 뒤 공개 레코드의 허용 불리언·SHA256을 보존한다. `forced_invalid_marker`, `previous_marker_valid`, `previous_paused`, `reason_sha256`은 강제 해제 사실의 근거이며 자유 이유 문장·외부 식별자 값은 허용 형식으로 제한한다. 허용 UUID 모양이어도 알려진 비밀 값은 공개하지 않는다. relay runtime/upload/persistent/host/operator 혼합 상태와 operator pause marker는 기존 JSON 바이트·내구 순서를 유지하고, 알려진 비밀 값이 있으면 디렉터리·임시 파일을 만들기 전에 거절하여 기존 상태를 보존한다.
 
 최종 가림 반환은 소비자의 short-value 안내·UTF-8 cap·field marker 생성 뒤에도 known 값의 JSON 표기(선택적 solidus `\/`, 대소문자 Unicode, 혼합·중첩 escape)를 재검사한다. 잔존하면 기존 `REPORT_UNAVAILABLE`로 게시를 거부하며 새 허용 목록을 만들지 않는다. Python 소비자는 마지막 검사까지 처음 선택한 환경을 유지하며 PowerShell matcher는 UTF-16 문자 조각만 최대 256개 캐시한다.
+
+### D-16 E1 · apply 시작 증거(23:0x 정정)
+
+60초는 SYSTEM apply 시작 claim이 없는 상한이다. Authority 뒤 보호 apply-claim에 PID·native creation identity를 기록한다. LIVE/UNKNOWN 소유자는 기존240초 창에서 기다리며 느린90초 apply 동안 일반 실행을 시작하지 않는다. 프로세스 부재·PID 생성 identity 불일치가 증명될 때만 복귀하고, UNKNOWN은 창 끝에 진행 안내·코드를 남긴다. 정상 종료는 기존 guarded sink로 claim을 SETTLED 기록해 증거를 보존한다. 같은 bootstrap에서 실패한 trial의 UNKNOWN 거부와 다음 fresh 시작의 E3/E4 회복은 구별한다.

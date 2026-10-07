@@ -21,7 +21,7 @@ relay 읽기 실패는 서버 끊김과 구별한다. 마지막으로 읽은 대
 포인터보다 먼저 내구 기록한다. 확인 불가의 다음 시작은 기존 guard가 지원 복구를
 안내하며, GUI·SYSTEM 실제 수명주기 검증은 [남은 작업](BACKLOG.md)에 기록한다.
 이미 확인된 이전 판의 복귀에는 READY를 재요구하지 않는다. 준비된 갱신의 SYSTEM 요청
-실패·60초 무진전과 FAILED/UNKNOWN 종점은 G가 허용하는 active 판을 일반 실행하며,
+실패·60초 안에 apply 시작 증거가 나타나지 않음과 FAILED/UNKNOWN 종점은 G가 허용하는 active 판을 일반 실행하며,
 기존 writer·자료 guard는 유지한다. writer 때문에 미룬 DEFERRED도 부재 뒤 원 G 결정을
 한 번 재개하고 정착 전에는 새 prepared를 적용하지 않는다. 종점 코드와 candidate 유지 여부는 사용자 staging의
 `startup-support.json`에 허용 공개 필드로 기록한다.
@@ -451,3 +451,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 ## 관리자 보류 처리 입력
 
 기존 관리자 ID·가린 PIN 한 폼에 원 동작·선택 대상·원 현품표를 함께 표시한다. 원 요청 다시 조회도 저장된 동일 대상/labels를 표시하고, 제출 뒤 PIN 칸을 비운다. 승인/최종 확인·6자리 검증·서버 잠금/역할/철회·원장 CAS·UNKNOWN·건별 보류는 같은 handler로 유지한다. 손상 원본 식별은 중앙 조회 결과가 PIN 필요 여부를 정하고 오프라인 무 PIN 보류와 코드를 공유하므로 기존 입력을 유지한다(2026-10-01 coordinator 답). Python 3.12.10/PS5.1 headless: 새 폼 5 RED→GREEN, 관련 5파일 793 PASS; 처음 broad 90 FAIL은 두 공용 prompt fixture의 인수 불일치로 원본 보존 후 교정했고 마지막 변경 뒤 같은 pack을 다시 실행했다. [결과·미수용 화면 범위](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md).
+
+### D-16 E1 · apply 시작 증거(23:0x 정정)
+
+60초는 SYSTEM apply 시작 claim이 없는 상한이다. Authority 뒤 보호 apply-claim에 PID·native creation identity를 기록한다. LIVE/UNKNOWN 소유자는 기존240초 창에서 기다리며 느린90초 apply 동안 일반 실행을 시작하지 않는다. 프로세스 부재·PID 생성 identity 불일치가 증명될 때만 복귀하고, UNKNOWN은 창 끝에 진행 안내·코드를 남긴다. 정상 종료는 기존 guarded sink로 claim을 SETTLED 기록해 증거를 보존한다. 같은 bootstrap에서 실패한 trial의 UNKNOWN 거부와 다음 fresh 시작의 E3/E4 회복은 구별한다.
