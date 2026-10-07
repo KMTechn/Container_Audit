@@ -99,6 +99,10 @@ if($stage -ceq 'elevation-cancelled'){
     Invoke-Expression $capture[0].Extent.Text
     $Script:InstallationEvidenceRoot=$env:CA_CONTRACT_ROOT
     function Get-InstallationEvidenceControlRoot {return Join-Path $env:CA_CONTRACT_ROOT 'control'}
+    # Confine the existing transport I/O doubles to the cancellation seam.
+    # The following actual G readback must authenticate the real shared leaf.
+    $actualNoReparseForRollback=${function:Assert-BootstrapNoReparsePoint}
+    $actualFileShaForRollback=${function:Get-FileSha256}
     function Assert-BootstrapNoReparsePoint {}
     function Get-FileSha256 {return ('a'*64)}
     function Get-InstallationElevationWrapperSource {return '# isolated wrapper'}
@@ -115,6 +119,10 @@ if($stage -ceq 'elevation-cancelled'){
     function Assert-InstallationEvidenceProtectedPath {}
     try {Invoke-InstallationElevationCapture -Target (Join-Path $source 'INSTALL_THIS_PC.ps1') -Arguments @('-isolated') -AuditBase 'isolated-audit' -OperatorSid $operatorSid;throw 'cancellation seam not reached'}
     catch {$script:cancellation=$_}
+    finally {
+        Set-Item -LiteralPath Function:Assert-BootstrapNoReparsePoint -Value $actualNoReparseForRollback
+        Set-Item -LiteralPath Function:Get-FileSha256 -Value $actualFileShaForRollback
+    }
     if($script:observed.elevation -ne 1){throw 'RunAs cancellation seam not reached'}
 }
 $clauses=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.CatchClauseAst] -and $n.Body.Extent.Text.Contains('if (-not $enteredPlacementTry)')},$true))

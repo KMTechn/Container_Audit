@@ -31,7 +31,19 @@ def test_canonical_rollback_attempts_remaining_recovery_with_actual_g(tmp_path,s
                            creationflags=subprocess.CREATE_NO_WINDOW,timeout=90)
     assert process.returncode==0, 'isolated actual-G fixture failed'
     result=json.loads(output.read_text(encoding='utf-8-sig'))
-    assert result['actual_g_calls']>=1
+    if case == 'g-unknown':
+        # T1 reads the malformed marker before any code restoration or
+        # surviving-code admission. Keep the tree and all writers fenced.
+        assert result['commit_point_status'] == 'UNKNOWN'
+        assert result['rollback_status'] == 'CODE_ROLLBACK_FAILED'
+        assert result['actual_g_calls'] == result['actual_g_passed'] == result['actual_g_blocked'] == 0
+        assert result['code_rollback_failure'] == 'COMMIT_POINT_UNKNOWN'
+        assert result['rollback_steps']['commit_point_readback'] == {
+            'status': 'UNPROVEN_FENCE_RETAINED', 'failure_type': 'COMMIT_POINT_UNKNOWN'}
+        assert (sandbox / 'actual-g-data/data-generation.json').read_bytes() == b'invalid isolated generation marker'
+    else:
+        assert result['commit_point_status'] == 'NOT_REACHED'
+        assert result['actual_g_calls'] >= 1
     assert result['full_installer_executed'] is False
     assert result['actual_host_lifecycle_calls']==0
     assert result['child_changes']==0
@@ -60,7 +72,7 @@ def test_canonical_rollback_attempts_remaining_recovery_with_actual_g(tmp_path,s
         assert '관리자 지원 복구' in process.stdout+process.stderr
         if case=='g-unknown':
             assert counts['code_restore']==0
-            assert result['actual_g_blocked']>=1
+            assert result['actual_g_blocked'] == 0
         else:
             assert counts['code_restore']==1
         assert result['code_rollback_failure']
