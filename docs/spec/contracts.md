@@ -207,7 +207,10 @@ generation_before가 UNKNOWN이면 새 시험을 시작하지 않고 DEFERRED로
 APPLIED_PENDING_READY에서 SYSTEM 감독과 trial writer가 모두 사라져도 같은 조건으로
 active 후보를 일반 실행한다. 사용자 쪽은 CONFIRMED나 포인터를 쓰지 않는다. 일반 시작과
 SYSTEM의 writer 재확인·전환은 같은 update 잠금으로 배제하며 늦은 SYSTEM은 기존 writer에
-DEFERRED한다. 감독 소실은 `UPDATE_SUPERVISION_UNAVAILABLE` 코드로 보고한다.
+DEFERRED한다. 보호 journal의 recovery_pending과 원 phase·원 실패 코드를 보존하며,
+writer 부재 뒤 같은 failure_decision으로 한 번 정착하고 recovery_pending=false를 내구 저장한다.
+G가 오르지 않았으면 이전 판, 올랐으면 candidate를 선택하고 그 뒤에만 새 prepared를 처리한다.
+감독 소실은 `UPDATE_SUPERVISION_UNAVAILABLE` 코드로 보고한다.
 canonical 교체 전 HKCU Run·실행 중 relay는 설치된 판의 정확한 명령으로 검증한다.
 Run이 `current/app/auto_update.py --bootstrap --role relay --`이면 실행 중 relay의
 실제 경로는 보호된 active 포인터와 해당 version의 manifest·bootstrap aggregate에서 구한다.

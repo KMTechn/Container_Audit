@@ -510,3 +510,88 @@ def test_x3_real_hung_trial_remains_alive_until_logoff_then_next_start_works(end
     assert_ordinary(endpoint, NEW)
     assert updates.apply_prepared(control) == 0
     assert_ordinary(endpoint, OLD)
+
+
+@pytest.mark.parametrize("phase", ["APPLIED_PENDING_READY", "UNKNOWN", "FAILED"])
+@pytest.mark.parametrize("advanced", [False, True])
+def test_deferred_recovery_settles_once_after_writer_exit(endpoint, monkeypatch, phase, advanced):
+    control, _, _, state, marker, _ = endpoint
+    updates.write_json_durable(control / "transition.json", {**state, "phase": phase,
+        "reason_code": "UPDATE_SUPERVISION_UNAVAILABLE"})
+    row = dict(pid=456, observable=True, sha=NEW, sid=SID, ordinary_user=True,
+               role="gui", created_at=updates.now_utc())
+    monkeypatch.setattr(updates, "process_snapshot", lambda *_: [row])
+    assert updates.apply_prepared(control) == 0
+    deferred = updates.read_json(control / "transition.json")
+    assert deferred["phase"] == "DEFERRED" and deferred["recovery_pending"] is True
+    assert deferred["recovery_phase"] == phase
+    assert deferred["recovery_reason_code"] == "UPDATE_SUPERVISION_UNAVAILABLE"
+    assert updates.read_json(control / "active.json")["sha"] == NEW
+    if advanced:
+        generation.record_generation(marker, "v2.0.99", app_id="container_audit", subject_sid=SID, build_id=NEW)
+    monkeypatch.setattr(updates, "process_snapshot", lambda *_: [])
+    expected = NEW if advanced else OLD
+    assert_ordinary(endpoint, expected)  # A fresh icon must request pending recovery.
+    settled = updates.read_json(control / "transition.json")
+    assert settled["recovery_pending"] is False
+    assert settled["phase"] == ("DEFERRED" if advanced else "ROLLED_BACK")
+    assert updates.read_json(endpoint[1] / "startup-support.json")["retained_candidate"] is advanced
+    assert settled["failure_decision"]["selected_sha"] == expected
+    before = (control / "transition.json").read_bytes()
+    assert updates.apply_prepared(control) == 0
+    assert (control / "transition.json").read_bytes() == before
+    assert_ordinary(endpoint, expected)
+
+
+@pytest.mark.parametrize("phase", ["APPLIED_PENDING_READY", "UNKNOWN", "FAILED"])
+def test_deferred_recovery_precedes_next_signed_hotfix(endpoint, monkeypatch, phase):
+    control, _, _, state, _, _ = endpoint
+    updates.write_json_durable(control / "transition.json", {**state, "phase": phase})
+    hot = hotfix_packet(endpoint, monkeypatch)
+    row = dict(pid=456, observable=True, sha=NEW, sid=SID, ordinary_user=True,
+               role="gui", created_at=updates.now_utc())
+    monkeypatch.setattr(updates, "process_snapshot", lambda *_: [row])
+    assert updates.apply_prepared(control) == 0
+    pending = (control / "transition.json").read_bytes()
+    assert updates.apply_prepared(control) == 0
+    assert (control / "transition.json").read_bytes() == pending
+    assert updates.read_json(control / "active.json")["sha"] == NEW
+    monkeypatch.setattr(updates, "process_snapshot", lambda *_: [])
+    written = updates.write_json_durable
+    decisions = []
+    def observe(path, value):
+        written(path, value)
+        if path == control / "transition.json" and value.get("failure_decision"):
+            decisions.append(value["failure_decision"]["selected_sha"])
+        if path == control / "active.json" and value.get("sha") == hot:
+            raise SystemExit(0)
+    monkeypatch.setattr(updates, "write_json_durable", observe)
+    with pytest.raises(SystemExit):
+        updates.apply_prepared(control)
+    assert decisions and set(decisions) == {OLD}
+    applied = updates.read_json(control / "transition.json")
+    assert applied["phase"] == "APPLIED_PENDING_READY"
+    assert applied["previous_sha"] == OLD and applied["candidate_sha"] == hot
+
+
+@pytest.mark.parametrize("defect", ["sha", "sid", "ordinary_user", "role", "stamp", "operator"])
+def test_ordinary_recovery_rejects_each_unrelated_writer_condition(endpoint, monkeypatch, defect):
+    control, _, _, state, _, _ = endpoint
+    stamp = updates.now_utc()
+    updates.write_json_durable(control / "transition.json", {**state, "phase": "FAILED"})
+    monkeypatch.setenv("KMTECH_CA_UPDATE_DEFERRED_AT", stamp)
+    monkeypatch.setattr(updates, "runtime_matches", lambda *_: True)
+    monkeypatch.setattr(updates, "request_bootstrap", lambda *a, **k: None)
+    if defect in {"stamp", "operator"}:
+        if defect == "stamp":
+            monkeypatch.delenv("KMTECH_CA_UPDATE_DEFERRED_AT")
+        else:
+            monkeypatch.setattr(updates, "ordinary_user_context", lambda *_: False)
+        assert updates.startup_gate(updates.version_bundle(control, NEW) / "app", []) == (0 if defect == "stamp" else 20)
+    else:
+        row = dict(pid=456, observable=True, sha=NEW, sid=SID, ordinary_user=True,
+                   role="relay", created_at=stamp)
+        row[defect] = {"sha": OLD, "sid": "S-1-5-21-999", "ordinary_user": False, "role": "worker"}[defect]
+        monkeypatch.setattr(updates, "process_snapshot", lambda *_: [row])
+        with pytest.raises(ValueError):
+            updates.startup_gate(updates.version_bundle(control, NEW) / "app", [])

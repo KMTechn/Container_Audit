@@ -300,6 +300,9 @@ bootstrap에서 바로 일반 실행한다. 자료 판정 불가 안내는 기�
 APPLIED 후 감독이 없고 trial 자식도 없으면 후보를 일반 실행하고
 `UPDATE_SUPERVISION_UNAVAILABLE`을 기록한다. 전환 잠금이 사용 중이면 고정 진행 안내를
 내고 다음 시작에서 다시 확인한다. 기존 writer를 종료하거나 사용자 쪽에서 확정하지 않는다.
+writer 때문에 미룬 DEFERRED는 recovery_pending=true와 원 phase·실패 코드를 보존한다.
+writer 부재 뒤 원 G 결정을 한 번 재개한다. G가 그대로면 이전 판, 올랐으면 후보를
+일반 실행하며 정착(false) 전에는 새 prepared를 적용하지 않는다. 재실행은 같은 정착을 유지한다.
 사용자 staging의 `startup-support.json`은 허용 코드 `transition_code`와
 `retained_candidate`를 포함한다. 예외 문장·외부 입력값을 공개 보고서에 넣지 않는다.
 

@@ -22,7 +22,8 @@ relay 읽기 실패는 서버 끊김과 구별한다. 마지막으로 읽은 대
 안내하며, GUI·SYSTEM 실제 수명주기 검증은 [남은 작업](BACKLOG.md)에 기록한다.
 이미 확인된 이전 판의 복귀에는 READY를 재요구하지 않는다. 준비된 갱신의 SYSTEM 요청
 실패·60초 무진전과 FAILED/UNKNOWN 종점은 G가 허용하는 active 판을 일반 실행하며,
-기존 writer·자료 guard는 유지한다. 종점 코드와 candidate 유지 여부는 사용자 staging의
+기존 writer·자료 guard는 유지한다. writer 때문에 미룬 DEFERRED도 부재 뒤 원 G 결정을
+한 번 재개하고 정착 전에는 새 prepared를 적용하지 않는다. 종점 코드와 candidate 유지 여부는 사용자 staging의
 `startup-support.json`에 허용 공개 필드로 기록한다.
 
 기본 루트 제거 후 custom 루트를 채택한 설치의 은퇴 마감은

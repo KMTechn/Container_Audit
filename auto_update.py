@@ -61,6 +61,8 @@ def startup_action(
     if transition.get("schema") != SCHEMA:
         raise ValueError("startup update record is unsupported")
     phase = transition.get("phase")
+    if phase == "DEFERRED" and transition.get("recovery_pending") is True:
+        return "WAIT_FOR_RECOVERY"
     if phase == "PREPARED":
         return "REQUEST_APPLY"
     if phase in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"}:
@@ -1647,7 +1649,8 @@ def settle_trial_failure(control: Path, state: Mapping[str, Any], policy: Mappin
     failures = list(state.get("failed_shas", []))
     if state["candidate_sha"] not in failures:
         failures.append(state["candidate_sha"])
-    state = decide_trial_failure({**state, "phase": "ROLLBACK_PENDING", "failed_shas": failures}, policy)
+    state = decide_trial_failure({**state, "phase": "ROLLBACK_PENDING", "failed_shas": failures,
+                                  "recovery_pending": False}, policy)
     write_json_durable(control / "transition.json", state)
     selected = state["failure_decision"]["selected_sha"]
     fixed_helper(control, "Verify", code_root=version_bundle(control, selected))
@@ -1672,6 +1675,10 @@ def _apply_prepared(control: Path) -> int:
         state = optional_record(control / "transition.json")
         if state and state["phase"] == "CONFIRMED":
             state = record_confirmed_policy(control, state)
+        if state and state.get("recovery_pending") is True:
+            if writer_processes(process_snapshot(control), own_pid=os.getpid()):
+                return 0  # Pending recovery never admits a new prepared packet.
+            state = settle_trial_failure(control, state, policy)
         if state and state["phase"] in {"APPLIED_PENDING_READY", "UNKNOWN", "FAILED"}:
             rows = process_snapshot(control)
             writers = writer_processes(rows, own_pid=os.getpid())
@@ -1687,7 +1694,9 @@ def _apply_prepared(control: Path) -> int:
                 # A later SYSTEM invocation never stops an ordinary active writer
                 # or upgrades its unconfirmed trial to CONFIRMED.
                 write_json_durable(control / "transition.json", {**state, "phase": "DEFERRED",
-                    "retained_candidate": False, "deferred_at": now_utc(), "reason_code": "UPDATE_EXISTING_WRITER"})
+                    "retained_candidate": False, "deferred_at": now_utc(), "reason_code": "UPDATE_EXISTING_WRITER",
+                    "recovery_pending": True, "recovery_phase": state["phase"],
+                    "recovery_reason_code": state.get("reason_code")})
                 return 0
         if state and state["phase"] in {"UNKNOWN", "FAILED", "ROLLBACK_PENDING_READY"}:
             if writer_processes(process_snapshot(control), own_pid=os.getpid()):
@@ -2287,7 +2296,7 @@ def startup_gate(app_root: Path, arguments: list[str], *, role: str = "gui") -> 
             # runs before data access; this grants no pointer or trial authority.
             return None
         prepared = prepared_pending(control, policy, state)
-        if not prepared and (not state or state["phase"] in {"CONFIRMED", "ROLLED_BACK", "DEFERRED"}) and sha == active["sha"]:
+        if not prepared and not (state and state.get("recovery_pending") is True) and (not state or state["phase"] in {"CONFIRMED", "ROLLED_BACK", "DEFERRED"}) and sha == active["sha"]:
             return None
     request_bootstrap(control, arguments, role=role)
     return 0
@@ -2364,8 +2373,7 @@ def start_current(control: Path, policy: Mapping[str, Any], state, active, argum
     """Reuse ordinary launch and publish only the E9 allowlisted support fields."""
     report = support_record({"reason_code": code,
         "transition_code": (state or {}).get("failure_decision", {}).get("code", code),
-        "retained_candidate": (state or {}).get("retained_candidate") is True or
-            ((state or {}).get("reason_code") == "UPDATE_EXISTING_WRITER" and active["sha"] == (state or {}).get("candidate_sha"))}, stage="update_apply")
+        "retained_candidate": (state or {}).get("retained_candidate") is True}, stage="update_apply")
     try:
         write_json_durable(Path(policy["staging_root"]) / "startup-support.json", report)
     except OSError:
