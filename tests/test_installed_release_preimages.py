@@ -30,19 +30,19 @@ def assert_undeployed_tools_absent(table, stock_names):
 
 @pytest.mark.parametrize('engine', ('powershell.exe','pwsh.exe'))
 @pytest.mark.parametrize('mutation', ('ea','892','byte','mixed','ea-absent','892-present',
-    'inventory','commit','reverse','after-byte','same-build'))
+    'inventory','commit','reverse','after-byte','same-build','projection-before-byte','projection-after-byte'))
 def test_installed_release_exact_pair_binds_complete_preimages(tmp_path, engine, mutation):
     declaration=json.loads((ROOT/'tools/container_data_generation_transition.json').read_bytes())
     releases={row['source_commit']:row for row in declaration['installed_release_preimages']}
     assert set(releases)=={EA,INSTALLED}
-    assert all(len(row['files'])==24 for row in releases.values())
+    assert all(len(row['files'])==25 for row in releases.values())
     before=tmp_path/'before';after=tmp_path/'after'
     before.mkdir();after.mkdir()
     selected=EA if mutation in ('ea','ea-absent') else INSTALLED
     source_map={f['path']:e['path'] for e in declaration['source_replacements'] for f in declaration['files']
                 if f['path'] in (e['path'],'app/'+e['path']) or
                    (e['path']=='portable/main.py' and f['path']=='app/main.py')}
-    assert len(source_map)==24
+    assert len(source_map)==25
     for entry in releases[selected]['files']:
         relative=entry['path']; target=before/relative
         if 'absent' not in entry:
@@ -75,6 +75,12 @@ def test_installed_release_exact_pair_binds_complete_preimages(tmp_path, engine,
     elif mutation=='ea-absent': (before/guard).unlink()
     elif mutation=='892-present': (before/guard).write_bytes((after/guard).read_bytes())
     elif mutation=='after-byte': (after/changed).write_bytes((after/changed).read_bytes()+b'!')
+    elif mutation=='projection-before-byte':
+        projection=before/'app/event_log_store.py'
+        projection.write_bytes(projection.read_bytes()+b'!')
+    elif mutation=='projection-after-byte':
+        projection=after/'app/event_log_store.py'
+        projection.write_bytes(projection.read_bytes()+b'!')
     final_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,
         creationflags=0x08000000).decode().strip()
     old={'source_commit':selected,'writer_sink_inventory_contract_sha256':releases[selected]['writer_inventory_sha256']}

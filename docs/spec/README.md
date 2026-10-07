@@ -12,6 +12,8 @@ relay 읽기 실패는 서버 끊김과 구별한다. 마지막으로 읽은 대
 
 중앙 조회·봉인·교환·PIN·relay·품목 갱신·작업자 등록·운영자 spool 복구는 전송 전 writer fence를 확인한 뒤 공유 쓰기 mutex를 반환한다. 시작·온보딩의 등록 HTTP도 같은 경계를 따른다. 로컬 checkpoint·감사·outbox 결과 적용은 별도 짧은 admission과 기존 상태/CAS 검증을 사용하므로 원격 응답 지연이 다음 스캔의 내구 저장을 막지 않는다.
 
+일반 스캔은 앞선 감사 CSV를 배경 writer에 맡기고 자기 트레이 JSON 내구 저장 뒤 목록·소리를 반영한다. outbox의 CSV 투영은 행 append·완료 표시에서만 쓰기 허가를 쥐고 fsync 동안 반환하며, 원 감사는 CSV fsync 성공까지 보존한다. CSV 중복 확인은 실제 파일에서 만든 색인을 사용하고 외부 파일 변경 시 다시 읽는다.
+
 표준 작업자 계정에서 시작한 canonical 설치는 별도 관리자 계정으로 코드 배치를
 승격할 수 있다. 작업자 SID·프로필 루트·이번 prepared receipt·fence를 결속하며
 교차 계정 guest 실물 설치는 [CA-G15](BACKLOG.md#ca-g15)의 미검증 항목이다.

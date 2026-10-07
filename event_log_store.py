@@ -20,6 +20,7 @@ LOCK_TIMEOUT_SECONDS = 10.0
 LOCK_STALE_SECONDS = 300.0
 _LOCKS_GUARD = threading.Lock()
 _PATH_LOCKS: dict[str, threading.Lock] = {}
+_CSV_INDEXES: dict[str, tuple[tuple[int, int, int], dict[tuple[str, str], Any]]] = {}
 
 
 class EventLogOutbox:
@@ -28,11 +29,16 @@ class EventLogOutbox:
     def __init__(self, directory: str | Path):
         self.directory = Path(directory)
         self._lock = threading.RLock()
+        self._projection_condition = threading.Condition(self._lock)
+        self._projecting: set[Path] = set()
         self._unstaged: deque[dict[str, Any]] = deque()
         self._staged_payloads = set()
+        self._staged_paths: dict[str, Path] = {}
         for path in self.directory.glob('*.json'):
             try:
-                self._staged_payloads.add(json.dumps(json.loads(path.read_text(encoding='utf-8')), sort_keys=True))
+                encoded = json.dumps(json.loads(path.read_text(encoding='utf-8')), sort_keys=True)
+                self._staged_payloads.add(encoded)
+                self._staged_paths[encoded] = path
             except FileNotFoundError:
                 pass  # Another admitted writer finished this projection.
         self._projection_results = {}
@@ -46,7 +52,7 @@ class EventLogOutbox:
         with self._lock:
             return bool(self._unstaged)
 
-    def stage(self, log_file_path: str, log_entry: Dict[str, Any], *, worker_record=None) -> None:
+    def stage(self, log_file_path: str, log_entry: Dict[str, Any], *, worker_record=None) -> Path | None:
         with self._lock:
             payload = {"log_file_path": log_file_path, "log_entry": dict(log_entry)}
             if worker_record:
@@ -55,6 +61,9 @@ class EventLogOutbox:
         # Retain before admission can fail; release the lock before waiting for
         # admission, matching drain's admission -> outbox lock order.
         self._persist_unstaged()
+        with self._lock:
+            # None means a concurrent projector has already synced/ACKed it.
+            return self._staged_paths.get(json.dumps(payload, sort_keys=True))
 
     @writer_sink("event_outbox_stage")
     def _persist_unstaged(self) -> None:
@@ -68,34 +77,77 @@ class EventLogOutbox:
                 path = self.directory / f"{self._sequence:020d}-{uuid.uuid4().hex}.json"
                 atomic_write_json(path, self._unstaged[0])
                 self._staged_payloads.add(encoded)
+                self._staged_paths[encoded] = path
                 self._unstaged.popleft()
 
-    @writer_sink("event_outbox_project")
-    def drain(self, *, append=None) -> dict[tuple[str, str, str], bool]:
+    def drain(self, *, append=None, through: Path | None = None) -> dict[tuple[str, str, str], bool]:
         projected = {}
         append = append or append_event_log_entry_idempotent
-        with self._lock:
-            self._persist_unstaged()
-            for path in sorted(self.directory.glob("*.json")):
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                entry = payload["log_entry"]
-                detail = json.loads(entry["details"])
-                appended = append(
-                    payload["log_file_path"], entry,
-                    event_type=entry["event"], idempotency_key=detail["idempotency_key"],
-                    durable=True,
-                )
-                if not appended:
-                    # A prior fsync/ACK may have failed after the row reached CSV.
-                    with open(payload["log_file_path"], "ab") as handle:
+        if through is not None and through.parent != self.directory:
+            raise ValueError("projection target must belong to this outbox")
+        self._persist_unstaged()
+        paths = sorted(self.directory.glob("*.json"))
+        if through is not None and through not in paths:
+            return projected
+        for path in paths:
+            reserved = False
+            try:
+                while not reserved:
+                    with writer_admission("event_outbox_project"):
+                        with self._lock:
+                            try:
+                                original = path.read_text(encoding="utf-8")
+                            except FileNotFoundError:
+                                break  # Another projector synced/ACKed it.
+                            if path not in self._projecting:
+                                self._projecting.add(path)
+                                reserved = True
+                                payload = json.loads(original)
+                                entry = payload["log_entry"]
+                                detail = json.loads(entry["details"])
+                                appended = append(
+                                    payload["log_file_path"], entry,
+                                    event_type=entry["event"], idempotency_key=detail["idempotency_key"],
+                                    durable=False,
+                                )
+                                handle = open(payload["log_file_path"], "ab")
+                    if not reserved:
+                        # Never pass an earlier row still being synced. Both
+                        # admission and the RLock are released while waiting.
+                        with self._projection_condition:
+                            self._projection_condition.wait_for(lambda: path not in self._projecting)
+                if reserved:
+                    try:
+                        # A readable row may not have survived a prior fsync.
                         handle.flush()
                         os.fsync(handle.fileno())
-                path.unlink()
-                self._staged_payloads.discard(json.dumps(payload, sort_keys=True))
-                projected[(payload["log_file_path"], entry["event"], detail["idempotency_key"])] = appended
-            self._projection_results.update(projected)
-            while len(self._projection_results) > 256:
-                self._projection_results.pop(next(iter(self._projection_results)))
+                    finally:
+                        handle.close()
+                    with writer_admission("event_outbox_project"):
+                        with self._lock:
+                            try:
+                                if path.read_text(encoding="utf-8") != original:
+                                    raise ValueError("event outbox payload changed during projection")
+                                path.unlink()
+                            except FileNotFoundError:
+                                pass
+                            encoded = json.dumps(payload, sort_keys=True)
+                            self._staged_payloads.discard(encoded)
+                            self._staged_paths.pop(encoded, None)
+                            key = (payload["log_file_path"], entry["event"], detail["idempotency_key"])
+                            projected[key] = appended
+                            self._projection_results[key] = appended
+                            while len(self._projection_results) > 256:
+                                self._projection_results.pop(next(iter(self._projection_results)))
+            finally:
+                if reserved:
+                    with self._projection_condition:
+                        self._projecting.discard(path)
+                        self._projection_condition.notify_all()
+            if path == through:
+                break
+            # A waiting foreground admission gets a turn between rows.
+            time.sleep(0)
         return projected
 
     def take_projection_result(self, log_file_path, log_entry):
@@ -205,9 +257,9 @@ def append_event_log_entry_idempotent(
     """Append once by event plus details idempotency key.
 
     The existing-row check and append share the same process and interprocess
-    locks.  Returning ``False`` proves that an identical durable projection is
-    already present, which lets a SQLite projection receipt recover a crash
-    after the CSV append without creating a second relay event.
+    locks. With ``durable=True``, returning ``False`` also syncs the existing
+    projection before a SQLite receipt acknowledges it. An outbox projector
+    uses ``durable=False`` and must sync separately before its own ACK.
     """
 
     normalized_event = str(event_type or "").strip()
@@ -229,7 +281,15 @@ def append_event_log_entry_idempotent(
 
     with _lock_for_path(log_file_path):
         with _interprocess_file_lock(log_file_path):
-            if os.path.exists(log_file_path) and os.stat(log_file_path).st_size:
+            path_key = os.path.abspath(log_file_path)
+            stat = os.stat(log_file_path) if os.path.exists(log_file_path) else None
+            signature = (stat.st_size, stat.st_mtime_ns, stat.st_ino) if stat else (0, 0, 0)
+            cached = _CSV_INDEXES.get(path_key)
+            if cached is not None and cached[0] == signature:
+                index = cached[1]
+            else:
+                index = {}
+            if (cached is None or cached[0] != signature) and stat and stat.st_size:
                 with open(
                     log_file_path,
                     newline="",
@@ -239,30 +299,37 @@ def append_event_log_entry_idempotent(
                     if reader.fieldnames != EVENT_LOG_HEADERS:
                         raise ValueError("event log header is invalid")
                     for row in reader:
-                        if str(row.get("event") or "").strip() != normalized_event:
-                            continue
+                        existing_event = str(row.get("event") or "").strip()
                         try:
                             existing_details = json.loads(
                                 str(row.get("details") or "")
                             )
                         except (TypeError, ValueError, json.JSONDecodeError):
                             continue
-                        if (
-                            not isinstance(existing_details, dict)
-                            or str(
-                                existing_details.get("idempotency_key") or ""
-                            ).strip()
-                            != normalized_key
-                        ):
+                        if not isinstance(existing_details, dict):
                             continue
-                        if existing_details != expected_details:
-                            raise ValueError(
-                                "event log idempotency key has different details"
-                            )
-                        return False
+                        existing_key = str(existing_details.get("idempotency_key") or "").strip()
+                        if existing_event and existing_key:
+                            index.setdefault((existing_event, existing_key), existing_details)
+            _CSV_INDEXES[path_key] = (signature, index)
+            key = (normalized_event, normalized_key)
+            if key in index:
+                if index[key] != expected_details:
+                    raise ValueError("event log idempotency key has different details")
+                if durable:
+                    # Another projector may have appended this row but still
+                    # be syncing it outside admission. A durable caller must
+                    # establish its own receipt before returning a replay.
+                    with open(log_file_path, "ab") as handle:
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                return False
             _append_event_log_entry_unlocked(
                 log_file_path,
                 log_entry,
                 durable=durable,
             )
+            stat = os.stat(log_file_path)
+            index[key] = expected_details
+            _CSV_INDEXES[path_key] = ((stat.st_size, stat.st_mtime_ns, stat.st_ino), index)
             return True

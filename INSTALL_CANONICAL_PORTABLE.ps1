@@ -743,7 +743,7 @@ function Test-InstalledReleasePreimages($Old,$New,[string]$BeforeRoot,[string]$A
             'tools/direct_sync_relay_install_pack.py','tools/install_protected_admin.py',
             'tools/check_update_archive.py','tools/provision_protected_admin_acl.ps1')
         $sourceSeen=@{}
-        if (@($declaration.source_replacements).Count -ne 32) { return $false }
+        if (@($declaration.source_replacements).Count -ne 33) { return $false }
         foreach($entry in @($declaration.source_replacements)) {
             $sourcePath=[string]$entry.path
             if (-not (Test-ExactPropertySet $entry @('path','before','after')) -or $sourceSeen.ContainsKey($sourcePath)) { return $false }
@@ -763,7 +763,7 @@ function Test-InstalledReleasePreimages($Old,$New,[string]$BeforeRoot,[string]$A
                 [string]$packetRows[0].after -cne [string]$entry.after) { return $false }
             $expected[$relative]=[string]$entry.after
         }
-        if ($expected.Count -ne 24 -or @($selected.files).Count -ne $expected.Count) { return $false }
+        if ($expected.Count -ne 25 -or @($selected.files).Count -ne $expected.Count) { return $false }
         $seen=@{}
         foreach($entry in @($selected.files)) {
             $relative=[string]$entry.path

@@ -14119,7 +14119,11 @@ class ContainerAudit:
         _durable_scan_id: str = "", _catalog_decision=None,
         _defer_persistence: bool = False, _offline_hold_switch: Optional[PreflightHoldSnapshot] = None,
     ):
-        self._flush_pending_event_logs()
+        # Earlier actions retain their durable checkpoint/outbox originals.
+        # Wake the log writer; a new scan only waits for its own tray save.
+        log_thread = getattr(self, 'log_thread', None)
+        if log_thread is not None and log_thread.is_alive():
+            self.log_queue.put({})
         if getattr(self, "_inline_scan_choices", None):
             if not self._continue_after_inline_choice():
                 self._refuse_entry_scan("이전 작업 보류 저장을 확인하지 못했습니다. 원본을 보존합니다.")
@@ -16638,16 +16642,22 @@ class ContainerAudit:
         # its failure must never roll back an already saved operator action.
         try:
             store = self._event_log_outbox(target_log_file_path)
-            store.stage(target_log_file_path, log_entry, worker_record=payload['worker_record'])
+            target_path = store.stage(target_log_file_path, log_entry, worker_record=payload['worker_record'])
         except Exception as exc:
             self._record_log_write_error(f"로그 재시도 사본 저장 오류: {exc.__class__.__name__}")
             self._event_log_notice = "로그 저장 실패 · 재시도 중입니다. 저장 공간을 확인하고 이 PC를 종료하지 마세요."
             return False
         if synchronous:
             try:
-                if hasattr(self, "log_queue") and hasattr(self.log_queue, "join"):
-                    self.log_queue.join()
-                store.drain(append=append_event_log_entry_idempotent)
+                if log_entry['event'] == 'SCAN_OK':
+                    # Retain held-scan FIFO audit ACK, without waiting for rows
+                    # staged after this scan or for the entire log queue.
+                    if target_path is not None:
+                        store.drain(append=append_event_log_entry_idempotent, through=target_path)
+                else:
+                    if hasattr(self, "log_queue") and hasattr(self.log_queue, "join"):
+                        self.log_queue.join()
+                    store.drain(append=append_event_log_entry_idempotent)
                 self._last_log_event_was_replay = not store.take_projection_result(target_log_file_path, log_entry)
                 event_type = log_entry['event']
                 if not payload['local_only'] and event_type in {
