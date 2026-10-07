@@ -161,7 +161,40 @@ def observe_installer_failures(tmp_path, monkeypatch):
     monkeypatch.setattr(sys.modules[__name__], 'run_powershell', observe)
 
 
-def _assert_private_refusal(completed, expected):
+@pytest.fixture
+def observe_helper_fields(tmp_path, monkeypatch):
+    """Observe helper inputs privately without editing its source or filter."""
+    import itertools
+    original = run_powershell
+    sequence = itertools.count()
+
+    def observe(arguments, **kwargs):
+        path = tmp_path / ('private-helper-fields-' + str(next(sequence)) + '.jsonl')
+        return original(arguments, original_helper_path=path, **kwargs)
+
+    monkeypatch.setattr(sys.modules[__name__], 'run_powershell', observe)
+
+
+def _assert_private_helper_value(completed, name, expected):
+    from auto_update import PUBLIC_CODES, SAFE_MESSAGES, public_record
+    output = completed.stdout + completed.stderr
+    assert expected not in output
+    data = completed.original_helper_path.read_bytes()
+    assert len(data) <= 65536
+    original_records = [json.loads(line) for line in data.decode('utf-8').splitlines()]
+    values = [record[name] for record in original_records if name in record]
+    assert values == [expected]
+    public_records = [json.loads(line.partition('=')[2]) for line in output.splitlines()
+                      if line.startswith('CONTAINER_AUDIT_INSTALL_HELPER=')]
+    assert public_records
+    for record in public_records:
+        assert name not in record
+        assert public_record(record, PUBLIC_CODES | {
+            'installer_helper', 'REPORT_UNAVAILABLE', 'HIBERBOOT_ENABLED',
+            'HIBERBOOT_DISABLED', 'HIBERBOOT_UNKNOWN'}, SAFE_MESSAGES) == record
+
+
+def _assert_private_refusal(completed, expected, *, private_cause_path=None):
     import hashlib
     from auto_update import PUBLIC_CODES, SAFE_MESSAGES, public_record
     assert completed.returncode != 0
@@ -169,6 +202,12 @@ def _assert_private_refusal(completed, expected):
     assert expected not in output, 'original diagnostic reached the public stream'
     records = json.loads(completed.original_failure_path.read_text(encoding='utf-8'))
     original_observed = any(expected in item['message'] for item in records)
+    if private_cause_path is not None:
+        cause_path = private_cause_path.resolve()
+        assert cause_path.is_relative_to(completed.original_failure_path.parent.resolve())
+        cause = json.loads(cause_path.read_text(encoding='utf-8-sig'))
+        assert cause['exception_type']
+        original_observed |= expected in cause['message']
     failures = []
     for line in output.splitlines():
         _, separator, payload = line.partition('=')
@@ -1515,9 +1554,14 @@ def test_portable_preflight_failure_removes_prepared_writer_session(tmp_path, ob
     )
     marker = "$canonicalWriterFenceActive = $true\n"
     assert installer.count(marker) >= 1
+    private_cause_path = tmp_path / 'private-preflight-cause.json'
+    private_cause_literal = str(private_cause_path).replace("'", "''")
     installer = installer.replace(
         marker,
-        marker + "throw 'TEST_INJECTED_PREFLIGHT_FAILURE'\n",
+        marker + "try { throw 'TEST_INJECTED_PREFLIGHT_FAILURE' } catch {\n"
+        " [ordered]@{exception_type=$_.Exception.GetType().Name;message=$_.Exception.Message} |\n"
+        " ConvertTo-Json -Compress | Set-Content -LiteralPath '" + private_cause_literal + "' -Encoding UTF8\n"
+        " throw\n}\n",
         1,
     )
     installer_path.write_text(installer, encoding="utf-8")
@@ -1573,7 +1617,8 @@ def test_portable_preflight_failure_removes_prepared_writer_session(tmp_path, ob
     (tmp_path / "prepared-fixture.stderr.txt").write_text(
         _redact_install_diagnostic(completed.stderr), encoding="utf-8")
     assert completed.returncode != 0
-    _assert_private_refusal(completed, 'TEST_INJECTED_PREFLIGHT_FAILURE')
+    _assert_private_refusal(completed, 'TEST_INJECTED_PREFLIGHT_FAILURE',
+                            private_cause_path=private_cause_path)
     control_root = (
         local_app_data / "KMTech" / "DirectSync" / "container_audit" / "control" / "writer-session"
     )
@@ -1756,7 +1801,7 @@ def test_bootstrap_accepts_portable_tree_and_integrity_readback(tmp_path):
     assert verified.returncode == 0, verified.stderr or verified.stdout
 
 
-def test_bootstrap_replaces_only_an_integrity_verified_portable_tree(tmp_path, observe_installer_failures):
+def test_bootstrap_replaces_only_an_integrity_verified_portable_tree(tmp_path, observe_helper_fields):
     first_source = _portable_release_fixture(
         tmp_path,
         directory="portable first",
@@ -1789,7 +1834,7 @@ def test_bootstrap_replaces_only_an_integrity_verified_portable_tree(tmp_path, o
     assert "bootstrap_status=REPLACED_VERIFIED" in replaced.stdout
     assert "replacement_rollback_status=PRESERVED" in replaced.stdout
     assert "replacement_receipt_status=OLD_PRESERVED_NEW_VERIFIED" in replaced.stdout
-    assert _output_value(replaced.stdout, "replacement_receipt_path") == str(receipt)
+    _assert_private_helper_value(replaced, 'replacement_receipt_path', str(receipt))
     assert _output_value(replaced.stdout, "replacement_transaction_id") == transaction_id
     payload = json.loads(receipt.read_text(encoding="utf-8"))
     assert payload["schema_version"] == "container-audit-verified-replacement-v1"
@@ -2164,7 +2209,7 @@ def test_bootstrap_places_exact_bytes_records_integrity_and_reuses(tmp_path, obs
     _assert_private_refusal(damaged, 'different or damaged hardened code placement')
 
 
-def test_bootstrap_copies_opt_in_tls_ca_for_current_user_onboarding(tmp_path, observe_installer_failures):
+def test_bootstrap_copies_opt_in_tls_ca_for_current_user_onboarding(tmp_path, observe_helper_fields):
     source = _release_fixture(tmp_path)
     install = tmp_path / "apps" / "current"
     local_app_data = tmp_path / "operator" / "LocalAppData"
@@ -2187,7 +2232,7 @@ def test_bootstrap_copies_opt_in_tls_ca_for_current_user_onboarding(tmp_path, ob
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "tls_ca_bootstrap_status=PASS" in completed.stdout
-    assert _output_value(completed.stdout, 'tls_ca_bootstrap_path') == str(expected)
+    _assert_private_helper_value(completed, 'tls_ca_bootstrap_path', str(expected))
     assert expected.read_bytes() == ca_payload
 
 

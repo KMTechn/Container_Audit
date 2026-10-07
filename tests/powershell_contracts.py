@@ -10,7 +10,7 @@ import pytest
 
 
 def run_powershell(arguments, *, check=False, capture_output=True, text=True,
-                   original_failure_path=None, **kwargs):
+                   original_failure_path=None, original_helper_path=None, **kwargs):
     """Use a strict UTF-8 text protocol for owned PowerShell test invocations.
 
     -File scripts still run in their own script scope with named parameters.
@@ -34,6 +34,23 @@ def run_powershell(arguments, *, check=False, capture_output=True, text=True,
                       for value in argv[mode + 2:]]
         command = '& ' + literal(argv[mode + 1]) + ' ' + ' '.join(parameters)
         command += '; if (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }; exit 0'
+    if original_helper_path is not None:
+        if argv[mode].lower() != '-file':
+            raise ValueError('Private helper observation requires the actual script file')
+        source = Path(argv[mode + 1]).read_text(encoding='utf-8-sig').splitlines()
+        entry = 'function Write-InstallationHelperPublicRecord([Collections.IDictionary]$Fields) {'
+        assert source.count(entry) == 1
+        # A line breakpoint observes bound input before the product's first
+        # filtering statement. Its default action continues the unchanged body.
+        helper_line = source.index(entry) + 2
+        source_literal = "'" + str(argv[mode + 1]).replace("'", "''") + "'"
+        observation_literal = "'" + str(original_helper_path).replace("'", "''") + "'"
+        prefix += ('[void](Set-PSBreakpoint -Script ' + source_literal + ' -Line ' + str(helper_line)
+                   + ' -Action { $observedFields=Get-Variable -Name Fields -ValueOnly; '
+                   + '$observedJson=ConvertTo-Json -InputObject $observedFields -Depth 4 -Compress; '
+                   + 'if([Text.Encoding]::UTF8.GetByteCount($observedJson) -gt 4096){throw "Private observation exceeds bound"}; '
+                   + '[IO.File]::AppendAllText(' + observation_literal
+                   + ', $observedJson+[Environment]::NewLine, [Text.UTF8Encoding]::new($false)) }); ')
     if original_failure_path is not None:
         # Harness-only observation: the product's public sink remains intact.
         # Capture caught ErrorRecords privately, even when its script exits.
@@ -68,6 +85,8 @@ def run_powershell(arguments, *, check=False, capture_output=True, text=True,
     )
     if original_failure_path is not None:
         result.original_failure_path = Path(original_failure_path)
+    if original_helper_path is not None:
+        result.original_helper_path = Path(original_helper_path)
     if check:
         result.check_returncode()
     return result
