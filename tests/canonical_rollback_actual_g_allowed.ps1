@@ -81,7 +81,9 @@ function Enable-CanonicalWriter {
  $script:observed.task_restore++
  if($RecoveryCase -ceq 'task-restore-failure'){throw [IO.IOException]::new('SYNTHETIC_TASK_RESTORE_FAILURE')}
  $script:state.task='before'
- return @{present=$true;classification='CANONICAL_QUIESCE_RESTORE';enabled=$true;binding_sha256=('a'*64)}
+ # Match the real Enable-CanonicalWriter proof wrapper, not its nested snapshot.
+ return @{status='PASS';binding_sha256_exact=$true;future_natural_trigger_utc=[DateTime]::UtcNow.AddSeconds(20).ToString('o');
+  readback=@{present=$true;classification='CANONICAL_QUIESCE_RESTORE';enabled=$true;binding_sha256=('a'*64)}}
 }
 function Confirm-CanonicalWriterRunning {param($Install,$Enabled) return @{}}
 function StartRaw {param($Command) $script:observed.relay_start++;$script:state.relay='before';return 42}
