@@ -32,6 +32,7 @@ $Script:CanonicalWriterFenceDelegationToken = ''
 $retirementAuditSealed = $false
 $audit = $null
 $outputFailure = $null
+$canonicalInstallationCommitPoint = 'NOT_REACHED'
 $enteredPlacementTry = $false
 $currentAbsentBeforePlacement = $false
 $Script:CanonicalPreparationAdmissionFailed = $false
@@ -103,6 +104,44 @@ function Test-JsonPositiveInt32($Value) {
     if (-not (Test-JsonInteger $Value)) { return $false }
     return ([int64]$Value -gt 0 -and [int64]$Value -le [int]::MaxValue)
 }
+function Get-CanonicalInstallationCommitPoint {
+    param($Manifest,[string]$TargetSid,[string]$LocalAppDataRoot,[string]$DataRoot,[string]$HelperRoot)
+    try {
+        . (Get-BootstrapSharedPortableLeaf $HelperRoot 'data_generation.ps1')
+        Assert-KmtechDataIdentity 'container_audit' $TargetSid
+        $local=Get-StrictFullPath $LocalAppDataRoot 'operator LOCALAPPDATA'
+        if(-not $DataRoot){$DataRoot=Join-Path $local 'KMTech\ContainerAudit'}
+        $data=Get-StrictFullPath $DataRoot 'operator data root'
+        $markers=@((Join-Path $data 'data-generation.json'),
+            (Join-Path $local ('KMTech\DirectSync\container_audit\control\writer-session\data-generation\'+$TargetSid+'.json')))
+        $records=@()
+        foreach($marker in $markers){
+            $record=Read-KmtechDataGeneration $marker 'container_audit' $TargetSid
+            if($null -ne $record){$records+=,$record}
+        }
+        if($records.Count -eq 0){return 'NOT_REACHED'}
+        $version=ConvertTo-KmtechDataVersion ([string]$Manifest.version)
+        $build=[string]$Manifest.source_commit
+        Assert-KmtechDataBuildIdentity $build
+        $reached=$false
+        foreach($record in $records){
+            $comparison=(ConvertTo-KmtechDataVersion ([string]$record.version)).CompareTo($version)
+            if($comparison -gt 0){return 'UNKNOWN'}
+            if($comparison -eq 0 -and [string]$record.build_id -ceq $build){$reached=$true}
+        }
+        if($reached){return 'REACHED'}
+        return 'NOT_REACHED'
+    }catch{return 'UNKNOWN'}
+}
+
+function Get-CanonicalRollbackSuccessStatus {
+    param([bool]$Restore,[string]$CommitPoint)
+    if($Restore){return 'FAILED_RESTORE_RUNTIME_RECOVERED'}
+    if($CommitPoint -ceq 'REACHED'){return 'FAILED_RUNTIME_RESTORED_CODE_RETAINED'}
+    if($CommitPoint -ceq 'NOT_REACHED'){return 'FAILED_ROLLED_BACK'}
+    return 'CODE_ROLLBACK_FAILED'
+}
+
 function Get-CanonicalInstallSuccessStatus([bool]$IsTestMode) {
     if ($IsTestMode) { return 'TEST_ONLY_PARTIAL' }
     return 'PASS'
@@ -4564,6 +4603,12 @@ catch {
     Fail-InstallationEvidenceStages $original
     Set-InstallationEvidenceStage 'rollback.entry' 'rollback'
     if ($enteredPlacementTry) {
+        if(-not $RestoreVerifiedReplacement -and -not $Uninstall -and -not $CompleteRetiredRemoval){
+            $canonicalInstallationCommitPoint=Get-CanonicalInstallationCommitPoint -Manifest $sourceManifest `
+                -TargetSid $operatorSid -LocalAppDataRoot $lad -DataRoot $activeDataRoot -HelperRoot $source
+            $audit.rollback['commit_point_status']=$canonicalInstallationCommitPoint
+            if($canonicalInstallationCommitPoint -cne 'NOT_REACHED'){$codeRestoreNeeded=$false}
+        }
         $audit.failure_type=$original.Exception.GetType().Name
         $audit.failure=Get-CanonicalFailureDetails $original 'INSTALL'
         Save-CanonicalRecoveryDiagnostics 'catch.entry'
@@ -4861,6 +4906,18 @@ catch {
         param([string]$Step, [string]$Status, [string]$FailureType)
         $audit.rollback.steps[$Step]=[ordered]@{status=$Status;failure_type=$FailureType}
         Save-CanonicalRecoveryDiagnostics ('rollback.'+$Step)
+    }
+    if($canonicalInstallationCommitPoint -ceq 'UNKNOWN'){
+        $codeRestoredExact=$false
+        $codeRollbackFailure='COMMIT_POINT_UNKNOWN'
+        Record-CanonicalRollbackStep 'commit_point_readback' 'UNPROVEN_FENCE_RETAINED' $codeRollbackFailure
+    }elseif($canonicalInstallationCommitPoint -ceq 'NOT_REACHED' -and $currentAbsentBeforePlacement -and
+        $placement -ceq 'PASS_NEW_VERIFIED' -and (Test-Path -LiteralPath $install)){
+        # The privileged compensation must prove absence before this can be an
+        # exact restoration of the absent code preimage.
+        $codeRestoredExact=$false
+        $codeRollbackFailure='ROLLBACK_NEW_CODE_REMOVAL_UNPROVEN'
+        Record-CanonicalRollbackStep 'code_restore' 'UNPROVEN_FENCE_RETAINED' $codeRollbackFailure
     }
     try {
     if ($codeRestoreNeeded) {
@@ -5233,11 +5290,7 @@ catch {
         Record-CanonicalRollbackStep 'completion' 'FAILED' $fenceReleaseFailure
         throw [InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text "CANONICAL_WRITER_FENCE_RELEASE_FAILED: $fenceReleaseFailure" -UserLine),$original.Exception)
     }
-    $audit.status=if ($RestoreVerifiedReplacement) {
-        'FAILED_RESTORE_RUNTIME_RECOVERED'
-    } elseif ($placement -ceq 'PASS_NEW_VERIFIED') {
-        'FAILED_RUNTIME_RESTORED_CODE_RETAINED'
-    } else { 'FAILED_ROLLED_BACK' }
+    $audit.status=Get-CanonicalRollbackSuccessStatus -Restore ([bool]$RestoreVerifiedReplacement) -CommitPoint $canonicalInstallationCommitPoint
     Record-CanonicalRollbackStep 'completion' 'PASS' ''
     if ($Script:CanonicalRollbackContinuationCreated -and [bool]$audit.rollback.code_exact -and [bool]$audit.rollback.runtime_restored) {
         if($old.Count -gt 0){$audit.exact_launch=$Script:CanonicalRelayProof;Save-CanonicalRecoveryDiagnostics 'rollback.continuation_completion'}

@@ -1313,7 +1313,7 @@ Registration retains string profile-path arguments after shared resolution. Inva
 <a id="canonical-rollback-support-recovery"></a>
 ## Canonical rollback 중단과 관리자 지원 복구
 
-새 설치에서 코드 배치 뒤 onboarding·검증·child 실패가 나면 남은 검증된 current의 reader로 자료 세대와 locator·nested owner를 다시 확인한다. 설치 기록이 없는 transport stock을 설치된 reader처럼 실행하지 않는다. Run·stop·writer preimage와 자료 호환 확인을 마친 경우에만 `FAILED_RUNTIME_RESTORED_CODE_RETAINED`와 `rollback.runtime_restored=true`를 기록한다. 공통 옛 판 복원 wrapper는 이 상태에서 새 판 공개 제거를 확인한 뒤 옛 폴더와 자동 시작 정의를 바이트로 복원한다. 자료 세대 REFUSE·UNKNOWN이나 복원 불확실 상태에서는 fence와 옛 판 백업을 보존한다.
+새 설치에서 코드 배치 뒤 onboarding·검증·child 실패가 나면 실제 자료 세대 표시로 확정 시점을 먼저 확인한다. 새 판 version·build_id의 표시가 있으면 새 코드를 보존하고, 남은 검증된 current의 reader로 자료 세대와 locator·nested owner를 다시 확인한다. 설치 기록이 없는 transport stock을 설치된 reader처럼 실행하지 않는다. Run·stop·writer preimage와 자료 호환 확인을 마친 경우에만 `FAILED_RUNTIME_RESTORED_CODE_RETAINED`와 `rollback.runtime_restored=true`를 기록한다. 확정 전의 `FAILED_ROLLED_BACK`은 기록된 새 바이트 제거와 이전 코드·runtime 복원 readback을 모두 증명해야 한다. 공통 옛 판 복원 wrapper가 이 출구를 소비한다. 자료 세대 REFUSE·UNKNOWN이나 복원 불확실 상태에서는 fence와 옛 판 백업을 보존한다.
 
 설치 실패와 각 복구 단계의 실패는 같은 시도의 보호 보고서에 따로 남긴다. product child의 전체 공개 실패 레코드에 있는 보호 보고서 경로·SHA256도 이 보호 실패 체인에서 보존한다. 공개 출력은 고정 코드·안내와 원자 게시한 보고서 경로·SHA256만 사용한다. 이 변경은 새 재개 명령을 추가하지 않는다.
 
