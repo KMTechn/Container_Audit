@@ -8,6 +8,8 @@
 
 # 데이터·상태·통합 계약
 
+감사 CSV의 키 색인은 완결 줄만 인정한다. append와 색인 재생성 전에 같은 파일 잠금 안에서 줄바꿈 없는/NUL 꼬리를 잘라 fsync하고 색인을 무효화한다. 헤더 손상은 원본을 보존하며 거절한다. CSV fsync 뒤 파일 크기·수정 시각·identity가 바뀌면 outbox 원본을 ACK하지 않고 다시 투영한다.
+
 Canonical 설치 journal은 outer failure와 정리·감사 진단을 모두 기록한 뒤 한 번
 봉인한다. audit와 evidence-status의 부분 파일 SHA256은 최종 저장 바이트를
 가리키며, 봉인 뒤 audit 게시에는 이미 기록한 진단의 공개 형태를 사용한다.

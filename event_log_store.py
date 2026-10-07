@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import os
 import threading
 import time
@@ -21,6 +22,10 @@ LOCK_STALE_SECONDS = 300.0
 _LOCKS_GUARD = threading.Lock()
 _PATH_LOCKS: dict[str, threading.Lock] = {}
 _CSV_INDEXES: dict[str, tuple[tuple[int, int, int], dict[tuple[str, str], Any]]] = {}
+
+
+class _ProjectionPending(RuntimeError):
+    """A nested caller must leave damaged-tail recovery to the log worker."""
 
 
 class EventLogOutbox:
@@ -111,6 +116,8 @@ class EventLogOutbox:
                                     durable=False,
                                 )
                                 handle = open(payload["log_file_path"], "ab")
+                                stat = os.fstat(handle.fileno())
+                                projection_signature = (stat.st_size, stat.st_mtime_ns, stat.st_ino)
                     if not reserved:
                         # Never pass an earlier row still being synced. Both
                         # admission and the RLock are released while waiting.
@@ -128,6 +135,11 @@ class EventLogOutbox:
                             try:
                                 if path.read_text(encoding="utf-8") != original:
                                     raise ValueError("event outbox payload changed during projection")
+                                stat = os.stat(payload["log_file_path"])
+                                if (stat.st_size, stat.st_mtime_ns, stat.st_ino) != projection_signature:
+                                    # This receipt synced an earlier file image.
+                                    # Revalidate/re-sync on the next drain before ACK.
+                                    return projected
                                 path.unlink()
                             except FileNotFoundError:
                                 pass
@@ -234,6 +246,7 @@ def _append_event_log_entry_unlocked(
     *,
     durable: bool,
 ) -> None:
+    _repair_event_log_tail_unlocked(log_file_path)
     needs_header = not os.path.exists(log_file_path) or os.stat(log_file_path).st_size == 0
     with open(log_file_path, "a", newline="", encoding="utf-8-sig") as f_handle:
         writer = csv.DictWriter(f_handle, fieldnames=EVENT_LOG_HEADERS)
@@ -245,6 +258,63 @@ def _append_event_log_entry_unlocked(
             os.fsync(f_handle.fileno())
 
 
+@writer_sink("event_csv_unlocked_append")
+def _repair_event_log_tail_unlocked(log_file_path: str, *, defer: bool = False) -> None:
+    """Discard only the incomplete suffix while the caller holds both file locks."""
+    if not os.path.exists(log_file_path) or not os.stat(log_file_path).st_size:
+        return
+    with open(log_file_path, "r+b") as handle:
+        size = handle.seek(0, os.SEEK_END)
+        handle.seek(size - 1)
+        terminated = handle.read(1) == b"\n"
+        line_end, cursor = size, size - int(terminated)
+        line_nul = removed_nul = False
+        keep = 0
+        while cursor:
+            start = max(0, cursor - 4096)
+            handle.seek(start)
+            chunk = handle.read(cursor - start)
+            newline = chunk.rfind(b"\n")
+            line_nul |= b"\0" in chunk[newline + 1:]
+            if newline < 0:
+                cursor = start
+                continue
+            if terminated and not line_nul:
+                keep = line_end
+                break
+            removed_nul |= line_nul
+            line_end = start + newline + 1
+            cursor = line_end - 1
+            terminated, line_nul = True, False
+        else:
+            if terminated and not line_nul:
+                keep = line_end
+            removed_nul |= line_nul
+        if keep == size:
+            return
+        _CSV_INDEXES.pop(os.path.abspath(log_file_path), None)
+        handle.seek(0)
+        header = handle.readline(65536)
+        try:
+            valid_header = (header.endswith(b"\n") and
+                            next(csv.reader([header.decode("utf-8-sig")])) == EVENT_LOG_HEADERS)
+        except (UnicodeError, csv.Error, StopIteration):
+            valid_header = False
+        if not keep or not valid_header:
+            raise ValueError("event log header is invalid")
+        if defer:
+            raise _ProjectionPending("EVENT_CSV_TAIL_RECOVERY_PENDING")
+        handle.truncate(keep)
+        handle.flush()
+        # Exceptional recovery only: preserve admission -> file-lock ordering.
+        # Ordinary projection fsync remains outside writer admission.
+        os.fsync(handle.fileno())
+        logging.getLogger(__name__).warning(
+            "EVENT_CSV_TAIL_REPAIRED bytes=%d reason=%s", size - keep,
+            "NUL_TAIL" if removed_nul else "UNTERMINATED_TAIL",
+        )
+
+
 @writer_sink("event_csv_idempotent_append")
 def append_event_log_entry_idempotent(
     log_file_path: str,
@@ -253,6 +323,7 @@ def append_event_log_entry_idempotent(
     event_type: str,
     idempotency_key: str,
     durable: bool = True,
+    defer_repair: bool = False,
 ) -> bool:
     """Append once by event plus details idempotency key.
 
@@ -281,6 +352,7 @@ def append_event_log_entry_idempotent(
 
     with _lock_for_path(log_file_path):
         with _interprocess_file_lock(log_file_path):
+            _repair_event_log_tail_unlocked(log_file_path, defer=defer_repair)
             path_key = os.path.abspath(log_file_path)
             stat = os.stat(log_file_path) if os.path.exists(log_file_path) else None
             signature = (stat.st_size, stat.st_mtime_ns, stat.st_ino) if stat else (0, 0, 0)
@@ -324,11 +396,15 @@ def append_event_log_entry_idempotent(
                         handle.flush()
                         os.fsync(handle.fileno())
                 return False
-            _append_event_log_entry_unlocked(
-                log_file_path,
-                log_entry,
-                durable=durable,
-            )
+            try:
+                _append_event_log_entry_unlocked(
+                    log_file_path,
+                    log_entry,
+                    durable=durable,
+                )
+            except BaseException:
+                _CSV_INDEXES.pop(path_key, None)
+                raise
             stat = os.stat(log_file_path)
             index[key] = expected_details
             _CSV_INDEXES[path_key] = ((stat.st_size, stat.st_mtime_ns, stat.st_ino), index)
