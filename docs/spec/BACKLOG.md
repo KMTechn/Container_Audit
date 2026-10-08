@@ -755,3 +755,7 @@ NOT TESTED이며 coordinator의 랩 예행과 독립 확인에 남긴다.
 시험을 본 같은 bootstrap의 FAILED/UNKNOWN·SETTLED 회복과, 240초 뒤 수정된 지 15분을 넘긴 UNKNOWN claim의 좁은 일반 복귀를 구현한다. 일반 writer 부재·active G ALLOW·prepared 부재와 기존 일반 진입 검증을 유지하고 포인터·시험·READY·CONFIRMED는 쓰지 않는다. LIVE·신선한 UNKNOWN·시각 읽기 실패·G 거절은 진행 안내+20이다. 실제 pythonw/로그온 화면에서 종점 뒤 한 번 시작으로 앱이 열리는지와 SYSTEM 240초 감독은 별도 랩 수용 항목으로 남긴다.
 
 사망한 SYSTEM의 같은 claim은 같은 세션에서 재요청하지 않고 현재 G 허용 판을 일반 실행한다. 지원 코드는 같은 protected claim hash에 대해 한 번 게시하며 다음 로그온의 기존 SYSTEM 작업이 새 claim을 덮어써 재시도한다(1차 결정 msg_c93ef274762a).
+
+### Bootstrap relay 시작의 일시 admission 대기
+
+Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRITER_GATE_TIMEOUT`만 기존 240초 창에서 0.1초씩 쉬며 재시도한다. 각 시도는 기존 launch_version의 admission을 다시 얻으며 시도 사이에는 admission을 보유하지 않는다. 상한은 240초 + 마지막 admission 대기 최대 5초이며 마감 뒤에는 기존 실패 출구를 유지한다. fence 확정·버려진 소유권 등 다른 거절과 GUI 실행 자체의 timeout은 재시도하지 않는다. 포인터·trial claim·READY·CONFIRMED·G 허가·cohort·잠금 순서는 유지한다. bootstrap 밖의 relay launcher admission과 실제 로그온/pythonw 수용은 별도 범위다.
