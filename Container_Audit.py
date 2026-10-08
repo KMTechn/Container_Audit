@@ -21268,7 +21268,7 @@ class ContainerAudit:
             elif status == "command_pending":
                 self._show_field_notice(
                     "교체 취소 불가",
-                    "중앙 제품 교환 완료 여부가 아직 확정되지 않았습니다. "
+                    "회사 서버 제품 교환 완료 여부가 아직 확정되지 않았습니다. "
                     "네트워크를 확인한 뒤 다시 시도하세요.",
                 )
 
