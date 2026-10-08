@@ -504,6 +504,14 @@ def test_writer_sink_rejects_async_and_generator_bodies() -> None:
 
 
 def test_probe_only_admission_is_refused_for_every_unapproved_sink() -> None:
+    # DESIGN-V2 V1, v2.2 V7/V8 approve only these owned staging probes.
+    expected_staging = frozenset({
+        ("auto_update_control", "auto_update.write_download_bytes"),
+        ("auto_update_control", "auto_update.write_download_chunk"),
+        ("auto_update_control", "auto_update.stage_prepared_copies"),
+        ("auto_update_control", "auto_update._run_download_attempt"),
+    })
+    assert fence.STAGING_PROBE_ONLY_WRITER_SINKS == expected_staging
     assert fence.PROBE_ONLY_WRITER_SINKS == frozenset(
         {
             (
@@ -540,7 +548,7 @@ def test_probe_only_admission_is_refused_for_every_unapproved_sink() -> None:
             ("admin_pin_network", "container_admin_pin.AdminPinClient.query_roster"),
             ("admin_pin_network", "container_admin_pin.AdminPinClient._post_signed"),
         }
-    )
+    ) | expected_staging
 
     with pytest.raises(fence.WriterFencedError) as exc_info:
 

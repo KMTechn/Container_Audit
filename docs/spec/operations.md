@@ -345,6 +345,17 @@ stock manifest의 `runtime_file_inventory_sha256`·`runtime_file_inventory_bytes
 portable은 현재 제품 reader가 없는 config/validator_settings.json을 포장하지 않는다.
 source 자산은 보존하며 runtime-local denylist·정확 runtime 예외·feed 필터는 바꾸지 않는다.
 
+feed의 내려받기 조각과 세 임시 사본 복사·fsync는 정지 여부를 probe한 뒤 허가 밖에서 수행한다.
+staging probe는 이미 writer 허가를 가진 호출을 거절하며, 세 사본이 모두 완성된 뒤
+일반 publish sink가 고정 이름 세 개를 `os.replace`하고 기존 내구 쓰기로 `prepared.json`을 마지막에 게시한다.
+SYSTEM의 보호 사본 복사는 기존 일반 sink와 동일 검증·크기 상한·fsync를 유지한다.
+공유 복사 helper는 정확히 이 SYSTEM sink와 승인된 staging probe 두 호출자만 선언에 허용한다.
+fence는 진행 중인 한 조각/복사의 임시 쓰기를 즉시 중단하지 못하지만 다음 조각/고정 이름 게시를 거절한다.
+정지 주체는 staging을 소비하지 않으며, SYSTEM은 살아 있는 relay 등 기존 앱 writer가 있으면 고정 packet 적용을 DEFERRED한다.
+시도가 끝나면 성공·실패 모두 자기 `download-<32hex>`와 자기 UUID 임시 사본만 정리한다.
+삭제 전 이름·부모 경로를 확인하고 reparse를 거절하며, 남의 시도·임시 사본·고정 이름·prepared.json은 삭제하지 않는다.
+임시 사본은 fsync 뒤 교체한다. Windows의 marker 내구 게시가 앞선 NTFS 이름 교체도 내구로 만든다는 기존 순서 가정을 유지한다.
+
 관리자 설치기는 기존 보호 코드 배치와 같은 writer delegation 아래서
 `versions/<source SHA>`·`update-control`을 보호하고, 지정 작업자 SID의 로그온으로
 숨겨진 SYSTEM 작업 `KMTech.ContainerAudit.StartupUpdate.<경로/SID 식별값>`을 등록한다.

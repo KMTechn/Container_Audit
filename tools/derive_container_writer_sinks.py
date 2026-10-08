@@ -142,6 +142,11 @@ POWERSHELL_NATIVE_PROCESS_APIS = (
 INVENTORY_ALL_SOURCES_SENTINEL = "__INVENTORY_ALL_SOURCES__"
 TRUSTED_CONTROL_PLANE_MUTATIONS: dict[str, str] = {}
 CALLER_FENCED_MUTATIONS: dict[str, dict[str, tuple[str, ...] | str]] = {
+    "auto_update._copy_prepared_bytes": {
+        "callers": ("auto_update.copy_prepared_file", "auto_update.stage_prepared_copies"),
+        "sources": ("auto_update_control",),
+        "reason": "unchanged copy body is called only by the exact SYSTEM sink or approved feed staging probe",
+    },
     "data_generation_guard._runtime_release": {
         "callers": ("data_generation_guard.record_before_data_open",),
         "sources": ("data_generation_marker",),

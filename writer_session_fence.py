@@ -599,6 +599,15 @@ NETWORK_PROBE_ONLY_WRITER_SINKS = frozenset(
     }
 )
 
+# Feed writes/copies/cleanup affect only owned staging temporaries. Fence actors
+# do not consume staging, and SYSTEM defers fixed-packet consumption while the
+# relay is live. Reject inherited admissions so slow HDD writes/fsync remain
+# outside the gate; the ordinary publish sink alone replaces fixed names.
+STAGING_PROBE_ONLY_WRITER_SINKS = frozenset(
+    ("auto_update_control", "auto_update." + name)
+    for name in ("write_download_bytes", "write_download_chunk", "stage_prepared_copies", "_run_download_attempt")
+)
+
 # The process wrappers also release before a child can acquire admission.
 PROBE_ONLY_WRITER_SINKS = frozenset(
     {
@@ -612,7 +621,7 @@ PROBE_ONLY_WRITER_SINKS = frozenset(
         ),
         ("persistent_relay_status", "user_relay.main"),
     }
-) | NETWORK_PROBE_ONLY_WRITER_SINKS
+) | NETWORK_PROBE_ONLY_WRITER_SINKS | STAGING_PROBE_ONLY_WRITER_SINKS
 
 
 def writer_sink(
@@ -662,6 +671,13 @@ def writer_sink(
         @wraps(function)
         def guarded(*args: P.args, **kwargs: P.kwargs) -> R:
             if probe_only:
+                if (selected_source, sink_id) in STAGING_PROBE_ONLY_WRITER_SINKS and int(
+                    getattr(_WRITER_LOCAL, "depth", 0)
+                ) > 0:
+                    raise WriterFencedError(
+                        "STAGING_WRITER_ADMISSION_HELD",
+                        "feed staging cannot run inside a local writer admission",
+                    )
                 if (selected_source, sink_id) in NETWORK_PROBE_ONLY_WRITER_SINKS and int(
                     getattr(_WRITER_LOCAL, "depth", 0)
                 ) > 0:

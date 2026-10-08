@@ -10,15 +10,13 @@ import requests
 
 import auto_update as update
 import update_service
+import writer_session_fence as fence
 from vendor.kmtech_zero_pe.cng_p256 import P256KeyPair
 
 REPO = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize('variant', ['canonical', 'root-file', 'outside-prefix', 'duplicate',
-    'runtime-extra', 'runtime-hash', 'runtime-ledger', 'runtime-logs', 'runtime-credential',
-    'runtime-unlisted-inventory', 'runtime-duplicate-inventory'])
-def test_authenticated_stock_zip_prepares_only_with_valid_single_prefix(tmp_path, monkeypatch, variant):
+def _stock_feed(tmp_path, monkeypatch, variant, *, real_staging=False):
     def stock(commit, version):
         files = {name: (REPO / name).read_bytes() for name in update.CONTRACT_FILES}
         files.update({'app/' + name: (REPO / name).read_bytes() for name in update.DATA_API_FILES})
@@ -95,7 +93,8 @@ def test_authenticated_stock_zip_prepares_only_with_valid_single_prefix(tmp_path
     monkeypatch.setattr(update, 'control_root', lambda _root: control)
     monkeypatch.setattr(update, 'verify_lifecycle_stock', lambda _root: None)
     monkeypatch.setattr(update, 'version_manifest', lambda _root, **kw: current)
-    monkeypatch.setattr(update, 'create_protected_stage', lambda path: path.mkdir())
+    if not real_staging:
+        monkeypatch.setattr(update, 'create_protected_stage', lambda path: path.mkdir())
     bodies = {feed_url: update_service.canonical_manifest_bytes(manifest), feed_url + '.sig': signature, packet_url: packet_bytes}
 
     class Response:
@@ -104,6 +103,7 @@ def test_authenticated_stock_zip_prepares_only_with_valid_single_prefix(tmp_path
         def __enter__(self): return self
         def __exit__(self, *args): pass
         def iter_content(self, size):
+            assert int(getattr(fence._WRITER_LOCAL, "depth", 0)) == 0
             for offset in range(0, len(self.body), size): yield self.body[offset:offset + size]
         def close(self): pass
 
@@ -111,9 +111,22 @@ def test_authenticated_stock_zip_prepares_only_with_valid_single_prefix(tmp_path
         cookies = type('Cookies', (), {'clear': lambda self: None})()
         def __enter__(self): return self
         def __exit__(self, *args): pass
-        def get(self, url, **kwargs): return Response(url)
+        def get(self, url, **kwargs):
+            assert int(getattr(fence._WRITER_LOCAL, "depth", 0)) == 0
+            return Response(url)
 
     monkeypatch.setattr(requests, 'Session', Session)
+    return dict(candidate=candidate, candidate_files=candidate_files, packet_bytes=packet_bytes,
+                signature=signature, manifest=manifest, stage=stage, original_read=original_read)
+
+
+@pytest.mark.parametrize('variant', ['canonical', 'root-file', 'outside-prefix', 'duplicate',
+    'runtime-extra', 'runtime-hash', 'runtime-ledger', 'runtime-logs', 'runtime-credential',
+    'runtime-unlisted-inventory', 'runtime-duplicate-inventory'])
+def test_authenticated_stock_zip_prepares_only_with_valid_single_prefix(tmp_path, monkeypatch, variant):
+    fixture = _stock_feed(tmp_path, monkeypatch, variant)
+    candidate, candidate_files, packet_bytes = (fixture[name] for name in ('candidate', 'candidate_files', 'packet_bytes'))
+    signature, manifest, stage, original_read = (fixture[name] for name in ('signature', 'manifest', 'stage', 'original_read'))
     if variant == 'canonical':
         assert update.prepare_feed_packet(tmp_path) == dict(status='PREPARED', source_commit=candidate['source_commit'])
         prepared = original_read(stage / 'prepared.json')
@@ -127,7 +140,12 @@ def test_authenticated_stock_zip_prepares_only_with_valid_single_prefix(tmp_path
         with pytest.raises(ValueError): update.prepare_feed_packet(tmp_path)
         assert not (stage / 'prepared.json').exists()
         assert not (stage / 'packet.zip').exists()
-        downloaded = next(stage.glob('download-*')) / 'packet.zip'
+        # DESIGN-V2 v2.2 V7 removes failed attempts. Keep the independent
+        # extraction rejection against the identical authenticated ZIP bytes.
+        assert not list(stage.glob('download-*'))
+        assert not list(stage.glob('*.tmp'))
+        downloaded = tmp_path / 'rejected-packet.zip'
+        downloaded.write_bytes(packet_bytes)
         with pytest.raises(ValueError):
             update_service.safe_extract_update_zip(downloaded, tmp_path / 'rejected-extraction', archive_policy=manifest['archive'])
         assert not list((tmp_path / 'rejected-extraction').rglob('*'))
