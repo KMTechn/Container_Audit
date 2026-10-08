@@ -21747,6 +21747,11 @@ def main(argv: list[str] | None = None):
 def _prepare_gui_startup(*, data_root=None):
     """Guard initialization without holding admission for a resident mode."""
 
+    try:
+        from data_generation_guard import _runtime_release
+        _runtime_release()
+    except Exception:
+        pass
     with writer_admission("gui_startup"):
         verify_factory_contract_startup()
         if getattr(sys, 'frozen', False):

@@ -4,6 +4,8 @@
 
 원격 전송은 fence probe 뒤 mutex 밖에서 수행한다. 결과의 로컬 저장은 admission을 다시 받고 기존 identity/version/CAS를 재확인한다. 스캔의 로컬 durable → 표시 → 같은 key의 배경 전송 순서는 유지한다. runtime lease는 HTTP 전 DB transaction을 닫고 적용 transaction에서 pending request와 row 소유를 다시 확인한다.
 
+Portable `_runtime_release()`는 전체 무결성 PASS와 version/build 결속 검증을 마친 결과만 해석된 packet root·app root·entrypoint별로 프로세스 안에 기억하고 사본을 반환한다. 실패·예외는 기억하지 않는다. GUI·상주 relay·raw relay 실행기의 최초 확인은 쓰기 허가 밖에서 수행하며, 미리 확인하지 못했으면 기존 자료 guard가 허가 안에서 다시 검증한다. frozen·source 판정과 자료 세대 marker 읽기·판정·기록은 기존 경계를 유지한다.
+
 운영자 spool 복구는 publish 직전 ACKED row의 상태·metadata·신원 결속을 다시 비교한다. 등록 응답은 신원·manifest·credential·profile 원본의 fingerprint와 possession key를 재확인한 뒤 적용하며, two-phase 복구는 요청을 만든 journal binding과 현재 binding이 같을 때만 전이·sealed package를 저장한다. 대기 중 바뀐 원본은 늦은 응답으로 덮어쓰지 않는다.
 
 # 데이터·상태·통합 계약

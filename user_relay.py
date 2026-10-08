@@ -564,6 +564,11 @@ def main(argv: list[str] | None = None) -> int:
     scan_source_dir = resolve_owner_path(args.scan_source_dir) if args.scan_source_dir else storage.events_dir
     profile = resolve_logistics_profile_path()
     try:
+        from data_generation_guard import _runtime_release
+        _runtime_release()
+    except Exception:
+        pass
+    try:
         with writer_admission("persistent_relay_status"):
             probe_before_owner_paths(storage.data_root, directory_paths=(direct_sync_root, scan_source_dir),
                                      file_paths=(profile,) if profile.is_file() else ())
