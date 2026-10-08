@@ -1,5 +1,7 @@
 ﻿# 운영·환경·장애 복구
 
+종료 시 CSV 배경 투영은 1초씩 최대 세 번 기다리고 화면을 닫는다. 예산에 남은 내구 outbox와 checkpoint 감사는 그대로 보존하며 다음 실행에서 원 키·순서로 재생한다. 아직 outbox 원본 저장에 실패한 메모리 감사가 있으면 기존 저장 재시도와 종료 차단을 유지한다. 끊김 복구에서 손상 CSV 꼬리를 제거할 때는 내용 없이 바이트 수와 고정 사유 코드만 기록한다.
+
 canonical 부모는 상승 direct/wrapper helper의 보호 원본 receipt와 restore evidence를 그 실행의
 bound evidence root·journal SHA로 읽는다. 일반 caller 사본의 존재를 요구하지 않는다.
 startup preimage 두 필드는 한 쌍으로 검증하며 원 preimage.json의 SHA가 같아야 한다.
