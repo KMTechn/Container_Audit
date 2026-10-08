@@ -131,7 +131,7 @@ class EventLogOutbox:
                                 )
                                 handle = open(payload["log_file_path"], "ab")
                                 stat = os.fstat(handle.fileno())
-                                projection_signature = (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+                                projection_signature = (stat.st_size, stat.st_ino)
                             elif nested:
                                 return projected  # The background worker needs the outer admission for ACK.
                     if not reserved:
@@ -162,9 +162,9 @@ class EventLogOutbox:
                                 stat = os.stat(payload["log_file_path"])
                             except FileNotFoundError:
                                 return projected  # A removed CSV is not an acknowledged outbox row.
-                            if (stat.st_size, stat.st_mtime_ns, stat.st_ino) != projection_signature:
-                                # This receipt synced an earlier file image.
-                                # Revalidate/re-sync on the next drain before ACK.
+                            if stat.st_ino != projection_signature[1] or stat.st_size < projection_signature[0]:
+                                # Replacement/shrinkage invalidates this receipt;
+                                # later appends preserve our already synced row.
                                 return projected
                             try:
                                 if path.read_text(encoding="utf-8") != original:

@@ -264,3 +264,118 @@ def test_new_fence_between_csv_fsync_and_ack_preserves_original_for_retry(tmp_pa
     store.drain()
     assert len(rows(csv_path)) == 1
     assert not list(store.directory.glob("*.json"))
+
+
+@pytest.mark.parametrize("append_after_sync", [False, True])
+def test_normal_appends_during_projection_do_not_defer_ack(tmp_path, monkeypatch, append_after_sync):
+    csv_path = tmp_path / "events.csv"
+    store = logs.EventLogOutbox(tmp_path / "outbox")
+    targets = [store.stage(str(csv_path), entry(f"own-{index}")) for index in range(5)]
+    originals = [target.read_bytes() for target in targets]
+    sync = os.fsync
+    competing_keys, errors = [], []
+
+    def competing_sync(fd):
+        index = len(competing_keys)
+        assert targets[index].read_bytes() == originals[index]
+        key = f"other-{index}"
+        competing_keys.append(key)
+
+        def append():
+            try:
+                logs.append_event_log_entry_idempotent(str(csv_path), entry(key),
+                    event_type="SCAN_OK", idempotency_key=key, durable=False)
+            except Exception as exc:
+                errors.append(exc)
+
+        if append_after_sync:
+            sync(fd)
+        thread = threading.Thread(target=append)
+        thread.start()
+        thread.join(5)
+        assert not thread.is_alive()
+        assert getattr(fence._WRITER_LOCAL, "depth", 0) == 0
+        if not append_after_sync:
+            sync(fd)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(logs.os, "fsync", competing_sync)
+        projected = store.drain()
+    assert not errors
+    assert len(projected) == 5
+    assert competing_keys == [f"other-{index}" for index in range(5)]
+    assert not list(store.directory.glob("*.json"))
+    store.drain()
+    keys = [json.loads(row["details"])["idempotency_key"] for row in rows(csv_path)]
+    assert keys == [key for index in range(5) for key in (f"own-{index}", f"other-{index}")]
+    assert len(keys) == len(set(keys))
+
+
+@pytest.mark.parametrize("change", ["missing", "replaced", "truncated"])
+def test_projection_ack_preserves_original_when_csv_changes(tmp_path, monkeypatch, change):
+    csv_path = tmp_path / "events.csv"
+    store = logs.EventLogOutbox(tmp_path / "outbox")
+    target = store.stage(str(csv_path), entry("own"))
+    original = target.read_bytes()
+    sync, stat = os.fsync, os.stat
+    synced = [False]
+
+    def observed_sync(fd):
+        sync(fd)
+        synced[0] = True
+
+    def changed_stat(path, *args, **kwargs):
+        if synced[0] and path == str(csv_path):
+            synced[0] = False  # Mutate after the projection handle has closed.
+            prior = stat(csv_path)
+            if change == "missing":
+                csv_path.unlink()
+            elif change == "replaced":
+                replacement = tmp_path / "replacement.csv"
+                replacement.write_bytes(csv_path.read_bytes())
+                os.replace(replacement, csv_path)
+                assert stat(csv_path).st_ino != prior.st_ino
+            else:
+                with csv_path.open("r+b") as stream:
+                    stream.truncate(len(stream.readline()))
+                assert stat(csv_path).st_ino == prior.st_ino
+                assert stat(csv_path).st_size < prior.st_size
+        return stat(path, *args, **kwargs)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(logs.os, "fsync", observed_sync)
+        fault.setattr(logs.os, "stat", changed_stat)
+        assert store.drain() == {}
+    assert target.read_bytes() == original
+    assert store._projection_results == {}
+    store.drain()
+    store.drain()
+    assert not target.exists()
+    assert [json.loads(row["details"])["idempotency_key"] for row in rows(csv_path)] == ["own"]
+
+
+def test_tail_repair_after_projection_signature_preserves_own_complete_row(tmp_path, monkeypatch):
+    csv_path = tmp_path / "events.csv"
+    store = logs.EventLogOutbox(tmp_path / "outbox")
+    target = store.stage(str(csv_path), entry("own"))
+    sync = os.fsync
+    repaired = []
+
+    def repair_during_sync(fd):
+        if not repaired:
+            own_bytes = csv_path.read_bytes()
+            repaired.append(True)
+            with fence.writer_admission("event_outbox_project"):
+                with csv_path.open("ab") as stream:
+                    stream.write(b"unfinished")
+                logs.append_event_log_entry_idempotent(str(csv_path), entry("other"),
+                    event_type="SCAN_OK", idempotency_key="other", durable=False)
+            assert csv_path.read_bytes().startswith(own_bytes)
+        return sync(fd)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(logs.os, "fsync", repair_during_sync)
+        assert len(store.drain()) == 1
+    assert repaired == [True]
+    assert not target.exists()
+    assert [json.loads(row["details"])["idempotency_key"] for row in rows(csv_path)] == ["own", "other"]
