@@ -158,7 +158,7 @@ def test_refresh_without_profile_sends_nothing_and_names_the_setup_action(
     assert app.items_data is rows and app.item_catalog is catalog
     assert os.environ[sync.ACTIVE_PATH_ENV] == active_path
     kind, title, body = messages[-1]
-    assert kind == "showwarning" and title == "중앙 연결 설정 필요"
+    assert kind == "showwarning" and title == "회사 서버 연결 설정 필요"
     assert "기존 품목 목록 2건으로 작업은 계속" in body
     assert "Windows 사용자" in body and "할 일" in body and "다시 시작" in body
 

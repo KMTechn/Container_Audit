@@ -681,7 +681,7 @@ def test_preflight_failure_preserves_held_fifo_until_same_master_retry(
     assert app.current_tray.master_label_code == ""
     assert app._preflight_scan_input_locked is True
     assert app.current_item_label["text"] == (
-        f"중앙 조회 실패 · 보류 {len(failed.items)}건 (삭제되지 않음)"
+        f"회사 서버 조회 실패 · 보류 {len(failed.items)}건 (삭제되지 않음)"
     )
     assert app.current_item_label["foreground"] == app.COLOR_DANGER
     assert app.warnings and app.warnings[-1][0] == "중앙 PHS=2 확인 실패"
@@ -1834,7 +1834,7 @@ def test_offline_queue_restart_only_skips_confirmation_for_durable_outage(tmp_pa
         assert not app.warnings and not app._preflight_scan_input_locked
     else:
         assert len(client.identities) == 1
-        assert app.warnings[-1][0] == "중앙 조회 재확인 필요"
+        assert app.warnings[-1][0] == "회사 서버 조회 재확인 필요"
 
 
 @pytest.mark.parametrize("failure", ["audit_false", "audit_raise", "after_move"])

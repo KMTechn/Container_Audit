@@ -486,7 +486,7 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
             lease=LeaseFixture(state="ISSUE_PENDING", start_allowed=False),
             preflight_phase="LOOKUP",
             status_variants=(
-                "중앙에서 검사 완료 수량과 제품 구성을 확인하고 있습니다.",
+                "회사 서버에서 검사 완료 수량과 제품 구성을 확인하고 있습니다.",
                 "현품표 정보를 읽지 못했습니다. 현품표를 확인한 뒤 다시 스캔하세요.",
             ),
         ),
@@ -505,7 +505,7 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
                 "중앙 확인 중 · 보류 스캔 2건",
                 "중앙 확인 완료 · 보류 2건 순서대로 처리 중",
                 "중앙 조회 실패 · 보류 2건 (삭제되지 않음)",
-                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                 "보류 저장 대기열이 가득 차 이번 스캔은 접수되지 않았습니다.",
             ),
         ),
@@ -526,8 +526,8 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
             held_scans=products[-1:],
             status_variants=(
                 "완료 처리 중",
-                "이전 중앙 작업 처리 중 · 이번 완료 요청은 접수되지 않았습니다.",
-                "중앙 조회 보류 묶음 처리 중입니다. 이번 작업은 접수되지 않았습니다.",
+                "이전 회사 서버 작업 처리 중 · 이번 완료 요청은 접수되지 않았습니다.",
+                "회사 서버 조회 보류 묶음 처리 중입니다. 이번 작업은 접수되지 않았습니다.",
             ),
             tray_image_visible=True,
         ),

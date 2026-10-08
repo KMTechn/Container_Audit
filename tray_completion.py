@@ -130,7 +130,7 @@ def request_complete_tray(
     lane = self._ui_task_lane()
     if lane.is_busy():
         self.show_status_message(
-            "이전 중앙 작업 처리 중 · 이번 완료 요청은 접수되지 않았습니다.",
+            "이전 회사 서버 작업 처리 중 · 이번 완료 요청은 접수되지 않았습니다.",
             self.COLOR_DANGER,
             duration=0,
         )

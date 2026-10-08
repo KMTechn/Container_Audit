@@ -26,7 +26,7 @@ EXPLICIT_ORIGIN = "https://explicit.example.invalid"
 PROCESS_ORIGIN = "https://process-env.example.invalid"
 MACHINE_ORIGIN = "https://machine-profile.example.invalid"
 TOKEN = "synthetic-w9caprofile-token"
-SETUP_TITLE = "중앙 연결 설정 필요"
+SETUP_TITLE = "회사 서버 연결 설정 필요"
 
 
 def _install_profile(path: Path, origin: str) -> Path:

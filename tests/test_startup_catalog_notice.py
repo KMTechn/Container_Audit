@@ -146,7 +146,7 @@ def test_other_nonblocking_catalog_startup_notices_use_connection_card(
     if reason == "profile_absent":
         monkeypatch.setattr(logistics_runtime_profile, "load_logistics_runtime_profile",
                             lambda **_kwargs: None)
-        expected = "중앙 연결 설정 필요"
+        expected = "회사 서버 연결 설정 필요"
     else:
         monkeypatch.setattr(ca, "legacy_label_transition_enabled", lambda: True)
         def unavailable():

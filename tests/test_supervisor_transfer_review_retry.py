@@ -62,7 +62,7 @@ def test_normal_supervisor_action_audits_before_same_command_retry(tmp_path, mon
     assert audit[0][1]["synchronous"] is True
     assert audit[0][1]["worker_name_override"] == "review-supervisor"
     assert audit[0][1]["detail"]["transfer_intent_id"] == intent_id
-    assert messages[-1][0] == "중앙 반영 확인"
+    assert messages[-1][0] == "회사 서버 반영 확인"
 
 
 def test_review_lease_failure_keeps_internal_diagnostics_out_of_dialog(tmp_path, monkeypatch):

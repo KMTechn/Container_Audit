@@ -26,7 +26,7 @@ from label_qr import (
 
 TRANSITION_CLASS_NAMES = {
     TRANSITION_LEGACY: "옛",
-    TRANSITION_PHS2_CENTRAL: "새 회사 서버",
+    TRANSITION_PHS2_CENTRAL: "새 중앙",
     TRANSITION_PHS2_LOCAL: "새 로컬",
     TRANSITION_PHS2_MALFORMED: "새 형식오류",
 }

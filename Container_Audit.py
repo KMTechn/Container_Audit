@@ -2303,7 +2303,7 @@ class ContainerAudit:
         else:
             self._set_preflight_scan_input_locked(True)
             self.show_fullscreen_warning(
-                "중앙 조회 재확인 필요",
+                "회사 서버 조회 재확인 필요",
                 "격리 보류 묶음을 복원했습니다. 확인을 누르면 같은 현품표로 다시 조회합니다.",
                 self.COLOR_DANGER,
             )
@@ -2433,7 +2433,7 @@ class ContainerAudit:
         if not blocked:
             return False
         self.show_status_message(
-            "중앙 조회 보류 묶음 처리 중입니다. 이번 작업은 접수되지 않았습니다.",
+            "회사 서버 조회 보류 묶음 처리 중입니다. 이번 작업은 접수되지 않았습니다.",
             self.COLOR_DANGER,
             duration=0,
         )
@@ -6721,7 +6721,7 @@ class ContainerAudit:
                 )
                 if value
             )
-            text = f"현재 사용 중 · {details}" if details else "현재 PHS2"
+            text = f"현재 사용 중 · {details}" if details else "현재 현품표"
             text += " · 단축키 F8"
         try:
             label.configure(text=text)
@@ -7304,7 +7304,7 @@ class ContainerAudit:
             self._phs_label_candidate_pending = False
             self._update_action_button_states()
             self.show_status_message(
-                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                 self.COLOR_DANGER,
                 duration=0,
             )
@@ -7530,7 +7530,7 @@ class ContainerAudit:
             self._phs_label_exchange_pending = False
             self._update_action_button_states()
             self.show_status_message(
-                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                 self.COLOR_DANGER,
                 duration=0,
             )
@@ -7803,7 +7803,7 @@ class ContainerAudit:
             self._phs_label_exchange_pending = False
             self._update_action_button_states()
             self.show_status_message(
-                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                 self.COLOR_DANGER,
                 duration=0,
             )
@@ -7981,7 +7981,7 @@ class ContainerAudit:
             self._phs_label_exchange_pending = False
             self._update_action_button_states()
             self.show_status_message(
-                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                 self.COLOR_DANGER,
                 duration=0,
             )
@@ -9907,7 +9907,7 @@ class ContainerAudit:
 
         def finish(verified: bool) -> None:
             if not verified or not self._blocked_work_identity_matches(approval):
-                messagebox.showerror("중앙 확인 대기", "원 현품표를 확인하지 못했습니다. 감사 사건은 계속 보류합니다.", parent=self.root)
+                messagebox.showerror("회사 서버 확인 대기", "원 현품표를 확인하지 못했습니다. 감사 사건은 계속 보류합니다.", parent=self.root)
                 return
             try:
                 def source():
@@ -9963,7 +9963,7 @@ class ContainerAudit:
         lane.submit(LaneTask(
             name="audit-evidence-identification", generation=getattr(self, "_scan_callback_epoch", 0),
             work=work, finish=finish,
-            fail=lambda _exc: messagebox.showerror("중앙 확인 대기", "회사 서버 조회에 실패했습니다. 감사 사건은 계속 보류합니다.", parent=self.root),
+            fail=lambda _exc: messagebox.showerror("회사 서버 확인 대기", "회사 서버 조회에 실패했습니다. 감사 사건은 계속 보류합니다.", parent=self.root),
         ))
 
     @_recovery_item_firewall
@@ -10000,7 +10000,7 @@ class ContainerAudit:
 
         def finish(verified: bool) -> None:
             if not verified or not self._blocked_work_identity_matches(approval):
-                messagebox.showerror("중앙 확인 대기", "원 현품표를 회사 서버에서 확인하지 못했습니다. 이 건은 계속 보류합니다.", parent=self.root)
+                messagebox.showerror("회사 서버 확인 대기", "원 현품표를 회사 서버에서 확인하지 못했습니다. 이 건은 계속 보류합니다.", parent=self.root)
                 return
             try:
                 def source():
@@ -10044,7 +10044,7 @@ class ContainerAudit:
         lane.submit(LaneTask(
             name="stale-hold-readback", generation=getattr(self, "_scan_callback_epoch", 0),
             work=work, finish=finish,
-            fail=lambda _exc: messagebox.showerror("중앙 확인 대기", "회사 서버 조회에 실패했습니다. 이 건은 계속 보류합니다.", parent=self.root),
+            fail=lambda _exc: messagebox.showerror("회사 서버 확인 대기", "회사 서버 조회에 실패했습니다. 이 건은 계속 보류합니다.", parent=self.root),
         ))
 
     @_recovery_item_firewall
@@ -11870,7 +11870,7 @@ class ContainerAudit:
             and snapshot.state == HOLD_LOOKUP_FAILED
         ):
             self.current_item_label['text'] = (
-                f"중앙 조회 실패 · 보류 {len(snapshot.items)}건 (삭제되지 않음)"
+                f"회사 서버 조회 실패 · 보류 {len(snapshot.items)}건 (삭제되지 않음)"
             )
             self.current_item_label['foreground'] = self.COLOR_DANGER
             return
@@ -12102,7 +12102,7 @@ class ContainerAudit:
         lane = self._ui_task_lane()
         if lane.is_busy():
             self.show_status_message(
-                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                 self.COLOR_DANGER,
             )
             return False
@@ -12116,7 +12116,7 @@ class ContainerAudit:
         elif not transition_requery:
             self._preflight_offline_error_code = ""
             self.show_status_message(
-                "중앙에서 검사 완료 수량과 제품 구성을 확인하고 있습니다.",
+                "회사 서버에서 검사 완료 수량과 제품 구성을 확인하고 있습니다.",
                 self.COLOR_PRIMARY,
                 duration=0,
             )
@@ -12396,7 +12396,7 @@ class ContainerAudit:
                     "",
                     TransferSealError(
                         "PHS2_PREFLIGHT_LOCAL_ERROR",
-                        "회사 서버 PHS=2 확인 중 처리 오류가 발생했습니다.",
+                        "중앙 PHS=2 확인 중 처리 오류가 발생했습니다.",
                         retryable=True,
                         committed=None,
                     ),
@@ -12478,7 +12478,7 @@ class ContainerAudit:
         if not success or preflight is None:
             failure = error if isinstance(error, TransferSealError) else TransferSealError(
                 "PHS2_PREFLIGHT_FAILED",
-                "회사 서버 PHS=2 확인에 실패했습니다.",
+                "중앙 PHS=2 확인에 실패했습니다.",
             )
             # A server that cannot be reached is not a verdict on this label:
             # keep the same durable hold open and look it up again later.
@@ -12859,7 +12859,7 @@ class ContainerAudit:
             self._update_action_button_states()
             self._update_current_item_label()
             self.show_status_message(
-                f"중앙 조회 실패 · 보류 {len(snapshot.items)}건 (삭제되지 않음)",
+                f"회사 서버 조회 실패 · 보류 {len(snapshot.items)}건 (삭제되지 않음)",
                 self.COLOR_DANGER,
                 duration=0,
             )
@@ -12889,7 +12889,7 @@ class ContainerAudit:
                 duration=0,
             )
 
-    def _begin_preflight_hold_drain(self, notice: str = "중앙 확인 완료") -> None:
+    def _begin_preflight_hold_drain(self, notice: str = "회사 서버 확인 완료") -> None:
         self._set_preflight_scan_input_locked(True)
         store = self._preflight_hold_store()
         if not store.exists():
@@ -13487,7 +13487,7 @@ class ContainerAudit:
                 duration=0,
             )
             self.show_fullscreen_warning(
-                "중앙 조회 재확인 필요",
+                "회사 서버 조회 재확인 필요",
                 "보류 스캔은 삭제되지 않았습니다. 확인을 누르면 같은 현품표로 "
                 "다시 조회합니다. 다른 작업이 급하면 운영 작업에서 관리자 인증 후 "
                 "보류 묶음을 격리하세요.",
@@ -13756,7 +13756,7 @@ class ContainerAudit:
             self._phs_label_refresh_pending = False
             self._update_action_button_states()
             self.show_status_message(
-                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                 self.COLOR_DANGER,
                 duration=0,
             )
@@ -15583,7 +15583,7 @@ class ContainerAudit:
                             foreground=self.COLOR_IDLE,
                         )
                     else:
-                        status_value.configure(text="이 PC 저장 완료", foreground=self.COLOR_SUCCESS)
+                        status_value.configure(text="이 PC에 저장됨", foreground=self.COLOR_SUCCESS)
                 elif state.completion is not None and state.completion.outcome is CompletionOutcome.RETRY_WAIT:
                     status_value.configure(text="서버 확인 대기", foreground=self.COLOR_IDLE)
                 elif state.completion is not None and state.completion.outcome is CompletionOutcome.LOCAL_EVENT_RETRY:
@@ -17156,7 +17156,7 @@ class ContainerAudit:
         lane = getattr(self, "_ui_lane", None)
         if lane is not None and lane.is_busy():
             self.show_status_message(
-                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                 self.COLOR_DANGER,
             )
             return True
@@ -17187,7 +17187,7 @@ class ContainerAudit:
                     f"{action} 작업을 할 수 없습니다. 현재 작업은 보존합니다. 관리자에게 알려 주세요."
                     if not getattr(self, "legacy_label_transition", False)
                     and self._is_pre_phs2_label(self._parse_new_format_qr(master_label))
-                    else "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                    else "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                     self.COLOR_DANGER,
                 )
                 return True
@@ -17198,19 +17198,19 @@ class ContainerAudit:
             attempt.status == "OPERATOR_REVIEW"
             or attempt.local_apply_status == "OPERATOR_REVIEW"
         ):
-            title = "중앙 제품 교체 확인 필요"
+            title = "회사 서버 제품 교환 확인 필요"
             message = (
                 "중앙 제품 교체 결과를 자동으로 확인할 수 없습니다.\n"
                 f"{action} 작업을 진행하지 말고 현재 트레이를 유지한 채 관리자에게 알려 주세요."
             )
         elif attempt.status == "ACKED":
-            title = "중앙 제품 교체 복구 필요"
+            title = "회사 서버 제품 교환 복구 필요"
             message = (
                 "중앙 제품 교체는 완료됐지만 현재 트레이에 반영되지 않았습니다.\n"
                 f"로컬 복구가 끝날 때까지 {action} 작업을 진행할 수 없습니다."
             )
         else:
-            title = "중앙 제품 교체 응답 대기"
+            title = "회사 서버 제품 교환 응답 대기"
             message = (
                 "중앙 제품 교체 결과를 확인 중입니다.\n"
                 f"확인이 끝날 때까지 {action} 작업을 진행할 수 없습니다."
@@ -18362,7 +18362,7 @@ class ContainerAudit:
             self._update_action_button_states()
             if result.status == "ACKED":
                 messagebox.showinfo(
-                    "중앙 반영 확인", "저장된 완료 작업의 회사 서버 반영을 확인했습니다.", parent=self.root,
+                    "회사 서버 반영 확인", "저장된 완료 작업의 회사 서버 반영을 확인했습니다.", parent=self.root,
                 )
             else:
                 messagebox.showwarning(
@@ -19124,7 +19124,7 @@ class ContainerAudit:
         lane = getattr(self, "_ui_lane", None)
         if lane is not None and lane.is_busy():
             self.show_status_message(
-                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                 self.COLOR_DANGER,
             )
             return True
@@ -19159,7 +19159,7 @@ class ContainerAudit:
         lane = getattr(self, "_ui_lane", None)
         if lane is not None and lane.is_busy():
             self.show_status_message(
-                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                 self.COLOR_DANGER,
             )
             return True
@@ -19235,7 +19235,7 @@ class ContainerAudit:
         lane = self._ui_task_lane()
         if lane.is_busy():
             self.show_status_message(
-                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                 self.COLOR_DANGER,
             )
             return False
@@ -19254,7 +19254,7 @@ class ContainerAudit:
         )
         if not admission.accepted:
             self.show_status_message(
-                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                 self.COLOR_DANGER,
             )
             return False
@@ -19617,7 +19617,7 @@ class ContainerAudit:
             f"파일: {path.name}\n원인: {reason}\n"
             f"SHA256: {result.sha256 or '읽기 실패'}\n"
             + ("원본 없음, 보류 표시만 남음. " if marker_only and not source.exists() else "")
-            + "남은 근거는 그대로 보존합니다. 원 현품표를 중앙에서 읽기 전용으로 재확인합니다."
+            + "남은 근거는 그대로 보존합니다. 원 현품표를 회사 서버에서 읽기 전용으로 재확인합니다."
         )
         if not messagebox.askyesno("손상 보류 작업", detail + "\n\n원 현품표를 다시 확인할까요?", parent=self.root):
             if not messagebox.askyesno("이 건만 보류", detail + "\n\n이 건만 보류하고 다른 현품표를 계속할까요?", parent=self.root):
@@ -19651,7 +19651,7 @@ class ContainerAudit:
 
         def finish(verified: bool) -> None:
             if not verified or not self._blocked_work_identity_matches(approval):
-                messagebox.showerror("중앙 확인 대기", "원 현품표를 회사 서버에서 확인하지 못했습니다. 원본을 계속 보류합니다.", parent=self.root)
+                messagebox.showerror("회사 서버 확인 대기", "원 현품표를 회사 서버에서 확인하지 못했습니다. 원본을 계속 보류합니다.", parent=self.root)
                 return
             try:
                 if read_recovery_file(path, "parked_manager_hold" if marker_only else "parked").sha256 != result.sha256:
@@ -19709,7 +19709,7 @@ class ContainerAudit:
             name="damaged-parked-readback",
             generation=getattr(self, "_scan_callback_epoch", 0),
             work=work, finish=finish,
-            fail=lambda _exc: messagebox.showerror("중앙 확인 대기", "회사 서버 조회에 실패했습니다. 원본을 계속 보류합니다.", parent=self.root),
+            fail=lambda _exc: messagebox.showerror("회사 서버 확인 대기", "회사 서버 조회에 실패했습니다. 원본을 계속 보류합니다.", parent=self.root),
         ))
 
     def _is_parked_tray_path(self, filepath: str) -> bool:
@@ -21300,7 +21300,7 @@ class ContainerAudit:
         lane = self._ui_task_lane()
         if lane.is_busy():
             self.show_status_message(
-                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                 self.COLOR_DANGER,
             )
             return False
@@ -21316,7 +21316,7 @@ class ContainerAudit:
         )
         if not admission.accepted:
             self.show_status_message(
-                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                 self.COLOR_DANGER,
             )
             return False
@@ -21517,7 +21517,7 @@ class ContainerAudit:
                 if hasattr(self, "exchange_complete_button"):
                     self.exchange_complete_button.config(state=tk.NORMAL)
                 self.show_status_message(
-                    "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                    "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                     self.COLOR_DANGER,
                 )
                 return
@@ -21538,7 +21538,7 @@ class ContainerAudit:
                 self.exchange_complete_button.config(state=tk.NORMAL)
             if not admission.accepted:
                 self.show_status_message(
-                    "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                    "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                     self.COLOR_DANGER,
                 )
             return
@@ -21589,13 +21589,13 @@ def prepare_startup_item_catalog() -> str:
 
 
 ITEM_CATALOG_STARTUP_EXIT_CODE = 3
-ITEM_CATALOG_STARTUP_ERROR_TITLE = "중앙 품목 목록 확인 실패"
+ITEM_CATALOG_STARTUP_ERROR_TITLE = "회사 서버 품목 목록 확인 실패"
 ITEM_CATALOG_STARTUP_ERROR_MESSAGE = (
     "중앙 품목 목록을 확인할 수 없어 프로그램 시작을 중단했습니다.\n\n"
     "네트워크 연결과 이 PC의 중앙 물류 설정을 확인한 뒤 다시 실행하세요. "
     "계속 실패하면 IT 담당자에게 문의하세요."
 )
-ITEM_CATALOG_CACHE_WARNING_TITLE = "검증된 품목 캐시 사용"
+ITEM_CATALOG_CACHE_WARNING_TITLE = "저장해 둔 품목 목록 사용"
 ITEM_CATALOG_CACHE_WARNING_MESSAGE = (
     "중앙 품목 목록을 새로 받지 못해 무결성이 검증된 로컬 캐시로 시작합니다.\n"
     "캐시 기준 시각: {cache_time}\n"
@@ -21608,7 +21608,7 @@ ITEM_CATALOG_TRANSITION_WARNING_MESSAGE = (
     "네트워크가 돌아오면 '운영 작업 → 품목 목록 새로 고침'을 누르세요.\n"
     "오류 코드: {cause_code}"
 )
-ITEM_CATALOG_SETUP_REQUIRED_TITLE = "중앙 연결 설정 필요"
+ITEM_CATALOG_SETUP_REQUIRED_TITLE = "회사 서버 연결 설정 필요"
 ITEM_CATALOG_SETUP_REQUIRED_MESSAGE = (
     "이 PC의 현재 Windows 사용자에 중앙 연결 설정이 없어 최신 품목 목록을 받지 않았습니다.\n"
     "{catalog} 작업은 계속할 수 있습니다. 목록에 없는 품목은 '품목 없음'으로 표시됩니다.\n\n"
