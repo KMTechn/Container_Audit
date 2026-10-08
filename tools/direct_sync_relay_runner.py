@@ -743,8 +743,8 @@ def _build_config(args: argparse.Namespace) -> DirectSyncRuntimeConfig:
 @writer_sink("raw_relay_runner", probe_only=True)
 def main(argv: list[str] | None = None) -> int:
     try:
-        from data_generation_guard import _runtime_release
-        _runtime_release()
+        from data_generation_guard import warm_runtime_release
+        warm_runtime_release()
     except Exception:
         pass
     from auto_update import SupportArgumentParser, emit_support_record

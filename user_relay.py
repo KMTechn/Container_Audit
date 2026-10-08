@@ -564,8 +564,8 @@ def main(argv: list[str] | None = None) -> int:
     scan_source_dir = resolve_owner_path(args.scan_source_dir) if args.scan_source_dir else storage.events_dir
     profile = resolve_logistics_profile_path()
     try:
-        from data_generation_guard import _runtime_release
-        _runtime_release()
+        from data_generation_guard import warm_runtime_release
+        warm_runtime_release()
     except Exception:
         pass
     try:

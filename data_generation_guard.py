@@ -98,6 +98,53 @@ class DataGenerationBlocked(RuntimeError):
         super().__init__(self.user_message)
 
 
+def _portable_runtime_release():
+    """Read and remember only a verified installed packet; never probe source Git."""
+    from tools.check_release_version import read_current_version
+
+    app_root = Path(__file__).resolve().parent
+    packet_root = app_root.parent if (app_root.parent / "portable-manifest.json").is_file() else app_root
+    manifest_path = packet_root / "portable-manifest.json"
+    if not manifest_path.exists():
+        return None
+    expected_entrypoint = (app_root / "Container_Audit.py").relative_to(packet_root).as_posix()
+    portable_identity = (packet_root.resolve(), app_root, expected_entrypoint)
+    cached = _PORTABLE_RELEASE_CACHE.get(portable_identity)
+    if cached is not None:
+        return dict(cached)
+    version = read_current_version(app_root / "Container_Audit.py")
+    from current_user_onboarding import verify_bootstrap_integrity
+    from types import SimpleNamespace
+
+    detail = verify_bootstrap_integrity(SimpleNamespace(
+        app_root=packet_root, bootstrap_integrity_path=packet_root / "bootstrap-integrity.json"), required=True,
+        expected_entrypoint=expected_entrypoint)
+    if detail.get("status") != "PASS":
+        raise ValueError("release code integrity is not proven")
+    if manifest_path.stat().st_size > 65536:
+        raise ValueError("release manifest is oversized")
+    manifest = json.loads(manifest_path.read_bytes())
+    if manifest.get("version") != version:
+        raise ValueError("release version binding differs")
+    build = manifest.get("source_commit")
+    if not isinstance(build, str) or not re.fullmatch(r"[0-9a-f]{40}", build):
+        raise ValueError("release build identity is not proven")
+    release = {"version": version, "build_id": build,
+               "data_compatible_min_version": version, "compatibility_verified": False}
+    _PORTABLE_RELEASE_CACHE[portable_identity] = dict(release)
+    return dict(release)
+
+
+def warm_runtime_release():
+    """Warm the installed packet check outside admission without source processes."""
+    if getattr(sys, "frozen", False):
+        return
+    try:
+        _portable_runtime_release()
+    except Exception:
+        pass
+
+
 def _runtime_release():
     """Bind to the running clean source commit or the verified installed packet."""
     from tools.check_release_version import read_current_version
@@ -112,30 +159,9 @@ def _runtime_release():
         return {"version": version, "build_id": build,
                 "data_compatible_min_version": version, "compatibility_verified": False}
     app_root = Path(__file__).resolve().parent
-    packet_root = app_root.parent if (app_root.parent / "portable-manifest.json").is_file() else app_root
-    manifest_path = packet_root / "portable-manifest.json"
-    portable_identity = None
-    if manifest_path.exists():
-        expected_entrypoint = (app_root / "Container_Audit.py").relative_to(packet_root).as_posix()
-        portable_identity = (packet_root.resolve(), app_root, expected_entrypoint)
-        cached = _PORTABLE_RELEASE_CACHE.get(portable_identity)
-        if cached is not None:
-            return dict(cached)
-        version = read_current_version(app_root / "Container_Audit.py")
-        from current_user_onboarding import verify_bootstrap_integrity
-        from types import SimpleNamespace
-
-        detail = verify_bootstrap_integrity(SimpleNamespace(
-            app_root=packet_root, bootstrap_integrity_path=packet_root / "bootstrap-integrity.json"), required=True,
-            expected_entrypoint=expected_entrypoint)
-        if detail.get("status") != "PASS":
-            raise ValueError("release code integrity is not proven")
-        if manifest_path.stat().st_size > 65536:
-            raise ValueError("release manifest is oversized")
-        manifest = json.loads(manifest_path.read_bytes())
-        if manifest.get("version") != version:
-            raise ValueError("release version binding differs")
-        build = manifest.get("source_commit")
+    release = _portable_runtime_release()
+    if release is not None:
+        return release
     else:
         version = read_current_version(app_root / "Container_Audit.py")
         build = subprocess.check_output(
@@ -151,8 +177,6 @@ def _runtime_release():
     # This support-portable path has no verified private release declaration.
     release = {"version": version, "build_id": build,
                "data_compatible_min_version": version, "compatibility_verified": False}
-    if portable_identity is not None:
-        _PORTABLE_RELEASE_CACHE[portable_identity] = dict(release)
     return release
 
 

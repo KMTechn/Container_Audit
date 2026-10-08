@@ -21748,8 +21748,8 @@ def _prepare_gui_startup(*, data_root=None):
     """Guard initialization without holding admission for a resident mode."""
 
     try:
-        from data_generation_guard import _runtime_release
-        _runtime_release()
+        from data_generation_guard import warm_runtime_release
+        warm_runtime_release()
     except Exception:
         pass
     with writer_admission("gui_startup"):
