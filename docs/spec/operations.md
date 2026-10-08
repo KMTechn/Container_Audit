@@ -1094,8 +1094,14 @@ evidence root에 CreateNew로 만든 두 transport 파일(UTF-8 source와 JSON a
 게시 전 메모리 bytes의 SHA256을 짧은 bootstrap에 결속한다. bootstrap은 leaf/ancestor
 reparse를 거절하고 FileShare.Read handle을 유지한 채 한 번 읽어 hash를 확인한다.
 확인한 bytes만 파싱·실행하며 source의 기존 filename metadata와 독립 pin은 유지한다.
-launcher 전체 명령은 고정 옵션·실행 파일을 포함해 16,000자 이하이고 기존 30,000자
-encoded 보조 guard도 유지한다. 완료·실패·취소의 finally에서 자기 파일만 정리한다.
+일반 사용자 finite producer는 같은 ACL의 추가 verifier 파일을 쓰며 짧은 `-Command`가
+그 파일의 reparse·크기·읽기 완전성·SHA256을 확인한 bytes만 실행한다. 실행 파일과
+옵션을 포함한 명령은 `CreateProcessWithTokenW`의 1,024 UTF-16 단위 한도에서 NUL
+한 단위를 예약한 1,023 이하이다. API 호출 전에 넘는 명령은 고정 코드
+`NORMAL_PRODUCER_COMMAND_TOO_LONG`과 길이 수치만 기록하고 거절한다. 비밀은 기존
+허용 환경 override에만 있으며 relay의 `StartLimited` 명령·토큰·세션 확인은 그대로다.
+그 밖의 launcher는 16,000자 이하이고 기존 30,000자 encoded 보조 guard도 유지한다.
+완료·실패·취소의 finally에서 자기 transport 파일만 정리한다.
 정리 실패는 원 오류/rollback을 덮지 않고 private 파일과 불완전 evidence를 보존한다.
 상승 helper·bootstrap library·writer fence helper와 일반 토큰 API는 한 번 읽은
 바이트의 SHA256을 확인하고 그 바이트를 파싱·평가한다. 실행 동안 source handle을
@@ -1435,3 +1441,5 @@ Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종�
 ### Bootstrap relay 시작의 일시 admission 대기
 
 Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRITER_GATE_TIMEOUT`만 기존 240초 창에서 0.1초씩 쉬며 재시도한다. 각 시도는 기존 launch_version의 admission을 다시 얻으며 시도 사이에는 admission을 보유하지 않는다. 상한은 240초 + 마지막 admission 대기 최대 5초이며 마감 뒤에는 기존 실패 출구를 유지한다. fence 확정·버려진 소유권 등 다른 거절과 GUI 실행 자체의 timeout은 재시도하지 않는다. 포인터·trial claim·READY·CONFIRMED·G 허가·cohort·잠금 순서는 유지한다. bootstrap 밖의 relay launcher admission과 실제 로그온/pythonw 수용은 별도 범위다.
+
+Rollback continuation의 기록된 owner PID가 현재 프로세스에 있어도 UTC 시작 시각이 기록과 다르면 PID 재사용으로 보고 재개한다(R-PID, 1차 결정 2026-10-08). 같은 시작 시각이면 기존 AllowLiveOwner·Depth 0 조건에서만 허용하고, 그 밖에는 `ROLLBACK_OWNER_ALIVE`로 거부한다. 시작 시각을 읽을 수 없으면 `ROLLBACK_OWNER_START_UNREADABLE`로 거부한다. 고정 코드와 보호 보고서 규칙을 적용하며 lineage·receipt·manifest 검증은 그대로 유지한다.

@@ -16,7 +16,7 @@ import time
 
 import pytest
 
-from tests.powershell_contracts import run_powershell
+from tests.powershell_contracts import run_functions, run_powershell
 from tests.test_canonical_installation_callers import _bind_packet, _distinct_replacement
 from tests.test_canonical_portable_uninstall import (
     _assert_one_live_relay, _launch_relay, _live_preimage, _ps, _setup, _sha, _tree,
@@ -257,7 +257,22 @@ def _produce_pending(tmp_path, env, source, install, engine):
     assert failed.returncode != 0
     assert (tmp_path / 'interrupted.json').exists(), failed.stdout + failed.stderr
     audit = json.loads((tmp_path / 'interrupted.json').read_text(encoding='utf-8-sig'))
-    assert 'FIXTURE_AFTER_REPLACEMENT' in json.dumps(audit['failure'])
+    # User/coordinator decision #31: public diagnostics contain fixed codes;
+    # the original belongs to this attempt's protected evidence report.
+    assert 'FIXTURE_AFTER_REPLACEMENT' not in json.dumps(audit['failure'])
+    assert audit['failure']['code'] == 'SUPPORT_FAILURE'
+    assert audit['failure']['exception_chain']
+    assert all(detail['message'] == 'SUPPORT_FAILURE'
+               for detail in audit['failure']['exception_chain'])
+    evidence_root = Path(audit['stage_evidence_root'])
+    assert evidence_root.resolve().parent == (tmp_path / 'a').resolve()
+    assert evidence_root.name.startswith('canonical-portable-' + audit['run_id'] + '.json.evidence.')
+    assert evidence_root == Path(audit['installation_evidence']['root'])
+    reports = [json.loads(line) for line in (evidence_root / 'stages.jsonl').read_text(
+        encoding='utf-8-sig').splitlines()]
+    assert any(report['event'] == 'CANONICAL_DIAGNOSTIC_REPORT'
+               and 'FIXTURE_AFTER_REPLACEMENT' in json.dumps(report['diagnostics'])
+               for report in reports)
     assert audit['code_replacement']['prestate'] == 'VERIFIED_REPLACE'
     records = list((tmp_path / 'protected-control/rollback-continuations').glob('*/continuation-journal.json'))
     assert len(records) == 1, failed.stdout + failed.stderr
@@ -376,14 +391,107 @@ def test_resume_mismatch_refuses_before_any_mutation(tmp_path, engine, tamper):
             (selected / 'app/main.py').write_text('# tampered tree\n', encoding='utf-8')
         state = _tree(tmp_path)
         refused = _invoke(tmp_path, env, source, install, engine, 'refused')
-        assert refused.returncode != 0 and '변경하지 않았습니다' in refused.stderr, refused.stdout + refused.stderr
+        # User/coordinator decision #31: this refusal is a fixed public record;
+        # preserve and verify the original through its same-attempt report.
+        assert refused.returncode != 0
+        assert '변경하지 않았습니다' not in refused.stdout + refused.stderr
+        records = [json.loads(line.split('=', 1)[1]) for line in refused.stdout.splitlines()
+                   if line.startswith('CONTAINER_AUDIT_INSTALL_CANONICAL=')]
+        assert len(records) == 1
+        public = records[0]
+        assert public['status'] == 'FAILED' and public['stage'] == 'canonical_install'
+        assert public['reason_code'] == 'INSTALLER_CANONICAL_FAILURE' and public['exit_code'] == 1
+        report_path = Path(public['report_path'])
+        report_root = report_path.parent
+        expected_reports = Path(env['LOCALAPPDATA']) / 'KMTech/ContainerAudit/install-audit'
+        assert report_root.resolve().parent == expected_reports.resolve()
+        assert re.fullmatch(r'canonical-portable-[A-Za-z0-9-]+\.json\.evidence\.\d+', report_root.name)
+        assert re.fullmatch(r'original-failure-[0-9a-f]{32}\.json', report_path.name)
+        assert str(report_path.relative_to(tmp_path)) not in state
+        assert _sha(report_path) == public['report_sha256']
+        original = json.loads(report_path.read_text(encoding='utf-8-sig'))
+        assert original['schema'] == 'container-audit-original-installation-failure-v1'
+        assert original['complete'] is True and original['truncated'] is False
+        assert original['failure']['script_line'] == public['location_line']
+        assert any('변경하지 않았습니다' in detail['message']
+                   for detail in original['failure']['exception_chain'])
+        diagnostic_files = {report_path.name, 'evidence-status.json', 'stages.jsonl'}
+        assert {path.name for path in report_root.iterdir()} == diagnostic_files
         after = _tree(tmp_path)
         # Captured process output is test evidence; product state must be exact.
         for name in ('refused-stdout.log', 'refused-stderr.log'):
             after.pop(name, None)
+        # Decision #31 requires only these fresh, same-attempt protected files.
+        # Every preexisting byte and every other new path still compares exactly.
+        for name in diagnostic_files:
+            relative = str((report_root / name).relative_to(tmp_path))
+            assert relative not in state and relative in after
+            after.pop(relative)
         assert after == state
         assert not (tmp_path / 'refused.json').exists()
         assert all(p.read_bytes() == b'protected-fixture-must-be-preserved' for p in protected)
+
+
+@pytest.mark.parametrize('engine', ['powershell.exe', 'pwsh.exe'])
+@pytest.mark.parametrize('owner_case', ['reused_pid', 'same_owner', 'start_unreadable', 'allowed_current_owner'])
+def test_rollback_owner_birth_rule_with_real_process(tmp_path, engine, owner_case):
+    # R-PID (coordinator 2026-10-08): real owned child identities; the unreadable
+    # case exits after the OS process query and before the actual StartTime read.
+    result = run_functions(tmp_path, Path(__file__).resolve().parents[1] /
+                           'tools/bootstrap_integrity.ps1',
+                           ['Assert-BootstrapRollbackOwnerExited'], r'''
+$info=[Diagnostics.ProcessStartInfo]::new()
+$info.FileName=$env:CA_OWNER_PYTHON
+$info.Arguments='-B -c "import sys;sys.stdin.buffer.read(1)"'
+$info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.RedirectStandardInput=$true
+$child=[Diagnostics.Process]::Start($info)
+try {
+    $script:ownerPid=$child.Id
+    $owner=Microsoft.PowerShell.Management\Get-Process -Id $script:ownerPid -ErrorAction Stop
+    $actualStart=$owner.StartTime.ToUniversalTime().ToString('o')
+    $owner.Dispose()
+    $recordedStart=$actualStart
+    if($env:CA_OWNER_CASE -ceq 'reused_pid'){
+        $recordedStart=([DateTime]$actualStart).AddSeconds(-1).ToUniversalTime().ToString('o')
+    }
+    function Get-Process {
+        [CmdletBinding()]param()
+        $queried=Microsoft.PowerShell.Management\Get-Process -Id $script:ownerPid -ErrorAction Stop
+        if($env:CA_OWNER_CASE -ceq 'start_unreadable'){
+            $child.StandardInput.Write('x');$child.StandardInput.Flush()
+            if(-not $child.WaitForExit(10000)){throw 'FIXTURE_OWNER_EXIT_UNPROVEN'}
+            $child.Dispose()
+        }
+        return $queried
+    }
+    $code='OWNER_EXITED_OR_ALLOWED'
+    try {
+        Assert-BootstrapRollbackOwnerExited $script:ownerPid $recordedStart `
+            -AllowLiveOwner:($env:CA_OWNER_CASE -ceq 'allowed_current_owner')
+    } catch {
+        if($_.Exception.Message -cnotin @('ROLLBACK_OWNER_ALIVE','ROLLBACK_OWNER_START_UNREADABLE')){throw}
+        $code=$_.Exception.Message
+    }
+    'OWNER_PROBE='+([ordered]@{reason_code=$code;owner_process_id=$script:ownerPid;
+        recorded_start=$recordedStart;actual_start=$actualStart}|ConvertTo-Json -Compress)
+} finally {
+    if($env:CA_OWNER_CASE -cne 'start_unreadable'){
+        if(-not $child.HasExited){$child.StandardInput.Write('x');$child.StandardInput.Flush()}
+        if(-not $child.WaitForExit(10000)){throw 'FIXTURE_OWNER_EXIT_UNPROVEN'}
+        $child.Dispose()
+    }
+}
+''', engine=engine, values={'CA_OWNER_CASE': owner_case, 'CA_OWNER_PYTHON': os.sys.executable})
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = [line for line in result.stdout.splitlines() if line.startswith('OWNER_PROBE=')]
+    assert len(lines) == 1
+    observed = json.loads(lines[0].split('=', 1)[1])
+    expected = {'same_owner': 'ROLLBACK_OWNER_ALIVE',
+                'start_unreadable': 'ROLLBACK_OWNER_START_UNREADABLE'}.get(
+                    owner_case, 'OWNER_EXITED_OR_ALLOWED')
+    assert observed['reason_code'] == expected
+    assert observed['owner_process_id'] > 0
+    assert (observed['actual_start'] != observed['recorded_start']) == (owner_case == 'reused_pid')
 
 
 @pytest.mark.parametrize('engine', ['powershell.exe', 'pwsh.exe'])

@@ -1,11 +1,41 @@
 """Exercise finite user capture and in-memory delegation without native launches."""
 from pathlib import Path
+import json
 import re
 import pytest
 from tests.powershell_contracts import run_functions
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "INSTALL_CANONICAL_PORTABLE.ps1"
+
+
+@pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
+def test_normal_producer_command_limit_precedes_native_dispatch(tmp_path, engine):
+    result = run_functions(tmp_path, SOURCE, ["Get-CanonicalFailureDetails"], r'''
+Add-Type 'public static class ContainerAuditCanonicalUserProcess { public static int Calls; public static int StartLimitedWithOverrides(string line,string sid,int session,string[] names,string[] values){Calls++;return 7;} }'
+$caller=[pscustomobject]@{sid='S-1-5-21-1-2-3-1001';session_id=1}
+$events=[Collections.Generic.List[object]]::new()
+function Write-InstallationEvidenceEvent($Payload){$events.Add($Payload)}
+if((Start-BootstrapNormalProducerWrapper ('x'*1023) $caller @() @()) -ne 7){throw 'within-budget command rejected'}
+foreach($line in @(('x'*1024),('x'*16000))){
+ $rejected=$false
+ try{[void](Start-BootstrapNormalProducerWrapper $line $caller @() @())}catch{$rejected=$_.Exception.Message -ceq 'NORMAL_PRODUCER_COMMAND_TOO_LONG'}
+ if(-not $rejected){throw 'oversized command reached native dispatch'}
+}
+if([ContainerAuditCanonicalUserProcess]::Calls -ne 1 -or $events.Count -ne 2){throw 'native call or rejection evidence count differs'}
+foreach($event in $events){
+ if($event.reason_code -cne 'NORMAL_PRODUCER_COMMAND_TOO_LONG' -or $event.command_limit_count -ne 1023 -or
+    $event.command_utf16_count -lt 1024 -or $event.Contains('command')){throw 'rejection metadata is not fixed and bounded'}
+}
+'PASS'
+''', engine=engine)
+    assert result.returncode == 0, result.stdout + result.stderr
+    records = [json.loads(line.split("=", 1)[1]) for line in result.stdout.splitlines()
+               if line.startswith("CONTAINER_AUDIT_NORMAL_PRODUCER=")]
+    assert records == [dict(status="FAILED", stage="normal_producer_launch",
+                            reason_code="NORMAL_PRODUCER_COMMAND_TOO_LONG",
+                            command_utf16_count=count, command_limit_count=1023)
+                       for count in (1024, 16000)]
 
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
@@ -175,6 +205,7 @@ function Get-BootstrapRelaySecurity {return [pscustomobject]@{sid=$sid;session_i
 function Import-BootstrapCanonicalUserProcessApi([string]$Root){if($Root -cne $fixture){throw 'wrong verified producer'}}
 function Start-BootstrapNormalProducerWrapper {
  param([string]$Line,$Caller,[string[]]$EnvironmentNames,[string[]]$EnvironmentValues)
+ if($Line.Length -gt 1023){throw 'finite producer command exceeds native API budget'}
  if($EnvironmentNames.Count -ne 5 -or $EnvironmentValues.Count -ne 5 -or $Caller.sid -cne $sid){throw 'ordinary launch delegation shape differs'}
  $parts=@([regex]::Matches($Line,'"([^"\r\n]*)"|([^\s]+)')|ForEach-Object {if($_.Groups[1].Success){$_.Groups[1].Value}else{$_.Groups[2].Value}})
  & $parts[0] @($parts|Select-Object -Skip 1) | Out-Null

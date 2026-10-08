@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 
@@ -16,7 +17,7 @@ LIBRARY = ROOT / "tools/bootstrap_integrity.ps1"
 ENGINES = ("powershell.exe", "pwsh.exe")
 
 
-def prepare(tmp_path, engine, source, arguments):
+def prepare(tmp_path, engine, source, arguments, *, limited=False):
     # Only the owned temporary directory is admitted; no native known folder,
     # registry, task, credential or elevation APIs are reached.
     (tmp_path / "code.txt").write_text(source, encoding="utf-8")
@@ -29,10 +30,10 @@ function Assert-InstallationEvidenceWriteRoot {param($Root)
 $source=[IO.File]::ReadAllText((Join-Path $env:CA_CONTRACT_ROOT 'code.txt'))
 $parsed=[IO.File]::ReadAllText((Join-Path $env:CA_CONTRACT_ROOT 'args.json'))|ConvertFrom-Json
 $values=[string[]]@($parsed)
-$transport=New-InstallationMemoryTransport $source $values $env:CA_CONTRACT_ROOT
+$transport=New-InstallationMemoryTransport $source $values $env:CA_CONTRACT_ROOT -LimitedUserCommand:($env:CA_LIMITED_TRANSPORT -ceq '1')
 [IO.File]::WriteAllText((Join-Path $env:CA_CONTRACT_ROOT 'transport.json'),($transport|ConvertTo-Json -Depth 5))
 'PREPARED'
-''', engine=engine)
+''', engine=engine, values={"CA_LIMITED_TRANSPORT": "1" if limited else "0"})
     assert result.returncode == 0, result.stdout + result.stderr
     return json.loads((tmp_path / "transport.json").read_text(encoding="utf-8-sig"))
 
@@ -47,6 +48,94 @@ def child(engine, encoded):
     # Pytest failures must not expand the private encoded command in logs.
     completed.args = [engine, "-EncodedCommand", "[private transport]"]
     return completed
+
+
+def limited_child(command):
+    engine = "powershell.exe"  # The product always selects Windows PowerShell.
+    environment = dict(os.environ)
+    environment["PSModulePath"] = str(Path(shutil.which(engine)).parent / "Modules")
+    result = subprocess.run([shutil.which(engine), "-NoLogo", "-NoProfile",
+                             "-ExecutionPolicy", "Bypass", "-Command", command],
+                            capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW,
+                            env=environment)
+    result.args = [engine, "-Command", "[private pinned launcher]"]
+    return result
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_limited_launcher_handles_max_path_and_full_private_argv(tmp_path, engine):
+    parent = tmp_path / "한 글'fixture"
+    tmp_path = parent / ("p" * (238 - len(str(parent)) - 1))
+    tmp_path.mkdir(parents=True)
+    values = ["", "한글", "a'b", 'a"b', "-NamedSwitch"] + ["x" * 259] * 45
+    source = ("if($args.Count -ne 50 -or $args[0] -cne '' -or $args[1] -cne '한글' "
+              "-or $args[2] -cne \"a'b\" -or $args[3] -cne 'a\"b' "
+              "-or $args[4] -cne '-NamedSwitch'){exit 9};exit 0")
+    transport = prepare(tmp_path, engine, source, values, limited=True)
+    assert len(transport["Paths"]) == 3
+    assert all(len(path) == 259 for path in transport["Paths"])
+    command = transport["LimitedCommand"]
+    line = f'{shutil.which("powershell.exe")} -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "{command}"'
+    assert len(line.encode("utf-16-le")) // 2 <= 1023
+    (tmp_path / "len.json").write_text(json.dumps({
+        "command_utf16_units": len(line.encode("utf-16-le")) // 2,
+        "transport_path_utf16_units": len(transport["Paths"][2].encode("utf-16-le")) // 2,
+        "api_limit": 1024, "nul_reserved": 1,
+    }), encoding="utf-8")
+    result = limited_child(command)
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    # The additional verifier has exactly the same protected read/delete DACL.
+    check = run_functions(tmp_path, LIBRARY, ["New-InstallationMemoryTransport"], r'''
+$paths=(Get-Content -LiteralPath (Join-Path $env:CA_CONTRACT_ROOT 'transport.json') -Raw|ConvertFrom-Json).Paths
+$descriptors=@($paths|ForEach-Object {(Get-Acl -LiteralPath $_).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)})
+if(@($descriptors|Select-Object -Unique).Count -ne 1){throw 'limited verifier ACL differs'}
+'PASS'
+''', engine=engine)
+    assert check.returncode == 0, check.stdout + check.stderr
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("target", (0, 1, 2))
+@pytest.mark.parametrize("fault", ("byte", "missing", "swap", "leaf", "ancestor"))
+def test_limited_launcher_rejects_unpinned_or_reparse_transport(tmp_path, engine, target, fault):
+    marker = tmp_path / "executed.txt"
+    source = "[IO.File]::WriteAllText('%s','executed')" % str(marker).replace("'", "''")
+    transport = prepare(tmp_path, engine, source, ["valid"], limited=True)
+    path = Path(transport["Paths"][target])
+    grant_fixture_owner_write(tmp_path, transport["Paths"], engine)
+    if fault == "byte":
+        content = bytearray(path.read_bytes())
+        content[-1] ^= 1
+        path.write_bytes(content)
+    elif fault == "missing":
+        path.unlink()
+    elif fault == "swap":
+        substitute = tmp_path / "substitute"
+        substitute.write_bytes(b"different")
+        os.replace(substitute, path)
+    else:
+        original = tmp_path / "original"
+        original.mkdir()
+        shutil.copyfile(path, original / path.name)
+        junction = tmp_path / "junction"
+        made = subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(junction), str(original)],
+                              capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        assert made.returncode == 0
+        linked = junction if fault == "leaf" else junction / path.name
+        if target == 2:
+            transport["LimitedCommand"] = transport["LimitedCommand"].replace(str(path), str(linked))
+        else:
+            # The outer pin remains valid so the real inner verifier must
+            # reject the reparse, rather than merely detecting edited bytes.
+            boot = Path(transport["Paths"][2])
+            boot.write_text(boot.read_text(encoding="utf-8").replace(str(path), str(linked)), encoding="utf-8")
+            command = transport["LimitedCommand"]
+            old_pin = re.search(r"-cne '([^']+)'", command).group(1)
+            new_pin = base64.b64encode(hashlib.sha256(boot.read_bytes()).digest()).decode("ascii")
+            transport["LimitedCommand"] = command.replace(old_pin, new_pin)
+    result = limited_child(transport["LimitedCommand"])
+    assert result.returncode == 1
+    assert not marker.exists()
 
 
 def grant_fixture_owner_write(tmp_path, paths, engine):

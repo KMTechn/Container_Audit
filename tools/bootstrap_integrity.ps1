@@ -880,7 +880,7 @@ function Remove-InstallationMemoryTransport($Transport,[switch]$AfterSeal) {
     }
 }
 
-function New-InstallationMemoryTransport([string]$Source,[string[]]$Arguments,[string]$Root,[string]$ReaderSid='') {
+function New-InstallationMemoryTransport([string]$Source,[string[]]$Arguments,[string]$Root,[string]$ReaderSid='',[switch]$LimitedUserCommand) {
     Assert-InstallationEvidenceWriteRoot $Root
     $stem=Join-Path $Root ([Guid]::NewGuid().ToString('N').Substring(0,16))
     $paths=@(($stem+'.ps1'),($stem+'.dat'))
@@ -954,7 +954,32 @@ finally{foreach($s in $streams){$s.Dispose()}}
             '@@data-path@@',$paths[1].Replace("'","''")).Replace('@@data-sha@@',$hashes[1])
         $encoded=ConvertTo-InstallationMemoryCommand $bootstrap @()
         Assert-InstallationMemoryCommandBound $encoded
-        return [pscustomobject]@{Encoded=$encoded;Paths=$paths;PayloadSha256=$hashes[1]}
+        $limitedCommand=''
+        if($LimitedUserCommand){
+            # The normal-user native API allows only 1024 UTF-16 units. Keep
+            # the existing pinned transport verifier in one more private file;
+            # the short command verifies captured bytes before evaluating them.
+            $path=$stem+'.run';$paths+=$path
+            $bytes=[Text.UTF8Encoding]::new($false).GetBytes($bootstrap)
+            $sha=[Security.Cryptography.SHA256]::Create()
+            try{$bootstrapPin=[Convert]::ToBase64String($sha.ComputeHash($bytes))}finally{$sha.Dispose()}
+            $stream=[IO.File]::Open($path,'CreateNew','Write','None');$created+=$path
+            try{
+                $fileAcl=[Security.AccessControl.FileSecurity]::new()
+                $fileAcl.SetSecurityDescriptorSddlForm($acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access),[Security.AccessControl.AccessControlSections]::Access)
+                if($PSVersionTable.PSEdition -ceq 'Desktop'){[IO.File]::SetAccessControl($path,$fileAcl)}
+                else{[IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($path),$fileAcl)}
+                $stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)
+            }finally{$stream.Dispose()}
+            # Numeric flags 1024=ReparsePoint and 5=FileShare.Read|Delete.
+            # No mutable path is re-read after the byte pin is checked. The
+            # bounded ReadBytes result must match the stream size and EOF.
+            $limitedCommand=@'
+try{$ErrorActionPreference='Stop';$p='@@path@@';for($q=$p;$q;$q=[IO.Path]::GetDirectoryName($q)){if([IO.File]::GetAttributes($q)-band 1024){throw 1}};$s=[IO.File]::Open($p,'Open','Read',5);try{if($s.Length-lt 1-or $s.Length-gt 16777216){throw 1};$b=([IO.BinaryReader]::new($s)).ReadBytes($s.Length);if($b.Length-ne $s.Length-or $s.ReadByte()-ne -1){throw 1};$h=[Security.Cryptography.SHA256]::Create();try{if([Convert]::ToBase64String($h.ComputeHash($b))-cne '@@sha@@'){throw 1}}finally{$h.Dispose()};& ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($b)))}finally{$s.Dispose()}}catch{exit 1}
+'@
+            $limitedCommand=$limitedCommand.Replace('@@path@@',$path.Replace("'","''")).Replace('@@sha@@',$bootstrapPin)
+        }
+        return [pscustomobject]@{Encoded=$encoded;Paths=$paths;PayloadSha256=$hashes[1];LimitedCommand=$limitedCommand}
     }catch{Remove-InstallationMemoryTransport ([pscustomobject]@{Paths=$created});throw}
 }
 
@@ -1857,6 +1882,16 @@ exit $exitCode
 }
 
 function Start-BootstrapNormalProducerWrapper([string]$Line,$Caller,[string[]]$EnvironmentNames,[string[]]$EnvironmentValues) {
+    # Reserve one UTF-16 unit for the terminating NUL; reject before any native
+    # token/process operation and record only fixed codes and numeric metadata.
+    if($Line.Length -gt 1023){
+        Write-InstallationEvidenceEvent ([ordered]@{event='NORMAL_PRODUCER_COMMAND_REJECTED';reason_code='NORMAL_PRODUCER_COMMAND_TOO_LONG';command_utf16_count=$Line.Length;command_limit_count=1023})
+        $public=ConvertTo-KmtechPublicRecord -Fields ([ordered]@{status='FAILED';stage='normal_producer_launch';
+            reason_code='NORMAL_PRODUCER_COMMAND_TOO_LONG';command_utf16_count=$Line.Length;command_limit_count=1023}) `
+            -AllowedCodes @('FAILED','normal_producer_launch','NORMAL_PRODUCER_COMMAND_TOO_LONG') -SafeMessages @()
+        [Console]::Out.WriteLine('CONTAINER_AUDIT_NORMAL_PRODUCER='+($public|ConvertTo-Json -Compress))
+        throw 'NORMAL_PRODUCER_COMMAND_TOO_LONG'
+    }
     return [ContainerAuditCanonicalUserProcess]::StartLimitedWithOverrides($Line,[string]$Caller.sid,[int]$Caller.session_id,$EnvironmentNames,$EnvironmentValues)
 }
 
@@ -1886,8 +1921,8 @@ function Invoke-BootstrapNormalFiniteProducer([string]$VerifiedProducerRoot,[str
     if(Test-Path -LiteralPath $resultPath){throw 'Normal producer capture target already exists.'}
     $library=Join-Path $VerifiedProducerRoot 'tools\bootstrap_integrity.ps1'
     $winps=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
-    $transport=New-InstallationMemoryTransport (Get-InstallationNormalProducerWrapperSource) (@($library,(Get-FileSha256 $library),$resultPath,[string]$PID,[string]$caller.sid,$Executable)+$Arguments) $root ([string]$caller.sid)
-    $argv=@((ConvertTo-BootstrapRelayArgument $winps),'-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$transport.Encoded)
+    $transport=New-InstallationMemoryTransport (Get-InstallationNormalProducerWrapperSource) (@($library,(Get-FileSha256 $library),$resultPath,[string]$PID,[string]$caller.sid,$Executable)+$Arguments) $root ([string]$caller.sid) -LimitedUserCommand
+    $argv=@((ConvertTo-BootstrapRelayArgument $winps),'-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-Command',(ConvertTo-BootstrapRelayArgument $transport.LimitedCommand))
     $names=@('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID','CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID','CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID','CONTAINER_AUDIT_DATA_ROOT')
     $values=[string[]]@($names|ForEach-Object {[string][Environment]::GetEnvironmentVariable($_,'Process')})
     $wrapperPid=Start-BootstrapNormalProducerWrapper ($argv -join ' ') $caller $names $values
@@ -3097,6 +3132,20 @@ function Read-BootstrapReplacementReceipt(
 
 
 
+function Assert-BootstrapRollbackOwnerExited([int]$OwnerProcessId,[string]$OwnerStartedAtUtc,[switch]$AllowLiveOwner) {
+    $recordedStart=([DateTime]$OwnerStartedAtUtc).ToUniversalTime().ToString('o')
+    try { $owners=@(Get-Process -ErrorAction Stop | Where-Object {$_.Id -eq $OwnerProcessId}) }
+    catch { throw 'ROLLBACK_OWNER_START_UNREADABLE' }
+    if (-not $owners.Count) { return }
+    try {
+        $started=$owners[0].StartTime
+        if ($started -isnot [DateTime]) { throw 'ROLLBACK_OWNER_START_UNREADABLE' }
+        $actualStart=$started.ToUniversalTime().ToString('o')
+    } catch { throw 'ROLLBACK_OWNER_START_UNREADABLE' }
+    # A live process with another birth is a reused PID, not the recorded owner.
+    if ($actualStart -ceq $recordedStart -and -not $AllowLiveOwner) { throw 'ROLLBACK_OWNER_ALIVE' }
+}
+
 function Read-BootstrapRollbackContinuationAuthority($Record,[string]$JournalPath,[string]$JournalSha256,$Fence,[int]$Depth=0,[switch]$AllowLiveOwner) {
     if($Depth -gt 128){throw 'Rollback authority lineage exceeds its bound.'}
     $names=@('session_id','attempt_id','orchestrator_sha256','writer_contract_sha256','replacement_transaction_id')
@@ -3144,9 +3193,7 @@ function Read-BootstrapRollbackContinuationAuthority($Record,[string]$JournalPat
     $previous=Read-BootstrapRollbackContinuationAuthority $Record $JournalPath $JournalSha256 $link.previous ($Depth+1)
     if([string]$link.previous_link_sha256 -cne [string]$previous.link_sha256){throw 'Rollback authority predecessor hash differs.'}
     [void][DateTime]::Parse([string]$link.owner_started_at_utc)
-    $owners=@(Get-Process -Id ([int]$link.owner_process_id) -ErrorAction SilentlyContinue)
-    if($owners.Count -and (-not $AllowLiveOwner -or $Depth -ne 0 -or
-        $owners[0].StartTime.ToUniversalTime().ToString('o') -cne ([DateTime]$link.owner_started_at_utc).ToUniversalTime().ToString('o'))){throw 'Rollback linked owner is alive or PID reused.'}
+    Assert-BootstrapRollbackOwnerExited ([int]$link.owner_process_id) ([string]$link.owner_started_at_utc) -AllowLiveOwner:($AllowLiveOwner -and $Depth -eq 0)
     if([string]$link.prepared_receipt_sha256 -cnotmatch '^[0-9a-f]{64}$'){throw 'Rollback linked preparation hash differs.'}
     # The immutable protected link is the durable preparation binding. Rotating
     # caller evidence is not required to remain available on a later retry.

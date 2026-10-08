@@ -2303,7 +2303,7 @@ function Read-CanonicalRollbackContinuation([string]$InstallRoot,[string]$LocalA
         if ($currentManifest -cnotin @([string]$record.old_manifest_sha256,[string]$record.new_manifest_sha256)) {throw 'Rollback continuation current manifest differs.'}
         if ([string]$record.source_manifest_sha256 -cne $sourceManifestSha256 -or [string]$record.new_manifest_sha256 -cne $sourceManifestSha256 -or
             [string]$record.orchestrator_sha256 -cne (Sha (Join-Path $source 'INSTALL_CANONICAL_PORTABLE.ps1'))) {throw 'Rollback continuation requires its exact successor packet.'}
-        if (@(Get-Process -ErrorAction Stop|Where-Object {$_.Id -eq [int]$record.owner_process_id}).Count) {throw 'Rollback continuation owner is alive or reused.'}
+        Assert-BootstrapRollbackOwnerExited ([int]$record.owner_process_id) ([string]$record.owner_started_at_utc)
         $receipt=ReadReplacementReceipt $physical ([string]$record.transaction_id) $InstallRoot $sourceManifest $sourceManifestSha256 $sourceHelperSha256 $sourceIntegrityHelperSha256 ([string]$record.receipt_binding_path)
         if ($receipt.PSObject.Properties['startup_update_preimage']) {
             $preimageDirectory=[string]$receipt.startup_update_preimage
