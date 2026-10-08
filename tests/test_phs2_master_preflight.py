@@ -1834,7 +1834,7 @@ def test_offline_queue_restart_only_skips_confirmation_for_durable_outage(tmp_pa
         assert not app.warnings and not app._preflight_scan_input_locked
     else:
         assert len(client.identities) == 1
-        assert app.warnings[-1][0] == "회사 서버 조회 재확인 필요"
+        assert app.warnings[-1][0] == "중앙 조회 재확인 필요"
 
 
 @pytest.mark.parametrize("failure", ["audit_false", "audit_raise", "after_move"])

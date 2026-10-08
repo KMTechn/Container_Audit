@@ -2303,7 +2303,7 @@ class ContainerAudit:
         else:
             self._set_preflight_scan_input_locked(True)
             self.show_fullscreen_warning(
-                "회사 서버 조회 재확인 필요",
+                "중앙 조회 재확인 필요",
                 "격리 보류 묶음을 복원했습니다. 확인을 누르면 같은 현품표로 다시 조회합니다.",
                 self.COLOR_DANGER,
             )
@@ -13487,7 +13487,7 @@ class ContainerAudit:
                 duration=0,
             )
             self.show_fullscreen_warning(
-                "회사 서버 조회 재확인 필요",
+                "중앙 조회 재확인 필요",
                 "보류 스캔은 삭제되지 않았습니다. 확인을 누르면 같은 현품표로 "
                 "다시 조회합니다. 다른 작업이 급하면 운영 작업에서 관리자 인증 후 "
                 "보류 묶음을 격리하세요.",
@@ -17198,19 +17198,19 @@ class ContainerAudit:
             attempt.status == "OPERATOR_REVIEW"
             or attempt.local_apply_status == "OPERATOR_REVIEW"
         ):
-            title = "회사 서버 제품 교환 확인 필요"
+            title = "중앙 제품 교체 확인 필요"
             message = (
                 "중앙 제품 교체 결과를 자동으로 확인할 수 없습니다.\n"
                 f"{action} 작업을 진행하지 말고 현재 트레이를 유지한 채 관리자에게 알려 주세요."
             )
         elif attempt.status == "ACKED":
-            title = "회사 서버 제품 교환 복구 필요"
+            title = "중앙 제품 교체 복구 필요"
             message = (
                 "중앙 제품 교체는 완료됐지만 현재 트레이에 반영되지 않았습니다.\n"
                 f"로컬 복구가 끝날 때까지 {action} 작업을 진행할 수 없습니다."
             )
         else:
-            title = "회사 서버 제품 교환 응답 대기"
+            title = "중앙 제품 교체 응답 대기"
             message = (
                 "중앙 제품 교체 결과를 확인 중입니다.\n"
                 f"확인이 끝날 때까지 {action} 작업을 진행할 수 없습니다."
@@ -21182,13 +21182,13 @@ class ContainerAudit:
         status = str(outcome.get("status") or "failed")
         if status == "conflict":
             self._show_field_notice(
-                "회사 서버 교체 상태 충돌",
+                "중앙 교체 상태 충돌",
                 "중앙 교체 결과와 현재 트레이 제품 목록이 부분적으로만 일치합니다. "
                 "작업을 중단하고 관리자에게 확인하세요.",
             )
         elif status == "failed":
             self._show_field_notice(
-                "회사 서버 교체 복구 실패",
+                "중앙 교체 복구 실패",
                 "서버에서 완료된 제품 교체를 현재 트레이에 복구하지 못했습니다. 담당자 확인이 필요합니다.",
             )
 
@@ -21263,12 +21263,12 @@ class ContainerAudit:
             elif status == "apply_failed":
                 self._show_field_notice(
                     "교체 취소 불가",
-                    "회사 서버에서 완료된 제품 교체를 현재 트레이에 먼저 복구해야 합니다. 담당자에게 알리세요.",
+                    "회사 서버에서 완료된 제품 교환을 현재 트레이에 먼저 복구해야 합니다. 담당자에게 알리세요.",
                 )
             elif status == "command_pending":
                 self._show_field_notice(
                     "교체 취소 불가",
-                    "중앙 제품 교체 완료 여부가 아직 확정되지 않았습니다. "
+                    "중앙 제품 교환 완료 여부가 아직 확정되지 않았습니다. "
                     "네트워크를 확인한 뒤 다시 시도하세요.",
                 )
 
@@ -21413,7 +21413,7 @@ class ContainerAudit:
             if not master_fields:
                 self.exchange_complete_button.config(state=tk.NORMAL)
                 self._show_field_notice(
-                    "회사 서버 교체 차단",
+                    "중앙 교체 차단",
                     "현재 현품표에서 중앙 등록 정보를 확인할 수 없습니다. "
                     "현품표를 다시 확인하고 관리자에게 문의하세요.",
                 )
@@ -21425,7 +21425,7 @@ class ContainerAudit:
             if not operation_lease_id:
                 self.exchange_complete_button.config(state=tk.NORMAL)
                 self._show_field_notice(
-                    "회사 서버 교체 차단",
+                    "중앙 교체 차단",
                     "현재 트레이의 이적 확인 정보가 없어 제품을 교체할 수 없습니다. "
                     "현재 트레이를 유지하고 관리자에게 문의하세요.",
                 )

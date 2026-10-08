@@ -172,7 +172,7 @@ def test_activation_preserves_actual_pending_exchange_and_blocks_submit(tmp_path
         assert attempt.status == "PREPARED"
         app.current_tray.scanned_barcodes = [ITEM + "-A", ITEM + "-B"]
         assert app.request_complete_tray() is False
-        assert warnings and "회사 서버 제품 교환" in warnings[0][0]
+        assert warnings and "중앙 제품 교체" in warnings[0][0]
     finally:
         app._ui_lane.close_idle()
 
