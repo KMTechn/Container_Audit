@@ -499,7 +499,7 @@ def container_startup_logistics_client():
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.99"
+CURRENT_VERSION = "v2.0.100"
 SAFE_TRANSFER_PREFLIGHT_RETRY_CODES = frozenset(
     {"PHS_LABEL_REPLACEMENT_AMBIGUOUS"}
 )
