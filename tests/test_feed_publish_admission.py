@@ -333,6 +333,7 @@ def test_download_copy_publish_and_marker_with_other_process(tmp_path, monkeypat
     assert scans["admissions"] >= 2
     assert summary["copy"]["count"] == 1
     assert summary["publish"]["max_ms"] < 100
+    assert summary["prepared.json"]["max_ms"] <= 2000
     assert max(row["hold_ms"] for row in records if row["phase"] != "prepared.json") <= 200
 
 

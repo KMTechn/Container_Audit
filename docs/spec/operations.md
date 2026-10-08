@@ -356,6 +356,22 @@ fence는 진행 중인 한 조각/복사의 임시 쓰기를 즉시 중단하지
 삭제 전 이름·부모 경로를 확인하고 reparse를 거절하며, 남의 시도·임시 사본·고정 이름·prepared.json은 삭제하지 않는다.
 임시 사본은 fsync 뒤 교체한다. Windows의 marker 내구 게시가 앞선 NTFS 이름 교체도 내구로 만든다는 기존 순서 가정을 유지한다.
 
+허가 보유 시간과 스캔 쪽 허가 진입 대기는 별도로 평가한다. D: HDD V4 실측에서
+허가 보유 최대는 prepared.json 700.91 ms, 조각 4.41 ms, 게시 6.50 ms였고,
+다른 프로세스의 스캔 진입 대기는 최대 2743.73 ms였다. K6 수정본의 최대 보유는
+85.42 ms, 스캔 진입 대기는 최대 1441.09 ms였으며 두 측정 모두 저장 거절은 0이었다.
+보유보다 긴 진입 대기는 active_fence 파일 읽기와 조각 fsync가 같은 HDD를 다투는
+경합으로 추정한다(256 MiB/256 KiB 내려받기는 조각 fsync 1024회). 이 결과는
+허가 보유와 저장 거절에 대한 근거이며, 스캔 진입 대기 1초 이하를 보장하지 않는다.
+실제 write_json_durable sink의 prepared.json 허가 보유는 D: HDD 시험에서 2초 이하를 단언한다.
+
+독립 검토의 잔여 한계도 유지한다. 게시 뒤 자기 시도 정리가 실패하면 relay는 FAILED를
+보고하고 시도 폴더가 남을 수 있다. 다음 주기에는 유효한 marker로 PREPARED가 되지만
+이전 시도를 쓸어 지우지 않는다. V6(a) 원천 시험은 staging_root 글자 대조에 한정되어
+리터럴 updates 경로나 부모 삭제를 포괄하지 않는다(현재 검토에서 해당 삭제는 0건).
+이 가지의 생성 선언·핀은 통합 472가 표준 도구로 재생성하고 --check PASS를 확인한다.
+V3 재생성 사본의 빌더 read-only PASS는 그 파생 가능성을 확인한 근거다.
+
 관리자 설치기는 기존 보호 코드 배치와 같은 writer delegation 아래서
 `versions/<source SHA>`·`update-control`을 보호하고, 지정 작업자 SID의 로그온으로
 숨겨진 SYSTEM 작업 `KMTech.ContainerAudit.StartupUpdate.<경로/SID 식별값>`을 등록한다.
