@@ -21745,68 +21745,33 @@ def main(argv: list[str] | None = None):
 
 @writer_sink("gui_startup", probe_only=True)
 def _prepare_gui_startup(*, data_root=None):
-    """Guard initialization without holding admission for a resident mode."""
+    """Check the kernel instance lease before admitting startup mutations."""
 
+    if getattr(sys, 'frozen', False):
+        application_path = os.path.dirname(sys.executable)
+    else:
+        application_path = os.path.dirname(os.path.abspath(__file__))
     try:
-        from data_generation_guard import warm_runtime_release
-        warm_runtime_release()
-    except Exception:
-        pass
-    with writer_admission("gui_startup"):
-        verify_factory_contract_startup()
-        if getattr(sys, 'frozen', False):
-            application_path = os.path.dirname(sys.executable)
-        else:
-            application_path = os.path.dirname(os.path.abspath(__file__))
-        try:
-            storage_paths = build_container_audit_storage_paths(
-                application_path=application_path, data_root=data_root,
-            )
-            if storage_paths.custom_data_root and not storage_paths.data_root.is_dir():
-                raise DataRootUnavailableError("GUI data root is unavailable")
-            from logistics_runtime_profile import resolve_logistics_profile_path
-            profile_candidates = [resolve_logistics_profile_path()]
-            profile_override = os.getenv(LOGISTICS_PROFILE_PATH_ENV, "").strip()
-            if profile_override:
-                profile_candidates.append(resolve_owner_path(profile_override))
-            profile_candidates = [path for path in profile_candidates if path.is_file()]
-            protected_admin_profile = default_protected_admin_profile_path()
-            # Keep the original reparse policy before binding the admitted path.
-            from logistics_runtime_profile import assert_path_has_no_reparse_components
-            try:
-                protected_admin_profile = assert_path_has_no_reparse_components(
-                    protected_admin_profile, label="protected administrator profile",
-                )
-            except (OSError, ValueError) as exc:
-                raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False}) from exc
-            probe_before_owner_paths(storage_paths.data_root, file_paths=(
-                *profile_candidates, protected_admin_profile,
-            ))
-            prepared_admin_pin_credential = None
-            if storage_paths.credential_path.is_file():
-                from direct_sync_runtime import prepare_credential_config
-                prepared_admin_pin_credential = prepare_credential_config(
-                    storage_paths.credential_path, data_root=storage_paths.data_root,
-                )
-            if storage_paths.custom_data_root:
-                validate_existing_data_root(storage_paths.data_root)
-        except (OSError, ValueError) as exc:
-            raise DataRootUnavailableError("GUI data root is unavailable") from exc
-        if storage_paths.custom_data_root:
-            # Keep onboarding, GUI constructors and subprocesses on this selection.
-            os.environ[DATA_ROOT_ENV] = str(storage_paths.data_root)
-        try:
-            instance_lease = acquire_runtime_instance(storage_paths.data_root)
-        except OSError:
-            messagebox.showerror(
-                "프로그램 실행 잠금 실패",
-                "데이터 충돌 방지를 위한 실행 잠금을 확인하지 못했습니다. "
-                "프로그램을 시작하지 않고 관리자에게 문의합니다.",
-            )
-            return
+        storage_paths = build_container_audit_storage_paths(
+            application_path=application_path, data_root=data_root,
+        )
+    except (OSError, ValueError) as exc:
+        raise DataRootUnavailableError("GUI data root is unavailable") from exc
+    startup_notice = None
+    try:
+        instance_lease = acquire_runtime_instance(storage_paths.data_root)
+    except OSError:
+        startup_notice = (
+            messagebox.showerror,
+            "프로그램 실행 잠금 실패",
+            "데이터 충돌 방지를 위한 실행 잠금을 확인하지 못했습니다. "
+            "프로그램을 시작하지 않고 관리자에게 문의합니다.",
+        )
+    else:
         if instance_lease is None:
             stalled = shutdown_stall_is_live(storage_paths.data_root)
-            messagebox.showwarning(
+            startup_notice = (
+                messagebox.showwarning,
                 "프로그램이 이미 실행 중입니다",
                 ("이전 프로그램의 종료 정리가 아직 끝나지 않았습니다. "
                  "잠시 기다린 뒤 다시 실행하세요. 앱이 닫히고 다시 안 켜지면 PC를 재시작하세요.")
@@ -21814,9 +21779,53 @@ def _prepare_gui_startup(*, data_root=None):
                 ("같은 PC에서 이적 검사 프로그램을 두 번 실행할 수 없습니다. "
                  "열려 있는 창을 사용해 주세요."),
             )
-            return
+    if startup_notice is not None:
+        show_notice, title, message = startup_notice
+        show_notice(title, message)
+        return
     startup_complete = False
     try:
+        try:
+            from data_generation_guard import warm_runtime_release
+            warm_runtime_release()
+        except Exception:
+            pass
+        with writer_admission("gui_startup"):
+            verify_factory_contract_startup()
+            try:
+                if storage_paths.custom_data_root and not storage_paths.data_root.is_dir():
+                    raise DataRootUnavailableError("GUI data root is unavailable")
+                from logistics_runtime_profile import resolve_logistics_profile_path
+                profile_candidates = [resolve_logistics_profile_path()]
+                profile_override = os.getenv(LOGISTICS_PROFILE_PATH_ENV, "").strip()
+                if profile_override:
+                    profile_candidates.append(resolve_owner_path(profile_override))
+                profile_candidates = [path for path in profile_candidates if path.is_file()]
+                protected_admin_profile = default_protected_admin_profile_path()
+                # Keep the original reparse policy before binding the admitted path.
+                from logistics_runtime_profile import assert_path_has_no_reparse_components
+                try:
+                    protected_admin_profile = assert_path_has_no_reparse_components(
+                        protected_admin_profile, label="protected administrator profile",
+                    )
+                except (OSError, ValueError) as exc:
+                    raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False}) from exc
+                probe_before_owner_paths(storage_paths.data_root, file_paths=(
+                    *profile_candidates, protected_admin_profile,
+                ))
+                prepared_admin_pin_credential = None
+                if storage_paths.credential_path.is_file():
+                    from direct_sync_runtime import prepare_credential_config
+                    prepared_admin_pin_credential = prepare_credential_config(
+                        storage_paths.credential_path, data_root=storage_paths.data_root,
+                    )
+                if storage_paths.custom_data_root:
+                    validate_existing_data_root(storage_paths.data_root)
+            except (OSError, ValueError) as exc:
+                raise DataRootUnavailableError("GUI data root is unavailable") from exc
+            if storage_paths.custom_data_root:
+                # Keep onboarding, GUI constructors and subprocesses on this selection.
+                os.environ[DATA_ROOT_ENV] = str(storage_paths.data_root)
         try:
             clear_shutdown_stall(storage_paths.data_root)
         except Exception as exc:
