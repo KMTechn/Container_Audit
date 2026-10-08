@@ -10,6 +10,8 @@
 
 감사 CSV의 키 색인은 완결 줄만 인정한다. append와 색인 재생성 전에 같은 파일 잠금 안에서 줄바꿈 없는/NUL 꼬리를 잘라 fsync하고 색인을 무효화한다. 헤더 손상은 원본을 보존하며 거절한다. CSV fsync 뒤 파일 크기·수정 시각·identity가 바뀌면 outbox 원본을 ACK하지 않고 다시 투영한다.
 
+CSV 잠금 owner는 PID와 생성 시각으로 결속한다. 경합 때 프로세스 부재 또는 생성 시각 불일치면 즉시 제거·재시도하고, 살아 있는 같은 owner와 조회 불가 owner는 기다린다. 옛 PID-only 잠금도 생존을 확인하며, 읽을 수 없는 기록만 mtime 300초 규칙으로 판단한다. 시작 때 별도 잠금 청소는 하지 않는다.
+
 이미 writer admission을 쥔 drain은 완결 행 append만 하고 fsync·ACK·진행 중 행 대기를 배경에 맡긴다. 손상 꼬리의 복구도 중첩 밖에서만 한다(끊김 복구의 truncate/fsync는 파일 잠금과 admission 안에서 한 번 수행하는 예외). 중첩 동기 감사의 True는 원본 내구 접수이며 내부 projection-pending으로 CSV 대기를 구별한다. 미투영 outbox가 있으면 checkpoint 감사 목록을 지우지 않는다.
 
 종료는 한 번 정한 CSV 대기 기한을 공유한다. 기한을 넘긴 행은 새로운 fsync·ACK를 시작하지 않으며, 진행 중 fsync가 돌아와도 원본을 ACK하지 않는다. 내구 원본은 다음 프로세스에서 재생한다. checkpoint 감사 목록도 투영이 남아 있으면 보존한다.

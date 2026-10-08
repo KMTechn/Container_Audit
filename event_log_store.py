@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict
 
+from auto_update import native_process_identity
 from writer_session_fence import _WRITER_LOCAL, writer_admission, writer_sink
 from storage_utils import atomic_write_json
 
@@ -212,17 +213,49 @@ def _lock_file_path(log_file_path: str) -> str:
     return f"{os.path.abspath(log_file_path)}.lock"
 
 
+def _lock_owner_is_dead(lock_path: str) -> bool | None:
+    """Return None only for an unreadable record, which uses the age fallback."""
+    try:
+        with open(lock_path, "rb") as handle:
+            raw = handle.read(4097)
+        if len(raw) > 4096:
+            return None
+        text = raw.decode("ascii").strip()
+        if text.isdecimal():
+            pid, creation = int(text), None  # Previous releases wrote PID only.
+        else:
+            record = json.loads(text)
+            pid, creation = record["pid"], record["creation_identity"]
+            if not isinstance(creation, str) or not creation.isdecimal():
+                return None
+        if type(pid) is not int or not 0 < pid <= 0xFFFFFFFF:
+            return None
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError):
+        return None
+    owner = native_process_identity(pid)
+    if owner["status"] == "ABSENT":
+        return True
+    if owner["status"] == "LIVE" and creation is not None:
+        return owner["creation_identity"] != creation
+    # An inaccessible process is not evidence that its owner died.
+    return False
+
+
 @contextmanager
 def _interprocess_file_lock(log_file_path: str):
     with writer_admission("event_interprocess_lock"):
         lock_path = _lock_file_path(log_file_path)
         Path(lock_path).parent.mkdir(parents=True, exist_ok=True)
+        owner = native_process_identity(os.getpid())
+        if owner["status"] != "LIVE":
+            raise OSError("event log lock owner creation identity is unobservable")
+        payload = json.dumps({"pid": os.getpid(),
+                              "creation_identity": owner["creation_identity"]}).encode("ascii")
         deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
         fd: int | None = None
         while fd is None:
             try:
                 fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-                os.write(fd, str(os.getpid()).encode("ascii", errors="ignore"))
             except (FileExistsError, PermissionError):
                 if not os.path.exists(lock_path):
                     if time.monotonic() >= deadline:
@@ -230,8 +263,9 @@ def _interprocess_file_lock(log_file_path: str):
                     time.sleep(0.01)
                     continue
                 try:
-                    age = time.time() - os.path.getmtime(lock_path)
-                    if age > LOCK_STALE_SECONDS:
+                    dead = _lock_owner_is_dead(lock_path)
+                    if dead or (dead is None and
+                                time.time() - os.path.getmtime(lock_path) > LOCK_STALE_SECONDS):
                         try:
                             os.unlink(lock_path)
                         except (FileNotFoundError, PermissionError):
@@ -243,6 +277,7 @@ def _interprocess_file_lock(log_file_path: str):
                     raise TimeoutError(f"event log lock timeout: {lock_path}")
                 time.sleep(0.01)
         try:
+            os.write(fd, payload)
             yield
         finally:
             if fd is not None:
