@@ -595,6 +595,12 @@ size/hash·aggregate를 검증한다. 기존 record를 다시 쓰거나 writer i
 [H-CA-PS 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w6hcaps/RESULT.md)에 구분한다.
 실제 lifecycle·관리자 ACL hardening은 이 소스 회귀의 검증 범위 밖이다.
 
+작성자 검증기는 정본 OS 모듈 머리 두 줄의 원본 바이트와 script 첫 명령 위치를
+확인한 경우에만 모듈 실행 예외로 인정한다. param이 있으면 그 뒤여야 한다.
+공백·대소문자·경로·오류 정책 변경과 추가 module load는 예외로 인정하지 않는다.
+진단 로그는 정확히 pin된 미사용 잎일 때만 분석상 제외하며 import·호출은 거절한다.
+이 예외는 생성 선언·설치 pin의 갱신이나 실제 설치 수용을 대신하지 않는다.
+
 `kmtech_shared` 0.3.1은 정본 code `1be471f04b40bc2feef6d5a9f1478ddbb2336050`의
 5개 파일(catalog·raster·runtime·__init__·powershell/portable.ps1)을 byte 그대로 고정한다. 별도 `kmtech_shared.lock.json`이 manifest SHA256을
 결속하며 기존 factory `contract.lock.json`과 독립적이다. portable/PyInstaller 모두

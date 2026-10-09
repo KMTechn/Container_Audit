@@ -17,6 +17,11 @@ BYTE_EXACT_CHECKOUT_PATHS = (SNAPSHOT_RELATIVE_PATH, Path("tools/bootstrap_integ
 SNAPSHOT_PATH = ROOT / SNAPSHOT_RELATIVE_PATH
 
 SHIPPED_PACKAGE_DIRS = ("kmtech_factory_contracts", "kmtech_shared", "vendor")
+SHARED_UNUSED_DIAGNOSTIC_SHA256 = "085c47ad7cf42130de74240a6e3dccefc2502d844591f775d46fedaabc6ad36b"
+PS_MODULE_PROLOGUE = (
+    b"Import-Module -Name (Join-Path $PSHOME 'Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop\n"
+    b"Import-Module -Name (Join-Path $PSHOME 'Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop\n"
+)
 SHIPPED_PORTABLE_ENTRYPOINTS = (Path("portable/main.py"),)
 POWERSHELL_PATHS = (
     Path("kmtech_shared/powershell/portable.ps1"),
@@ -2332,6 +2337,40 @@ def _powershell_target(fragment: str) -> tuple[str, bool]:
     return target, static
 
 
+def _powershell_module_prologue_lines(source: bytes) -> frozenset[int]:
+    """Only the byte-exact OS block at the script's first command is exempt."""
+    if source.count(PS_MODULE_PROLOGUE) != 1:
+        return frozenset()
+    before, after = source.split(PS_MODULE_PROLOGUE)
+    if before and not before.endswith(b"\n") and before != b"\xef\xbb\xbf":
+        return frozenset()
+    prefix = "\n".join(_powershell_code_only(line) for line in
+                       before.decode("utf-8-sig").splitlines()).strip()
+    if prefix:
+        parameter = re.match(r"(?i)(?:\[CmdletBinding\(\)\]\s*)?param\s*\(", prefix)
+        if parameter is None:
+            return frozenset()
+        depth = 1
+        for index, character in enumerate(prefix[parameter.end():], parameter.end()):
+            depth += (character == "(") - (character == ")")
+            if depth == 0:
+                if prefix[index + 1:].strip():
+                    return frozenset()
+                break
+        if depth or re.search(
+            r"(?i)\b(?:Convert(?:From|To)-Json|Get-Content|Get-Date|New-TimeSpan|"
+            r"New-Object|Out-Null|Get-FileHash|Get-Acl|Set-Acl|Get-AuthenticodeSignature)\b",
+            prefix,
+        ):
+            return frozenset()
+    suffix = "\n".join(_powershell_code_only(line) for line in
+                       after.decode("utf-8").splitlines()).lstrip()
+    if re.match(r"(?i)(?:\[CmdletBinding\(\)\]\s*)?param\s*\(", suffix):
+        return frozenset()
+    first = before.count(b"\n") + 1
+    return frozenset((first, first + 1))
+
+
 def _powershell_line_sites(
     lines: list[str], index: int
 ) -> list[dict[str, Any]]:
@@ -2594,8 +2633,16 @@ def _powershell_site_guard(
     function: dict[str, Any] | None,
     entry_guard: dict[str, Any],
     function_guards: dict[str, dict[str, Any]],
+    *,
+    module_prologue_lines: frozenset[int] = frozenset(),
 ) -> tuple[bool, str, int | None]:
     function_name = "" if function is None else str(function["name"])
+    if site["kind"] == "dot_source" and site["command"].casefold() in {
+        "import-module", "import-pssession", "using module",
+    }:
+        if site["command"] == "Import-Module" and int(site["line"]) in module_prologue_lines:
+            return True, "byte_exact_os_module_prologue", int(site["line"])
+        return False, "", None
     if site["kind"] == "scheduled_task_cmdlet":
         approved_wrapper = (
             relative_path == Path("tools/container_writer_fence.ps1")
@@ -2655,7 +2702,9 @@ def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
     mutation_scopes: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     delegated_sources: list[str] = []
     for relative_path in powershell_paths:
-        lines = (root / relative_path).read_text(encoding="utf-8").splitlines()
+        source_bytes = (root / relative_path).read_bytes()
+        lines = source_bytes.decode("utf-8").splitlines()
+        module_prologue_lines = _powershell_module_prologue_lines(source_bytes)
         function_ranges = _powershell_function_ranges(lines)
         entry_guard = _powershell_entry_guard(relative_path, lines, function_ranges)
         function_guards = _powershell_function_guard_proofs(
@@ -2686,6 +2735,7 @@ def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
                     function,
                     entry_guard,
                     function_guards,
+                    module_prologue_lines=module_prologue_lines,
                 )
                 site.update(
                     {
@@ -2915,8 +2965,43 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
         entrypoint_modules=entrypoint_modules,
         module_index=module_index,
     )
+    analysis_modules = dict(parsed_modules)
+    unused_module = "kmtech_shared.diagnostic_log"
+    pinned_unused_sources = []
+    if unused_module in parsed_modules:
+        unused = parsed_modules[unused_module]
+        unused_sha = hashlib.sha256((repo_root / unused["path"]).read_bytes()).hexdigest()
+        importers = set()
+        for name, payload in parsed_modules.items():
+            if name == unused_module:
+                continue
+            if unused_module in import_graph[name]:
+                importers.add(name)
+            for node in ast.walk(payload["tree"]):
+                if isinstance(node, ast.Import) and any(
+                    alias.name == "kmtech_shared" or alias.name.startswith(unused_module)
+                    for alias in node.names
+                ):
+                    importers.add(name)
+                if isinstance(node, ast.ImportFrom) and node.module == "kmtech_shared" and any(
+                    alias.name in {"diagnostic_log", "*"} for alias in node.names
+                ):
+                    importers.add(name)
+                if isinstance(node, ast.Call) and any(
+                    isinstance(value, ast.Constant) and isinstance(value.value, str)
+                    and value.value.replace("\\", "/") in {
+                        "kmtech_shared", unused_module, ".diagnostic_log", "diagnostic_log",
+                        "kmtech_shared/diagnostic_log.py",
+                    }
+                    for value in [*node.args, *(keyword.value for keyword in node.keywords)]
+                ):
+                    importers.add(name)
+        if unused_sha != SHARED_UNUSED_DIAGNOSTIC_SHA256 or importers:
+            raise InventoryError("shared diagnostic_log must remain byte-pinned and unconsumed in CA")
+        del analysis_modules[unused_module]
+        pinned_unused_sources.append({"path": _relative(unused["path"]), "sha256": unused_sha})
     node_analysis, call_graph, sink_sources, sink_marker_kinds = _analyze_closure(
-        parsed_modules=parsed_modules,
+        parsed_modules=analysis_modules,
         import_graph=import_graph,
     )
     start_nodes = _normalize_start_names(call_graph)
@@ -2926,13 +3011,13 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
         sink_nodes=set(sink_sources),
     )
     sink_rows = _sink_rows(
-        parsed_modules=parsed_modules,
+        parsed_modules=analysis_modules,
         node_analysis=node_analysis,
         sink_sources=sink_sources,
         sink_marker_kinds=sink_marker_kinds,
     )
     mutation_rows = _closure_mutation_rows(
-        parsed_modules=parsed_modules,
+        parsed_modules=analysis_modules,
         node_analysis=node_analysis,
         coverage=coverage,
         predecessor=predecessor,
@@ -2942,8 +3027,8 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
     uncovered = [
         row for row in mutation_rows if row["coverage_status"] == "uncovered"
     ]
-    caller_fence_failures = _caller_fence_reference_failures(parsed_modules)
-    python_external_control = _collect_python_external_control_commands(parsed_modules)
+    caller_fence_failures = _caller_fence_reference_failures(analysis_modules)
+    python_external_control = _collect_python_external_control_commands(analysis_modules)
     external_process_site_count = sum(
         1
         for row in mutation_rows
@@ -3108,6 +3193,8 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
             "caller_fence_reference_failure_count": len(caller_fence_failures),
         },
     }
+    if pinned_unused_sources:
+        payload["pinned_unused_sources"] = pinned_unused_sources
     payload["inventory_sha256"] = _inventory_sha256(payload)
     return payload
 
