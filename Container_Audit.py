@@ -18329,7 +18329,7 @@ class ContainerAudit:
         supervisor = persistent_operator_name(str(getattr(self, "worker_name", "") or ""))
         generation = int(getattr(self, "_scan_callback_epoch", 0) or 0)
         if not messagebox.askyesno(
-            "완료 작업 중앙 반영 재시도",
+            "완료 작업 회사 서버 반영 재시도",
             f"품목: {case['item_id']}\n수량: {case['scan_count']}개\n"
             f"완료 작업자: {case['operator']}\n\n"
             "관리자 확인을 마쳤습니까? 저장된 완료 요청을 그대로 다시 보냅니다.",
