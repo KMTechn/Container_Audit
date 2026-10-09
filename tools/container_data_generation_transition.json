@@ -188,7 +188,7 @@
     {
       "path": "app/Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "52853a463129aaa24415bce6c9e76d85edfecc94ea74852829855b62e17f0695"
+      "after": "31dd67192f4a83fd936ae6d42d3c0b8cb477d8e3ed846885d0a5a51bedfa9a06"
     },
     {
       "path": "app/best_time_records.py",
@@ -1388,7 +1388,7 @@
     {
       "path": "app/tray_completion.py",
       "before": "a04e9d08bf543dfd4e83341f92510491c9a82a477cc5530a9859c55b8d8388a7",
-      "after": "a9207f8c029b55ee6ccdf300bd5040ac32908970212b72918cbb8fad05b676c8"
+      "after": "d2cd845283d4c74a909c785b9b16b1e20810684ea90a4d2dbda4082616c2af39"
     },
     {
       "path": "app/tray_state.py",
@@ -4535,7 +4535,7 @@
     {
       "path": "Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "52853a463129aaa24415bce6c9e76d85edfecc94ea74852829855b62e17f0695"
+      "after": "31dd67192f4a83fd936ae6d42d3c0b8cb477d8e3ed846885d0a5a51bedfa9a06"
     },
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
