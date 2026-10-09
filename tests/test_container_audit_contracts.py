@@ -979,6 +979,8 @@ def test_main_completes_current_user_onboarding_before_catalog_and_client(
 
 
 def test_main_warns_and_continues_with_verified_catalog_cache(monkeypatch, tmp_path):
+    from tests.test_work_details_visibility import catalog_notice_text
+
     calls = []
     dialogs = []
     cards = []
@@ -1006,7 +1008,7 @@ def test_main_warns_and_continues_with_verified_catalog_cache(monkeypatch, tmp_p
         _consume_direct_sync_wake_results = lambda self: ""
 
         def __init__(self):
-            from tests.test_work_details_visibility import install_sync_display, catalog_notice_text
+            from tests.test_work_details_visibility import install_sync_display
             calls.append("client-created")
             self.root = FakeRoot()
             install_sync_display(self)
