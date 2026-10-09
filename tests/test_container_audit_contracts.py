@@ -698,6 +698,7 @@ def test_operations_menu_preserves_secondary_action_admission(
     app._is_preflight_hold_supervisor = lambda: False
     app.root = type("MenuRoot", (), {
         "winfo_pointerx": lambda self: 0, "winfo_pointery": lambda self: 0,
+        "after": lambda self, _delay, _callback: "menu-focus-job",
     })()
     entries = []
     popup = []
@@ -725,6 +726,7 @@ def test_operations_menu_preserves_secondary_action_admission(
     actions = ("reset_current_work", "initiate_master_label_replacement", "show_exchange_dialog")
     assert tuple(commands[name]["state"] for name in actions) == states
     assert popup == ["shown", "released"]
+    assert app.focus_return_job == "menu-focus-job"
     if replacement:
         assert commands["initiate_master_label_replacement"]["label"] == "현품표 교체 취소"
     if active and exact:
@@ -741,7 +743,10 @@ def test_operations_menu_exposes_supervisor_hold_recovery_during_blocking_notice
     app._active_blocking_completion_snapshot = lambda: None
     app._current_transfer_member_exchange_attempt = lambda: None
     app._warning_state_presenter = lambda: SimpleNamespace(state=SimpleNamespace(is_blocking=True))
-    app.root = SimpleNamespace(winfo_pointerx=lambda: 0, winfo_pointery=lambda: 0)
+    app.root = SimpleNamespace(
+        winfo_pointerx=lambda: 0, winfo_pointery=lambda: 0,
+        after=lambda _delay, _callback: "menu-focus-job",
+    )
     app.operations_button = SimpleNamespace(winfo_rootx=lambda: 0, winfo_rooty=lambda: 0, winfo_height=lambda: 0)
     entries = []
     shown = []
@@ -757,6 +762,7 @@ def test_operations_menu_exposes_supervisor_hold_recovery_during_blocking_notice
     app._show_operations_menu()
     recovery = [entry for entry in entries if entry["command"].__name__ == "_quarantine_preflight_hold_from_operations"]
     assert shown == [True]
+    assert app.focus_return_job == "menu-focus-job"
     assert len(recovery) == 1
     assert recovery[0]["state"] == container_audit_module.tk.NORMAL
 

@@ -475,6 +475,7 @@ def test_recheck_menu_remains_visible_over_unrelated_blocking_warning(monkeypatc
     app._warning_state_presenter = lambda: SimpleNamespace(
         state=SimpleNamespace(is_blocking=True))
     app._admin_pin_has_pending = lambda: True
+    app.root.after = lambda _delay, _callback: "menu-focus-job"
     shown = []
     class Menu:
         def __init__(self, *_args, **_kwargs):
@@ -488,6 +489,7 @@ def test_recheck_menu_remains_visible_over_unrelated_blocking_warning(monkeypatc
     monkeypatch.setattr(tk, "Menu", Menu)
     app._show_operations_menu()
     assert shown == ["관리자 확인 다시 조회", "opened"]
+    assert app.focus_return_job == "menu-focus-job"
 
 
 def test_offline_hold_is_key_specific_and_has_no_writer_approval(monkeypatch, tmp_path):

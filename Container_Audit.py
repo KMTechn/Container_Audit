@@ -8035,6 +8035,7 @@ class ContainerAudit:
                     menu.grab_release()
                 except tk.TclError:
                     pass
+                self._schedule_focus_return()
             return
         replacement_active = bool(getattr(self, "master_label_replace_state", None))
         exchange_dialog_open = self._widget_exists(getattr(self, "exchange_dialog", None))
@@ -8202,6 +8203,7 @@ class ContainerAudit:
                 menu.grab_release()
             except tk.TclError:
                 pass
+            self._schedule_focus_return()
 
     def _authorize_blocked_work_supervisor(self) -> Optional[Dict[str, str]]:
         operator = str(getattr(self, "worker_name", "") or "").strip()
@@ -11080,6 +11082,7 @@ class ContainerAudit:
             buttons_frame,
             text="작업자 변경",
             command=self.change_worker,
+            takefocus=False,
             style='Secondary.TButton',
         )
         self.change_worker_button.pack(fill=tk.X)
@@ -11130,6 +11133,7 @@ class ContainerAudit:
             switch_frame,
             text="보류 0건 보기",
             command=self._toggle_left_sidebar_view,
+            takefocus=False,
             style='Secondary.TButton',
             width=0,
         )
@@ -11210,6 +11214,7 @@ class ContainerAudit:
         bottom_frame.grid_rowconfigure(1, weight=1)
         self.tray_image_checkbox = tk.Checkbutton(
             bottom_frame, text="트레이 이미지 보기", variable=self.show_tray_image_var,
+            takefocus=False,
             command=self._update_tray_image_display, font=(self.DEFAULT_FONT, self.style_tokens.fonts.body),
             background=self.COLOR_SIDEBAR_BG, foreground=self.COLOR_TEXT,
             activebackground=self.COLOR_SIDEBAR_BG, activeforeground=self.COLOR_TEXT,
@@ -11565,7 +11570,7 @@ class ContainerAudit:
         self.submit_tray_button = ttk.Button(button_frame, text="트레이 제출", command=self.submit_current_tray, style='Success.TButton', width=0)
         self.undo_button = ttk.Button(button_frame, text="마지막 스캔 취소", command=self.undo_last_scan, state=tk.DISABLED, style='Secondary.TButton', width=0)
         self.park_button = ttk.Button(button_frame, text="트레이 보류", command=self.park_current_tray, style='Warning.TButton', width=0)
-        self.operations_button = ttk.Button(button_frame, text="운영 작업 ▾", command=self._show_operations_menu, style='Secondary.TButton', width=0)
+        self.operations_button = ttk.Button(button_frame, text="운영 작업 ▾", command=self._show_operations_menu, takefocus=False, style='Secondary.TButton', width=0)
         # Secondary actions are created on demand in the operations menu.
         self._center_action_buttons = [
             self.undo_button,
@@ -11617,6 +11622,7 @@ class ContainerAudit:
             self.info_cards['direct_sync']['frame'],
             text="상세",
             command=self._show_direct_sync_status_details,
+            takefocus=False,
             style='Secondary.TButton',
             width=0,
         )
@@ -11625,7 +11631,7 @@ class ContainerAudit:
             side='right', anchor='n', padx=(4, 0),
         )
         ttk.Button(parent_frame, text="진행 현황", command=self.show_logistics_progress,
-            style='Secondary.TButton').grid(row=8, column=0, sticky='ew', pady=8)
+            takefocus=False, style='Secondary.TButton').grid(row=8, column=0, sticky='ew', pady=8)
         for widget in self.info_cards['direct_sync'].values():
             try:
                 widget.bind('<Button-1>', lambda _event: self._show_direct_sync_status_details())
@@ -11639,6 +11645,7 @@ class ContainerAudit:
             parent_frame,
             text="작업 상세 ▸",
             command=self._toggle_work_details,
+            takefocus=False,
             style='Secondary.TButton',
         )
         self.work_details_button.grid(row=5, column=0, sticky='ew', pady=(0, 10))
@@ -11718,8 +11725,7 @@ class ContainerAudit:
     def _toggle_work_details(self) -> None:
         self._work_details_expanded = not getattr(self, "_work_details_expanded", False)
         self._apply_work_details_visibility()
-        if not self._work_details_expanded:
-            self._schedule_focus_return()
+        self._schedule_focus_return()
 
     def _apply_work_details_visibility(self) -> None:
         expanded = bool(getattr(self, "_work_details_expanded", False))
@@ -19391,7 +19397,9 @@ class ContainerAudit:
         self.tray_image_label.config(**options)
 
     def _update_tray_image_display(self):
-        if not (hasattr(self, 'tray_image_label') and self.tray_image_label.winfo_exists()): return
+        if not (hasattr(self, 'tray_image_label') and self.tray_image_label.winfo_exists()):
+            self._schedule_focus_return()
+            return
         self._apply_left_sidebar_layout()
         if self.show_tray_image_var.get():
             if self.current_tray.item_code:
