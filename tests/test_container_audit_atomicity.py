@@ -10,6 +10,16 @@ import tray_state
 from Container_Audit import ContainerAudit, TraySession
 
 
+def test_prepared_tray_json_preserves_atomic_write_bytes(tmp_path):
+    from storage_utils import atomic_write_json
+    app = _activation_app(tmp_path)
+    state = {"master_label_code": "한글", "pending_audit_events": [], "values": [1, "x\ny", None]}
+    reference = tmp_path / "reference.json"
+    atomic_write_json(reference, state, indent=4)
+    assert app._save_tray_state_snapshot(state)
+    assert (tmp_path / "current.json").read_bytes() == reference.read_bytes()
+
+
 class _Toggle:
     def __init__(self) -> None:
         self.value = False

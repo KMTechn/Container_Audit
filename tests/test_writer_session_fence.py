@@ -510,6 +510,7 @@ def test_probe_only_admission_is_refused_for_every_unapproved_sink() -> None:
         ("auto_update_control", "auto_update.write_download_chunk"),
         ("auto_update_control", "auto_update.stage_prepared_copies"),
         ("auto_update_control", "auto_update._run_download_attempt"),
+        ("gui_tray_state_save", "Container_Audit.ContainerAudit._prepare_tray_state_snapshot"),
     })
     assert fence.STAGING_PROBE_ONLY_WRITER_SINKS == expected_staging
     assert fence.PROBE_ONLY_WRITER_SINKS == frozenset(

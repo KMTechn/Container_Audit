@@ -11,6 +11,7 @@ import pytest
 
 import Container_Audit as module
 import storage_utils
+import writer_session_fence as fence
 from Container_Audit import TraySession
 from tests.test_container_audit_contracts import _completion_app, CapturingListbox
 from tests.test_observed_scanner_completion import ScannerEntry
@@ -19,6 +20,113 @@ from transfer_seal import SealAttempt
 
 pytestmark = pytest.mark.usefixtures("owned_tk_workers")
 ITEM = "AAA2270730100"
+
+
+@pytest.mark.parametrize("current", [False, True])
+def test_tray_fsync_releases_admission_for_concurrent_scan(app, monkeypatch, current):
+    from tests.test_feed_publish_admission import _observe_admissions
+
+    records = _observe_admissions(monkeypatch, ["tray-save"])
+    started = threading.Event()
+    waits, held, failures = [], [], []
+    fsync = storage_utils.os.fsync
+
+    def slow_fsync(fd):
+        held.append(int(getattr(fence._WRITER_LOCAL, "depth", 0)))
+        started.set()
+        time.sleep(3)
+        return fsync(fd)
+
+    def scan():
+        try:
+            assert started.wait(5)
+            before = time.perf_counter()
+            with fence.writer_admission("concurrent_scan", timeout_seconds=5):
+                waits.append(time.perf_counter() - before)
+        except BaseException as exc:
+            failures.append(exc)
+
+    monkeypatch.setattr(storage_utils.os, "fsync", slow_fsync)
+    worker = threading.Thread(target=scan)
+    worker.start()
+    try:
+        state = app._current_tray_state_snapshot()
+        assert (app._save_current_tray_state() if current else app._save_tray_state_snapshot(state))
+    finally:
+        worker.join(6)
+    assert not worker.is_alive() and not failures
+    assert held and not any(held), held
+    assert waits and max(waits) < 1, waits
+    assert records and max(row["hold_ms"] for row in records) < 500, records
+
+
+def test_tray_digest_conflict_reprepares_without_holding_state_lock(app, monkeypatch):
+    path = Path(app.save_folder) / app.CURRENT_TRAY_STATE_FILE
+    prepare = app._prepare_tray_state_snapshot
+    calls, staged = [], []
+
+    def interleave(target, state):
+        assert not app._tray_state_persist_lock._is_owned()
+        temporary = prepare(target, state)
+        calls.append(temporary)
+        if len(calls) == 1:
+            with fence.writer_admission("checkpoint-clear"):
+                storage_utils.atomic_write_json(path, {"pending_audit_events": [{"id": "other"}]})
+        return temporary
+
+    app._tray_state_persist_lock = threading.RLock()
+    monkeypatch.setattr(app, "_prepare_tray_state_snapshot", interleave)
+    monkeypatch.setattr(app, "_stage_checkpoint_audit_events", lambda state: staged.append(
+        (state, int(getattr(fence._WRITER_LOCAL, "depth", 0)))))
+    assert app._save_tray_state_snapshot({"pending_audit_events": [{"id": "own"}]})
+    assert len(calls) == 2 and not any(p.exists() for p in calls)
+    assert json.loads(path.read_bytes())["pending_audit_events"] == [{"id": "own"}, {"id": "other"}]
+    assert len(staged) == 1 and staged[0][1] > 0
+
+
+def test_tray_three_digest_conflicts_use_existing_admitted_write(app, monkeypatch):
+    prepare = app._prepare_tray_state_snapshot
+    calls = []
+    path = Path(app.save_folder) / app.CURRENT_TRAY_STATE_FILE
+    monkeypatch.setattr(app, "_stage_checkpoint_audit_events", lambda state: True)
+
+    def conflict(target, state):
+        temporary = prepare(target, state)
+        calls.append(temporary)
+        with fence.writer_admission("checkpoint-clear"):
+            storage_utils.atomic_write_json(path, {"other": len(calls)})
+        return temporary
+
+    monkeypatch.setattr(app, "_prepare_tray_state_snapshot", conflict)
+    assert app._save_tray_state_snapshot({"own": "kept"})
+    assert len(calls) == 3 and not any(p.exists() for p in calls)
+    assert json.loads(path.read_bytes()) == {"own": "kept"}
+
+
+@pytest.mark.parametrize("failure", ["fsync", "publish_fence"])
+def test_tray_preparation_failure_preserves_target_and_cleans_own_temp(app, monkeypatch, failure):
+    path = Path(app.save_folder) / app.CURRENT_TRAY_STATE_FILE
+    assert app._save_current_tray_state()
+    before = path.read_bytes()
+    if failure == "fsync":
+        monkeypatch.setattr(storage_utils.os, "fsync", lambda fd: (_ for _ in ()).throw(OSError("disk failed")))
+        assert not app._save_tray_state_snapshot({"new": "state"})
+    else:
+        def deny(*args):
+            raise fence.WriterFencedError("ACTIVE_WRITER_FENCE", "test fence")
+        monkeypatch.setattr(app, "_publish_tray_state_snapshot", deny)
+        with pytest.raises(fence.WriterFencedError):
+            app._save_tray_state_snapshot({"new": "state"})
+    assert path.read_bytes() == before and not list(path.parent.glob(path.name + ".*.tmp"))
+
+
+def test_tray_nested_save_keeps_existing_path_and_preparation_refuses_inheritance(app, monkeypatch):
+    with fence.writer_admission("nested-test"):
+        with pytest.raises(fence.WriterFencedError) as error:
+            app._prepare_tray_state_snapshot(Path(app.save_folder) / app.CURRENT_TRAY_STATE_FILE, {})
+        assert error.value.code == "STAGING_WRITER_ADMISSION_HELD"
+        monkeypatch.setattr(app, "_prepare_tray_state_snapshot", lambda *args: pytest.fail("nested preparation"))
+        assert app._save_current_tray_state()
 
 
 @pytest.fixture
@@ -149,7 +257,7 @@ def test_scan_write_failure_retains_previous_disk_state_without_receipt_or_succe
     path = Path(app.save_folder) / app.CURRENT_TRAY_STATE_FILE
     original = path.read_bytes()
     if failure == "write":
-        monkeypatch.setattr(module, "atomic_write_json", lambda *a, **k: (_ for _ in ()).throw(OSError("disk failed")))
+        monkeypatch.setattr(app, "_prepare_tray_state_snapshot", lambda *a, **k: (_ for _ in ()).throw(OSError("disk failed")))
     else:
         app._save_tray_state_snapshot = lambda state: (_ for _ in ()).throw(TimeoutError("admission failed"))
     app._process_barcode_logic(ITEM + "-1", _durable_scan_log=True, _durable_scan_id="held-1")

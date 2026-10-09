@@ -607,7 +607,9 @@ NETWORK_PROBE_ONLY_WRITER_SINKS = frozenset(
 STAGING_PROBE_ONLY_WRITER_SINKS = frozenset(
     ("auto_update_control", "auto_update." + name)
     for name in ("write_download_bytes", "write_download_chunk", "stage_prepared_copies", "_run_download_attempt")
-)
+) | frozenset({
+    ("gui_tray_state_save", "Container_Audit.ContainerAudit._prepare_tray_state_snapshot"),
+})
 
 # The process wrappers also release before a child can acquire admission.
 PROBE_ONLY_WRITER_SINKS = frozenset(

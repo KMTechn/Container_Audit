@@ -366,6 +366,11 @@ portable은 현재 제품 reader가 없는 config/validator_settings.json을 포
 source 자산은 보존하며 runtime-local denylist·정확 runtime 예외·feed 필터는 바꾸지 않는다.
 
 feed의 내려받기 조각과 세 임시 사본 복사·fsync는 정지 여부를 probe한 뒤 허가 밖에서 수행한다.
+현재 트레이 JSON도 허가가 없는 호출에서는 같은 임시 이름·직렬화로 준비하고 fsync한 뒤,
+허가→트레이 잠금 순서로 원 파일 digest를 재확인하여 교체한다. 경합은 세 번 다시 준비한 뒤
+기존 허가 안 저장으로 돌아가며, 이미 허가를 가진 호출은 기존 경로를 사용한다.
+준비 함수는 상속한 허가를 거절한다. checkpoint 감사 staging은 이번 변경에서 허가 안에 유지하며
+중단으로 남은 트레이 임시파일은 기존 관리자 증거로 보존한다.
 staging probe는 이미 writer 허가를 가진 호출을 거절하며, 세 사본이 모두 완성된 뒤
 일반 publish sink가 고정 이름 세 개를 `os.replace`하고 기존 내구 쓰기로 `prepared.json`을 마지막에 게시한다.
 SYSTEM의 보호 사본 복사는 기존 일반 sink와 동일 검증·크기 상한·fsync를 유지한다.

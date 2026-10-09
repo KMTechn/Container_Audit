@@ -6,6 +6,9 @@ import base64
 import hashlib
 import itertools
 import json
+import os
+import subprocess
+import sys
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +22,47 @@ from preflight_scan_hold import PreflightScanHoldStore
 from recovery_file_read import read_recovery_file
 from tests.test_container_audit_contracts import _headless_app
 from tests.test_container_p0_contracts import _saved_tray_state
+
+
+@pytest.mark.parametrize("point", ["fsync", "before_replace", "after_replace"])
+def test_tray_process_crash_keeps_old_or_new_atomic_bytes(tmp_path, point):
+    from storage_utils import atomic_write_json
+    target = tmp_path / "current.json"
+    old, new = {"state": "old"}, {"state": "new"}
+    atomic_write_json(target, old)
+    old_bytes = target.read_bytes()
+    reference = tmp_path / "reference.json"
+    atomic_write_json(reference, new)
+    new_bytes = reference.read_bytes()
+    code = '''
+import os, sys
+from pathlib import Path
+from Container_Audit import ContainerAudit
+point, root = sys.argv[1:]
+app = ContainerAudit.__new__(ContainerAudit)
+app.save_folder = root
+app.CURRENT_TRAY_STATE_FILE = "current.json"
+app._stage_checkpoint_audit_events = lambda state: True
+sync, replace = os.fsync, os.replace
+def crash_sync(fd):
+    sync(fd)
+    if point == "fsync": os._exit(73)
+def crash_replace(source, target):
+    if point == "before_replace": os._exit(73)
+    replace(source, target)
+    if point == "after_replace": os._exit(73)
+os.fsync, os.replace = crash_sync, crash_replace
+app._save_tray_state_snapshot({"state": "new"})
+'''
+    child = subprocess.run([sys.executable, "-B", "-c", code, point, str(tmp_path)],
+        capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    assert child.returncode == 73, (child.returncode, len(child.stderr))
+    assert target.read_bytes() == (new_bytes if point == "after_replace" else old_bytes)
+    temps = list(tmp_path.glob("current.json.*.tmp"))
+    assert len(temps) == (0 if point == "after_replace" else 1)
+    for temp in temps:
+        assert atomic_temp_target(temp) == target
+        assert json.loads(temp.read_bytes()) == new
 
 
 def _test_app(tmp_path, monkeypatch):

@@ -220,7 +220,7 @@ from tk_serial_ui_lane import (
     LaneTask,
     TkSerialUiLane,
 )
-from writer_session_fence import _WRITER_LOCAL, WriterFencedError, writer_admission, writer_sink
+from writer_session_fence import _WRITER_LOCAL, WriterFenceError, WriterFencedError, writer_admission, writer_sink
 from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, record_before_owner_paths, resolve_owner_path
 from tray_state import (
     ACTIVATION_EVENT_STATE_KEY,
@@ -3783,11 +3783,11 @@ class ContainerAudit:
         if lock is None:
             lock = threading.RLock()
             self._tray_state_persist_lock = lock
-        with writer_admission("gui_tray_state_save"), lock:
+        with lock:
             if not self.current_tray.master_label_code:
                 return False
             state = self._current_tray_state_snapshot()
-            return self._save_tray_state_snapshot(state)
+        return self._save_tray_state_snapshot(state)
 
     def _current_tray_save_operation(self) -> Callable[[], bool]:
         """Freeze the UI-owned state before handing its write to the lane."""
@@ -3796,8 +3796,84 @@ class ContainerAudit:
         state = self._current_tray_state_snapshot()
         return lambda: self._save_tray_state_snapshot(state)
 
-    @writer_sink("gui_tray_state_save")
     def _save_tray_state_snapshot(self, state: Dict[str, Any]) -> bool:
+        if int(getattr(_WRITER_LOCAL, "depth", 0)) > 0:
+            return self._save_tray_state_snapshot_admitted(state)
+        state_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
+        try:
+            for _ in range(3):
+                try:
+                    prior_bytes = state_path.read_bytes()
+                except FileNotFoundError:
+                    prior_bytes = None
+                digest = hashlib.sha256(prior_bytes).digest() if prior_bytes is not None else None
+                prepared_state = dict(state)
+                if prior_bytes is not None:
+                    try:
+                        prior = json.loads(prior_bytes.decode('utf-8'))
+                    except (UnicodeError, json.JSONDecodeError):
+                        prior = {}
+                    pending = list(state.get('pending_audit_events', []))
+                    for event in prior.get('pending_audit_events', []):
+                        if event not in pending:
+                            pending.append(event)
+                    if pending:
+                        prepared_state['pending_audit_events'] = pending
+                temporary = self._prepare_tray_state_snapshot(state_path, prepared_state)
+                try:
+                    if self._publish_tray_state_snapshot(state_path, temporary, digest, prepared_state):
+                        return True
+                finally:
+                    try:
+                        temporary.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            return self._save_tray_state_snapshot_admitted(state)
+        except WriterFenceError:
+            raise
+        except Exception as e:
+            print(f"현재 트레이 상태 저장 실패: {e}")
+            return False
+
+    @writer_sink("gui_tray_state_save", probe_only=True)
+    def _prepare_tray_state_snapshot(self, path: Path, state: Dict[str, Any]) -> Path:
+        serialized = json.dumps(state, indent=4)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        try:
+            with temporary.open("w", encoding="utf-8") as handle:
+                handle.write(serialized)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except BaseException:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+        return temporary
+
+    @writer_sink("gui_tray_state_save")
+    def _publish_tray_state_snapshot(self, path: Path, temporary: Path, digest, state: Dict[str, Any]) -> bool:
+        lock = getattr(self, "_tray_state_persist_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._tray_state_persist_lock = lock
+        with lock:
+            try:
+                current_bytes = path.read_bytes()
+            except FileNotFoundError:
+                current_bytes = None
+            current_digest = hashlib.sha256(current_bytes).digest() if current_bytes is not None else None
+            if current_digest != digest:
+                return False
+            os.replace(temporary, path)
+            # Q3: checkpoint audit staging stays admitted until the 1a revision.
+            self._stage_checkpoint_audit_events(state)
+            return True
+
+    @writer_sink("gui_tray_state_save")
+    def _save_tray_state_snapshot_admitted(self, state: Dict[str, Any]) -> bool:
         lock = getattr(self, "_tray_state_persist_lock", None)
         if lock is None:
             lock = threading.RLock()
