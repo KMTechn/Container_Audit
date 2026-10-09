@@ -154,6 +154,64 @@ def test_catalog_notice_keeps_first_line_and_buttons_in_short_sidebar(sidebar):
     assert not app.catalog_notice_details_label.visible
 
 
+@pytest.mark.parametrize("height", [220, 768])
+def test_catalog_notice_refresh_changes_layout_only_on_state_transition(sidebar, monkeypatch, height):
+    app = sidebar
+    parent = Widget()
+    parent.height = height
+    app._create_right_sidebar_content(parent)
+    app.catalog_notice_details_label.requested_height = 80
+    watched = (app.catalog_notice_frame, app.catalog_notice_label, app.catalog_notice_details_label)
+    calls = []
+    for name in ("configure", "grid", "grid_remove", "grid_rowconfigure"):
+        original = getattr(Widget, name)
+
+        def record(widget, *args, _name=name, _original=original, **options):
+            if widget in watched or (widget is parent and _name == "grid_rowconfigure" and options):
+                calls.append((_name, id(widget), args, dict(options)))
+            return _original(widget, *args, **options)
+
+        monkeypatch.setattr(Widget, name, record)
+
+    health = RelayHealth("ready", 0, 0, 0, "", "", "")
+
+    def refresh():
+        app._apply_right_sidebar_layout()
+        app._apply_direct_sync_health(health)
+
+    def snapshot():
+        return ([dict(widget.grid_info()) for widget in watched],
+                {row: dict(options) for row, options in parent.row_options.items()},
+                [widget.visible for widget in watched], len(calls))
+
+    refresh()
+    initial = snapshot()
+    for _ in range(10):
+        refresh()
+        assert snapshot() == initial
+    app._startup_item_catalog_context = {
+        "cache_used": True, "catalog_source": "VERIFIED_CACHE",
+        "cache_last_modified_utc": NOW.isoformat(),
+    }
+    refresh()
+    notice = snapshot()
+    assert notice[3] > initial[3]
+    assert notice[2] == [True, True, height == 768]
+    assert parent.row_options[3]["minsize"] > 0
+    assert app.work_details_button.visible and app.logistics_progress_button.visible
+    for _ in range(10):
+        refresh()
+        assert snapshot() == notice
+    app._startup_item_catalog_context = {}
+    refresh()
+    cleared = snapshot()
+    assert cleared[3] > notice[3] and cleared[2] == [False, False, False]
+    assert parent.row_options[3]["minsize"] == 0
+    for _ in range(10):
+        refresh()
+        assert snapshot() == cleared
+
+
 def test_details_preserve_relay_fields_and_add_two_approved_lines(footer_app, monkeypatch):
     app = footer_app
     health = RelayHealth("pending", 3, 1, 2, NOW.isoformat(), "", NOW.isoformat())

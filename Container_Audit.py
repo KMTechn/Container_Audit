@@ -16957,44 +16957,66 @@ class ContainerAudit:
             sentence, _, rest = rest.partition('\n')
             first += '\n' + sentence
         label, details = self.catalog_notice_label, self.catalog_notice_details_label
-        label.configure(text=first)
-        details.configure(text=rest)
-        if not first:
-            label.grid_remove()
-            details.grid_remove()
-            frame.grid_remove()
-            self._right_sidebar_frame.grid_rowconfigure(3, weight=0, minsize=0, uniform="")
-            return
         parent = self._right_sidebar_frame
-        label.grid()
-        frame.grid()
-        details.grid_remove()
+        previous = getattr(self, '_catalog_notice_layout_state', {})
+        widgets = (frame, label, details, parent)
+        if previous.get('widgets') != widgets:
+            previous = {}
+        width = None
         try:
-            padding = parent.cget('padding')
-            padding = tuple(int(value) for value in (padding if isinstance(padding, (tuple, list)) else str(padding).split()))
-            outer = padding[0] if padding else 0
-            width = max(1, parent.winfo_width() - 2 * outer)
-            label.configure(wraplength=width)
-            details.configure(wraplength=width)
-            reserved = 2 * outer
-            for child in parent.winfo_children():
-                if child is frame or child.winfo_manager() != 'grid':
-                    continue
-                info = child.grid_info()
-                pady = info.get('pady', 0)
-                values = pady if isinstance(pady, (tuple, list)) else str(pady).split()
-                gaps = [int(value) for value in values]
-                gap = sum(gaps) if len(gaps) > 1 else 2 * sum(gaps)
-                needed = child.winfo_reqheight() + gap
-                if child in (self.work_details_button, self.logistics_progress_button):
-                    parent.grid_rowconfigure(int(info['row']), weight=0, minsize=needed)
-                else:
-                    needed = max(needed, int(parent.grid_rowconfigure(int(info['row'])).get('minsize', 0)))
-                reserved += needed
-            parent.grid_rowconfigure(3, weight=0, minsize=label.winfo_reqheight() + 10, uniform="")
-            remaining = self._pane_viewport_height(parent) - reserved - label.winfo_reqheight() - 10
-            if rest and details.winfo_reqheight() <= remaining:
-                details.grid()
+            outer = 0
+            if first:
+                padding = parent.cget('padding')
+                padding = tuple(int(value) for value in (padding if isinstance(padding, (tuple, list)) else str(padding).split()))
+                outer = padding[0] if padding else 0
+                width = max(1, parent.winfo_width() - 2 * outer)
+            for widget, text, key in ((label, first, 'first'), (details, rest, 'rest')):
+                options = {}
+                if previous.get(key) != text:
+                    options['text'] = text
+                if width is not None and previous.get('width') != width:
+                    options['wraplength'] = width
+                if options:
+                    widget.configure(**options)
+            row_sizes = {3: 0}
+            expanded = False
+            if first:
+                reserved = 2 * outer
+                for child in parent.winfo_children():
+                    if child is frame or child.winfo_manager() != 'grid':
+                        continue
+                    info = child.grid_info()
+                    row = int(info['row'])
+                    pady = info.get('pady', 0)
+                    values = pady if isinstance(pady, (tuple, list)) else str(pady).split()
+                    gaps = [int(value) for value in values]
+                    gap = sum(gaps) if len(gaps) > 1 else 2 * sum(gaps)
+                    needed = child.winfo_reqheight() + gap
+                    if child in (self.work_details_button, self.logistics_progress_button):
+                        row_sizes[row] = needed
+                    else:
+                        needed = max(needed, int(parent.grid_rowconfigure(row).get('minsize', 0)))
+                    reserved += needed
+                row_sizes[3] = label.winfo_reqheight() + 10
+                remaining = self._pane_viewport_height(parent) - reserved - row_sizes[3]
+                expanded = bool(rest and details.winfo_reqheight() <= remaining)
+            shown = bool(first)
+            if previous.get('shown') != shown:
+                for widget in (label, frame):
+                    widget.grid() if shown else widget.grid_remove()
+            if previous.get('expanded') != expanded:
+                details.grid() if expanded else details.grid_remove()
+            for row, minsize in row_sizes.items():
+                options = dict(weight=0, minsize=minsize)
+                if row == 3:
+                    options['uniform'] = ''
+                current = parent.grid_rowconfigure(row)
+                if any(current.get(key) != value for key, value in options.items()):
+                    parent.grid_rowconfigure(row, **options)
+            self._catalog_notice_layout_state = dict(
+                widgets=widgets, first=first, rest=rest, width=width,
+                shown=shown, expanded=expanded, row_sizes=row_sizes,
+            )
         except (AttributeError, TypeError, ValueError, tk.TclError):
             pass
 
