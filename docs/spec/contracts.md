@@ -398,6 +398,8 @@ lease는 서명·keyring·binding·기간·membership 검증을 요구한다. �
 <a id="ca-c03"></a>
 ## CA-C03 CA → Web 이적 봉인·receipt
 
+서버 봉인 성공 뒤 로컬 작업 권한 영수증 기록이 SQLite busy/locked로 실패하면 기존 `RETRY_WAIT`에서 저장된 명령·같은 키를 다음 회차에 다시 보내 저장된 서버 응답을 기록한다. SQLite 오류 코드가 있으면 확장 코드를 포함한 BUSY/LOCKED만 재시도하고, 코드가 없으면 locked/busy 메시지로 구별한다. 무결성·손상·디스크 I/O 및 작업 권한 오류는 기존 `OPERATOR_REVIEW`를 유지한다. 잠금이 오류 상태 기록까지 막으면 이번 drain의 뒤 intent도 다음 회차로 밀리며, 같은 첫 intent가 매 회차 먼저 막힐 수 있다. 잠금이 풀리면 기존 FIFO 순서로 처리하며 배경 일꾼은 유지된다.
+
 봉인 명령 재검증은 저장된 원 현품표의 칸 구성을 유지한다(6칸은 그대로, 7칸은 마지막 QT 포함); physical label·구성원·서명 lease의 exact 검증과 기존 관리자 감사 재시도는 동일하다.
 
 완료 orchestration은 [tray_completion](../../tray_completion.py)의 명시 owner 함수로 위임한다.

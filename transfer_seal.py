@@ -3255,6 +3255,20 @@ class TransferSealCoordinator:
                             receipt=receipt,
                         )
                     except (OperationLeaseError, sqlite3.Error) as exc:
+                        retryable = False
+                        if isinstance(exc, sqlite3.OperationalError):
+                            sqlite_errorcode = getattr(exc, "sqlite_errorcode", None)
+                            if sqlite_errorcode is not None:
+                                retryable = (sqlite_errorcode & 0xFF) in {
+                                    sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED,
+                                }
+                            else:
+                                retryable = any(
+                                    message in str(exc).lower()
+                                    for message in (
+                                        "database is locked", "database table is locked", "busy",
+                                    )
+                                )
                         code = getattr(
                             exc,
                             "code",
@@ -3263,6 +3277,7 @@ class TransferSealCoordinator:
                         raise TransferSealError(
                             code,
                             "서버 이적 확인 결과를 안전하게 기록하지 못했습니다.",
+                            retryable=retryable,
                         ) from exc
                 row = self.store.record_receipt(intent_id, receipt, qr_payload)
         except TransferSealError as exc:

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sqlite3
 import threading
@@ -660,6 +661,152 @@ def test_lost_ack_restart_replays_same_command_and_records_one_receipt(
         assert connection.execute(
             "SELECT COUNT(*) FROM terminal_operation_lease_receipts"
         ).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize(
+    ("message", "sqlite_errorcode"),
+    [
+        ("database is locked", None),
+        ("database table is locked: terminal_operation_lease_receipts", None),
+        ("database is busy", None),
+        ("localized lock error", sqlite3.SQLITE_BUSY),
+        ("localized lock error", sqlite3.SQLITE_LOCKED),
+        ("localized lock error", sqlite3.SQLITE_BUSY_SNAPSHOT),
+        ("localized lock error", sqlite3.SQLITE_LOCKED_SHAREDCACHE),
+    ],
+)
+def test_locked_lease_receipt_retries_identical_command_and_records_one_receipt(
+    tmp_path, monkeypatch, message, sqlite_errorcode
+):
+    posted_hashes = []
+    posted_keys = []
+    committed_receipt = None
+    mutation_count = 0
+
+    def handler(call):
+        nonlocal committed_receipt, mutation_count
+        assert call["method"] == "POST"
+        assert call["url"].endswith("/transfers/seal")
+        command_bytes = json.dumps(
+            call["json"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+        posted_hashes.append(hashlib.sha256(command_bytes).hexdigest())
+        posted_keys.append(call["headers"]["Idempotency-Key"])
+        if committed_receipt is None:
+            mutation_count += 1
+            committed_receipt = _consumed_receipt(call["json"])
+        return FakeResponse(
+            200,
+            {"ok": True, "status": "replayed", "data": committed_receipt},
+        )
+
+    coordinator, manager, _session, resolved, scan_payload, _db_path = (
+        _accepted_coordinator(tmp_path, handler)
+    )
+    prepared = _prepare_lease_transfer(
+        coordinator, resolved, scan_payload, "operation-lease-test-01"
+    )
+    record_receipt = manager.store.record_receipt
+    receipt_attempts = 0
+
+    def briefly_locked(**kwargs):
+        nonlocal receipt_attempts
+        receipt_attempts += 1
+        if receipt_attempts == 1:
+            error = sqlite3.OperationalError(message)
+            if sqlite_errorcode is not None:
+                error.sqlite_errorcode = sqlite_errorcode
+            raise error
+        return record_receipt(**kwargs)
+
+    monkeypatch.setattr(manager.store, "record_receipt", briefly_locked)
+    waiting = coordinator.drain_pending()[0]
+    assert waiting.status == "RETRY_WAIT"
+    assert waiting.error_code == "OPERATION_LEASE_RECEIPT_DURABILITY_FAILED"
+    assert manager.store.state(waiting.operation_lease_id) == "LOCAL_COMPLETED"
+    original = dict(coordinator.store.load(prepared.intent_id))
+    assert coordinator.store.post_review_cases() == []
+
+    monkeypatch.setattr(
+        coordinator, "_build_command",
+        lambda _row: pytest.fail("a retry must reuse the stored command"),
+    )
+    recovered = coordinator.drain_pending()[0]
+    assert recovered.status == recovered.operation_lease_state == "ACKED"
+    assert receipt_attempts == 2
+    assert mutation_count == 1
+    assert posted_keys == [prepared.command_id, prepared.command_id]
+    original_hash = hashlib.sha256(original["command_json"].encode("utf-8")).hexdigest()
+    assert posted_hashes == [original_hash, original_hash]
+    current = coordinator.store.load(prepared.intent_id)
+    assert hashlib.sha256(current["command_json"].encode("utf-8")).hexdigest() == original_hash
+    for field in ("command_hash", "idempotency_key", "local_completion_id"):
+        assert current[field] == original[field]
+    assert coordinator.store.post_review_cases() == []
+    assert coordinator.drain_pending() == []
+    with manager.store._connect() as connection:
+        for table in ("terminal_operation_lease_completions", "terminal_operation_lease_receipts"):
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["integrity", "io", "corrupt", "io_with_busy_message", "lease"],
+)
+def test_non_lock_lease_receipt_failure_stays_operator_review(
+    tmp_path, monkeypatch, failure
+):
+    def handler(call):
+        assert call["method"] == "POST"
+        assert call["url"].endswith("/transfers/seal")
+        return FakeResponse(200, {"ok": True, "data": _consumed_receipt(call["json"])})
+
+    coordinator, manager, session, resolved, scan_payload, _db_path = (
+        _accepted_coordinator(tmp_path, handler)
+    )
+    prepared = _prepare_lease_transfer(
+        coordinator, resolved, scan_payload, "operation-lease-test-01"
+    )
+    if failure == "integrity":
+        error = sqlite3.IntegrityError("durable terminal operation receipt differs from replay")
+    elif failure == "lease":
+        error = OperationLeaseError("OPERATION_LEASE_RECEIPT_MISMATCH", "receipt differs")
+    else:
+        error = sqlite3.OperationalError({
+            "io": "disk I/O error",
+            "corrupt": "database disk image is malformed",
+            "io_with_busy_message": "disk I/O error while database is busy",
+        }[failure])
+        if failure == "io_with_busy_message":
+            error.sqlite_errorcode = sqlite3.SQLITE_IOERR
+    recorded_errors = []
+    record_error = coordinator.store.record_error
+
+    def capture_error(intent_id, seal_error):
+        recorded_errors.append(seal_error)
+        return record_error(intent_id, seal_error)
+
+    def fail_receipt(**_kwargs):
+        raise error
+
+    monkeypatch.setattr(coordinator.store, "record_error", capture_error)
+    monkeypatch.setattr(manager.store, "record_receipt", fail_receipt)
+    result = coordinator.drain_pending()[0]
+    expected_code = (
+        "OPERATION_LEASE_RECEIPT_MISMATCH" if failure == "lease"
+        else "OPERATION_LEASE_RECEIPT_DURABILITY_FAILED"
+    )
+    assert result.status == result.operation_lease_state == "OPERATOR_REVIEW"
+    assert result.error_code == expected_code
+    assert recorded_errors[0].retryable is False
+    assert recorded_errors[0].committed is False
+    assert str(recorded_errors[0]) == "서버 이적 확인 결과를 안전하게 기록하지 못했습니다."
+    assert manager.store.state(result.operation_lease_id) == "OPERATOR_REVIEW"
+    assert coordinator.drain_pending() == []
+    assert len(session.calls) == 1
+    with manager.store._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM terminal_operation_lease_receipts").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM terminal_operation_lease_reviews").fetchone()[0] == 1
 
 
 @pytest.mark.parametrize(

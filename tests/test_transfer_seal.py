@@ -1483,6 +1483,46 @@ def test_offline_multi_event_keeps_linked_ledger_and_fifo_outbox(tmp_path):
     assert all(row["event_type"] == "LINKED" for row in linked)
 
 
+def test_record_error_lock_defers_later_intents_until_next_fifo_drain(tmp_path, monkeypatch):
+    coordinator = TransferSealCoordinator(TransferSealStore(tmp_path / "locked-drain.db"), None)
+    first = _prepare(coordinator)
+    second = coordinator.prepare(
+        master_label=_completion_label("SECOND"),
+        master_label_fields=_COMPLETION_FIELDS,
+        item_id=ITEM, operator="tester", scanned_barcodes=["BC-1", "BC-2", "BC-3"],
+    )
+    record_error = coordinator.store.record_error
+    attempted_ids = []
+
+    def once_locked(intent_id, error):
+        attempted_ids.append(intent_id)
+        if len(attempted_ids) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return record_error(intent_id, error)
+
+    monkeypatch.setattr(coordinator.store, "record_error", once_locked)
+    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        coordinator.drain_pending()
+    assert attempted_ids == [first.intent_id]
+    assert coordinator.store.pending_ids() == [first.intent_id, second.intent_id]
+
+    posted_keys = []
+
+    def handler(call):
+        if call["method"] == "GET" and "/bundles/resolve?" in call["url"]:
+            return FakeResponse(200, {"ok": True, "data": _resolved_bundle()})
+        assert call["method"] == "POST"
+        posted_keys.append(call["headers"]["Idempotency-Key"])
+        return FakeResponse(200, {"ok": True, "data": _receipt(call["json"])})
+
+    coordinator.client, _session = _client(handler)
+    recovered = coordinator.drain_pending()
+    assert [result.intent_id for result in recovered] == [first.intent_id, second.intent_id]
+    assert [result.status for result in recovered] == ["ACKED", "ACKED"]
+    assert posted_keys == [first.command_id, second.command_id]
+    assert coordinator.store.pending_ids() == []
+
+
 def test_drain_pending_gate_stops_before_next_durable_intent(tmp_path):
     coordinator = TransferSealCoordinator(
         TransferSealStore(tmp_path / "gated-drain.db"),
