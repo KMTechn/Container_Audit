@@ -10,7 +10,7 @@ import uuid
 from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 from auto_update import native_process_identity
 from writer_session_fence import _WRITER_LOCAL, writer_admission, writer_sink
@@ -378,6 +378,45 @@ def _repair_event_log_tail_unlocked(log_file_path: str, *, defer: bool = False) 
             "EVENT_CSV_TAIL_REPAIRED bytes=%d reason=%s", size - keep,
             "NUL_TAIL" if removed_nul else "UNTERMINATED_TAIL",
         )
+
+
+def project_event_log_entry_durably(
+    log_file_path: str,
+    log_entry: Dict[str, Any],
+    *,
+    event_type: str,
+    idempotency_key: str,
+    acknowledge: Callable[[bool], Any],
+) -> Any:
+    """Sync the exact appended file before admitting its projection receipt."""
+    if int(getattr(_WRITER_LOCAL, "depth", 0)) > 0:
+        appended = append_event_log_entry_idempotent(
+            log_file_path, log_entry, event_type=event_type,
+            idempotency_key=idempotency_key, durable=True,
+        )
+        return acknowledge(appended)
+    with writer_admission("event_csv_idempotent_append"):
+        appended = append_event_log_entry_idempotent(
+            log_file_path, log_entry, event_type=event_type,
+            idempotency_key=idempotency_key, durable=False,
+        )
+        handle = open(log_file_path, "ab")
+        try:
+            stat = os.fstat(handle.fileno())
+            signature = (stat.st_size, stat.st_ino)
+        except BaseException:
+            handle.close()
+            raise
+    try:
+        handle.flush()
+        os.fsync(handle.fileno())
+    finally:
+        handle.close()
+    with writer_admission("event_csv_idempotent_append"):
+        stat = os.stat(log_file_path)
+        if stat.st_ino != signature[1] or stat.st_size < signature[0]:
+            raise OSError("EVENT_CSV_PROJECTION_CHANGED")
+        return acknowledge(appended)
 
 
 @writer_sink("event_csv_idempotent_append")

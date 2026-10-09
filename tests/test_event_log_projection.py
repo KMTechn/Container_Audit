@@ -1,10 +1,14 @@
 """CSV projection cannot retain scan admission while flushing another event."""
 import builtins
+from contextlib import contextmanager
 import csv
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 import threading
+import time
 
 import pytest
 
@@ -21,6 +25,133 @@ def entry(key, **details):
 def rows(path):
     with path.open(newline="", encoding="utf-8-sig") as stream:
         return list(csv.DictReader(stream))
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_durable_receipt_projection_fsync_releases_admission_for_scan(tmp_path, monkeypatch, duplicate):
+    from tests.test_feed_publish_admission import _observe_admissions
+    path = str(tmp_path / "events.csv")
+    if duplicate:
+        logs.append_event_log_entry_idempotent(path, entry("same"), event_type="SCAN_OK", idempotency_key="same")
+    records = _observe_admissions(monkeypatch, ["durable-projection"])
+    sync = os.fsync
+    started = threading.Event()
+    held, waits, receipts, errors = [], [], [], []
+
+    def delayed(fd):
+        held.append(int(getattr(fence._WRITER_LOCAL, "depth", 0)))
+        started.set()
+        time.sleep(3)
+        return sync(fd)
+
+    def scan():
+        try:
+            assert started.wait(5)
+            before = time.perf_counter()
+            with fence.writer_admission("scan", timeout_seconds=5):
+                waits.append(time.perf_counter() - before)
+        except BaseException as exc:
+            errors.append(exc)
+
+    def legacy(path, original, *, event_type, idempotency_key, acknowledge):
+        appended = logs.append_event_log_entry_idempotent(path, original, event_type=event_type,
+                                                         idempotency_key=idempotency_key, durable=True)
+        return acknowledge(appended)
+
+    project = getattr(logs, "project_event_log_entry_durably", legacy)
+    monkeypatch.setattr(logs.os, "fsync", delayed)
+    worker = threading.Thread(target=scan)
+    worker.start()
+    try:
+        project(path, entry("same"), event_type="SCAN_OK", idempotency_key="same", acknowledge=receipts.append)
+    finally:
+        worker.join(6)
+    assert not worker.is_alive() and not errors and receipts == [not duplicate]
+    assert held and not any(held), held
+    assert waits and max(waits) < 1, waits
+    assert records and max(row["hold_ms"] for row in records) < 500, records
+
+
+@pytest.mark.parametrize("failure", ["fsync", "replace", "shrink", "admission", "receipt"])
+def test_receipt_projection_failure_leaves_replayable_single_row(tmp_path, monkeypatch, failure):
+    path = tmp_path / "events.csv"
+    receipts = []
+    admit, sync = logs.writer_admission, os.fsync
+    calls = []
+
+    @contextmanager
+    def interleave(source, **kwargs):
+        outer = int(getattr(fence._WRITER_LOCAL, "depth", 0)) == 0
+        if outer:
+            calls.append(source)
+        if outer and len(calls) == 2:
+            if failure == "replace":
+                replacement = tmp_path / "replacement.csv"
+                replacement.write_bytes(path.read_bytes())
+                os.replace(replacement, path)
+            elif failure == "shrink":
+                path.write_bytes((",".join(logs.EVENT_LOG_HEADERS) + "\r\n").encode("utf-8-sig"))
+            elif failure == "admission":
+                raise fence.WriterFencedError("ACTIVE_WRITER_FENCE", "test fence")
+        with admit(source, **kwargs):
+            yield
+
+    def failed_sync(fd):
+        raise OSError("disk failed")
+
+    def acknowledge(appended):
+        assert int(getattr(fence._WRITER_LOCAL, "depth", 0)) > 0
+        if failure == "receipt":
+            raise OSError("receipt failed")
+        receipts.append(appended)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(logs, "writer_admission", interleave)
+        if failure == "fsync":
+            fault.setattr(logs.os, "fsync", failed_sync)
+        with pytest.raises((OSError, fence.WriterFencedError)):
+            logs.project_event_log_entry_durably(str(path), entry("same"), event_type="SCAN_OK",
+                idempotency_key="same", acknowledge=acknowledge)
+    assert not receipts
+    logs.project_event_log_entry_durably(str(path), entry("same"), event_type="SCAN_OK",
+        idempotency_key="same", acknowledge=receipts.append)
+    assert len(receipts) == 1 and len(rows(path)) == 1
+
+
+def test_receipt_projection_allows_later_append_and_acknowledges_after_sync(tmp_path, monkeypatch):
+    path = tmp_path / "events.csv"
+    synced, receipts = [], []
+    sync = os.fsync
+
+    def interleave(fd):
+        assert int(getattr(fence._WRITER_LOCAL, "depth", 0)) == 0
+        sync(fd)
+        synced.append(True)
+        logs.append_event_log_entry_idempotent(str(path), entry("later"), event_type="SCAN_OK",
+                                               idempotency_key="later", durable=False)
+
+    def acknowledge(appended):
+        assert synced and int(getattr(fence._WRITER_LOCAL, "depth", 0)) > 0
+        receipts.append(appended)
+
+    monkeypatch.setattr(logs.os, "fsync", interleave)
+    logs.project_event_log_entry_durably(str(path), entry("first"), event_type="SCAN_OK",
+        idempotency_key="first", acknowledge=acknowledge)
+    assert receipts == [True] and len(rows(path)) == 2
+
+
+@pytest.mark.parametrize("cut", ["after-append", "after-sync"])
+def test_receipt_projection_process_crash_replays_one_row_and_one_receipt(tmp_path, cut):
+    command = [sys.executable, "-B", str(Path(__file__).with_name("event_log_projection_child.py")), str(tmp_path)]
+    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    child = subprocess.run(command + ["receipt-cut", cut], capture_output=True, creationflags=flags)
+    assert child.returncode == 78, (child.returncode, len(child.stderr))
+    recovered = subprocess.run(command + ["receipt-recover", "none"], capture_output=True, creationflags=flags)
+    assert recovered.returncode == 0, (recovered.returncode, len(recovered.stderr))
+    assert len(rows(tmp_path / "events.csv")) == 1
+    import sqlite3
+    with sqlite3.connect(tmp_path / "receipt.sqlite3") as connection:
+        assert connection.execute("SELECT COUNT(*) FROM phs_replacement_waiting_projection_receipts").fetchone()[0] == 1
 
 
 def test_csv_fsync_releases_admission_and_outbox_for_scan(tmp_path, monkeypatch):

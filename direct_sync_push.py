@@ -1341,27 +1341,40 @@ def _with_upload_status_artifact(
     status_write_error_code = ""
     status_write_error_message = ""
     try:
-        payload = {
-            "success": result.success,
-            "status_code": result.status_code,
-            "committed": result.committed,
-            "retryable": result.retryable,
-            "retry_after_seconds": result.retry_after_seconds,
-            "receipt": receipt,
-            "error_code": result.error_code,
-            "error_message": result.error_message,
-            "metadata": _upload_status_runtime_safe_metadata(plan.metadata),
-            "status_context": redact_runtime_secrets(context),
-            "source_file_path": plan.source_file_path,
-            "generated_at": utc_now_text(),
-        }
         if int(getattr(_WRITER_LOCAL, "depth", 0)) > 0:
             with writer_admission("relay_upload_status"):
                 before_status_write = _UPLOAD_STATUS_CHECK.get()
                 if before_status_write is not None and not before_status_write():
                     return result
-                _write_json_atomic(status_path, payload)
+                _write_json_atomic(status_path, {
+                    "success": result.success,
+                    "status_code": result.status_code,
+                    "committed": result.committed,
+                    "retryable": result.retryable,
+                    "retry_after_seconds": result.retry_after_seconds,
+                    "receipt": receipt,
+                    "error_code": result.error_code,
+                    "error_message": result.error_message,
+                    "metadata": _upload_status_runtime_safe_metadata(plan.metadata),
+                    "status_context": redact_runtime_secrets(context),
+                    "source_file_path": plan.source_file_path,
+                    "generated_at": utc_now_text(),
+                })
         else:
+            payload = {
+                "success": result.success,
+                "status_code": result.status_code,
+                "committed": result.committed,
+                "retryable": result.retryable,
+                "retry_after_seconds": result.retry_after_seconds,
+                "receipt": receipt,
+                "error_code": result.error_code,
+                "error_message": result.error_message,
+                "metadata": _upload_status_runtime_safe_metadata(plan.metadata),
+                "status_context": redact_runtime_secrets(context),
+                "source_file_path": plan.source_file_path,
+                "generated_at": utc_now_text(),
+            }
             temporary = _prepare_status_temp(status_path, payload)
             try:
                 with writer_admission("relay_upload_status"):

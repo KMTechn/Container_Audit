@@ -22,7 +22,33 @@ def entry(key):
             "event": "SCAN_OK", "details": json.dumps({"idempotency_key": key})}
 
 
-if mode == "shutdown":
+if mode in {"receipt-cut", "receipt-recover"}:
+    from transfer_seal import TransferSealStore
+    receipts = TransferSealStore(root / "receipt.sqlite3",
+        owner_thread_id_provider=lambda owner=threading.get_ident(): owner)
+    if mode == "receipt-cut":
+        marked = receipts.mark_phs_replacement_waiting(session_id="crash-fixture", old_label_id="old",
+            new_label_id="new", process_context="transfer", location_codes=["PHS_GOOD"],
+            operator="fixture", master_label="fixture", projection_log_file_path=str(csv_path))
+        append, sync = logs.append_event_log_entry_idempotent, os.fsync
+        def interrupted_append(*args, **kwargs):
+            result = append(*args, **kwargs)
+            if cut == "after-append": os._exit(78)
+            return result
+        def interrupted_sync(fd):
+            result = sync(fd)
+            if cut == "after-sync": os._exit(78)
+            return result
+        logs.append_event_log_entry_idempotent, os.fsync = interrupted_append, interrupted_sync
+        identity = marked["intent_id"]
+    else:
+        identity = receipts.pending_replacement_waiting_projections()[0]["intent_id"]
+    for _ in range(2):
+        logs.project_event_log_entry_durably(str(csv_path), entry("receipt"), event_type="SCAN_OK",
+            idempotency_key="receipt", acknowledge=lambda appended: receipts.record_replacement_waiting_projection(
+                identity, projection_log_file_path=str(csv_path)))
+    raise SystemExit(0)
+elif mode == "shutdown":
     import _tkinter
     _tkinter.create = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("HOST_GUI_BOUNDARY"))
     import Container_Audit as ca

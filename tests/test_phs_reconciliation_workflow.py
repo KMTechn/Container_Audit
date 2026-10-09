@@ -1228,8 +1228,24 @@ def test_replacement_required_notice_is_yellow_non_modal_once_per_pair():
     )
 
 
-def test_replacement_notice_marks_durable_waiting_before_yellow_display(tmp_path):
+def test_replacement_notice_marks_durable_waiting_before_yellow_display(tmp_path, monkeypatch):
     events = []
+    synced = []
+    sync = container_module.os.fsync
+    project = container_module.project_event_log_entry_durably
+    def observe_sync(fd):
+        csv_path = tmp_path / "events.csv"
+        if csv_path.exists() and container_module.os.fstat(fd).st_ino == csv_path.stat().st_ino:
+            assert int(getattr(container_module._WRITER_LOCAL, "depth", 0)) == 0
+            result = sync(fd)
+            synced.append(True)
+            return result
+        return sync(fd)
+    def observe_project(*args, **kwargs):
+        assert int(getattr(container_module._WRITER_LOCAL, "depth", 0)) == 0
+        return project(*args, **kwargs)
+    monkeypatch.setattr(container_module.os, "fsync", observe_sync)
+    monkeypatch.setattr(container_module, "project_event_log_entry_durably", observe_project)
     durable_store = TransferSealStore(tmp_path / "replacement-notice.db")
 
     class RecordingStore:
@@ -1238,6 +1254,7 @@ def test_replacement_notice_marks_durable_waiting_before_yellow_display(tmp_path
             return durable_store.mark_phs_replacement_waiting(**kwargs)
 
         def record_replacement_waiting_projection(self, *args, **kwargs):
+            assert synced
             events.append(("receipt", args, kwargs))
             return durable_store.record_replacement_waiting_projection(
                 *args,

@@ -13,6 +13,22 @@ import writer_session_fence as fence
 from tests.test_event_log_projection import entry, rows
 
 
+def test_nested_durable_receipt_projection_preserves_existing_sync_path(tmp_path, monkeypatch):
+    path = str(tmp_path / "events.csv")
+    sync, depths, receipts = os.fsync, [], []
+    def observe(fd):
+        depths.append(int(getattr(fence._WRITER_LOCAL, "depth", 0)))
+        return sync(fd)
+    monkeypatch.setattr(logs.os, "fsync", observe)
+    with fence.writer_admission("nested-receipt"):
+        logs.project_event_log_entry_durably(path, entry("same"), event_type="SCAN_OK",
+            idempotency_key="same", acknowledge=receipts.append)
+        logs.project_event_log_entry_durably(path, entry("same"), event_type="SCAN_OK",
+            idempotency_key="same", acknowledge=receipts.append)
+    assert len(depths) == 2 and all(depths) and receipts == [True, False]
+    assert len(rows(Path(path))) == 1
+
+
 def test_nested_projection_defers_sync_and_ack(tmp_path, monkeypatch):
     csv_path = tmp_path / "events.csv"
     store = logs.EventLogOutbox(tmp_path / "outbox")

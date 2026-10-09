@@ -121,6 +121,20 @@ def test_upload_status_nested_path_and_prepare_inheritance_guard(tmp_path, monke
         assert Path(published.status_path).is_file()
 
 
+def test_nested_lost_upload_claim_returns_before_payload_construction(tmp_path, monkeypatch):
+    plan = direct_sync_push.SourceFilePlan(str(tmp_path / "source.csv"), {"idempotency_key": "status-fixture"}, "a" * 64, 1)
+    result = direct_sync_push.UploadResult(True, 200, True, False, {})
+    monkeypatch.setattr(direct_sync_push, "_upload_status_runtime_safe_metadata",
+                        lambda *args: pytest.fail("lost nested claim constructed payload"))
+    selected = direct_sync_push._UPLOAD_STATUS_CHECK.set(lambda: False)
+    try:
+        with fence.writer_admission("nested-status"):
+            assert direct_sync_push._with_upload_status_artifact(plan, result, tmp_path / "status") is result
+    finally:
+        direct_sync_push._UPLOAD_STATUS_CHECK.reset(selected)
+    assert not (tmp_path / "status").exists()
+
+
 @pytest.mark.parametrize("point", ["fsync", "before_replace", "after_replace"])
 def test_upload_status_process_crash_preserves_atomic_artifact(tmp_path, monkeypatch, point):
     plan = direct_sync_push.SourceFilePlan(str(tmp_path / "source.csv"), {"idempotency_key": "status-fixture"}, "a" * 64, 1)

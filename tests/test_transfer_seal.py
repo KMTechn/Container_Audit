@@ -3013,8 +3013,25 @@ def test_post_review_projection_receipt_is_append_only_and_restart_safe(
 
 def test_post_review_projection_recovers_csv_append_crash_without_duplicate(
     tmp_path,
+    monkeypatch,
 ):
+    import Container_Audit as module
+    import writer_session_fence as fence
     event_log_path = tmp_path / "events.csv"
+    synced = []
+    sync, project = module.os.fsync, module.project_event_log_entry_durably
+    def observe_sync(fd):
+        if event_log_path.exists() and module.os.fstat(fd).st_ino == event_log_path.stat().st_ino:
+            assert int(getattr(fence._WRITER_LOCAL, "depth", 0)) == 0
+            result = sync(fd)
+            synced.append(True)
+            return result
+        return sync(fd)
+    def observe_project(*args, **kwargs):
+        assert int(getattr(fence._WRITER_LOCAL, "depth", 0)) == 0
+        return project(*args, **kwargs)
+    monkeypatch.setattr(module.os, "fsync", observe_sync)
+    monkeypatch.setattr(module, "project_event_log_entry_durably", observe_project)
     store = TransferSealStore(tmp_path / "post-review-crash.db")
     prepared = store.prepare(
         master_label="MASTER-POST-REVIEW-CRASH",
@@ -3037,6 +3054,7 @@ def test_post_review_projection_recovers_csv_append_crash_without_duplicate(
 
     def crash_once(*args, **kwargs):
         nonlocal record_calls
+        assert len(synced) > record_calls
         record_calls += 1
         if record_calls == 1:
             raise OSError("crash after CSV append")

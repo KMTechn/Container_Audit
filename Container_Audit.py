@@ -73,6 +73,7 @@ from event_log_store import (
     EventLogOutbox,
     append_event_log_entry,
     append_event_log_entry_idempotent,
+    project_event_log_entry_durably,
 )
 from event_stream_policy import LOCAL_ONLY_EVENT_TYPES, local_only_event_log_path
 from event_payloads import (
@@ -6549,17 +6550,16 @@ class ContainerAudit:
                 allow_nan=False,
             ),
         }
-        append_event_log_entry_idempotent(
+        store = self._transfer_seal_runtime().store
+        receipt = project_event_log_entry_durably(
             projection_log_file_path,
             log_entry,
             event_type=event_type,
             idempotency_key=idempotency_key,
-            durable=True,
-        )
-        store = self._transfer_seal_runtime().store
-        receipt = store.record_replacement_waiting_projection(
-            str(result.get("intent_id") or ""),
-            projection_log_file_path=projection_log_file_path,
+            acknowledge=lambda appended: store.record_replacement_waiting_projection(
+                str(result.get("intent_id") or ""),
+                projection_log_file_path=projection_log_file_path,
+            ),
         )
         self._trigger_session_direct_sync(event_type)
         result["projection_id"] = str(receipt["projection_id"])
@@ -18673,17 +18673,16 @@ class ContainerAudit:
                 allow_nan=False,
             ),
         }
-        append_event_log_entry_idempotent(
+        store = self._transfer_seal_runtime().store
+        receipt = project_event_log_entry_durably(
             projection_log_file_path,
             log_entry,
             event_type=event_type,
             idempotency_key=idempotency_key,
-            durable=True,
-        )
-        store = self._transfer_seal_runtime().store
-        receipt = store.record_post_review_projection(
-            review_case_id,
-            projection_log_file_path=projection_log_file_path,
+            acknowledge=lambda appended: store.record_post_review_projection(
+                review_case_id,
+                projection_log_file_path=projection_log_file_path,
+            ),
         )
         self._trigger_session_direct_sync(event_type)
         result["projection_id"] = str(receipt["projection_id"])
