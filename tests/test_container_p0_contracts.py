@@ -1171,7 +1171,9 @@ def test_close_waits_for_inflight_startup_transfer_recovery_on_shared_lane(tmp_p
             root.run_until(lambda: lane.state == "CLOSED")
 
 
-def test_live_event_writer_retries_close_without_destroy(monkeypatch):
+def test_live_event_writer_retries_close_without_destroy(monkeypatch, tmp_path):
+    import event_log_store
+    from tests.test_event_log_projection import entry, rows
     from tests.test_tk_serial_ui_lane import FakeTkRoot
     from tk_serial_ui_lane import TkSerialUiLane
 
@@ -1179,12 +1181,16 @@ def test_live_event_writer_retries_close_without_destroy(monkeypatch):
         def __init__(self):
             self.alive = True
             self.join_calls = []
+            self.start_calls = 0
 
         def is_alive(self):
             return self.alive
 
         def join(self, timeout=None):
             self.join_calls.append(timeout)
+
+        def start(self):
+            self.start_calls += 1
 
     monkeypatch.setattr(container_module, "stop_all_sounds", lambda: None)
     monkeypatch.setattr(
@@ -1193,7 +1199,7 @@ def test_live_event_writer_retries_close_without_destroy(monkeypatch):
         lambda *_args, **_kwargs: True,
     )
 
-    def close_app(writer):
+    def close_app(writer, outbox=None):
         root = FakeTkRoot()
         lane = TkSerialUiLane(root, poll_ms=1)
         queued = []
@@ -1202,6 +1208,7 @@ def test_live_event_writer_retries_close_without_destroy(monkeypatch):
         app.root = root
         app._ui_lane = lane
         app._event_log_close_requested = False
+        app._event_log_outbox_instance = outbox
         app.log_queue = SimpleNamespace(put=queued.append)
         app.log_thread = writer
         app._ui_close_requested = True
@@ -1217,32 +1224,103 @@ def test_live_event_writer_retries_close_without_destroy(monkeypatch):
         app._preserve_preflight_hold_for_close = lambda: (True, False)
         app.save_settings = lambda: None
         app._cancel_all_jobs = lambda: None
+        app._poll_event_log_notice = lambda: None
         app.show_status_message = lambda message, *_a, **_k: statuses.append(
             message
         )
         app.COLOR_DANGER = "danger"
         return app, root, lane, queued, statuses
 
-    live_writer = LiveWriter()
-    app, root, lane, queued, statuses = close_app(live_writer)
-    app._finalize_application_close()
-    assert root.run_one() is True
-    assert root.run_one() is True
+    # F7 bounds CSV projection, but an original that failed to reach the
+    # durable outbox must still keep the window open and restart its writer.
+    log_path = tmp_path / "unstaged.csv"
+    original = entry("close-retry")
+    outbox = event_log_store.EventLogOutbox(tmp_path / "unstaged-outbox")
+    with monkeypatch.context() as failed_save:
+        def fail_save(*_args, **_kwargs):
+            raise OSError("injected original save failure")
+        failed_save.setattr(event_log_store, "atomic_write_json", fail_save)
+        with pytest.raises(OSError, match="injected original save failure"):
+            outbox.stage(str(log_path), original)
+    assert outbox.has_unstaged
+    assert not list(outbox.directory.glob("*.json"))
 
+    live_writer = LiveWriter()
+    app, root, lane, queued, statuses = close_app(live_writer, outbox)
+    with monkeypatch.context() as retry_thread:
+        def restart_writer(*, target, daemon):
+            assert target == app._event_log_writer
+            assert daemon is True
+            return live_writer
+        retry_thread.setattr(container_module.threading, "Thread", restart_writer)
+        app._finalize_application_close()
+        assert root.run_one() is True
+        assert root.run_one() is True
+
+        assert root.destroyed is False
+        assert live_writer.join_calls == [1.0, 1.0, 1.0]
+        assert live_writer.start_calls == 1
+        assert queued == [None]
+        assert not root.jobs
+        assert lane.state == "CLOSED"
+        assert statuses[-1].startswith("로그 저장 실패")
+        assert app._event_log_close_requested is False
+        assert app._event_log_close_deadline is None
+        assert app._ui_close_requested is False
+        assert outbox.has_unstaged
+        app.on_closing()
+        assert root.run_one() is True
+        assert root.run_one() is True
+        assert live_writer.join_calls == [1.0] * 6
+        assert live_writer.start_calls == 2
+        assert queued == [None, None]
+        assert lane.state == "CLOSED"
+        assert root.destroyed is False
+        assert outbox.has_unstaged
+        assert not list(outbox.directory.glob("*.json"))
+
+        recovered = outbox.stage(str(log_path), original)
+        assert not outbox.has_unstaged
+        assert json.loads(recovered.read_text(encoding="utf-8"))["log_entry"] == original
+        live_writer.alive = False
+        app.on_closing()
+        assert root.destroyed is True
+        assert queued == [None, None, None]
+        assert live_writer.join_calls == [1.0] * 6
+        assert recovered.exists()
+    # A fresh outbox replays the saved original once, including the failed
+    # stage's duplicate retry, rather than losing or duplicating that audit.
+    replay = event_log_store.EventLogOutbox(outbox.directory)
+    replay.drain()
+    replay.drain()
+    assert len(rows(log_path)) == 1
+    assert json.loads(rows(log_path)[0]["details"]) == json.loads(original["details"])
+    assert not list(outbox.directory.glob("*.json"))
+
+    # A live writer with only a durable original is allowed to outlast the
+    # three joins. Closing must preserve that original for the next start.
+    durable = event_log_store.EventLogOutbox(tmp_path / "durable-outbox")
+    pending = durable.stage(str(tmp_path / "durable.csv"), entry("close-durable"))
+    pending_bytes = pending.read_bytes()
+    durable_writer = LiveWriter()
+    app, root, lane, queued, statuses = close_app(durable_writer, durable)
+    app._finalize_application_close()
     assert root.destroyed is False
-    assert live_writer.join_calls == [1.0, 1.0, 1.0]
+    assert root.run_one() is True
+    assert root.destroyed is False
+    assert root.run_one() is True
+    assert root.destroyed is True
+    assert durable_writer.is_alive()
+    assert durable_writer.join_calls == [1.0, 1.0, 1.0]
     assert queued == [None]
     assert not root.jobs
-    assert lane.state == "BROKEN"
-    assert statuses[-1].startswith("종료 정리 지연")
-    app.on_closing()
-    assert root.run_one() is True
-    assert root.run_one() is True
-    assert live_writer.join_calls == [1.0] * 6
-    assert lane.state == "BROKEN"
-    assert root.destroyed is False
-    lane.close_idle()
     assert lane.state == "CLOSED"
+    assert statuses == []
+    assert pending.read_bytes() == pending_bytes
+    app._finalize_application_close()
+    assert durable_writer.join_calls == [1.0, 1.0, 1.0]
+    assert queued == [None]
+    assert pending.read_bytes() == pending_bytes
 
     retry_writer = LiveWriter()
     app, root, lane, queued, _statuses = close_app(retry_writer)
