@@ -188,7 +188,7 @@
     {
       "path": "app/Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "3867aa2fe694bd6811fa6117997af98bc5701ecb70bb01ec25c1af40f9b387a9"
+      "after": "52853a463129aaa24415bce6c9e76d85edfecc94ea74852829855b62e17f0695"
     },
     {
       "path": "app/best_time_records.py",
@@ -253,7 +253,7 @@
     {
       "path": "app/event_log_store.py",
       "before": "f1c2152fd691f7e9c1a17c3f829f412e89b6989ab9d1069a3a1ed110d14be8ca",
-      "after": "8c99cbb63cc0c9da3ddbcb6ba460a974fa55ac1130442f667294a4a62d7fddbe"
+      "after": "d459f6716a97f9fc4653ceea10d209640c62ed6c19f4a375b867a2efa0c49d0d"
     },
     {
       "path": "app/event_payloads.py",
@@ -1463,7 +1463,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "722d24119c4c416792d0533fafce41a5076b5ea17eb117671c180f94ee359331"
+      "after": "7c6b6e704e28d2c432339e510d2d2836c11cd5315fd69b4097d9b0b7a17db6c3"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4535,7 +4535,7 @@
     {
       "path": "Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "3867aa2fe694bd6811fa6117997af98bc5701ecb70bb01ec25c1af40f9b387a9"
+      "after": "52853a463129aaa24415bce6c9e76d85edfecc94ea74852829855b62e17f0695"
     },
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
@@ -4586,6 +4586,11 @@
       "path": "direct_sync_runtime.py",
       "before": "8626c0873e3bf1586af93187bc60f429f65036f92c4f2fd14ce2841f8b12eca6",
       "after": "10193b3e9bc037612c3e965dd136bce8e4a7d70e9950582c46e485cf8b3aedcd"
+    },
+    {
+      "path": "event_log_store.py",
+      "before": "f1c2152fd691f7e9c1a17c3f829f412e89b6989ab9d1069a3a1ed110d14be8ca",
+      "after": "d459f6716a97f9fc4653ceea10d209640c62ed6c19f4a375b867a2efa0c49d0d"
     },
     {
       "path": "item_catalog_sync.py",
@@ -4690,14 +4695,14 @@
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "722d24119c4c416792d0533fafce41a5076b5ea17eb117671c180f94ee359331"
+      "after": "7c6b6e704e28d2c432339e510d2d2836c11cd5315fd69b4097d9b0b7a17db6c3"
     }
   ],
   "hash_provenance": {
     "before": "clean baseline stock-baseline-latest at ea566d1, Python 3.12.10",
     "after": "Exact integrated committed LF source bytes including shipped PowerShell UTF-8 BOM; original released before bytes retained; standard inventory regenerated.",
     "domain": "all .py/.ps1/.sql plus the two writer JSON artifacts; generated release metadata retains existing package integrity",
-    "installed_release_preimages": "Actual deployed bytes only: EA stock before scalar preserved (13 CRLF source files); TEST1 E3 CA-8928228.zip SHA256 3f70a102c0e321a00708ee41921e66bfb93f8ffdfecfdc3ce0125c0043ef4886 / installed manifest dd07bd13d9f989ccfe184628a870b1a3e3f6473fb7ddb6b70c3a2203dcac95be (w9test1v3/exec/raw/{packet-pins,verify-CA,final-ca}.json); whole commit/inventory/24-file tuple, no line-ending alternatives or mixing."
+    "installed_release_preimages": "Actual deployed bytes only: EA stock before scalar preserved (13 CRLF source files); TEST1 E3 CA-8928228.zip SHA256 3f70a102c0e321a00708ee41921e66bfb93f8ffdfecfdc3ce0125c0043ef4886 / installed manifest dd07bd13d9f989ccfe184628a870b1a3e3f6473fb7ddb6b70c3a2203dcac95be (w9test1v3/exec/raw/{packet-pins,verify-CA,final-ca}.json); whole commit/inventory/25-file tuple, no line-ending alternatives or mixing."
   },
   "installed_release_preimages": [
     {
@@ -4747,6 +4752,10 @@
         {
           "path": "app/direct_sync_runtime.py",
           "sha256": "ceccf8e265feaf0280cdb8640810aa4d04e78e61e76fd2c3368d0efcc547acb7"
+        },
+        {
+          "path": "app/event_log_store.py",
+          "sha256": "f1c2152fd691f7e9c1a17c3f829f412e89b6989ab9d1069a3a1ed110d14be8ca"
         },
         {
           "path": "app/item_catalog_sync.py",
@@ -4849,6 +4858,10 @@
         {
           "path": "app/direct_sync_runtime.py",
           "sha256": "74ea4126201fa1c6f39cbfc5b887462ec0790c2f1c582cbe982301202d8f89c8"
+        },
+        {
+          "path": "app/event_log_store.py",
+          "sha256": "08aa68d1c52a9dfd253550724838256642e9de40e95c69bb32002777e20d69ff"
         },
         {
           "path": "app/item_catalog_sync.py",
