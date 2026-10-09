@@ -99,6 +99,21 @@ class DataGenerationBlocked(RuntimeError):
         super().__init__(self.user_message)
 
 
+def verified_private_compatibility(manifest, signature, public_key_config, *, version, build_id):
+    """Bind the existing ES256 update proof to this running release."""
+    from update_service import verified_data_compatibility_from_manifest
+
+    if not isinstance(manifest, dict) or manifest.get("signature_version") != "es256-v1":
+        raise ValueError("data compatibility requires an ES256 update manifest")
+    metadata = verified_data_compatibility_from_manifest(manifest, signature, public_key_config)
+    if (generation.version_key(metadata["version"]) != generation.version_key(version)
+            or manifest.get("source_commit") != build_id):
+        raise ValueError("data compatibility release binding differs")
+    return {"version": version, "build_id": build_id,
+            "data_compatible_min_version": metadata["data_compatible_min_version"],
+            "compatibility_verified": "data_compatible_min_version" in manifest}
+
+
 def _portable_runtime_release():
     """Read and remember only a verified installed packet; never probe source Git."""
     from tools.check_release_version import read_current_version
@@ -132,6 +147,29 @@ def _portable_runtime_release():
         raise ValueError("release build identity is not proven")
     release = {"version": version, "build_id": build,
                "data_compatible_min_version": version, "compatibility_verified": False}
+    proof = manifest.get("data_generation_signed_manifest")
+    signature_hex = manifest.get("data_generation_signature_hex")
+    if proof is not None or signature_hex is not None:
+        try:
+            if (not isinstance(proof, dict) or not isinstance(signature_hex, str)
+                    or not re.fullmatch(r"[0-9a-f]{128}", signature_hex)):
+                raise ValueError("data compatibility proof is invalid")
+            key_path = app_root / "update-manifest-key-config.json"
+            if key_path.stat().st_size > 16 * 1024:
+                raise ValueError("packaged update key config is oversized")
+            key_config = json.loads(key_path.read_bytes())
+            if (not isinstance(key_config, dict)
+                    or set(key_config) != {"schema", "manifest_public_key"}
+                    or key_config.get("schema") != "container-audit-update-key-config-v1"):
+                raise ValueError("packaged update key config is invalid")
+            release = verified_private_compatibility(
+                proof, bytes.fromhex(signature_hex), key_config["manifest_public_key"],
+                version=version, build_id=build,
+            )
+        except (OSError, ValueError, TypeError, generation.DataGenerationError):
+            # A bad or unavailable proof grants no compatibility permission.
+            # The already verified code identity still uses its own version.
+            pass
     _PORTABLE_RELEASE_CACHE[portable_identity] = dict(release)
     return dict(release)
 

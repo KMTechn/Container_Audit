@@ -152,8 +152,17 @@ builder는 새 metadata helper 사용 전에 기존 공용 pin 검사를 끝낸�
 명시 호환 필드가 있을 때만 기록 helper의 `compatibility_verified=True`로 전달한다.
 기록과 대상의 검증된 commit/서명 manifest hash도 전달하고, 모든 marker를 probe한 뒤
 자료를 연다. G 이전 빌드가 marker 없이 연 자료는 보호되지 않는다. unsigned portable manifest의
-floor나 CPython Authenticode만으로 호환을 허가하지 않으며 지원 portable 설치에서는
-최소 판을 자기 판으로 강제한다. signed floor 변조/서명 없음·미래 floor 거절과 builder
+floor나 CPython Authenticode만으로 호환을 허가하지 않는다. portable 빌더의 선택 인수
+`--data-generation-update-manifest`·`--data-generation-update-signature`는 함께 주며,
+기존 ES256 서명·앱·실행 판·source_commit·하한을 검증한 선언과 64바이트 서명을
+`data_generation_signed_manifest`·`data_generation_signature_hex`로 내장한다.
+서명된 하한은 `--data-compatible-min-version`의 unsigned 값보다 우선한다.
+인수가 없으면 기존 metadata 바이트를 유지한다. 런타임은 전체 코드 무결성 확인 뒤
+설치본의 공개키 설정으로 같은 증명을 검증하고 기존 warmup/cache에 포함한다.
+증명 누락·검증 실패·키 부재는 자기 판 하한이며 이미 같은 판/build로 기록한 marker는
+뒤늦게 낮추지 않는다. 옛 portable reader는 추가 필드를 무시하고 기존 판/commit을 읽는다.
+하한을 낮추기 전에는 옛 판이 새 업무 자료와 소유·신원 파일을 읽는지 확인해야 한다.
+signed floor 변조/서명 없음·미래 floor 거절과 builder
 기본값을 포함한 관련 3파일 101 PASS(격리 소스), 실제 출시 서명 발행/stock은 미검증이다.
 
 보호 helper가 writer admission을 보유한 동안의 설치 수명주기 판독은 기존 byte-pinned

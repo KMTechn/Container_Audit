@@ -159,7 +159,10 @@ preimage/pin의 최종 정합성 및 실제 업데이트 수용은 조립 단계
 새 기준 집중 비교는 작업 보고서에 기록한다. 독립 review·H10 정책 결정과
 frozen/실제 GUI 설치 수용은 남아 있다.
 builder version/최소 호환 판 입력과 기존 ES256 signed private manifest 소비는 관련
-3파일 101 PASS이나 실제 private 출시 발행은 미완료다. 최초 옛
+3파일 101 PASS이나 실제 private 출시 발행은 미완료다. 재설치 packet의 내장 ES256
+호환 증명도 portable reader가 검증한다. 실제 키로 첫 업데이트 packet 발행과
+N+1 첫 자료-open → N 재설치 → G ALLOW·자료 보존·READY·relay 전송은 미검증이다.
+기존 같은 판/build marker의 자기 판 하한은 이 기능으로 낮추지 않는다. 최초 옛
 v2.0.33 위 설치의 일관 백업·수동
 복구는 운영 문서/runbook이며 H10 랩·실제 현장 설치/GUI/relay는 NOT TESTED다.
 [입구·남은 관문](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/ENTRY-POINTS.md),

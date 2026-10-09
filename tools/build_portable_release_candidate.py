@@ -613,6 +613,8 @@ def build(
     *,
     update_manifest_public_key_config: str | None = None,
     data_compatible_min_version: str | None = None,
+    data_generation_update_manifest: Path | None = None,
+    data_generation_update_signature: Path | None = None,
     auto_update_settings: dict[str, object] | None = None,
 ) -> dict[str, object]:
     from auto_update import policy_from_settings
@@ -636,6 +638,28 @@ def build(
     if shared_check.returncode:
         raise PortableBuildError("shared source pin check failed: " + shared_check.stderr.strip())
     data_metadata = _release_data_metadata(repo_root, data_compatible_min_version)
+    private_generation_manifest = None
+    private_generation_signature = None
+    if bool(data_generation_update_manifest) != bool(data_generation_update_signature):
+        raise PortableBuildError("private compatibility manifest and signature are required together")
+    if data_generation_update_manifest is not None:
+        from data_generation_guard import verified_private_compatibility
+        from kmtech_shared.data_generation import DataGenerationError
+
+        try:
+            if (data_generation_update_manifest.stat().st_size > 1024 * 1024
+                    or data_generation_update_signature.stat().st_size != 64):
+                raise ValueError("private compatibility proof size is invalid")
+            private_generation_manifest = json.loads(data_generation_update_manifest.read_bytes())
+            private_generation_signature = data_generation_update_signature.read_bytes()
+            proof = verified_private_compatibility(
+                private_generation_manifest, private_generation_signature,
+                _update_public_key_config(update_manifest_public_key_config),
+                version=data_metadata["version"], build_id=_git_value(repo_root, "HEAD^{commit}"),
+            )
+        except (OSError, ValueError, TypeError, DataGenerationError) as exc:
+            raise PortableBuildError("private compatibility proof is invalid") from exc
+        data_metadata["data_compatible_min_version"] = proof["data_compatible_min_version"]
     writer_inventory = _assert_writer_sink_inventory(repo_root)
     from auto_update import source_version_literal
     version = source_version_literal((repo_root / 'Container_Audit.py').read_bytes())
@@ -730,8 +754,14 @@ def build(
         "file_count_before_manifest": file_count,
         "byte_count_before_manifest": byte_count,
     }
+    if private_generation_manifest is not None:
+        manifest["data_generation_signed_manifest"] = private_generation_manifest
+        manifest["data_generation_signature_hex"] = private_generation_signature.hex()
+    serialized_manifest = json.dumps(manifest, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
+    if len(serialized_manifest.encode("utf-8")) > 65536:
+        raise PortableBuildError("portable generation metadata exceeds the runtime bound")
     (output / "portable-manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        serialized_manifest,
         encoding="utf-8",
         newline="\n",
     )
@@ -747,6 +777,8 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--update-manifest-public-key-config")
     parser.add_argument("--data-compatible-min-version", help="Release data floor; portable installers still require a verified signed binding before trusting a lower floor")
+    parser.add_argument("--data-generation-update-manifest", type=Path)
+    parser.add_argument("--data-generation-update-signature", type=Path)
     parser.add_argument("--auto-update-settings", type=Path)
     return parser.parse_args(argv)
 
@@ -759,6 +791,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.output,
         update_manifest_public_key_config=args.update_manifest_public_key_config,
         data_compatible_min_version=args.data_compatible_min_version,
+        data_generation_update_manifest=args.data_generation_update_manifest,
+        data_generation_update_signature=args.data_generation_update_signature,
         auto_update_settings=(json.loads(args.auto_update_settings.read_text(encoding="utf-8-sig")) if args.auto_update_settings else None),
     )
     print(json.dumps(result, ensure_ascii=True, sort_keys=True))

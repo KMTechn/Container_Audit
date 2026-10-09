@@ -36,6 +36,10 @@ $BootstrapIntegrityFileName='bootstrap-integrity.json'
 
 @pytest.fixture
 def packet(tmp_path, monkeypatch):
+    from tools import register_container_audit_worker_pc as registration
+
+    # Keep identity and marker filenames synthetic even under long lane roots.
+    monkeypatch.setattr(registration, "_current_user_sid", lambda: "S-1-5-21-219")
     source_root = Path(onboarding.__file__).resolve().parent
     app = _write_packet(tmp_path / "packet", source_root)
     if hasattr(guard, "_PORTABLE_RELEASE_CACHE"):

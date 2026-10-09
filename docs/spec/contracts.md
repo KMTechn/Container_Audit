@@ -4,7 +4,9 @@
 
 원격 전송은 fence probe 뒤 mutex 밖에서 수행한다. 결과의 로컬 저장은 admission을 다시 받고 기존 identity/version/CAS를 재확인한다. 스캔의 로컬 durable → 표시 → 같은 key의 배경 전송 순서는 유지한다. runtime lease는 HTTP 전 DB transaction을 닫고 적용 transaction에서 pending request와 row 소유를 다시 확인한다.
 
-Portable `_runtime_release()`는 전체 무결성 PASS와 version/build 결속 검증을 마친 결과만 해석된 packet root·app root·entrypoint별로 프로세스 안에 기억하고 사본을 반환한다. 실패·예외는 기억하지 않는다. GUI·상주 relay·raw relay 실행기의 최초 확인은 쓰기 허가 밖에서 수행하며, 미리 확인하지 못했으면 기존 자료 guard가 허가 안에서 다시 검증한다. frozen·source 판정과 자료 세대 marker 읽기·판정·기록은 기존 경계를 유지한다.
+Portable `_runtime_release()`는 전체 무결성 PASS와 version/build 결속 검증을 마친 결과만 해석된 packet root·app root·entrypoint별로 프로세스 안에 기억하고 사본을 반환한다. 코드 무결성·판 결속의 실패·예외는 기억하지 않는다. GUI·상주 relay·raw relay 실행기의 최초 확인은 쓰기 허가 밖에서 수행하며, 미리 확인하지 못했으면 기존 자료 guard가 허가 안에서 다시 검증한다. frozen·source 판정과 자료 세대 marker 읽기·판정·기록은 기존 경계를 유지한다.
+
+Portable metadata의 `data_generation_signed_manifest`·`data_generation_signature_hex`는 설치본 `app/update-manifest-key-config.json`의 공개키로 기존 ES256 업데이트 서명을 검증한다. 선언의 앱·package·판·source_commit이 실행 코드와 맞고 하한이 실행 판 이하인 경우에만 명시 하한을 신뢰한다. 누락·변조·결속 불일치·키 부재는 `(실행 판, False)`이며 unsigned 숫자는 권한을 주지 않는다. 증명 검증도 기존 허가 밖 warmup과 프로세스 캐시에 포함한다. 같은 판·build의 기존 marker를 덮지 않으며 자료·신원·marker 스키마는 바꾸지 않는다.
 
 운영자 spool 복구는 publish 직전 ACKED row의 상태·metadata·신원 결속을 다시 비교한다. 등록 응답은 신원·manifest·credential·profile 원본의 fingerprint와 possession key를 재확인한 뒤 적용하며, two-phase 복구는 요청을 만든 journal binding과 현재 binding이 같을 때만 전이·sealed package를 저장한다. 대기 중 바뀐 원본은 늦은 응답으로 덮어쓰지 않는다.
 
