@@ -10,7 +10,7 @@ import item_catalog_sync as sync
 import logistics_runtime_profile
 from item_catalog import ItemCatalog
 from direct_sync_health import RelayHealth
-from tests.test_container_p0_contracts import _health_card
+from tests.test_work_details_visibility import install_sync_display, catalog_notice_text
 from tests.test_item_catalog_sync import CATALOG, FakeResponse, _profile
 from tests.test_scanonly_review_regressions import public_scan, real_notice
 from tests.test_w9scanonly_workflow import flow, windows, fixed_operation_lease_clock, COMPACT_QR, ITEM
@@ -22,7 +22,7 @@ pytestmark = pytest.mark.usefixtures("fixed_operation_lease_clock", "owned_tk_wo
 @pytest.fixture
 def startup(monkeypatch, tmp_path, flow):
     app = flow(transition=False)
-    app.info_cards = {"direct_sync": _health_card()}
+    install_sync_display(app)
     app._direct_sync_health = RelayHealth("idle", 0, 0, 0, "", "", "")
     released = []
     def create_app():
@@ -110,7 +110,7 @@ def test_verified_offline_start_has_no_window_and_scans_then_updates_connection(
     assert isinstance(result, tuple) and result[0] is app
     result[1].release()
     assert windows == []
-    text = app.info_cards["direct_sync"]["value"].options["text"]
+    text = catalog_notice_text(app)
     context = sync.get_catalog_attempt_context()
     assert context["catalog_source"] == "VERIFIED_CACHE"
     assert "회사 서버 품목 목록" in text and "저장된 목록 시각" in text
@@ -123,8 +123,9 @@ def test_verified_offline_start_has_no_window_and_scans_then_updates_connection(
     client = app.transfer_seal_coordinator.client
     client.connection_state = "normal"
     app._apply_direct_sync_health(app._direct_sync_health)
-    text = app.info_cards["direct_sync"]["value"].options["text"]
-    assert "서버 연결: 정상" in text and "목록 재확인 가능" in text
+    text = catalog_notice_text(app)
+    assert "목록 재확인 가능" in text
+    assert app.direct_sync_status_label.options["text"] == "연결됨 · 0건"
     assert "받지 못해" not in text
     assert "저장된 목록 시각" in text  # Reconnection alone does not refresh the catalog.
     assert windows == []
@@ -139,7 +140,7 @@ def test_invalid_offline_cache_still_blocks_startup(startup, monkeypatch, tmp_pa
 
 
 @pytest.mark.parametrize("reason", ["profile_absent", "transition"])
-def test_other_nonblocking_catalog_startup_notices_use_connection_card(
+def test_other_nonblocking_catalog_startup_notices_use_notice_labels(
     startup, monkeypatch, tmp_path, windows, reason,
 ):
     app, _released = startup
@@ -157,8 +158,17 @@ def test_other_nonblocking_catalog_startup_notices_use_connection_card(
     result = ca._prepare_gui_startup()
     assert isinstance(result, tuple) and result[0] is app
     result[1].release()
-    assert expected in app.info_cards["direct_sync"]["value"].options["text"]
+    assert expected in catalog_notice_text(app)
     assert windows == []
+
+
+def test_empty_catalog_notice_hides_both_labels_and_frame(startup):
+    app, _released = startup
+    app._startup_item_catalog_context = {}
+    app._apply_direct_sync_health(app._direct_sync_health)
+    assert not app.catalog_notice_frame.visible
+    assert not app.catalog_notice_label.visible
+    assert not app.catalog_notice_details_label.visible
 
 
 def test_best_time_startup_warning_is_inline_and_preserves_corrupt_original(

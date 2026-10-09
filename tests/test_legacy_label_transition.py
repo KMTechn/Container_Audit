@@ -1353,9 +1353,9 @@ class _StartupApp:
     _consume_direct_sync_wake_results = lambda self: ""
 
     def __init__(self):
-        from tests.test_container_p0_contracts import _health_card
+        from tests.test_work_details_visibility import install_sync_display
         self.root = type("Root", (), {"after": lambda *_args: None})()
-        self.info_cards = {"direct_sync": _health_card()}
+        install_sync_display(self)
         self.ran = False
 
     def run(self):
@@ -1405,7 +1405,8 @@ def test_catalog_failure_without_a_cache_starts_only_in_transition_mode(
         assert app.ran is True and app.item_catalog_unconfirmed is True
         assert container_audit_module.ACTIVE_PATH_ENV not in container_audit_module.os.environ
         assert dialogs == []  # DESIGN §0/§1: use the existing work-screen card.
-        notice = app.info_cards["direct_sync"]["value"].options["text"]
+        from tests.test_work_details_visibility import catalog_notice_text
+        notice = catalog_notice_text(app)
         assert container_audit_module.ITEM_CATALOG_TRANSITION_WARNING_TITLE in notice
         assert "REQUEST_FAILED_NO_CACHE" in notice
     else:

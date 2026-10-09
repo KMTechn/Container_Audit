@@ -3090,11 +3090,12 @@ def test_direct_sync_health_poll_skips_busy_lane_and_stale_result():
     assert app._direct_sync_health is current
 
 
-def test_direct_sync_card_keeps_pending_neutral_and_terminal_amber():
+def test_direct_sync_footer_keeps_checking_neutral_and_counted_review_red():
     health_module = importlib.import_module("direct_sync_health")
+    from tests.test_work_details_visibility import install_sync_display
     app = ContainerAudit.__new__(ContainerAudit)
-    card = _health_card()
-    app.info_cards = {"direct_sync": card}
+    app.root = SimpleNamespace()
+    install_sync_display(app)
     app._direct_sync_wake_results = queue.Queue()
     app._direct_sync_wake_error_code = ""
     pending = health_module.RelayHealth(
@@ -3105,29 +3106,27 @@ def test_direct_sync_card_keeps_pending_neutral_and_terminal_amber():
     )
 
     app._apply_direct_sync_health(pending)
-    assert card["frame"].options["style"] == "Card.TFrame"
-    assert "대기 3" in card["value"].options["text"]
+    assert app.direct_sync_status_label.options["fg"] == app.COLOR_TEXT_SUBTLE
+    assert app.direct_sync_status_label.options["text"] == "확인 중"
 
     app._apply_direct_sync_health(review)
-    assert card["frame"].options["style"] == "RelayAttention.TFrame"
-    assert "담당자 확인 2건" in card["value"].options["text"]
-    assert "전송 대기 3건" in card["value"].options["text"]
+    assert app.direct_sync_status_label.options["fg"] == app.COLOR_DANGER
+    assert app.direct_sync_status_label.options["text"] == "관리자 확인 2건"
+    assert app._direct_sync_health.pending_count == 3
 
     # An unreadable queue with no counted rows must never look like success.
     blocked = health_module.RelayHealth("blocked", 0, 0, 0, "", "", "", "queue_unreadable")
     app._apply_direct_sync_health(blocked)
-    assert card["frame"].options["style"] == "RelayAttention.TFrame"
-    assert "전송 확인 필요" in card["value"].options["text"]
-    assert "전송 상세 확인" in card["value"].options["text"]
-    assert "queue_unreadable" not in card["value"].options["text"]
+    assert app.direct_sync_status_label.options["text"] == "확인 중"
+    assert "queue_unreadable" not in app.direct_sync_status_label.options["text"]
     assert health_module.relay_health_detail_model(blocked)["진단 코드"] == "queue_unreadable"
 
     ready = health_module.RelayHealth("ready", 0, 0, 0, "", "", "")
     app._apply_direct_sync_health(ready)
-    assert card["frame"].options["style"] == "Card.TFrame"
+    assert app.direct_sync_status_label.options["fg"] == app.COLOR_TEXT_SUBTLE
     # G10 adds observed connection and last successful send beside the queue.
     # An empty local queue alone supplies no observation of the server link.
-    assert card["value"].options["text"] == "서버 연결: 확인 중 · 보낼 것 0건\n마지막 성공 전송 없음\n전송 대기 없음"
+    assert app.direct_sync_status_label.options["text"] == "확인 중"
 
 
 def test_gui_completion_is_nonblocking_and_persists_on_worker(tmp_path):

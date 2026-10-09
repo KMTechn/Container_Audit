@@ -123,7 +123,7 @@ v2.0.33 위 설치의 일관 백업·수동
 
 명단 2단의 로컬 `worker_id`·`worker_name_snapshot`, UUID 복구 소유, 켜짐 신호에 따른 전송과 고정 재전송은 headless 회귀 대상이다. held-scan ACK 실패의 정상·거부 재생과 모든 신원 호출의 AST 분류·저장본 필수 전달은 [경계 회귀](../../tests/test_event_identity_boundaries.py)로 확인한다. 실제 명단 정정·중지 후 스캐너로 진행 중 완료와 다음 묶음 선택을 확인하는 현장 수용은 별도다. [계약](contracts.md), [회귀](../../tests/test_worker_record_identity.py).
 
-G10 relay 읽기 실패는 실제 마지막 counts/ACK를 유지하고 미확인 안내로 구별한다. 카드·운영 메뉴의 상세에서 최초 실패/미수신의 미확인, 마지막 확인값·확인 시각·읽기 실패, 정상 읽기 복구와 후속 스캔을 소스 회귀로 검증한다. 실제 장애 화면은 랩에 남는다.
+G10 relay 읽기 실패는 실제 마지막 counts/ACK를 유지하고 미확인 안내로 구별한다. 운영 메뉴의 전송 상태 상세에서 최초 실패/미수신의 미확인, 마지막 확인값·확인 시각·읽기 실패, 정상 읽기 복구와 후속 스캔을 소스 회귀로 검증한다. 실제 장애 화면은 랩에 남는다.
 
 portable 등록·관리자 복구 도구는 직접 격리 실행 전에 자기 `app`·bundled `site-packages`를 준비한다. `--help` subprocess 회귀는 import 경계만 검증하며 같은 PC 재설치·키 분실 뒤 실제 서버 복구는 랩 수용에 남는다.
 
@@ -149,7 +149,7 @@ G10 연결 정상 표시는 성공 envelope 검증 뒤로 옮겼다. 끊김 뒤 
 
 ## 문서 작성 진행과 제품 준비도
 
-- **w9cap1fix (P1-2·P1-5·P1-3 CA 몫):** 못 보낸 이적 완료를 새 완료·재시작 없이 30초마다 배경에서 다시 보내고(완료와 같은 3초 한도·FIFO·hold 검사), 화면은 완료 대신 `서버 전송 대기 N건(자동으로 다시 보냄)`, `저장 전송` 카드는 `완료 전송 대기 N건`을 보인다([배경 재전송](contracts.md#ca-background-seal-retry)). lease 시각 확인에 서버와 같은 30초 허용, 봉인 완료 시각은 발급 시각 아래로 가지 않게 올리고, 과도기 켬은 발급 전·끊김 조회를 같은 key로 한 번 더 한 뒤에만 로컬로 간다([시계 허용](contracts.md#ca-lease-clock)). 버린 트레이의 쓰지 않은 lease는 서버에 해제 요청한다([기기 해제](contracts.md#ca-lease-release)). [RESULT](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9cap1fix/RESULT.md). 실제 화면·서버 해제 API(w9srvp1fix 판)와의 결합은 랩 몫(NOT VERIFIED).
+- **w9cap1fix (P1-2·P1-5·P1-3 CA 몫):** 못 보낸 이적 완료를 새 완료·재시작 없이 30초마다 배경에서 다시 보내고(완료와 같은 3초 한도·FIFO·hold 검사), 화면은 완료 대신 `서버 전송 대기 N건(자동으로 다시 보냄)`, 바닥 한 줄의 보낼 것 수에 완료 전송 대기 수를 합친다([배경 재전송](contracts.md#ca-background-seal-retry)). lease 시각 확인에 서버와 같은 30초 허용, 봉인 완료 시각은 발급 시각 아래로 가지 않게 올리고, 과도기 켬은 발급 전·끊김 조회를 같은 key로 한 번 더 한 뒤에만 로컬로 간다([시계 허용](contracts.md#ca-lease-clock)). 버린 트레이의 쓰지 않은 lease는 서버에 해제 요청한다([기기 해제](contracts.md#ca-lease-release)). [RESULT](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9cap1fix/RESULT.md). 실제 화면·서버 해제 API(w9srvp1fix 판)와의 결합은 랩 몫(NOT VERIFIED).
 - <a id="ca-g19"></a>**CA-G19 늦게 커밋된 해제와 같은 PC 재생의 경합 — 확인 필요, 담당 Web·CA:** 해제 요청이 3초에서 끊긴 뒤 서버가 늦게 커밋하는 사이 같은 PC가 같은 현품표를 다시 스캔해 같은 issue key 재생으로 `ACTIVE`를 받으면, 그 트레이 완료는 뒤이어 커밋된 해제 때문에 서버에서 거절될 수 있다(완료 후 관리자 확인, 조용한 유실은 아님). 서버의 발급 재생과 해제가 같은 행 잠금으로 직렬화되는지(`immediate_transaction`) 확인이 필요하다(w9cap1fixrev P2-G).
 - <a id="ca-g18"></a>**CA-G18 재시작 뒤 해제 재시도(내구 기록) — 소스 구현:** 기존 lease SQLite에 요청과 최종 결과를 보존하고, 초기화의 상태 삭제 전 요청을 저장한다. 재시작 뒤 원 key·본문으로 재전송하며 사용 중인 lease의 해제는 취소한다. 실제 서버·설치본 수용은 미검증이다.
 
@@ -400,7 +400,7 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g13"></a>
 ## CA-G13 전체 UI 가시성·포커스와 idle 후 명령 복귀
 
-- 최근 정상 스캔·다음 행동(row6)은 항상 표시하며 작업 상세는 평균·30일 최고(row7)만 접는다(P1-CA-01). 기본·복원 설정과 재구성·토글은 창 없는 실제 sidebar builder 회귀로 확인한다. 작업 상세 펼침·접힘, 운영 작업 메뉴의 선택·취소·닫기·팝업 오류, 트레이 이미지 선택의 초점 복귀와 보조 제어 Tab 제외는 창 없는 회귀로 확인한다. 실제 스캐너·VM 화면 확인은 별도 UI 감사에 남긴다([sub-512 결과](D:/KMTech/program-improvement-20260912/work/program/w9scanonly/sub-512/RESULT.md)).
+- 전송 상태는 공통 바닥 한 줄, 품목 안내는 기존 row3의 주황 라벨로 표시한다(P1-CA-03). 좁은 높이에서는 첫 문장·단추 행을 유지하고 보조 줄만 접는다. 기존 relay 상세에 목록 시각·client 마지막 성공 전송 시각 두 줄을 추가했다. 실제 화면은 별도 Claude/VM 확인에 남긴다. 최근 정상 스캔·다음 행동(row6)은 항상 표시하며 작업 상세는 평균·30일 최고(row7)만 접는다(P1-CA-01). 기본·복원 설정과 재구성·토글은 창 없는 실제 sidebar builder 회귀로 확인한다. 작업 상세 펼침·접힘, 운영 작업 메뉴의 선택·취소·닫기·팝업 오류, 트레이 이미지 선택의 초점 복귀와 보조 제어 Tab 제외는 창 없는 회귀로 확인한다. 실제 스캐너·VM 화면 확인은 별도 UI 감사에 남긴다([sub-512 결과](D:/KMTech/program-improvement-20260912/work/program/w9scanonly/sub-512/RESULT.md)).
 - A3·A4: 메뉴 반환 뒤 열린 다른 창의 초점/grab 보호, 부분 스캔 내용·선택 보존, 겹친 복귀 한 번 실행을 창 없는 회귀로 확인한다. 실제 Windows 메뉴 명령·PIN 입력의 화면 확인은 별도 VM 감사에 남긴다.
 
 - **2026-09-15 사용자 화면 후속 수용:** 현재 작업의 품목명/규격·상세/품목 코드/목표 수량을 별도 줄로 나누고 품목명만 강조한다. 체크된 사진 미표시는 pcwalk 합성 어댑터의 갱신 누락과 제품 `show_validation_screen` 재구성 누락을 구별하여 수정했다. 기준 `730ffa19`+개발후보 SHA2563483f897…, Windows/Python3.12.10 비GUI2+투명·화면밖 native4=6 PASS; 독립 diff 검토 차단사항0, 개발 VM2560×1440/배율1.0에서 줄분리·사진표시·재구성/체크토글 복원·동일2/3 직접 관측 PROVEN([결과](D:/KMTech/program-improvement-20260912/work/crosscut/pcwalk/CA/ui-fix/RESULT.md), [독립 검토](D:/KMTech/program-improvement-20260912/work/crosscut/pcwalk/CA/ui-fix/REVIEW-RESULT.md)). guest pytest/원본 신규회귀RED는 NOT TESTED, 원본·native recovery 실패는 보존한다. 이어 사용자 요청으로 KMC_LHD 사진의 앞면 손글씨/오염을 이미지 생성기로 정리하고 검은 원형 식별 스티커·흰 인쇄를 유지했다([원본·편집·적용](D:/KMTech/program-improvement-20260912/work/crosscut/pcwalk/CA/tray-image-edit/RESULT.md)); LHD 편집본은 사용자 수용·개발 VM 반영 PROVEN, 독립 Pillow pixel golden 대조와 PNG4건 PASS([JUnit](D:/KMTech/t/cau915/31afaf83/junit.xml)). 이어 사용자 "반영해"로 RHD 무문자 파란 원형 스티커/HMC 파란 잉크 도장 v2를 수용해 두 PNG를 교체했다. 독립 Pillow golden 대조 및 PNG4+표시상태1=5 PASS([JUnit](D:/KMTech/t/cau915/ffa0dd14/junit.xml)). 원본과 사용자 거부 v1을 보존하고 읽히지 않는 문자를 임의로 채우지 않는다([승인 파일·근거](D:/KMTech/program-improvement-20260912/work/crosscut/pcwalk/CA/tray-image-edit/other-previews/README.md)). 품목 매핑 변경0; 개발 VM 동일 SHA/원본보존/제품 해독·축소 PROVEN([guest](D:/KMTech/program-improvement-20260912/work/crosscut/pcwalk/CA/tray-image-edit/GUEST-V2-RESULT.json)). 현재 LHD/2·3 상태를 유지했으며 RHD/HMC 실제 품목 화면 전환은 NOT TESTED다. 운영 배포·실업무 수용으로 확대하지 않는다.

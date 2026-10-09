@@ -5,14 +5,21 @@ import pytest
 
 import Container_Audit as ca
 
+_ContainerAudit = ca.ContainerAudit
+
 
 class Widget:
     def __init__(self, parent=None, **options):
         self.parent = parent
+        self.master = parent
         self.options = options
         self.grid_options = {}
         self.visible = False
         self.children = []
+        self.width, self.height = 300, 768
+        self.requested_height = 24
+        self.row_options = {}
+        self.pack_options = {}
         if isinstance(parent, Widget):
             parent.children.append(self)
 
@@ -30,16 +37,92 @@ class Widget:
         self.visible = False
 
     def pack(self, **options):
+        self.pack_options.update(options)
         self.visible = True
+
+    def grid_info(self):
+        return self.grid_options
+
+    def grid_configure(self, **options):
+        self.grid_options.update(options)
+
+    def grid_rowconfigure(self, row, **options):
+        if not options:
+            return self.row_options.get(row, {})
+        self.row_options.setdefault(row, {}).update(options)
+
+    def cget(self, name):
+        return self.options.get(name, "")
+
+    def winfo_width(self):
+        return self.width
+
+    def winfo_height(self):
+        return self.height
+
+    def winfo_reqwidth(self):
+        return 100
+
+    def winfo_reqheight(self):
+        return self.requested_height
+
+    def winfo_ismapped(self):
+        return self.visible
+
+    def winfo_manager(self):
+        return "grid" if self.visible and self.grid_options else ""
+
+    def winfo_children(self):
+        return self.children
+
+    def add(self, child, **options):
+        pass
+
+    def after(self, *args):
+        pass
 
     def grid_columnconfigure(self, *args, **options):
         pass
 
-    def bind(self, *args):
+    def bind(self, *args, **options):
         pass
 
     def unbind(self, *args):
         pass
+
+
+def install_sync_display(app):
+    """Install only display stubs while retaining a flow's real lane/root helpers."""
+    footer = Widget(app.root)
+    footer.width = 1366
+    app.direct_sync_status_label = Widget(footer)
+    app.status_label = Widget(footer, font=("Malgun Gothic", 11))
+    parent = Widget()
+    app._right_sidebar_frame = parent
+    app.catalog_notice_frame = Widget(parent)
+    app.catalog_notice_frame.grid(row=3, column=0)
+    app.catalog_notice_label = Widget(app.catalog_notice_frame)
+    app.catalog_notice_label.grid(row=0, column=0)
+    app.catalog_notice_details_label = Widget(app.catalog_notice_frame)
+    app.catalog_notice_details_label.grid(row=1, column=0)
+    app.work_details_button = Widget(parent)
+    app.logistics_progress_button = Widget(parent)
+    for name in ("_render_direct_sync_status_line", "_catalog_notice_for_display", "_apply_catalog_notice_layout"):
+        setattr(app, name, getattr(_ContainerAudit, name).__get__(app))
+    for name in ("COLOR_TEXT_SUBTLE", "COLOR_SIDEBAR_BG", "COLOR_DANGER", "COLOR_IDLE_TEXT", "COLOR_IDLE_BG", "DEFAULT_FONT"):
+        setattr(app, name, getattr(_ContainerAudit, name))
+    app._pane_viewport_height = _ContainerAudit._pane_viewport_height
+    app._apply_catalog_notice_layout()
+
+
+def catalog_notice_text(app):
+    assert app.catalog_notice_frame.visible and app.catalog_notice_label.visible
+    parts = [app.catalog_notice_label.options["text"]]
+    detail = app.catalog_notice_details_label.options["text"]
+    if detail:
+        assert app.catalog_notice_details_label.visible
+        parts.append(detail)
+    return "\n".join(parts)
 
 
 @pytest.fixture

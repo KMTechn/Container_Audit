@@ -128,8 +128,13 @@ def native_operator(native_tk_root, request):
     app._create_right_sidebar_content(right)
     # Existing detailed-readout checks exercise the operator's disclosure.
     app.work_details_button.invoke()
-    app.status_label = tk.Label(root, text='스캐너 준비')
-    app.status_label.place(x=0, y=950, width=800, height=40)
+    footer = tk.Frame(root)
+    footer.place(x=0, y=root.winfo_height()-40, width=root.winfo_width(), height=40)
+    app.direct_sync_status_label = tk.Label(footer, text='회사 서버 확인 중')
+    app.direct_sync_status_label.pack(side=tk.RIGHT)
+    app.status_label = tk.Label(footer, text='스캐너 준비')
+    app.status_label.pack(side=tk.LEFT)
+    footer.bind('<Configure>', app._render_direct_sync_status_line)
     app._update_center_display()
     root.update()
     return app, center, right
@@ -230,10 +235,11 @@ def test_native_routine_disclosures_preserve_warning_quantity_and_scan_rows(nati
     app.work_details_button.invoke()
     app.root.update()
     assert not app.notice_frame.winfo_ismapped()
-    assert not app._right_context_frame.winfo_ismapped()
+    assert app._right_context_frame.winfo_ismapped()
     assert not app._secondary_stats_frame.winfo_ismapped()
     assert_contained(app.work_details_button, right)
-    assert_contained(app.direct_sync_details_button, right)
+    assert_contained(app.logistics_progress_button, right)
+    assert not hasattr(app, "direct_sync_details_button")
 
     app.warning_presenter.present(Notice(
         code='scan.duplicate', title='중복 스캔', message='이미 처리된 제품입니다.',
@@ -244,7 +250,8 @@ def test_native_routine_disclosures_preserve_warning_quantity_and_scan_rows(nati
         app.work_details_button.invoke()
         center.place_configure(width=760 if expanded else 900)
         app.root.update()
-        assert bool(app._right_context_frame.winfo_ismapped()) is expanded
+        assert app._right_context_frame.winfo_ismapped()
+        assert bool(app._secondary_stats_frame.winfo_ismapped()) is expanded
         assert_contained(app.notice_frame, center)
         assert_contained(app.notice_ack_button, center)
         assert str(app.scan_entry.cget('state')) == 'disabled'
@@ -508,7 +515,7 @@ def test_native_right_cards_and_details_restore_after_compact_round_trip(native_
         assert app._work_details_expanded is True
         assert_contained(app.work_details_button, right)
         assert app.work_details_button.cget('text') == '작업 상세 ▾'
-        values = [app.info_cards[key]['value'] for key in ['status', 'direct_sync', 'stopwatch', 'avg_time', 'best_time']]
+        values = [app.info_cards[key]['value'] for key in ['status', 'stopwatch', 'avg_time', 'best_time']]
         values += [app.last_scan_value_label, app.follow_up_label]
         for widget in values:
             assert_contained(widget, right)
@@ -525,12 +532,12 @@ def test_native_compact_right_values_are_readable_at_supported_scales(
     native_operator, record_testsuite_property,
 ):
     from tkinter.font import Font
-    from direct_sync_health import RelayHealth, relay_health_card_model
+    from direct_sync_health import RelayHealth
 
     app, _center, right = native_operator
     for key, text in [('avg_time', '01:23.4'), ('best_time', '00:58.2')]:
         app.info_cards[key]['value'].configure(text=text)
-    for button in (app.work_details_button, app.direct_sync_details_button):
+    for button in (app.work_details_button, app.logistics_progress_button):
         assert_contained(button, right)
         assert button.winfo_width() >= button.winfo_reqwidth()
         assert button.winfo_height() >= button.winfo_reqheight()
@@ -549,9 +556,11 @@ def test_native_compact_right_values_are_readable_at_supported_scales(
         health = RelayHealth(state, pending, failed, review, ack, '', '')
         app._apply_direct_sync_health(health)
         app.root.update()
-        model = relay_health_card_model(health)
-        value = app.info_cards['direct_sync']['value']
-        assert value.cget('text') == '\n'.join(filter(None, (model['summary'], model['detail'])))
+        value = app.direct_sync_status_label
+        assert value.cget('text') == ('관리자 확인 필요 3건 · 보낼 것 12건' if failed + review else '회사 서버 확인 중')
+        assert_contained(value, value.master)
+        assert value.winfo_width() >= value.winfo_reqwidth()
+        assert 'direct_sync' not in app.info_cards
         # A contained label can still clip its actual multiline text.
         assert value.winfo_height() >= value.winfo_reqheight()
         for card in app.info_cards.values():
@@ -568,7 +577,7 @@ def test_native_compact_right_values_are_readable_at_supported_scales(
         assert Font(root=app.root, font=app.info_cards[key]['value'].cget('font')).cget('size') == (
             16 if app.scale_factor < 1.2 else 14
         )
-    for key in ['direct_sync', 'avg_time', 'best_time']:
+    for key in ['avg_time', 'best_time']:
         assert Font(root=app.root, font=app.info_cards[key]['value'].cget('font')).cget('size') == (
             14 if app.scale_factor < 1.2 else 12
         )
@@ -582,7 +591,7 @@ def test_native_constrained_relay_states_fit_actual_maximized_pane(
     native_operator, record_testsuite_property,
 ):
     from tkinter.font import Font
-    from direct_sync_health import RelayHealth, relay_health_card_model
+    from direct_sync_health import RelayHealth
 
     app, _center, right = native_operator
     assert app.scale_factor == 1.4
@@ -594,7 +603,7 @@ def test_native_constrained_relay_states_fit_actual_maximized_pane(
     for key, text in [('avg_time', '01:23.4'), ('best_time', '00:58.2')]:
         app.info_cards[key]['value'].configure(text=text)
     captions = {
-        'status': '현재 작업 상태', 'direct_sync': '저장 전송',
+        'status': '현재 작업 상태',
         'stopwatch': '트레이 소요', 'avg_time': '평균', 'best_time': '30일 최고',
     }
     for state, pending, failed, review, ack in [
@@ -606,9 +615,8 @@ def test_native_constrained_relay_states_fit_actual_maximized_pane(
         health = RelayHealth(state, pending, failed, review, ack, '', '')
         app._apply_direct_sync_health(health)
         app.root.update()
-        model = relay_health_card_model(health)
         expected = {
-            'status': '대기 중', 'direct_sync': '\n'.join(filter(None, (model['summary'], model['detail']))),
+            'status': '대기 중',
             'stopwatch': '-', 'avg_time': '01:23.4', 'best_time': '00:58.2',
             'last_scan': '-', 'follow_up': '현품표 라벨 스캔',
         }

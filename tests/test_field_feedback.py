@@ -18,7 +18,8 @@ from tests.test_observed_scanner_completion import ScannerEntry
 from tests.test_transfer_seal import FakeSession, FakeResponse
 from transfer_client import LogisticsTransferClient
 from direct_sync_health import RelayHealth, relay_health_detail_model
-from tests.test_container_p0_contracts import _health_card, _insert_relay_row
+from tests.test_container_p0_contracts import _insert_relay_row
+from tests.test_work_details_visibility import install_sync_display
 from direct_sync_push import init_relay_queue_schema
 
 pytestmark = pytest.mark.usefixtures('fixed_operation_lease_clock', 'owned_tk_workers')
@@ -63,33 +64,32 @@ def test_logistics_connection_failure_preserves_last_successful_send_and_get_doe
     assert client.last_successful_transmission_at == successful_send
 
 
-def test_connection_card_combines_status_send_time_and_existing_queues(flow, windows):
+def test_connection_footer_combines_existing_queues_without_transmission_detail(flow, windows):
     app = flow(transition=True)
-    card = _health_card()
-    app.info_cards = {'direct_sync': card}
+    install_sync_display(app)
     client = app.transfer_seal_coordinator.client
     client.connection_state = 'disconnected'
     client.last_successful_transmission_at = '2026-10-01T01:30:00+00:00'
     app._pending_seal_intent_count = 2
     health = RelayHealth('pending', 3, 0, 0, '2026-10-01T01:00:00+00:00', '', '')
     app._apply_direct_sync_health(health)
-    text = card['value'].options['text']
-    assert '서버 연결: 끊김' in text
-    assert '마지막 성공 전송' in text
+    text = app.direct_sync_status_label.options['text']
+    assert '연결 안 됨' in text
+    assert '마지막 성공 전송' not in text
     assert '보낼 것 5건' in text
-    assert '완료 전송 대기 2건' in text
+    assert '\n' not in text
+    assert app._pending_seal_intent_count == 2
+    assert client.last_successful_transmission_at == '2026-10-01T01:30:00+00:00'
 
 
 def test_relay_read_failure_preserves_observed_counts_and_ack_until_read_recovers(flow, windows, monkeypatch):
     app = flow(transition=True)
-    card = _health_card()
-    app.info_cards = {'direct_sync': card}
+    install_sync_display(app)
     app.transfer_seal_coordinator.client.connection_state = 'normal'
     app.transfer_seal_coordinator.client.last_successful_transmission_at = ''
     app._pending_seal_intent_count = 2
     prior = RelayHealth('pending', 3, 0, 0, '2026-10-01T01:00:00+00:00', '', '')
     app._apply_direct_sync_health(prior)
-    last_success_text = card['value'].options['text'].splitlines()[1]
 
     def unreadable(**kwargs):
         raise OSError('synthetic relay read failure')
@@ -100,30 +100,32 @@ def test_relay_read_failure_preserves_observed_counts_and_ack_until_read_recover
     _pump_until(app.root, lambda: not app._direct_sync_health_pending)
     assert app._direct_sync_health.pending_count == 3
     assert app._direct_sync_health.last_acked_at == prior.last_acked_at
-    text = card['value'].options['text']
-    assert '서버 연결: 정상' in text
-    assert '보낼 것 5건' in text and '마지막 확인' in text
-    assert '대기 건수 확인 불가(읽기 실패)' in text
-    assert last_success_text in text
+    text = app.direct_sync_status_label.options['text']
+    assert text == '연결됨 · 5건'
+    detail = relay_health_detail_model(app._direct_sync_health, last_read_health=app._direct_sync_last_read_health)
+    assert '읽기 실패' in detail['확인 상태'] and '마지막 확인값' in detail['확인 상태']
+    assert detail['대기'] == '3'
+    assert detail['마지막 ACK'] == datetime.fromisoformat(prior.last_acked_at).astimezone().strftime('%m-%d %H:%M')
 
     for code in ('relay_db_open_failed', 'relay_db_schema_unavailable'):
         app._apply_direct_sync_health(RelayHealth('blocked', 0, 0, 0, '', '', '', code))
         assert app._direct_sync_health.pending_count == 3
         assert app._direct_sync_health.last_acked_at == prior.last_acked_at
-        assert '대기 건수 확인 불가(읽기 실패)' in card['value'].options['text']
+        assert '읽기 실패' in relay_health_detail_model(app._direct_sync_health,
+            last_read_health=app._direct_sync_last_read_health)['확인 상태']
 
     del app._direct_sync_last_read_health
     app._apply_direct_sync_health(RelayHealth('blocked', 0, 0, 0, '', '', '', 'relay_health_read_failed'))
-    text = card['value'].options['text']
-    assert '대기 건수 확인 불가(읽기 실패)' in text
+    text = app.direct_sync_status_label.options['text']
+    assert text == '연결됨'
     assert '보낼 것 0건' not in text and '대기 0건' not in text
     assert '마지막 성공 전송 없음' not in text
 
     recovered = RelayHealth('pending', 1, 0, 0, '2026-10-01T02:00:00+00:00', '', '')
     app._apply_direct_sync_health(recovered)
     assert app._direct_sync_health == recovered
-    text = card['value'].options['text']
-    assert '보낼 것 3건' in text
+    text = app.direct_sync_status_label.options['text']
+    assert text == '연결됨 · 3건'
     assert '읽기 실패' not in text and '마지막 확인' not in text
     assert windows == []
 
@@ -135,7 +137,7 @@ def test_public_relay_detail_distinguishes_unknown_stale_and_recovered_values(
     public_scan(app, f'CLC={ITEM}|QT=3')
     public_scan(app, ITEM + '-SERIAL-001')
     app.direct_sync_program_data_root = str(tmp_path / 'relay')
-    app.info_cards = {'direct_sync': _health_card()}
+    install_sync_display(app)
     monkeypatch.setattr(app, '_schedule_direct_sync_health_refresh', lambda **kwargs: None)
     monkeypatch.setattr(app, '_schedule_focus_return', lambda: None)
     captured = []

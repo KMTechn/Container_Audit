@@ -13,7 +13,7 @@ import item_catalog_sync as sync
 import logistics_runtime_profile as runtime_module
 from current_user_onboarding import resolve_current_user_onboarding_paths
 from tests.test_item_catalog_sync import CATALOG, FakeResponse
-from tests.test_container_p0_contracts import _health_card
+from tests.test_work_details_visibility import install_sync_display, catalog_notice_text
 from tools.install_logistics_runtime_profile import install_runtime_profile
 from tools import install_logistics_runtime_profile as installer_module
 
@@ -193,8 +193,8 @@ def test_no_profile_sends_no_request_and_startup_shows_setup_action(
         def __init__(self):
             calls.append("app-created")
             self.root = FakeRoot()
-            self.info_cards = {"direct_sync": _health_card()}
-            cards.append(self.info_cards["direct_sync"])
+            install_sync_display(self)
+            cards.append(self)
 
         def run(self):
             calls.append("run")
@@ -215,7 +215,7 @@ def test_no_profile_sends_no_request_and_startup_shows_setup_action(
     assert launcher == []
     assert calls == ["app-created", "after", "run", "release"]
     assert dialogs == []  # DESIGN §0/§1: guidance stays in the work screen.
-    message = cards[0]["value"].options["text"]
+    message = catalog_notice_text(cards[0])
     assert SETUP_TITLE in message
     assert "Windows 사용자" in message and "할 일" in message and "다시 시작" in message
     assert "작업은 계속" in message

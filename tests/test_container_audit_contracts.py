@@ -894,8 +894,8 @@ def test_main_schedules_update_check_after_app_creation(monkeypatch):
         def __init__(self):
             calls.append("init")
             self.root = FakeRoot()
-            from tests.test_container_p0_contracts import _health_card
-            self.info_cards = {"direct_sync": _health_card()}
+            from tests.test_work_details_visibility import install_sync_display, catalog_notice_text
+            install_sync_display(self)
 
         _apply_direct_sync_health = ContainerAudit._apply_direct_sync_health
         _consume_direct_sync_wake_results = lambda self: ""
@@ -1006,11 +1006,11 @@ def test_main_warns_and_continues_with_verified_catalog_cache(monkeypatch, tmp_p
         _consume_direct_sync_wake_results = lambda self: ""
 
         def __init__(self):
-            from tests.test_container_p0_contracts import _health_card
+            from tests.test_work_details_visibility import install_sync_display, catalog_notice_text
             calls.append("client-created")
             self.root = FakeRoot()
-            self.info_cards = {"direct_sync": _health_card()}
-            cards.append(self.info_cards["direct_sync"])
+            install_sync_display(self)
+            cards.append(self)
 
         def run(self):
             calls.append("run")
@@ -1054,7 +1054,7 @@ def test_main_warns_and_continues_with_verified_catalog_cache(monkeypatch, tmp_p
     assert calls[1][0] == "diagnostic"
     assert calls[2:] == ["client-created", ("after", 500), "run", "release"]
     assert dialogs == []  # DESIGN §0/§1: no acknowledgement before scanning.
-    notice = cards[0]["value"].options["text"]
+    notice = catalog_notice_text(cards[0])
     assert container_audit_module.ITEM_CATALOG_CACHE_WARNING_TITLE in notice
     assert "2026-08-28" in notice
     assert "UNKNOWN" not in notice

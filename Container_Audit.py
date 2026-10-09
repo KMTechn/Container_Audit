@@ -2704,8 +2704,15 @@ class ContainerAudit:
             highlightthickness=1,
         )
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        self.direct_sync_status_label = tk.Label(
+            status_bar, text="회사 서버 확인 중", anchor=tk.E, wraplength=0,
+            bg=self.COLOR_SIDEBAR_BG, fg=self.COLOR_TEXT_SUBTLE,
+        )
+        self.direct_sync_status_label.pack(side=tk.RIGHT, padx=10, pady=4)
         self.status_label = tk.Label(status_bar, text="스캐너 준비", anchor=tk.W, bg=self.COLOR_SIDEBAR_BG, fg=self.COLOR_TEXT)
         self.status_label.pack(side=tk.LEFT, padx=10, pady=4)
+        status_bar.bind('<Configure>', self._render_direct_sync_status_line)
+        self.status_label.bind('<Configure>', self._render_direct_sync_status_line)
         self.paned_window = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         self.left_pane = ttk.Frame(self.paned_window, style='Sidebar.TFrame')
         self.center_pane = ttk.Frame(self.paned_window, style='TFrame')
@@ -2897,6 +2904,7 @@ class ContainerAudit:
         self.style.configure('Inactive.Horizontal.TProgressbar', troughcolor=self.COLOR_BG, background=self.COLOR_BG, bordercolor=self.COLOR_BG, lightcolor=self.COLOR_BG, darkcolor=self.COLOR_BG, thickness=tokens.components.progress_thickness)
         if hasattr(self, 'status_label'):
             self.status_label.configure(font=(self.DEFAULT_FONT, s), bg=self.COLOR_SIDEBAR_BG, fg=self.COLOR_TEXT)
+        self._render_direct_sync_status_line()
 
     def on_ctrl_wheel(self, event):
         self.scale_factor += 0.1 if event.delta > 0 else -0.1
@@ -10649,6 +10657,7 @@ class ContainerAudit:
         metrics = self._get_right_sidebar_layout_metrics(height)
         metrics_key = (generation, *metrics.values())
         if metrics_key == getattr(self, "_right_sidebar_layout_metrics", None):
+            self._apply_catalog_notice_layout()
             return
         try:
             parent_frame.configure(padding=(metrics["outer_padding"], metrics["outer_padding"]))
@@ -10661,7 +10670,8 @@ class ContainerAudit:
             if clock_label is not None:
                 clock_label.configure(font=(self.DEFAULT_FONT, metrics["clock_font"], 'bold'))
                 clock_label.grid_configure(pady=(0, metrics["clock_gap"]))
-            for row in (2, 3, 4):
+            parent_frame.grid_rowconfigure(3, weight=0, minsize=0, uniform="")
+            for row in (2, 4):
                 parent_frame.grid_rowconfigure(
                     row,
                     weight=1,
@@ -10675,7 +10685,7 @@ class ContainerAudit:
                 'SidebarDetail.Secondary.TButton',
                 padding=(6, 2),
             )
-            for name in ('work_details_button', 'direct_sync_details_button'):
+            for name in ('work_details_button',):
                 button = getattr(self, name, None)
                 if button is not None:
                     button.configure(style=(
@@ -10684,10 +10694,7 @@ class ContainerAudit:
             work_details = getattr(self, 'work_details_button', None)
             if work_details is not None:
                 work_details.grid_configure(pady=(0, 0 if compact else metrics['card_gap']))
-            sync_details = getattr(self, 'direct_sync_details_button', None)
-            if sync_details is not None:
-                sync_details.pack_configure(pady=(0 if compact else 6, 0))
-            for key in ("status", "direct_sync", "stopwatch"):
+            for key in ("status", "stopwatch"):
                 card = getattr(self, "info_cards", {}).get(key)
                 if card:
                     card["frame"].configure(padding=0 if compact else metrics["card_padding"])
@@ -10703,11 +10710,6 @@ class ContainerAudit:
                         anchor='center',
                         justify='center',
                     )
-            direct_sync_card = getattr(self, "info_cards", {}).get("direct_sync")
-            if direct_sync_card:
-                direct_sync_card["value"].configure(
-                    font=(self.DEFAULT_FONT, metrics["secondary_value_font"], 'bold')
-                )
             context_frame = getattr(self, "_right_context_frame", None)
             if context_frame is not None:
                 context_frame.configure(padding=0 if compact else metrics["context_padding"])
@@ -11609,35 +11611,28 @@ class ContainerAudit:
         self.clock_label.grid(row=1, column=0, pady=(0,20))
         self.info_cards = {
             'status': self._create_info_card(parent_frame, "현재 작업 상태"),
-            'direct_sync': self._create_info_card(parent_frame, "저장 전송"),
             'stopwatch': self._create_info_card(parent_frame, "트레이 소요"),
         }
         self.info_cards['status']['frame'].grid(row=2, column=0, sticky='nsew', pady=(0, 10))
-        self.info_cards['direct_sync']['frame'].grid(row=3, column=0, sticky='nsew', pady=(0, 10))
         self.info_cards['stopwatch']['frame'].grid(row=4, column=0, sticky='nsew', pady=(0, 10))
-        self.info_cards['direct_sync']['value'].configure(
-            text="전송 상태 확인 중",
+        self.catalog_notice_frame = ttk.Frame(parent_frame, style='RelayAttention.TFrame')
+        self.catalog_notice_frame.grid(row=3, column=0, sticky='ew', pady=(0, 10))
+        self.catalog_notice_label = ttk.Label(
+            self.catalog_notice_frame, style='RelayAttention.Value.TLabel',
+            anchor='center', justify='center',
         )
-        self.direct_sync_details_button = ttk.Button(
-            self.info_cards['direct_sync']['frame'],
-            text="상세",
-            command=self._show_direct_sync_status_details,
-            takefocus=False,
-            style='Secondary.TButton',
-            width=0,
+        self.catalog_notice_label.grid(row=0, column=0, sticky='ew')
+        self.catalog_notice_details_label = ttk.Label(
+            self.catalog_notice_frame, style='RelayAttention.Value.TLabel',
+            anchor='center', justify='center',
         )
-        self.direct_sync_details_button.pack(
-            before=self.info_cards['direct_sync']['label'],
-            side='right', anchor='n', padx=(4, 0),
+        self.catalog_notice_details_label.grid(row=1, column=0, sticky='ew')
+        self.catalog_notice_frame.grid_columnconfigure(0, weight=1)
+        self.logistics_progress_button = ttk.Button(
+            parent_frame, text="진행 현황", command=self.show_logistics_progress,
+            takefocus=False, style='Secondary.TButton',
         )
-        ttk.Button(parent_frame, text="진행 현황", command=self.show_logistics_progress,
-            takefocus=False, style='Secondary.TButton').grid(row=8, column=0, sticky='ew', pady=8)
-        for widget in self.info_cards['direct_sync'].values():
-            try:
-                widget.bind('<Button-1>', lambda _event: self._show_direct_sync_status_details())
-                widget.configure(cursor='hand2')
-            except (AttributeError, tk.TclError):
-                pass
+        self.logistics_progress_button.grid(row=8, column=0, sticky='ew', pady=8)
 
         context_frame = ttk.Frame(parent_frame, style='Card.TFrame', padding=16)
         self._right_context_frame = context_frame
@@ -11736,6 +11731,7 @@ class ContainerAudit:
         frame = getattr(self, "_secondary_stats_frame", None)
         if frame is not None:
             frame.grid() if expanded else frame.grid_remove()
+        self._apply_catalog_notice_layout()
 
     def _create_info_card(self, parent: ttk.Frame, label_text: str) -> Dict[str, ttk.Widget]:
         card = ttk.Frame(parent, style='Card.TFrame', padding=20)
@@ -16837,39 +16833,86 @@ class ContainerAudit:
                 error_code=health.error_code if read_failed else wake_error,
             )
         self._direct_sync_health = health
-        card = getattr(self, "info_cards", {}).get("direct_sync")
-        if not card:
+        self._render_direct_sync_status_line()
+        self._apply_catalog_notice_layout()
+
+    def _render_direct_sync_status_line(self, event=None) -> None:
+        label = getattr(self, "direct_sync_status_label", None)
+        if label is None:
             return
-        model = relay_health_card_model(
-            health,
-            transfer_pending_count=int(
-                getattr(self, "_pending_seal_intent_count", None) or 0
-            ),
+        health = getattr(self, "_direct_sync_health", None)
+        known_counts = isinstance(health, RelayHealth) and (
+            not health.read_failed
+            or isinstance(getattr(self, "_direct_sync_last_read_health", None), RelayHealth)
         )
-        if read_failed and not has_previous_read:
-            model["summary"] = "대기 건수 확인 불가(읽기 실패)"
-            completion_pending = int(getattr(self, "_pending_seal_intent_count", None) or 0)
-            model["detail"] = f"완료 전송 대기 {completion_pending}건" if completion_pending else ""
+        pending = (
+            health.pending_count + int(getattr(self, "_pending_seal_intent_count", None) or 0)
+            if known_counts else None
+        )
+        review = health.failed_permanent_count + health.operator_review_count if known_counts else 0
         client = getattr(getattr(self, "transfer_seal_coordinator", None), "client", None)
         connection = getattr(client, "connection_state", "unknown")
-        connection_text = {"normal": "정상", "disconnected": "끊김"}.get(connection, "확인 중")
-        sent_times = []
-        for value in (health.last_acked_at, getattr(client, "last_successful_transmission_at", "")):
+        now = datetime.datetime.now().astimezone()
+        delayed = False
+        if pending and isinstance(health, RelayHealth):
             try:
-                sent_times.append(datetime.datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone())
-            except (ValueError, AttributeError):
+                oldest = datetime.datetime.fromisoformat(health.oldest_pending_at.replace('Z', '+00:00')).astimezone()
+                delayed = (now - oldest).total_seconds() > 600
+            except (ValueError, AttributeError, TypeError):
                 pass
-        last_sent = max(sent_times).strftime('%m-%d %H:%M') if sent_times else (
-            "확인 불가(읽기 실패)" if read_failed and not has_previous_read else "없음"
+        foreground, background, weight = self.COLOR_TEXT_SUBTLE, self.COLOR_SIDEBAR_BG, 'normal'
+        if review:
+            long_text = f"관리자 확인 필요 {review}건"
+            if pending is not None:
+                long_text += f" · 보낼 것 {pending}건"
+            short_text = f"관리자 확인 {review}건"
+            foreground, weight = self.COLOR_DANGER, 'bold'
+        elif connection == "disconnected":
+            long_text = "회사 서버 연결 안 됨 · 이 PC에 저장 중"
+            short_text = "연결 안 됨"
+            if pending is not None:
+                long_text += f" · 보낼 것 {pending}건"
+                short_text += f" · 보낼 것 {pending}건"
+            foreground, background = self.COLOR_IDLE_TEXT, self.COLOR_IDLE_BG
+        elif connection == "normal" and delayed:
+            long_text, short_text = f"회사 서버로 못 보낸 것 {pending}건", f"못 보낸 것 {pending}건"
+            foreground = self.COLOR_IDLE_TEXT
+            sent_times = []
+            for value in (health.last_acked_at, getattr(client, "last_successful_transmission_at", "")):
+                try:
+                    sent_times.append(datetime.datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone())
+                except (ValueError, AttributeError, TypeError):
+                    pass
+            if sent_times:
+                sent = max(sent_times)
+                timestamp = sent.strftime('%H:%M') if sent.date() == now.date() else f"{sent.month}. {sent.day}. {sent:%H:%M}"
+                long_text += f" · 마지막 전송 {timestamp}"
+        elif connection == "normal":
+            long_text, short_text = "회사 서버 연결됨", "연결됨"
+            if pending is not None:
+                long_text += f" · 보낼 것 {pending}건"
+                short_text += f" · {pending}건"
+        else:
+            long_text, short_text = "회사 서버 확인 중", "확인 중"
+        size = max(9, int(11 * float(getattr(self, "scale_factor", 1.0))))
+        available, required = 0, 1
+        width = 0
+        try:
+            width = self.root.winfo_width()
+            size = tkfont.Font(root=self.root, font=self.status_label.cget('font')).actual('size')
+            font = tkfont.Font(root=self.root, family=self.DEFAULT_FONT, size=size, weight=weight)
+            required = font.measure(long_text)
+            available = label.master.winfo_width() - self.status_label.winfo_reqwidth() - 40
+        except (AttributeError, RuntimeError, TypeError, ValueError, tk.TclError):
+            pass
+        label.configure(
+            text=long_text if width >= 1366 and required <= available else short_text,
+            fg=foreground, bg=background, font=(self.DEFAULT_FONT, size, weight), wraplength=0,
         )
-        pending = health.pending_count + int(getattr(self, "_pending_seal_intent_count", None) or 0)
-        pending_summary = f"보낼 것 {pending}건"
-        if read_failed:
-            pending_summary = (
-                f"{pending_summary} (마지막 확인) · " if has_previous_read else ""
-            ) + "대기 건수 확인 불가(읽기 실패)"
-        connection_summary = f"서버 연결: {connection_text} · {pending_summary}"
-        transmission_summary = f"마지막 성공 전송 {last_sent}"
+
+    def _catalog_notice_for_display(self) -> str:
+        client = getattr(getattr(self, "transfer_seal_coordinator", None), "client", None)
+        connection = getattr(client, "connection_state", "unknown")
         catalog_context = getattr(self, "_startup_item_catalog_context", {})
         catalog_notice = ""
         if catalog_context.get("transition_cause_code"):
@@ -16895,25 +16938,65 @@ class ContainerAudit:
                 else f"{ITEM_CATALOG_CACHE_WARNING_TITLE}\n"
                 + ITEM_CATALOG_CACHE_WARNING_MESSAGE.format(cache_time=cache_time)
             )
-        attention = model["tone"] == "amber" or bool(catalog_notice)
-        card["frame"].configure(
-            style="RelayAttention.TFrame" if attention else "Card.TFrame"
+        return catalog_notice
+
+    def _apply_catalog_notice_layout(self) -> None:
+        frame = getattr(self, "catalog_notice_frame", None)
+        if frame is None:
+            return
+        first, _, rest = self._catalog_notice_for_display().partition('\n')
+        context = getattr(self, "_startup_item_catalog_context", {})
+        client = getattr(getattr(self, "transfer_seal_coordinator", None), "client", None)
+        cache_reconnected = (
+            context.get("cache_used") and context.get("catalog_source") == "VERIFIED_CACHE"
+            and getattr(client, "connection_state", "unknown") == "normal"
+            and not context.get("transition_cause_code")
+            and context.get("pre_send_rejection_code") != PROFILE_ABSENT
         )
-        card["label"].configure(
-            style=(
-                "RelayAttention.Subtle.TLabel"
-                if attention
-                else "Card.Subtle.TLabel"
-            )
-        )
-        card["value"].configure(
-            text="\n".join(value for value in (connection_summary, transmission_summary, model['summary'], model['detail'], catalog_notice) if value),
-            style=(
-                "RelayAttention.Value.TLabel"
-                if attention
-                else "Card.Value.TLabel"
-            ),
-        )
+        if rest and not cache_reconnected:
+            sentence, _, rest = rest.partition('\n')
+            first += '\n' + sentence
+        label, details = self.catalog_notice_label, self.catalog_notice_details_label
+        label.configure(text=first)
+        details.configure(text=rest)
+        if not first:
+            label.grid_remove()
+            details.grid_remove()
+            frame.grid_remove()
+            self._right_sidebar_frame.grid_rowconfigure(3, weight=0, minsize=0, uniform="")
+            return
+        parent = self._right_sidebar_frame
+        label.grid()
+        frame.grid()
+        details.grid_remove()
+        try:
+            padding = parent.cget('padding')
+            padding = tuple(int(value) for value in (padding if isinstance(padding, (tuple, list)) else str(padding).split()))
+            outer = padding[0] if padding else 0
+            width = max(1, parent.winfo_width() - 2 * outer)
+            label.configure(wraplength=width)
+            details.configure(wraplength=width)
+            reserved = 2 * outer
+            for child in parent.winfo_children():
+                if child is frame or child.winfo_manager() != 'grid':
+                    continue
+                info = child.grid_info()
+                pady = info.get('pady', 0)
+                values = pady if isinstance(pady, (tuple, list)) else str(pady).split()
+                gaps = [int(value) for value in values]
+                gap = sum(gaps) if len(gaps) > 1 else 2 * sum(gaps)
+                needed = child.winfo_reqheight() + gap
+                if child in (self.work_details_button, self.logistics_progress_button):
+                    parent.grid_rowconfigure(int(info['row']), weight=0, minsize=needed)
+                else:
+                    needed = max(needed, int(parent.grid_rowconfigure(int(info['row'])).get('minsize', 0)))
+                reserved += needed
+            parent.grid_rowconfigure(3, weight=0, minsize=label.winfo_reqheight() + 10, uniform="")
+            remaining = self._pane_viewport_height(parent) - reserved - label.winfo_reqheight() - 10
+            if rest and details.winfo_reqheight() <= remaining:
+                details.grid()
+        except (AttributeError, TypeError, ValueError, tk.TclError):
+            pass
 
     def _show_direct_sync_status_details(self) -> None:
         health = getattr(self, "_direct_sync_health", None)
@@ -16932,6 +17015,10 @@ class ContainerAudit:
             health,
             last_read_health=getattr(self, "_direct_sync_last_read_health", None),
         )
+        catalog_context = getattr(self, "_startup_item_catalog_context", {})
+        client = getattr(getattr(self, "transfer_seal_coordinator", None), "client", None)
+        detail["저장된 목록 시각"] = _item_catalog_cache_time_for_display(catalog_context.get("cache_last_modified_utc"))
+        detail["마지막 성공 전송"] = _item_catalog_cache_time_for_display(getattr(client, "last_successful_transmission_at", ""))
         messagebox.showinfo(
             "전송 상태 상세",
             "\n".join(f"{label}: {value}" for label, value in detail.items()),

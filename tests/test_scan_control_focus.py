@@ -156,7 +156,6 @@ def test_image_toggle_returns_focus_with_or_without_live_image_label(
     ("_create_left_sidebar_content", "_toggle_left_sidebar_view"),
     ("_create_left_sidebar_content", "_update_tray_image_display"),
     ("_create_center_content", "_show_operations_menu"),
-    ("_create_right_sidebar_content", "_show_direct_sync_status_details"),
     ("_create_right_sidebar_content", "show_logistics_progress"),
     ("_create_right_sidebar_content", "_toggle_work_details"),
 ])

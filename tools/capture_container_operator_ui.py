@@ -3742,14 +3742,21 @@ def collect_ui_geometry(app: Any) -> dict[str, Any]:
         "status_bar_text": (app.status_label, False, True),
     }
     if not getattr(app, "_work_details_expanded", True):
-        for name in ("right_context", "right_last_scan", "right_follow_up", "right_secondary"):
-            critical_widgets.pop(name)
+        critical_widgets.pop("right_secondary")
     for name, attribute in (
         ("work_details", "work_details_button"),
-        ("relay_details", "direct_sync_details_button"),
+        ("logistics_progress", "logistics_progress_button"),
+        ("direct_sync_status", "direct_sync_status_label"),
     ):
         widget = getattr(app, attribute, None)
         if widget is not None:
+            critical_widgets[name] = (widget, True, True)
+    for name, attribute in (
+        ("catalog_notice", "catalog_notice_label"),
+        ("catalog_notice_details", "catalog_notice_details_label"),
+    ):
+        widget = getattr(app, attribute, None)
+        if widget is not None and widget.winfo_ismapped():
             critical_widgets[name] = (widget, True, True)
     notice_state = app.warning_presenter.state
     exchange_panel = getattr(app, "phs_label_exchange_frame", None)
@@ -3985,7 +3992,7 @@ def collect_rendered_state(app: Any) -> dict[str, Any]:
         active_tray_last_scan_raw = ""
     right_texts = {
         "status": _widget_text(app.info_cards["status"]["value"]),
-        "direct_sync": _widget_text(app.info_cards["direct_sync"]["value"]),
+        "direct_sync": _widget_text(getattr(app, "direct_sync_status_label", None)),
         "stopwatch": _widget_text(app.info_cards["stopwatch"]["value"]),
         "last_normal_scan": _widget_text(app.last_scan_value_label),
         "next_action": _widget_text(app.follow_up_label),

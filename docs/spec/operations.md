@@ -722,7 +722,7 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 
 공급자 호환은 [contract.lock.json](../../contract.lock.json)의 bundle/API/capability 선언과 실제 설치 후보를 함께 확인한다. 물류 lease 서명 검증은 [terminal_operation_lease](../../terminal_operation_lease.py)가 `vendor.kmtech_zero_pe`를 import하는 소스 경로다. CA에 Rework의 sibling/provider 선택 규칙을 그대로 적용할 근거는 없다. 현재 설치된 Python/Tcl, vendor·overlay 유무/해시, 서버 flags·인증 scope·TLS 설정·capability는 이 문서 작업에서 확인하지 않았다. 이름이나 HEAD만으로 설치 조합을 추정하지 않는다. [CA-G05](BACKLOG.md#ca-g05).
 
-품목은 중앙 CSV와 검증 cache·복구 cache를 관리한다. 중앙 갱신 실패 시 검증된 cache로 시작하면 작업 화면의 기존 `저장 전송` 카드에 캐시 기준 시각과 갱신 실패 안내를 표시한다(확인 창·누름 없음). 기존 연결 표시가 정상으로 돌아오면 목록 재확인 가능 안내로 바뀌며, 실제 목록은 `운영 작업 → 품목 목록 새로 고침` 성공 또는 다음 시작의 갱신 뒤에만 새것으로 취급한다. 선택된 profile이 없으면 인증이 필요한 운영 품목 원본(`worker.kmtecherp.com`, 기본값)에 요청하지 않는다. 로컬 cache 또는 패키지 목록으로 시작하고 진단에 `request_sent=false`·`pre_send_rejection_code=PROFILE_ABSENT`를 남기며 같은 카드의 `중앙 연결 설정 필요` 안내에서 작업 계속 가능과 할 일(이 Windows 사용자로 설치·초기 설정 재실행 후 재시작)을 알린다. 명시한 다른 origin의 무인증 override는 기존대로다. 검증 가능한 cache가 없거나 검증 뒤 snapshot이 사라진 경로는 시작 오류다(창: 네트워크·설정 확인 뒤 다시 실행, 계속되면 IT 담당자 문의). 그래서 설치·업그레이드 뒤 첫 시작은 서버에 연결된 상태에서 한 번 해 검증 cache를 만든다. [refresh_item_catalog](../../item_catalog_sync.py), [prepare_startup_item_catalog / load_items](../../Container_Audit.py), [CA-C08](contracts.md#ca-c08). 허용 cache 나이와 갱신 지연의 업무 목표는 미정이다.
+품목은 중앙 CSV와 검증 cache·복구 cache를 관리한다. 중앙 갱신 실패 시 검증된 cache로 시작하면 작업 화면의 주황 품목 안내 라벨에 캐시 기준 시각과 갱신 실패 안내를 표시한다(확인 창·누름 없음). 기존 연결 표시가 정상으로 돌아오면 목록 재확인 가능 안내로 바뀌며, 실제 목록은 `운영 작업 → 품목 목록 새로 고침` 성공 또는 다음 시작의 갱신 뒤에만 새것으로 취급한다. 선택된 profile이 없으면 인증이 필요한 운영 품목 원본(`worker.kmtecherp.com`, 기본값)에 요청하지 않는다. 로컬 cache 또는 패키지 목록으로 시작하고 진단에 `request_sent=false`·`pre_send_rejection_code=PROFILE_ABSENT`를 남기며 같은 라벨의 `회사 서버 연결 설정 필요` 안내에서 작업 계속 가능과 할 일(이 Windows 사용자로 설치·초기 설정 재실행 후 재시작)을 알린다. 명시한 다른 origin의 무인증 override는 기존대로다. 검증 가능한 cache가 없거나 검증 뒤 snapshot이 사라진 경로는 시작 오류다(창: 네트워크·설정 확인 뒤 다시 실행, 계속되면 IT 담당자 문의). 그래서 설치·업그레이드 뒤 첫 시작은 서버에 연결된 상태에서 한 번 해 검증 cache를 만든다. [refresh_item_catalog](../../item_catalog_sync.py), [prepare_startup_item_catalog / load_items](../../Container_Audit.py), [CA-C08](contracts.md#ca-c08). 허용 cache 나이와 갱신 지연의 업무 목표는 미정이다.
 
 <a id="ca-catalog-refresh"></a>
 ### 실행 중 품목 목록 새로 고침
@@ -744,7 +744,7 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 일상 안내 band는 필요한 알림/현품표 교체 때 펼친다. 최근 정상 스캔·다음 행동은 항상 표시하고, 작업 상세는 평균·30일 최고만 접고 펼친다.
 작업 상세 열기·닫기, 운영 작업 메뉴 선택·취소·닫기, 트레이 이미지 체크 뒤에는 스캔 칸으로 초점을 예약한다. 좌우 보조 단추와 운영 작업 단추·이미지 체크 상자는 Tab 이동에서 빠진다. 차단 안내가 있으면 기존 초점 보호를 따르며 스캔 칸·대화상자·관리자 PIN 입력의 Tab 설정은 유지한다.
 확인·PIN·교환 창이 초점이나 grab을 가지면 예약 복귀는 그 창의 입력을 유지한다. 작업 상세를 연속으로 여닫아도 스캔 칸의 입력 중인 글자는 보존하고 마지막 복귀 한 번만 처리한다.
-`저장 전송` 카드의 `상세`는 Tab으로 접근하고 닫은 뒤 비차단 상태에서 스캔 포커스로 복귀한다.
+전송 세부는 `운영 작업 → 전송 상태 상세`에서 확인한다. 닫은 뒤 기존 비차단 스캔 초점 복귀를 유지한다. 작업 화면에는 공통 바닥 한 줄과 필요할 때만 표시하는 주황 품목 안내가 있으며 저장 전송 카드·상세 단추는 없다.
 교체 화면 닫기는 진행 중인 조회/교체/복구/차단 상태를 해제하지 않는다.
 글자 크기 재구성 후 열린 교체 화면과 선택한 모드를 유지하며, 내구 복구가 남으면 메뉴 차단 중에도 `F8로 복구` 진입을 보여 준다.
 가시성 수집기는 접힌 내용 대신 실제 상세 진입점을 검사하며, 알림이 필요한 상태는 계속 필수로 검사한다.
