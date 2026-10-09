@@ -2357,11 +2357,9 @@ def _powershell_module_prologue_lines(source: bytes) -> frozenset[int]:
                 if prefix[index + 1:].strip():
                     return frozenset()
                 break
-        if depth or re.search(
-            r"(?i)\b(?:Convert(?:From|To)-Json|Get-Content|Get-Date|New-TimeSpan|"
-            r"New-Object|Out-Null|Get-FileHash|Get-Acl|Set-Acl|Get-AuthenticodeSignature)\b",
-            prefix,
-        ):
+        # Parameter binding happens before the script body. Even an OS cmdlet
+        # in a default or ValidateScript must not precede the accepted imports.
+        if depth or re.search(r"\b[A-Za-z][A-Za-z0-9]*-[A-Za-z][A-Za-z0-9]*\b|[&|]", prefix):
             return frozenset()
     suffix = "\n".join(_powershell_code_only(line) for line in
                        after.decode("utf-8").splitlines()).lstrip()

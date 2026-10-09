@@ -29,6 +29,7 @@ def test_validator_accepts_only_exact_os_module_block_at_script_head(tmp_path, p
 @pytest.mark.parametrize("mutation", [
     "character", "module", "root", "action", "third", "leading_space",
     "trailing_space", "case", "crlf", "before_param", "late", "function", "parameter_command",
+    "parameter_select", "parameter_dynamic",
 ])
 def test_validator_refuses_changed_or_misplaced_os_module_block(tmp_path, mutation):
     source = _load_module().PS_MODULE_PROLOGUE
@@ -56,6 +57,10 @@ def test_validator_refuses_changed_or_misplaced_os_module_block(tmp_path, mutati
         source = b"Get-Content -LiteralPath 'fixture'\n" + source
     elif mutation == "function":
         source = b"function Read-Hash {\n" + source + b"}\n"
+    elif mutation == "parameter_select":
+        source = b"param($Path = ('fixture' | Select-Object -First 1))\n" + source
+    elif mutation == "parameter_dynamic":
+        source = b"param($Path = (& $Command))\n" + source
     else:
         source = b"param($Path = (Get-FileHash 'fixture'))\n" + source
     rejected = _inventory(tmp_path, source)["guard_failures"]
