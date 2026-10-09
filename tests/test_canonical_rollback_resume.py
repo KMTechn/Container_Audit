@@ -13,11 +13,13 @@ import re
 import shutil
 import subprocess
 import time
+import uuid
 
 import pytest
 
 from tests.powershell_contracts import run_functions, run_powershell
 from tests.test_canonical_installation_callers import _bind_packet, _distinct_replacement
+from tests.test_installation_redaction_contract import _assert_no_raw_environment_bytes
 from tests.test_canonical_portable_uninstall import (
     _assert_one_live_relay, _launch_relay, _live_preimage, _ps, _setup, _sha, _tree,
 )
@@ -374,6 +376,20 @@ def test_same_tuple_forged_lineage_refuses_before_restore_mutation(tmp_path, eng
 @pytest.mark.parametrize('tamper', ['receipt', 'journal_manifest', 'old_tree', 'new_tree', 'startup_preimage'])
 def test_resume_mismatch_refuses_before_any_mutation(tmp_path, engine, tamper):
     env, source, install, protected, _ = _fixture(tmp_path)
+    # Exercise #31 with a fresh synthetic value, never a host credential.
+    vector = {'environ': {'CA_RESUME_SECRET': uuid.uuid4().hex + uuid.uuid4().hex}}
+    env.update(vector['environ'])
+    canonical = source / 'INSTALL_CANONICAL_PORTABLE.ps1'
+    text = canonical.read_text(encoding='utf-8-sig')
+    for message in (
+        '끝나지 않은 되돌리기의 기록이 맞지 않아 변경하지 않았습니다. 지원 담당자에게 문의하세요.',
+        '끝나지 않은 되돌리기의 자동 시작 값이 달라 변경하지 않았습니다.',
+    ):
+        literal = "'" + message + "'"
+        assert text.count(literal) == 1
+        text = text.replace(literal, '(' + literal + '+$env:CA_RESUME_SECRET)')
+    canonical.write_text(text, encoding='utf-8-sig')
+    _bind_packet(source)
     with _launch_relay(tmp_path, env) as child:
         _live_preimage(tmp_path, env, source, install, child)
         journal, record = _produce_pending(tmp_path, env, source, install, engine)
@@ -417,16 +433,47 @@ def test_resume_mismatch_refuses_before_any_mutation(tmp_path, engine, tamper):
                    for detail in original['failure']['exception_chain'])
         diagnostic_files = {report_path.name, 'evidence-status.json', 'stages.jsonl'}
         assert {path.name for path in report_root.iterdir()} == diagnostic_files
+        # 1차 16:0x: admit exactly this attempt's standard FAILED summary.
+        # Its run id binds the basename to one evidence box; the box's caught
+        # failure binds that summary to the SHA-verified original above.
+        summary_name = report_root.name.rsplit('.evidence.', 1)[0]
+        summary_path = report_root.parent / summary_name
+        assert re.fullmatch(r'canonical-portable-[A-Za-z0-9-]+\.json', summary_name)
+        summary = json.loads(summary_path.read_text(encoding='utf-8-sig'))
+        assert summary['schema'] == 'container-audit-canonical-portable-install-v2'
+        assert summary['status'] == 'FAILED'
+        assert summary_name == 'canonical-portable-' + summary['run_id'] + '.json'
+        assert list(report_root.parent.glob(summary_name + '.evidence.*')) == [report_root]
+        assert list(report_root.glob('original-failure-*.json')) == [report_path]
+        evidence_status = json.loads((report_root / 'evidence-status.json').read_text(encoding='utf-8-sig'))
+        assert Path(evidence_status['root']).resolve() == report_root.resolve()
+        stages = [json.loads(line) for line in (report_root / 'stages.jsonl').read_text(
+            encoding='utf-8-sig').splitlines()]
+        caught = [stage for stage in stages if stage['event'] == 'CAUGHT_FAILURE']
+        assert len(caught) == 1
+        assert Path(caught[0]['original_failure']['path']).resolve() == report_path.resolve()
+        assert caught[0]['original_failure']['sha256'] == public['report_sha256']
+        assert summary['preparation_failure']['script_line'] == public['location_line']
+        # All four protected diagnostics use the same shared raw-byte search,
+        # including JSON escape variants. The original exercises the canary.
+        if '[REDACTED:' not in report_path.read_text(encoding='utf-8-sig'):
+            pytest.fail('Synthetic refusal redaction was not exercised', pytrace=False)
+        for path in [summary_path, *(report_root / name for name in diagnostic_files)]:
+            _assert_no_raw_environment_bytes(vector, path.read_text(encoding='utf-8-sig'))
+        _assert_no_raw_environment_bytes(vector, refused.stdout + refused.stderr)
         after = _tree(tmp_path)
         # Captured process output is test evidence; product state must be exact.
         for name in ('refused-stdout.log', 'refused-stderr.log'):
             after.pop(name, None)
-        # Decision #31 requires only these fresh, same-attempt protected files.
+        # Decision #31 and 1차 16:0x allow these exact same-attempt diagnostics.
         # Every preexisting byte and every other new path still compares exactly.
         for name in diagnostic_files:
             relative = str((report_root / name).relative_to(tmp_path))
             assert relative not in state and relative in after
             after.pop(relative)
+        summary_relative = str(summary_path.relative_to(tmp_path))
+        assert summary_relative not in state and summary_relative in after
+        after.pop(summary_relative)
         assert after == state
         assert not (tmp_path / 'refused.json').exists()
         assert all(p.read_bytes() == b'protected-fixture-must-be-preserved' for p in protected)
