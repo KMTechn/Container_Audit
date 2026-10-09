@@ -1508,8 +1508,8 @@ def update_lock(control: Path, operator_sid: str, *, trial: bool = False):
     sddl = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x00100001;;;" + operator_sid + ")"
     if not convert(sddl, 1, ctypes.byref(descriptor), None):
         raise OSError(ctypes.get_last_error(), "update mutex ACL conversion failed")
-    create = kernel.CreateMutexW
-    create.argtypes = [ctypes.POINTER(Attributes), wintypes.BOOL, wintypes.LPCWSTR]
+    create = kernel.CreateMutexExW
+    create.argtypes = [ctypes.POINTER(Attributes), wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD]
     create.restype = wintypes.HANDLE
     kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
     kernel.WaitForSingleObject.restype = wintypes.DWORD
@@ -1519,7 +1519,7 @@ def update_lock(control: Path, operator_sid: str, *, trial: bool = False):
     identity = hashlib.sha256(os.path.normcase(str(control.absolute())).encode("utf-8")).hexdigest()[:24]
     attributes = Attributes(ctypes.sizeof(Attributes), descriptor, False)
     try:
-        handle = create(ctypes.byref(attributes), False, "Global\\KMTech.ContainerAudit.Update." + identity + (".Trial" if trial else ""))
+        handle = create(ctypes.byref(attributes), "Global\\KMTech.ContainerAudit.Update." + identity + (".Trial" if trial else ""), 0, 0x00100001)
     finally:
         kernel.LocalFree(descriptor)
     if not handle:
@@ -2567,7 +2567,7 @@ def start_current(control: Path, policy: Mapping[str, Any], state, active, argum
         if not (report_once and previous and previous.get("reason_code") == code
                 and previous.get("apply_claim_sha256") == report["apply_claim_sha256"]):
             write_json_durable(report_path, report)
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, WriterFencedError):
         # A support sink failure cannot turn a safe ordinary launch into a stop.
         emit_support_record({"reason_code": "REPORT_UNAVAILABLE"}, stage="update_apply")
     started_at = now_utc()
@@ -2583,8 +2583,11 @@ def start_current(control: Path, policy: Mapping[str, Any], state, active, argum
 def bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
     try:
         return _bootstrap(app_root, arguments, role=role)
-    except RuntimeError as error:
-        if str(error) != "update mutex ownership is busy or abandoned":
+    except (OSError, RuntimeError) as error:
+        if isinstance(error, OSError):
+            if error.args[1:] != ("update mutex cannot be opened",):
+                raise
+        elif str(error) != "update mutex ownership is busy or abandoned":
             raise
         record = support_record({"reason_code": "UPDATE_IN_PROGRESS"}, stage="update_apply")
         record["guidance"] = SAFE_MESSAGES[3]

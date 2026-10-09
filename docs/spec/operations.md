@@ -287,6 +287,8 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 <a id="ca-startup-update"></a>
 ## 로그온 자동 갱신 운영
 
+갱신 mutex는 작업자 ACL의 SYNCHRONIZE|MUTEX_MODIFY_STATE 권한으로 열며 열기 거절·busy·abandoned는 `UPDATE_IN_PROGRESS`(종료 20)로 안내한다. `startup-support.json` 쓰기의 `WriterFencedError`는 `REPORT_UNAVAILABLE`을 기록하고 기존 일반 실행 검증을 계속한다.
+
 설치기의 `auto_update.py --print-logon-task` 자식은 script 실행에서도 앱 루트 기준
 모듈 이름으로 writer sink를 식별한다. 앱 밖 정의는 `__main__`을 유지하며,
 기존 허용 목록·source·fence 판정과 로그온 작업 JSON/XML 계약을 그대로 적용한다.
