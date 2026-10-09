@@ -98,6 +98,9 @@ def test_saved_action_survives_csv_failure(flow, windows, monkeypatch, tmp_path,
         projection_app = app
     else:
         blocked[0] = False
+        # Finish this test's writer projection before requiring a successful retry.
+        app.log_queue.put({})
+        app.log_queue.join()
         assert app._flush_pending_event_logs()
         projection_app = app
     rows = audit_rows(projection_app, event)
