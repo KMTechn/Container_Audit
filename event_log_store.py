@@ -238,7 +238,7 @@ def _lock_owner_is_dead(lock_path: str) -> bool | None:
     if owner["status"] == "LIVE" and creation is not None:
         return owner["creation_identity"] != creation
     # An inaccessible process is not evidence that its owner died.
-    return False
+    return None
 
 
 @contextmanager

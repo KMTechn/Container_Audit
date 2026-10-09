@@ -12,7 +12,7 @@ Portable `_runtime_release()`는 전체 무결성 PASS와 version/build 결속 �
 
 감사 CSV의 키 색인은 완결 줄만 인정한다. append와 색인 재생성 전에 같은 파일 잠금 안에서 줄바꿈 없는/NUL 꼬리를 잘라 fsync하고 색인을 무효화한다. 헤더 손상은 원본을 보존하며 거절한다. CSV fsync 뒤 같은 inode이고 크기가 투영 서명 이상이면 outbox 원본을 ACK한다. 뒤에 정상 행이 추가되어 크기·수정 시각이 바뀌어도 ACK하며, 파일 부재·교체·크기 감소는 원본을 보존하고 다음 drain에서 다시 확인한다. 꼬리 복구는 이미 완결된 내 행을 자르지 않는다.
 
-CSV 잠금 owner는 PID와 생성 시각으로 결속한다. 경합 때 프로세스 부재 또는 생성 시각 불일치면 즉시 제거·재시도하고, 살아 있는 같은 owner와 조회 불가 owner는 기다린다. 옛 PID-only 잠금도 생존을 확인하며, 읽을 수 없는 기록만 mtime 300초 규칙으로 판단한다. 시작 때 별도 잠금 청소는 하지 않는다.
+CSV 잠금 owner는 PID와 생성 시각으로 결속한다. 경합 때 프로세스 부재 또는 생성 시각 불일치면 즉시 제거·재시도하고, 생성 시각이 일치하는 살아 있는 owner는 잠금 나이와 무관하게 기다린다. 조회 불가 owner·살아 있는 PID-only 옛 형식·읽을 수 없는 기록은 mtime이 300초를 넘으면 회수한다. 시작 때 별도 잠금 청소는 하지 않는다.
 
 이미 writer admission을 쥔 drain은 완결 행 append만 하고 fsync·ACK·진행 중 행 대기를 배경에 맡긴다. 손상 꼬리의 복구도 중첩 밖에서만 한다(끊김 복구의 truncate/fsync는 파일 잠금과 admission 안에서 한 번 수행하는 예외). 중첩 동기 감사의 True는 원본 내구 접수이며 내부 projection-pending으로 CSV 대기를 구별한다. 미투영 outbox가 있으면 checkpoint 감사 목록을 지우지 않는다.
 

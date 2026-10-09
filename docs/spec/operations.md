@@ -2,7 +2,7 @@
 
 종료 시 CSV 배경 투영은 1초씩 최대 세 번 기다리고 화면을 닫는다. 예산에 남은 내구 outbox와 checkpoint 감사는 그대로 보존하며 다음 실행에서 원 키·순서로 재생한다. 아직 outbox 원본 저장에 실패한 메모리 감사가 있으면 기존 저장 재시도와 종료 차단을 유지한다. 끊김 복구에서 손상 CSV 꼬리를 제거할 때는 내용 없이 바이트 수와 고정 사유 코드만 기록한다.
 
-CSV append 중 프로세스가 종료되어 남은 잠금은 다음 투영의 경합에서 PID·생성 시각을 확인해 즉시 회수한다. 살아 있거나 조회 불가인 owner는 보존하고, PID-only 옛 형식도 읽는다. 기록을 못 읽는 잠금의 기존 300초 유예는 유지한다.
+CSV append 중 프로세스가 종료되어 남은 잠금은 다음 투영의 경합에서 PID·생성 시각을 확인해 즉시 회수한다. 생성 시각이 일치하는 살아 있는 owner는 잠금 나이와 무관하게 보존한다. 조회 불가 owner·살아 있는 PID-only 옛 형식·읽을 수 없는 기록은 기존 mtime 300초 유예 뒤 회수한다.
 
 canonical 부모는 상승 direct/wrapper helper의 보호 원본 receipt와 restore evidence를 그 실행의
 bound evidence root·journal SHA로 읽는다. 일반 caller 사본의 존재를 요구하지 않는다.

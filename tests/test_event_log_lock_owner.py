@@ -39,7 +39,7 @@ def test_real_crashed_append_restarts_without_blocking_tray_save(tmp_path):
     assert not lock.exists()
 
 
-@pytest.mark.parametrize("record", ["reused", "live", "legacy-dead", "legacy-live"])
+@pytest.mark.parametrize("record", ["reused", "live", "legacy-dead", "legacy-live", "legacy-live-fresh"])
 def test_real_process_lock_owner_branches(tmp_path, record):
     owner = subprocess.Popen([sys.executable, "-B", str(CHILD), str(tmp_path), "owner"],
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -61,11 +61,11 @@ def test_real_process_lock_owner_branches(tmp_path, record):
             owner.communicate("exit\n")
             assert owner.returncode == 0
         if record in {"live", "legacy-live"}:
-            # A valid live owner is authoritative even for an old lock file.
+            # Only a live owner with matching creation identity overrides age.
             past = time.time() - logs.LOCK_STALE_SECONDS - 1
             os.utime(lock, (past, past))
         result = json.loads(run_child(tmp_path, "append", ".25").stdout)
-        if record in {"live", "legacy-live"}:
+        if record in {"live", "legacy-live-fresh"}:
             assert result["status"] == "TIMEOUT", result
             assert lock.read_bytes() == original
             assert not (tmp_path / "events.csv").exists()
@@ -92,11 +92,14 @@ def test_unreadable_lock_record_keeps_age_fallback(tmp_path, old):
         assert lock.read_bytes() == original
 
 
-def test_inaccessible_owner_is_not_reclaimed(tmp_path, monkeypatch):
-    lock = Path(logs._lock_file_path(str(tmp_path / "events.csv")))
+@pytest.mark.parametrize("old", [False, True])
+def test_inaccessible_owner_uses_age_fallback(tmp_path, monkeypatch, old):
+    csv_path = tmp_path / "events.csv"
+    lock = Path(logs._lock_file_path(str(csv_path)))
     lock.write_text(json.dumps({"pid": os.getpid(), "creation_identity": "1"}), encoding="ascii")
-    past = time.time() - logs.LOCK_STALE_SECONDS - 1
-    os.utime(lock, (past, past))
+    if old:
+        past = time.time() - logs.LOCK_STALE_SECONDS - 1
+        os.utime(lock, (past, past))
     original = lock.read_bytes()
     observation = logs.native_process_identity
     calls = [0]
@@ -105,7 +108,14 @@ def test_inaccessible_owner_is_not_reclaimed(tmp_path, monkeypatch):
         return observation(pid) if calls[0] == 1 else {"status": "UNKNOWN"}
     monkeypatch.setattr(logs, "native_process_identity", inaccessible)
     monkeypatch.setattr(logs, "LOCK_TIMEOUT_SECONDS", .05)
-    with pytest.raises(TimeoutError):
-        with logs._interprocess_file_lock(str(tmp_path / "events.csv")):
-            pytest.fail("an inaccessible owner must retain its lock")
-    assert lock.read_bytes() == original
+    entry = {"timestamp": "2026-10-09T13:00:00", "worker_name": "fixture",
+             "event": "SCAN_OK", "details": json.dumps({"idempotency_key": "unknown"})}
+    if old:
+        logs.append_event_log_entry(str(csv_path), entry)
+        assert rows(csv_path) == [entry]
+        assert not lock.exists()
+    else:
+        with pytest.raises(TimeoutError):
+            logs.append_event_log_entry(str(csv_path), entry)
+        assert lock.read_bytes() == original
+        assert not csv_path.exists()
