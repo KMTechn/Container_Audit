@@ -11733,10 +11733,9 @@ class ContainerAudit:
         if button is None:
             return
         button.configure(text="작업 상세 ▾" if expanded else "작업 상세 ▸")
-        for name in ("_right_context_frame", "_secondary_stats_frame"):
-            frame = getattr(self, name, None)
-            if frame is not None:
-                frame.grid() if expanded else frame.grid_remove()
+        frame = getattr(self, "_secondary_stats_frame", None)
+        if frame is not None:
+            frame.grid() if expanded else frame.grid_remove()
 
     def _create_info_card(self, parent: ttk.Frame, label_text: str) -> Dict[str, ttk.Widget]:
         card = ttk.Frame(parent, style='Card.TFrame', padding=20)

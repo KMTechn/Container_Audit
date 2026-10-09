@@ -64,15 +64,18 @@ def test_details_open_and_close_return_focus_after_visibility_change(focus_app, 
     app._right_context_frame = SimpleNamespace(
         grid=lambda: events.append("shown"), grid_remove=lambda: events.append("hidden"),
     )
-    app._secondary_stats_frame = app._right_context_frame
+    app._secondary_stats_frame = SimpleNamespace(
+        grid=lambda: events.append("shown"), grid_remove=lambda: events.append("hidden"),
+    )
 
     app._toggle_work_details()
 
     assert app._work_details_expanded is not expanded
-    assert events[:3] == [
+    assert events[:2] == [
         {"text": "작업 상세 ▸" if expanded else "작업 상세 ▾"},
-        "hidden" if expanded else "shown", "hidden" if expanded else "shown",
+        "hidden" if expanded else "shown",
     ]
+    assert events.count("hidden" if expanded else "shown") == 1
     assert events[-1] == ("focus scheduled", 50)
     assert len(pending) == 1
     pending.pop()()
