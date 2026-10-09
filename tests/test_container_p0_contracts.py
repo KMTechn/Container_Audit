@@ -386,8 +386,9 @@ def test_recovery_decline_audit_failure_keeps_current_and_parked_copies(tmp_path
     assert app.current_tray.master_label_code == "STALE"
 
 
+@pytest.mark.parametrize("saved_pending_audit", [False, True], ids=["control", "saved-only-audit"])
 def test_supervisor_defer_blocked_tray_preserves_review_and_releases_only_after_audit(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, saved_pending_audit,
 ):
     app = ContainerAudit.__new__(ContainerAudit)
     app.worker_name = container_module.PROTECTED_ADMIN_OPERATOR_ID
@@ -406,7 +407,20 @@ def test_supervisor_defer_blocked_tray_preserves_review_and_releases_only_after_
         "scan_count": len(state["scanned_barcodes"]), "target_count": state["tray_size"],
         "message": "중앙 확인 필요", "receipt_id": "", "error_code": "SERVER_REJECTED",
     }
-    atomic_write_json(tmp_path / "current.json", state, ensure_ascii=False)
+    saved_state = dict(state)
+    pending_audit = {
+        "log_file_name": "audit.csv",
+        "local_only": False,
+        "log_entry": {
+            "timestamp": "2026-10-09T12:00:00",
+            "worker_name": "fixture",
+            "event": "SCAN_UNDO",
+            "details": json.dumps({"idempotency_key": "review-saved-only"}),
+        },
+    }
+    if saved_pending_audit:
+        saved_state["pending_audit_events"] = [pending_audit]
+    atomic_write_json(tmp_path / "current.json", saved_state, ensure_ascii=False)
     app._current_tray_state_snapshot = lambda: dict(state)
     review = container_module.CompletionOutcomeSnapshot(
         outcome=container_module.CompletionOutcome.OPERATOR_REVIEW,
@@ -433,12 +447,16 @@ def test_supervisor_defer_blocked_tray_preserves_review_and_releases_only_after_
     app.scanned_listbox = SimpleNamespace(delete=lambda *_args: None)
     app._pending_completion_event_contract = None
     monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda *_a, **_k: True)
+    monkeypatch.setattr("Container_Audit.messagebox.showerror", lambda *_a, **_k: None)
     _linked_test_pin(app)
 
     assert app._defer_blocked_current_tray_for_supervisor(confirm=False) is True
     parked = list((tmp_path / "parked").glob("parked_recovery_*.json"))
     assert len(parked) == 1
     assert ParkedTrayStore.load(parked[0])[container_module.OPERATOR_REVIEW_STATE_KEY] == state[container_module.OPERATOR_REVIEW_STATE_KEY]
+    assert ParkedTrayStore.load(parked[0]).get("pending_audit_events", []) == (
+        [pending_audit] if saved_pending_audit else []
+    )
     assert not (tmp_path / "current.json").exists()
     assert app.current_tray.master_label_code == ""
     assert app._active_blocking_completion_snapshot() is None

@@ -3822,7 +3822,7 @@ class ContainerAudit:
                         prepared_state['pending_audit_events'] = pending
                 temporary = self._prepare_tray_state_snapshot(state_path, prepared_state)
                 try:
-                    if self._publish_tray_state_snapshot(state_path, temporary, digest, prepared_state):
+                    if self._publish_tray_state_snapshot(state_path, temporary, digest, prepared_state, state):
                         return True
                 finally:
                     try:
@@ -3855,7 +3855,9 @@ class ContainerAudit:
         return temporary
 
     @writer_sink("gui_tray_state_save")
-    def _publish_tray_state_snapshot(self, path: Path, temporary: Path, digest, state: Dict[str, Any]) -> bool:
+    def _publish_tray_state_snapshot(
+        self, path: Path, temporary: Path, digest, state: Dict[str, Any], caller_state: Dict[str, Any],
+    ) -> bool:
         lock = getattr(self, "_tray_state_persist_lock", None)
         if lock is None:
             lock = threading.RLock()
@@ -3869,6 +3871,9 @@ class ContainerAudit:
             if current_digest != digest:
                 return False
             os.replace(temporary, path)
+            # Keep strict readback/PIN consumers bound to the snapshot we published.
+            caller_state.clear()
+            caller_state.update(state)
             # Q3: checkpoint audit staging stays admitted until the 1a revision.
             self._stage_checkpoint_audit_events(state)
             return True

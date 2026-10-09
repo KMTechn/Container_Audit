@@ -64,6 +64,7 @@ def test_tray_digest_conflict_reprepares_without_holding_state_lock(app, monkeyp
     path = Path(app.save_folder) / app.CURRENT_TRAY_STATE_FILE
     prepare = app._prepare_tray_state_snapshot
     calls, staged = [], []
+    caller_state = {"pending_audit_events": [{"id": "own"}]}
 
     def interleave(target, state):
         assert not app._tray_state_persist_lock._is_owned()
@@ -77,11 +78,13 @@ def test_tray_digest_conflict_reprepares_without_holding_state_lock(app, monkeyp
     app._tray_state_persist_lock = threading.RLock()
     monkeypatch.setattr(app, "_prepare_tray_state_snapshot", interleave)
     monkeypatch.setattr(app, "_stage_checkpoint_audit_events", lambda state: staged.append(
-        (state, int(getattr(fence._WRITER_LOCAL, "depth", 0)))))
-    assert app._save_tray_state_snapshot({"pending_audit_events": [{"id": "own"}]})
+        (dict(state), dict(caller_state), int(getattr(fence._WRITER_LOCAL, "depth", 0)))))
+    assert app._save_tray_state_snapshot(caller_state)
     assert len(calls) == 2 and not any(p.exists() for p in calls)
     assert json.loads(path.read_bytes())["pending_audit_events"] == [{"id": "own"}, {"id": "other"}]
-    assert len(staged) == 1 and staged[0][1] > 0
+    assert caller_state == json.loads(path.read_bytes())
+    assert len(staged) == 1 and staged[0][0] == staged[0][1] == caller_state
+    assert staged[0][2] > 0
 
 
 def test_tray_three_digest_conflicts_use_existing_admitted_write(app, monkeypatch):
