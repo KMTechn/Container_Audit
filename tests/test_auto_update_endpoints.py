@@ -522,8 +522,10 @@ def test_x3_real_hung_trial_remains_alive_until_logoff_then_next_start_works(end
 @pytest.mark.parametrize("phase", ["APPLIED_PENDING_READY", "UNKNOWN", "FAILED"])
 @pytest.mark.parametrize("advanced", [False, True])
 def test_deferred_recovery_settles_once_after_writer_exit(endpoint, monkeypatch, phase, advanced):
-    control, _, _, state, marker, _ = endpoint
+    control, stage, policy, state, marker, _ = endpoint
+    failures = [NEW] if phase == "FAILED" else []
     updates.write_json_durable(control / "transition.json", {**state, "phase": phase,
+        "failed_shas": failures,
         "reason_code": "UPDATE_SUPERVISION_UNAVAILABLE"})
     row = dict(pid=456, observable=True, sha=NEW, sid=SID, ordinary_user=True,
                role="gui", created_at=updates.now_utc())
@@ -541,6 +543,7 @@ def test_deferred_recovery_settles_once_after_writer_exit(endpoint, monkeypatch,
     assert_ordinary(endpoint, expected)  # A fresh icon must request pending recovery.
     settled = updates.read_json(control / "transition.json")
     assert settled["recovery_pending"] is False
+    assert settled["failed_shas"] == failures
     assert settled["phase"] == ("DEFERRED" if advanced else "ROLLED_BACK")
     assert updates.read_json(endpoint[1] / "startup-support.json")["retained_candidate"] is advanced
     assert settled["failure_decision"]["selected_sha"] == expected
@@ -548,6 +551,126 @@ def test_deferred_recovery_settles_once_after_writer_exit(endpoint, monkeypatch,
     assert updates.apply_prepared(control) == 0
     assert (control / "transition.json").read_bytes() == before
     assert_ordinary(endpoint, expected)
+    if phase == "APPLIED_PENDING_READY" and not advanced:
+        # The original authenticated candidate remains eligible for supervision.
+        updates.write_json_durable(stage / "prepared.json", {
+            "source_commit": NEW, "packet_sha256": "3" * 64})
+        assert updates.prepared_pending(control, policy, settled) is True
+        app = control.parent / "current/app"
+        app.mkdir(parents=True, exist_ok=True)
+        updates.write_json_durable(app / "update-manifest-key-config.json", {
+            "manifest_public_key": "feed-key-adapter"})
+        import requests
+        import update_service
+        monkeypatch.setattr(updates, "verify_lifecycle_stock", lambda *_: {})
+        monkeypatch.setattr(update_service, "verify_update_manifest_signature", lambda *_: None)
+        monkeypatch.setattr(update_service, "update_candidate_from_private_manifest", lambda *a, **k: {
+            "archive_policy": {"layout": "canonical_portable"}, "sha256": "3" * 64})
+        class FeedSession(contextlib.AbstractContextManager):
+            cookies = {}
+            def __exit__(self, *args):
+                return False
+            def get(self, url, **kwargs):
+                class Response(contextlib.AbstractContextManager):
+                    status_code = 200
+                    def __exit__(self, *args):
+                        return False
+                    def iter_content(self, size):
+                        yield json.dumps({"source_commit": NEW}).encode()
+                response = Response()
+                response.url = url
+                return response
+        monkeypatch.setattr(requests, "Session", FeedSession)
+        assert updates.prepare_feed_packet(app) == {"status": "PREPARED", "source_commit": NEW}
+
+
+@pytest.mark.parametrize("exit_kind", ["dead_trial", "timeout"])
+@pytest.mark.parametrize("generation_case", ["unchanged", "advanced", "unknown"])
+def test_inherited_ready_failure_uses_unknown_then_generation_only(endpoint, monkeypatch, exit_kind, generation_case):
+    control, _, _, state, marker, _ = endpoint
+    if exit_kind == "dead_trial":
+        state = updates.bind_trial(state, sha=NEW, pid=456, ordinary_user=True, now=updates.now_utc())
+    state = {**state, "reason": "inherited READY observation"}
+    updates.write_json_durable(control / "transition.json", state)
+    if generation_case == "advanced":
+        generation.record_generation(marker, "v2.0.99", app_id="container_audit", subject_sid=SID, build_id=NEW)
+    elif generation_case == "unknown":
+        marker.write_bytes(b"{unreadable-generation")
+    marker_before = marker.read_bytes()
+    written, observations = updates.write_json_durable, []
+    def observe(path, value):
+        written(path, value)
+        if path == control / "transition.json":
+            observations.append(value)
+    monkeypatch.setattr(updates, "write_json_durable", observe)
+    retained = generation_case != "unchanged"
+    assert updates.apply_prepared(control) == (20 if retained else 0)
+    assert observations[0] == {**state, "phase": "UNKNOWN"}
+    settled = updates.read_json(control / "transition.json")
+    assert settled["failed_shas"] == []
+    assert settled["phase"] == ("DEFERRED" if retained else "ROLLED_BACK")
+    assert settled["failure_decision"]["code"] == "TRIAL_GENERATION_" + generation_case.upper()
+    assert updates.read_json(control / "active.json")["sha"] == (NEW if retained else OLD)
+    assert marker.read_bytes() == marker_before
+
+
+def test_inherited_ready_can_still_confirm_valid_gui_and_relay(endpoint, monkeypatch):
+    control, stage, _, state, _, _ = endpoint
+    stamp = updates.now_utc()
+    updates.write_json_durable(stage / "trial.json", {
+        "nonce": state["nonce"], "transition_id": state["transition_id"], "pid": 456})
+    updates.write_json_durable(stage / "ready.json", {
+        **{check: True for check in updates.READY_CHECKS}, "nonce": state["nonce"],
+        "transition_id": state["transition_id"], "sha": NEW, "pid": 456, "ready_at": stamp})
+    rows = [dict(pid=pid, observable=True, sha=NEW, sid=SID, ordinary_user=True,
+                 role=role, created_at=stamp) for pid, role in ((456, "gui"), (457, "relay"))]
+    monkeypatch.setattr(updates, "process_snapshot", lambda *_: rows)
+    assert updates.apply_prepared(control) == 0
+    confirmed = updates.read_json(control / "transition.json")
+    assert confirmed["phase"] == "CONFIRMED" and confirmed["failed_shas"] == []
+    assert updates.read_json(control / "active.json")["sha"] == NEW
+
+
+@pytest.mark.parametrize("phase", ["ROLLBACK_PENDING", "UNKNOWN"])
+def test_inherited_supervised_rollback_preserves_exact_failure_list(endpoint, phase):
+    control, _, _, state, _, _ = endpoint
+    state = updates.request_rollback(state, reason="supervised candidate failure")
+    updates.write_json_durable(control / "transition.json", {**state, "phase": phase})
+    assert updates.apply_prepared(control) == 0
+    settled = updates.read_json(control / "transition.json")
+    assert settled["phase"] == "ROLLED_BACK" and settled["failed_shas"] == [NEW]
+    assert updates.read_json(control / "active.json")["sha"] == OLD
+
+
+@pytest.mark.parametrize("changed_phase,code,final_phase", [
+    ("CONFIRMED", 0, "DEFERRED"), ("ROLLBACK_PENDING_READY", 20, "FAILED")])
+def test_inherited_expiry_preserves_other_system_phase_change(endpoint, monkeypatch, changed_phase, code, final_phase):
+    control, _, _, state, _, _ = endpoint
+    state = {**state, "failed_shas": ["9" * 40]}
+    updates.write_json_durable(control / "transition.json", state)
+    pointer_before = (control / "active.json").read_bytes()
+    clock = [0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    def other_system(_):
+        updates.write_json_durable(control / "transition.json", {**state, "phase": changed_phase})
+        clock[0] = 120
+    monkeypatch.setattr(time, "sleep", other_system)
+    written, phases = updates.write_json_durable, []
+    def observe(path, value):
+        written(path, value)
+        if path == control / "transition.json":
+            phases.append(value["phase"])
+    monkeypatch.setattr(updates, "write_json_durable", observe)
+    assert updates.apply_prepared(control) == code
+    settled = updates.read_json(control / "transition.json")
+    assert phases == [changed_phase, final_phase]
+    assert settled["failed_shas"] == ["9" * 40]
+    if changed_phase == "CONFIRMED":
+        assert settled["reason"] == "ValueError"
+        assert settled["reason_code"] == "UPDATE_PREPARATION_FAILED"
+    else:
+        assert settled["reason"] == "previous version readiness failed"
+    assert (control / "active.json").read_bytes() == pointer_before
 
 
 @pytest.mark.parametrize("phase", ["APPLIED_PENDING_READY", "UNKNOWN", "FAILED"])

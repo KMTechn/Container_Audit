@@ -264,8 +264,9 @@ def test_failed_preparation_defers_but_failed_activation_remains_unknown(monkeyp
     assert writes[-1][1]["phase"] == "UNKNOWN"
 
 
-@pytest.mark.parametrize("generation_case", ["unchanged", "advanced", "unknown"])
-def test_engine_candidate_exit_selects_generation_compatible_code_without_reverting_data(monkeypatch, tmp_path, generation_case):
+@pytest.mark.parametrize("generation_case,failure_kind", [
+    ("unchanged", "exit"), ("advanced", "exit"), ("unknown", "exit"), ("unchanged", "timeout")])
+def test_engine_candidate_exit_selects_generation_compatible_code_without_reverting_data(monkeypatch, tmp_path, generation_case, failure_kind):
     """Exercise the apply loop/journal with synthetic process and crypto adapters."""
     import json
     import time
@@ -318,6 +319,8 @@ def test_engine_candidate_exit_selects_generation_compatible_code_without_revert
         if not state or state["phase"] == "PREPARED":
             return []
         if state["phase"] == "APPLIED_PENDING_READY":
+            if failure_kind == "timeout":
+                return []  # This invocation opened the window; no READY ever arrives.
             if candidate_seen:
                 if generation_case != "unchanged":
                     from kmtech_shared import data_generation as generation
@@ -340,6 +343,9 @@ def test_engine_candidate_exit_selects_generation_compatible_code_without_revert
             return [dict(pid=pid, observable=True, sha=OLD, sid=sid, role=role, ordinary_user=True, created_at=LATER) for pid, role in ((44, "gui"), (45, "relay"))]
         return []  # Candidate writers are absent before rollback.
     monkeypatch.setattr(updates, "process_snapshot", snapshot)
+    if failure_kind == "timeout":
+        ticks = iter(range(0, 1000000))
+        monkeypatch.setattr(time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(time, "sleep", lambda _seconds: None)
     original_policy = (control / "policy.json").read_bytes()
     assert updates.apply_prepared(control) == (0 if generation_case == "unchanged" else 20)
@@ -349,7 +355,7 @@ def test_engine_candidate_exit_selects_generation_compatible_code_without_revert
     assert updates.read_json(control / "active.json")["sha"] == (OLD if generation_case == "unchanged" else NEW)
     if generation_case == "unchanged":
         # E6 removes the old READY trial; only candidate was trial-launched.
-        assert len(nonces) == 1
+        assert len(nonces) == (1 if failure_kind == "exit" else 0)
         assert result["trial_sha"] is None
     else:
         assert result["retained_candidate"] is True

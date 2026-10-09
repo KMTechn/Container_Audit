@@ -48,6 +48,7 @@ def test_representable_offset_times_remain_exact(timestamp, expected):
 @pytest.mark.parametrize("timestamp", EXTREMES)
 @pytest.mark.parametrize("previous_ready", (False, True))
 def test_extreme_ready_keeps_deadline_and_code_rollback_alive(tmp_path, monkeypatch, timestamp, previous_ready):
+    """An inherited trial is unconfirmed; its expiry does not condemn the candidate."""
     control, stage = tmp_path / "control", tmp_path / "stage"
     control.mkdir()
     stage.mkdir()
@@ -76,6 +77,12 @@ def test_extreme_ready_keeps_deadline_and_code_rollback_alive(tmp_path, monkeypa
     policy_before = (control / "policy.json").read_bytes()
     monkeypatch.setattr(updates, "update_lock", lambda *_args, **_kwargs: nullcontext())
     helpers, phases = [], []
+    written = updates.write_json_durable
+    def observe(path, value):
+        written(path, value)
+        if path == control / "transition.json":
+            phases.append(value["phase"])
+    monkeypatch.setattr(updates, "write_json_durable", observe)
     monkeypatch.setattr(updates, "fixed_helper", lambda _control, mode, **_kwargs: helpers.append(mode) or "")
     monkeypatch.setattr(updates, "now_utc", lambda: LATER)
     ticks = iter(range(0, 10000, 10))
@@ -85,8 +92,9 @@ def test_extreme_ready_keeps_deadline_and_code_rollback_alive(tmp_path, monkeypa
     def snapshot(_control):
         state = updates.read_json(control / "transition.json")
         phases.append(state["phase"])
-        if state["phase"] == "ROLLBACK_PENDING":
-            return []  # Supported normal stop has completed before old code is selected.
+        if state["phase"] in {"ROLLBACK_PENDING", "UNKNOWN"}:
+            # Inherited UNKNOWN also requests normal trial stop before G selects code.
+            return []
         rollback = state["phase"] == "ROLLBACK_PENDING_READY"
         sha, pid = (OLD, 44) if rollback else (NEW, 42)
         proof = {**ready(state), "sha": sha, "pid": pid,
@@ -104,9 +112,9 @@ def test_extreme_ready_keeps_deadline_and_code_rollback_alive(tmp_path, monkeypa
     state = updates.read_json(control / "transition.json")
     assert code == 0
     assert state["phase"] == "ROLLED_BACK"
-    assert state["failed_shas"] == [NEW]
+    assert state["failed_shas"] == []
     assert updates.read_json(control / "active.json")["sha"] == OLD
-    assert "APPLIED_PENDING_READY" in phases and "ROLLBACK_PENDING" in phases
+    assert {"APPLIED_PENDING_READY", "UNKNOWN", "ROLLBACK_PENDING"} <= set(phases)
     assert "ROLLBACK_PENDING_READY" not in phases
     assert marker.read_bytes() == marker_before
     assert "Verify" in helpers

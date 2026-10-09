@@ -12,7 +12,7 @@ import time
 import pytest
 
 import auto_update as updates
-from tests.test_auto_update_endpoints import endpoint, assert_ordinary, OLD, NEW
+from tests.test_auto_update_endpoints import endpoint, assert_ordinary, hotfix_packet, OLD, NEW
 from kmtech_shared import data_generation as generation
 
 
@@ -152,8 +152,42 @@ def test_e1_next_logon_system_replaces_absent_claim_and_applies(endpoint, monkey
     assert updates.apply_prepared(control) == 0
     assert len(started) == 1 and started[0]['creation_identity'] == own_claim()['creation_identity']
     assert updates.read_json(control/'transition.json')['phase'] == 'ROLLED_BACK'
+    assert updates.read_json(control/'transition.json')['failed_shas'] == []
     assert updates.read_json(control/'apply-claim.json')['status'] == 'SETTLED'
     assert_ordinary(endpoint, OLD)
+
+
+@pytest.mark.parametrize('crash_phase', ['PREPARED', 'APPLIED_PENDING_READY'])
+def test_system_restart_supervises_only_a_window_it_opens(endpoint, monkeypatch, crash_phase):
+    control, _, _, state, _, _ = endpoint
+    updates.write_json_durable(control/'transition.json', {**state, 'phase': 'FAILED'})
+    updates.write_json_durable(control/'active.json', {'sha': OLD})
+    hot = hotfix_packet(endpoint, monkeypatch)
+    written = updates.write_json_durable
+    def crash(path, value):
+        written(path, value)
+        if crash_phase == 'PREPARED':
+            if path == control/'transition.json' and value.get('phase') == 'PREPARED':
+                raise SystemExit(0)
+        elif path == control/'active.json' and value.get('sha') == hot:
+            raise SystemExit(0)
+    monkeypatch.setattr(updates, 'write_json_durable', crash)
+    with pytest.raises(SystemExit):
+        updates.apply_prepared(control)
+    assert updates.read_json(control/'transition.json')['phase'] == crash_phase
+    observations = []
+    def observe(path, value):
+        written(path, value)
+        if path == control/'transition.json':
+            observations.append(value)
+    monkeypatch.setattr(updates, 'write_json_durable', observe)
+    # Same interpreter: ownership must be local to each SYSTEM call.
+    assert updates.apply_prepared(control) == 0
+    settled = updates.read_json(control/'transition.json')
+    assert settled['phase'] == 'ROLLED_BACK'
+    assert settled['failed_shas'] == ([hot] if crash_phase == 'PREPARED' else [])
+    assert any(value['phase'] == 'UNKNOWN' for value in observations) is (crash_phase == 'APPLIED_PENDING_READY')
+    assert updates.read_json(control/'active.json')['sha'] == OLD
 
 
 @pytest.mark.parametrize('phase', ['FAILED', 'UNKNOWN'])
