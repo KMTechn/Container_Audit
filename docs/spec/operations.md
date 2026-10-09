@@ -161,6 +161,7 @@ floor나 CPython Authenticode만으로 호환을 허가하지 않는다. portabl
 설치본의 공개키 설정으로 같은 증명을 검증하고 기존 warmup/cache에 포함한다.
 증명 누락·검증 실패·키 부재는 자기 판 하한이며 이미 같은 판/build로 기록한 marker는
 뒤늦게 낮추지 않는다. 옛 portable reader는 추가 필드를 무시하고 기존 판/commit을 읽는다.
+암호 API의 RuntimeError 등 증명 계산 오류도 자기 판/미검증으로 캐시하고 예외 원문 없이 한 줄 진단한다. 증명은 복귀 권한을 더하므로 실패가 기존 업무 시작을 막지 않는다. 설치기 onboarding도 첫 writer 허가 전에 warmup을 수행한다. 실제 onboarding의 증명 검증 깊이 0과 G 기록, artifact/archive/install/rollout을 포함한 시험 feed의 빌더→공식 bootstrap 크기·비밀 검사→runtime 결속을 좁은 시험으로 확인한다. packaging 복사/import 단계를 고정한 시험이며 전체 출시 packet 수용은 별도다.
 하한을 낮추기 전에는 옛 판이 새 업무 자료와 소유·신원 파일을 읽는지 확인해야 한다.
 signed floor 변조/서명 없음·미래 floor 거절과 builder
 기본값을 포함한 관련 3파일 101 PASS(격리 소스), 실제 출시 서명 발행/stock은 미검증이다.

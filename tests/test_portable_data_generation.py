@@ -79,6 +79,8 @@ def signed_packet(tmp_path, monkeypatch, signed_proof):
         elif case == "wrong_key":
             configuration = signed_proof()[2]
         key_path = app / "update-manifest-key-config.json"
+        if case == "onboarding":
+            (packet / "Container_Audit.exe").write_bytes(b"synthetic frozen entrypoint; never execute")
         if case != "missing_key":
             key_document = {
                 "schema": "container-audit-update-key-config-v1",
@@ -364,3 +366,95 @@ def test_builder_rejects_signed_metadata_above_reader_bound(tmp_path, metadata_b
             update_manifest_public_key_config=json.dumps(configuration),
             data_generation_update_manifest=build.manifest,
             data_generation_update_signature=build.signature)
+
+
+def test_crypto_api_failure_keeps_business_open(tmp_path, signed_packet, monkeypatch, caplog):
+    import data_generation_guard as guard
+    import update_service
+    from tools import register_container_audit_worker_pc as registration
+    signed_packet()
+    observed = []
+    def failed(*args, **kwargs):
+        observed.append(1)
+        raise RuntimeError("synthetic crypto API failure")
+    monkeypatch.setattr(update_service, "verify_update_manifest_signature", failed)
+    monkeypatch.setattr(registration, "_current_user_sid", lambda: "S-1-5-21-219")
+    guard.warm_runtime_release()
+    release = guard._runtime_release()
+    assert (release["data_compatible_min_version"], release["compatibility_verified"]) == ("v2.0.99", False)
+    guard.record_before_data_open(tmp_path / "data")
+    assert json.loads((tmp_path / "data/data-generation.json").read_bytes())["compatibility_verified"] is False
+    assert observed == [1]
+    assert len(caplog.records) == 1 and "synthetic crypto" not in caplog.text
+
+
+def test_installer_onboarding_verifies_floor_before_admission(tmp_path, signed_packet, monkeypatch):
+    import current_user_onboarding as onboarding
+    import update_service
+    import writer_session_fence as fence
+    from tests.test_current_user_onboarding import (
+        _ready_state, _profile_loader, _credential_loader, _ledger_factory, _autostart, _relay_start,
+        _FakeExistingPossessionKey,
+    )
+    from tools import register_container_audit_worker_pc as registration
+    packet = signed_packet("onboarding")
+    environment = {"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "owner")}
+    paths = onboarding.resolve_current_user_onboarding_paths(packet, environ=environment)
+    _ready_state(paths)
+    monkeypatch.setattr(onboarding.PersistentPossessionKey, "open_existing",
+        classmethod(lambda _cls, *args, **kwargs: _FakeExistingPossessionKey()))
+    monkeypatch.setattr(registration, "_current_user_sid", lambda: "S-1-5-21-219")
+    observed = []
+    verify = update_service.verify_update_manifest_signature
+    def measured(*args, **kwargs):
+        observed.append(getattr(fence._WRITER_LOCAL, "depth", 0))
+        return verify(*args, **kwargs)
+    monkeypatch.setattr(update_service, "verify_update_manifest_signature", measured)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("READY fixture must not register or contact a server")
+    report = onboarding.onboard_current_user(packet, environ=environment, require_bootstrap_integrity=True,
+        registration_runner=forbidden, profile_loader=_profile_loader, credential_loader=_credential_loader,
+        ledger_factory=_ledger_factory, autostart_installer=_autostart, relay_launcher=_relay_start)
+    assert report["status"] == "READY"
+    assert json.loads((paths.data_root / "data-generation.json").read_bytes())["compatibility_verified"] is True
+    assert observed == [0]
+
+
+def test_real_feed_floor_builder_integrity_and_runtime(tmp_path, metadata_build, signed_proof, monkeypatch):
+    """Actual feed shape passes 64 KiB and the official metadata secret check."""
+    import current_user_onboarding as onboarding
+    import data_generation_guard as guard
+    from tests.powershell_contracts import run_functions
+    from tests.test_update_service import _private_update_manifest
+    from types import SimpleNamespace
+    build = metadata_build
+    proof, signature, configuration = signed_proof(**_private_update_manifest(
+        version="v2.0.99", url="https://updates.example.invalid/Container_Audit-v2.0.99.zip"))
+    build.manifest.write_text(json.dumps(proof), encoding="utf-8")
+    build.signature.write_bytes(signature)
+    output = tmp_path / "real-feed-packet"
+    metadata = build.builder.build(build.source, build.runtime, output,
+        update_manifest_public_key_config=json.dumps(configuration),
+        data_generation_update_manifest=build.manifest, data_generation_update_signature=build.signature)
+    assert {"artifact", "archive", "install", "rollout"} <= metadata["data_generation_signed_manifest"].keys()
+    assert (output / "portable-manifest.json").stat().st_size <= 65536
+    literal = str(output).replace("'", "''")
+    result = run_functions(tmp_path, Path(onboarding.__file__).resolve().parent / "tools/bootstrap_integrity.ps1", [
+        "Get-StrictFullPath", "Get-RelativeCodePath", "Get-FileSha256", "Get-CodeInventory",
+        "Get-InventoryAggregate", "Protect-InstallationText", "Assert-InstallationMachineMetadataNoSecrets",
+        "Write-Utf8Json", "Write-BootstrapIntegrityRecord"], f"""
+$BootstrapIntegritySchema='container-audit-bootstrap-integrity-v1'
+$BootstrapIntegrityFileName='bootstrap-integrity.json'
+[void](Write-BootstrapIntegrityRecord -Root '{literal}' -CodeRootIdentity '.')
+""")
+    assert result.returncode == 0, "official size/secret producer rejected actual feed shape"
+    detail = onboarding.verify_bootstrap_integrity(SimpleNamespace(app_root=output,
+        bootstrap_integrity_path=output / "bootstrap-integrity.json"), required=True,
+        expected_entrypoint="app/Container_Audit.py")
+    assert detail["status"] == "PASS"
+    record = json.loads((output / "bootstrap-integrity.json").read_bytes())
+    assert any(row["path"] == "app/update-manifest-key-config.json" for row in record["files"])
+    monkeypatch.setattr(guard, "__file__", str(output / "app/data_generation_guard.py"))
+    monkeypatch.setattr(guard, "_PORTABLE_RELEASE_CACHE", {})
+    release = guard._runtime_release()
+    assert (release["data_compatible_min_version"], release["compatibility_verified"]) == ("v2.0.98", True)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import hashlib
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ from writer_session_fence import canonical_control_root, writer_sink
 _READONLY_ROLLBACK_TARGET = ContextVar('container_readonly_rollback_target', default=None)
 _READONLY_INSTALLER_SOURCE = ContextVar('container_readonly_installer_source', default=None)
 _PORTABLE_RELEASE_CACHE = {}
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -166,10 +168,10 @@ def _portable_runtime_release():
                 proof, bytes.fromhex(signature_hex), key_config["manifest_public_key"],
                 version=version, build_id=build,
             )
-        except (OSError, ValueError, TypeError, generation.DataGenerationError):
+        except Exception:
             # A bad or unavailable proof grants no compatibility permission.
             # The already verified code identity still uses its own version.
-            pass
+            logger.warning("Installed data compatibility proof unavailable; using release version")
     _PORTABLE_RELEASE_CACHE[portable_identity] = dict(release)
     return dict(release)
 

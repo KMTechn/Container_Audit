@@ -267,3 +267,4 @@
 | `postcut/firstupd-ca-w5` · c5599fe | README: 「운영 작업의 관리자 확인 다시 조회와 보류 묶음 격리 후 다른 작업 계속은 기존 직렬 lane 에서 서버 요청과 내구 반영을 처리 … 창이 닫혀도 이미 시작한 내구 반영은 마치며」 | §3-3 마지막 줄(현장 말 요지). 기술 상세는 operations.md |
 | `postcut/firstupd-ca-w5` · c5599fe | BACKLOG: 「운영 메뉴의 관리자 PIN 재조회·사전조회 보류 격리는 기존 lane 으로 … 실제 PIN 창·메뉴·음성·1366/1920 배율별 맞춤은 별도 화면 수용이 남는다」 | BACKLOG 기존 줄은 그대로 남는다. 화면 수용은 §7 CA-3 |
 | `postcut/firstupd-ca-shared036` · 8d528e0 | README·BACKLOG: 「shared 0.3.6 / 9파일 manifest·lock 고정, diagnostic_log 미사용 잎」 | 기술 내용이라 목표 명세 본문에는 넣지 않는다. 공용 코드 고정은 contracts/operations 와 그 가지 BACKLOG 에 남는다(병합 때 그대로) |
+| `postcut/firstupd-row6` · a2bff65 | README: 「설치 packet의 ES256 호환 하한·검증 실패 때 자기 판 fallback·onboarding 허가 밖 검증」 | 목표 본문은 유지한다. 자료 세대 기술 계약은 contracts.md·operations.md, 실제 서명/되돌림 미검증 범위는 BACKLOG에 남긴다. |

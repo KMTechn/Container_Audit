@@ -1920,6 +1920,8 @@ def onboard_current_user(
     relay_launcher: Callable[..., Mapping[str, Any]] = start_user_relay_process,
     expected_input_binding: str = "",
 ) -> dict[str, Any]:
+    from data_generation_guard import warm_runtime_release
+    warm_runtime_release()
     from auto_update import installation_root, resolve_lifecycle_context
     managed = installation_root(Path(app_root))
     if managed is not None and any((managed / 'update-control' / name).exists() for name in ('policy.json', 'active.json', 'transition.json')):

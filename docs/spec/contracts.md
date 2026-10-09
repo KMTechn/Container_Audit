@@ -8,6 +8,8 @@ Portable `_runtime_release()`는 전체 무결성 PASS와 version/build 결속 �
 
 Portable metadata의 `data_generation_signed_manifest`·`data_generation_signature_hex`는 설치본 `app/update-manifest-key-config.json`의 공개키로 기존 ES256 업데이트 서명을 검증한다. 선언의 앱·package·판·source_commit이 실행 코드와 맞고 하한이 실행 판 이하인 경우에만 명시 하한을 신뢰한다. 누락·변조·결속 불일치·키 부재는 `(실행 판, False)`이며 unsigned 숫자는 권한을 주지 않는다. 증명 검증도 기존 허가 밖 warmup과 프로세스 캐시에 포함한다. 같은 판·build의 기존 marker를 덮지 않으며 자료·신원·marker 스키마는 바꾸지 않는다.
 
+증명 계산의 암호 API 오류도 같은 fallback과 고정 한 줄 진단을 사용한다. 설치기 onboarding의 실제 첫 owner marker 기록까지 검증은 writer 깊이 0에서 한 번 수행한다. 코드 무결성·실행 신원 실패의 기존 차단 규칙은 유지한다.
+
 운영자 spool 복구는 publish 직전 ACKED row의 상태·metadata·신원 결속을 다시 비교한다. 등록 응답은 신원·manifest·credential·profile 원본의 fingerprint와 possession key를 재확인한 뒤 적용하며, two-phase 복구는 요청을 만든 journal binding과 현재 binding이 같을 때만 전이·sealed package를 저장한다. 대기 중 바뀐 원본은 늦은 응답으로 덮어쓰지 않는다.
 
 # 데이터·상태·통합 계약
