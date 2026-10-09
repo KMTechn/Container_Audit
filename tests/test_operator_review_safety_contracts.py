@@ -372,7 +372,7 @@ def test_commandless_successor_review_exposes_safe_retry_and_recovery_menu(tmp_p
     app._update_action_button_states()
 
     assert app.submit_tray_button["state"] == container_audit_module.tk.NORMAL
-    assert app.submit_tray_button["text"] == "사전검증 재시도"
+    assert app.submit_tray_button["text"] == "트레이 제출 다시 하기"
     assert (
         app.submit_tray_button.options["command"].__name__
         == "_retry_precommand_operator_review_completion"

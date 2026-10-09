@@ -113,7 +113,7 @@ def test_verified_offline_start_has_no_window_and_scans_then_updates_connection(
     text = app.info_cards["direct_sync"]["value"].options["text"]
     context = sync.get_catalog_attempt_context()
     assert context["catalog_source"] == "VERIFIED_CACHE"
-    assert "중앙 품목 목록" in text and "캐시 기준 시각" in text
+    assert "회사 서버 품목 목록" in text and "저장된 목록 시각" in text
     assert ca._item_catalog_cache_time_for_display(context["cache_last_modified_utc"]) in text
     label = COMPACT_QR + "|QT=2"
     public_scan(app, label)
@@ -125,8 +125,8 @@ def test_verified_offline_start_has_no_window_and_scans_then_updates_connection(
     app._apply_direct_sync_health(app._direct_sync_health)
     text = app.info_cards["direct_sync"]["value"].options["text"]
     assert "서버 연결: 정상" in text and "목록 재확인 가능" in text
-    assert "새로 받지 못해" not in text
-    assert "캐시 기준 시각" in text  # Reconnection alone does not refresh the catalog.
+    assert "받지 못해" not in text
+    assert "저장된 목록 시각" in text  # Reconnection alone does not refresh the catalog.
     assert windows == []
 
 

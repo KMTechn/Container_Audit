@@ -341,7 +341,7 @@ def test_verified_offline_start_remembers_worker_with_no_window(startup, monkeyp
     try:
         app._start_remembered_worker(registry.recent_worker())
         assert app.worker_name == "tester" and screen["value"] == "work"
-        assert "중앙 품목 목록" in app.info_cards["direct_sync"]["value"].options["text"]
+        assert "회사 서버 품목 목록" in app.info_cards["direct_sync"]["value"].options["text"]
         public_scan(app, COMPACT_QR + "|QT=2")
         public_scan(app, ITEM + "-SERIAL-001")
         assert app.current_tray.scanned_barcodes == [ITEM + "-SERIAL-001"]

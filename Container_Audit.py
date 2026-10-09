@@ -5843,7 +5843,7 @@ class ContainerAudit:
             "undo": "스캔 취소",
             "park": "트레이 보류",
             "submit": (
-                "사전검증 재시도"
+                "트레이 제출 다시 하기"
                 if precommand_retry
                 else "운영 작업"
                 if operator_review
@@ -15513,7 +15513,7 @@ class ContainerAudit:
                 if precommand_retry:
                     acknowledge_button.grid()
                     acknowledge_button.configure(
-                        text="사전검증 재시도",
+                        text="트레이 제출 다시 하기",
                         state=tk.NORMAL,
                         bg=title_color,
                         fg="white",
@@ -16890,7 +16890,7 @@ class ContainerAudit:
                 catalog_context.get("cache_last_modified_utc")
             )
             catalog_notice = (
-                f"{ITEM_CATALOG_CACHE_WARNING_TITLE} · 목록 재확인 가능\n캐시 기준 시각: {cache_time}\n"
+                f"{ITEM_CATALOG_CACHE_WARNING_TITLE} · 목록 재확인 가능\n저장된 목록 시각: {cache_time}\n"
                 "운영 작업 → 품목 목록 새로 고침"
                 if connection == "normal"
                 else f"{ITEM_CATALOG_CACHE_WARNING_TITLE}\n"
@@ -17379,7 +17379,7 @@ class ContainerAudit:
             synchronous=True,
         ):
             messagebox.showerror(
-                "사전검증 재시도 실패",
+                "트레이 제출 다시 하기 실패",
                 "재시도 요청 기록을 저장하지 못해 현재 잠금을 유지합니다.",
                 parent=getattr(self, "root", None),
             )
@@ -17418,7 +17418,7 @@ class ContainerAudit:
             if not state_restored:
                 message += "\n잠금 상태 재저장에도 실패했으므로 프로그램을 종료하지 마세요."
             messagebox.showerror(
-                "사전검증 재시도 실패",
+                "트레이 제출 다시 하기 실패",
                 message,
                 parent=getattr(self, "root", None),
             )
@@ -21605,19 +21605,19 @@ def prepare_startup_item_catalog() -> str:
 ITEM_CATALOG_STARTUP_EXIT_CODE = 3
 ITEM_CATALOG_STARTUP_ERROR_TITLE = "회사 서버 품목 목록 확인 실패"
 ITEM_CATALOG_STARTUP_ERROR_MESSAGE = (
-    "중앙 품목 목록을 확인할 수 없어 프로그램 시작을 중단했습니다.\n\n"
-    "네트워크 연결과 이 PC의 중앙 물류 설정을 확인한 뒤 다시 실행하세요. "
+    "회사 서버 품목 목록을 확인할 수 없어 프로그램 시작을 중단했습니다.\n\n"
+    "네트워크 연결과 이 PC의 회사 서버 설정을 확인한 뒤 다시 실행하세요. "
     "계속 실패하면 IT 담당자에게 문의하세요."
 )
 ITEM_CATALOG_CACHE_WARNING_TITLE = "저장해 둔 품목 목록 사용"
 ITEM_CATALOG_CACHE_WARNING_MESSAGE = (
-    "중앙 품목 목록을 새로 받지 못해 무결성이 검증된 로컬 캐시로 시작합니다.\n"
-    "캐시 기준 시각: {cache_time}\n"
-    "연결 복구 후 운영 작업 → 품목 목록 새로 고침으로 다시 확인할 수 있습니다."
+    "회사 서버 품목 목록을 받지 못해 이 PC에 저장된 목록으로 시작합니다.\n"
+    "저장된 목록 시각: {cache_time}\n"
+    "연결이 돌아오면 운영 작업 → 품목 목록 새로 고침으로 다시 받을 수 있습니다."
 )
 ITEM_CATALOG_TRANSITION_WARNING_TITLE = "과도기 모드 — 품목 목록 미확인"
 ITEM_CATALOG_TRANSITION_WARNING_MESSAGE = (
-    "중앙 품목 목록을 확인하지 못했지만 과도기 모드라 설치에 들어 있는 품목 목록으로 시작합니다.\n"
+    "회사 서버 품목 목록을 확인하지 못했지만 과도기 모드라 설치에 들어 있는 품목 목록으로 시작합니다.\n"
     "이 상태에서 시작한 트레이는 '품목 미확인'으로 기록됩니다.\n\n"
     "네트워크가 돌아오면 '운영 작업 → 품목 목록 새로 고침'을 누르세요.\n"
     "오류 코드: {cause_code}"
