@@ -287,6 +287,10 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 <a id="ca-startup-update"></a>
 ## 로그온 자동 갱신 운영
 
+설치기의 `auto_update.py --print-logon-task` 자식은 script 실행에서도 앱 루트 기준
+모듈 이름으로 writer sink를 식별한다. 앱 밖 정의는 `__main__`을 유지하며,
+기존 허용 목록·source·fence 판정과 로그온 작업 JSON/XML 계약을 그대로 적용한다.
+
 READY 실패 뒤 `update-control/transition.json`의 `retained_candidate=true`이면
 새 판을 current로 유지한 상태다. `failure_decision.code`가
 `TRIAL_GENERATION_ADVANCED`이면 새 판 세대가 기록됐고,

@@ -596,23 +596,51 @@ def test_network_sink_denies_active_fence_before_dispatch(tmp_path, source, sink
     assert error.value.code == "ACTIVE_WRITER_FENCE"
 
 
-@pytest.mark.parametrize("source,name,path", [
-    ("gui_startup", "_prepare_gui_startup", "Container_Audit.py"),
-    ("raw_relay_runner", "main", "tools/direct_sync_relay_runner.py"),
-    ("worker_pc_registration", "main", "tools/register_container_audit_worker_pc.py"),
-    ("worker_enrollment_network", "_post_enrollment_request", "tools/register_container_audit_worker_pc.py"),
+@pytest.mark.parametrize("source,name,path,nested_code", [
+    ("gui_startup", "_prepare_gui_startup", "Container_Audit.py", "NETWORK_WRITER_ADMISSION_HELD"),
+    ("raw_relay_runner", "main", "tools/direct_sync_relay_runner.py", "NETWORK_WRITER_ADMISSION_HELD"),
+    ("worker_pc_registration", "main", "tools/register_container_audit_worker_pc.py", "NETWORK_WRITER_ADMISSION_HELD"),
+    ("worker_enrollment_network", "_post_enrollment_request", "tools/register_container_audit_worker_pc.py", "NETWORK_WRITER_ADMISSION_HELD"),
+    *[("auto_update_control", name, "auto_update.py", "STAGING_WRITER_ADMISSION_HELD")
+      for name in ("write_download_bytes", "write_download_chunk", "stage_prepared_copies", "_run_download_attempt")],
 ])
-def test_script_probe_binds_runtime_file_after_code_filename_relocation(source, name, path):
+def test_script_probe_binds_runtime_file_after_code_filename_relocation(source, name, path, nested_code):
     namespace = {"__name__": "__main__", "__file__": str(ROOT / path), "writer_sink": fence.writer_sink}
     code = f'@writer_sink({source!r}, probe_only=True)\ndef {name}():\n    raise AssertionError("body must remain fenced")\n'
     exec(compile(code, "build-time/entry.py", "exec"), namespace)
     with fence.writer_admission(source):
         with pytest.raises(fence.WriterFencedError) as error:
             namespace[name]()
-    assert error.value.code == "NETWORK_WRITER_ADMISSION_HELD"
+    assert error.value.code == nested_code
     namespace["__file__"] = str(ROOT / "foreign.py")
     with pytest.raises(fence.WriterFencedError) as error:
         exec(compile(code, str(ROOT / path), "exec"), namespace)
+    assert error.value.code == "WRITER_PROBE_ONLY_SINK_NOT_ALLOWED"
+
+
+@pytest.mark.parametrize("module,path,expected", [
+    ("__main__", "auto_update.py", "auto_update.outer.<locals>.write"),
+    ("__main__", "tools/new_writer.py", "tools.new_writer.outer.<locals>.write"),
+    ("imported_alias", "auto_update.py", "imported_alias.outer.<locals>.write"),
+    ("__main__", "../repo-sibling/auto_update.py", "__main__.outer.<locals>.write"),
+])
+def test_writer_sink_identity_preserves_imports_and_app_boundary(module, path, expected):
+    import inspect
+
+    namespace = {"__name__": module, "writer_sink": fence.writer_sink}
+    code = 'def outer():\n    @writer_sink("auto_update_control")\n    def write():\n        pass\n    return write\n'
+    # No __file__: the definition filename must also support script execution.
+    exec(compile(code, str(ROOT / path), "exec"), namespace)
+    guarded = namespace["outer"]()
+    assert inspect.getclosurevars(guarded).nonlocals["sink_id"] == expected
+
+
+def test_script_probe_outside_app_cannot_borrow_an_approved_filename(tmp_path):
+    namespace = {"__name__": "__main__", "__file__": str(tmp_path / "auto_update.py"),
+                 "writer_sink": fence.writer_sink}
+    code = '@writer_sink("auto_update_control", probe_only=True)\ndef write_download_bytes():\n    pass\n'
+    with pytest.raises(fence.WriterFencedError) as error:
+        exec(compile(code, str(ROOT / "auto_update.py"), "exec"), namespace)
     assert error.value.code == "WRITER_PROBE_ONLY_SINK_NOT_ALLOWED"
 
 

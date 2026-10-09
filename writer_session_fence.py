@@ -643,25 +643,18 @@ def writer_sink(
         ):
             raise TypeError("writer sinks must execute synchronously inside admission")
 
-        sink_id = f"{function.__module__}.{function.__qualname__}"
-        if (
-            sink_id == "__main__._prepare_gui_startup"
-            and Path(function.__globals__.get("__file__", function.__code__.co_filename)).resolve()
-            == Path(__file__).with_name("Container_Audit.py").resolve()
-        ):
-            sink_id = "Container_Audit._prepare_gui_startup"
-        if (
-            sink_id == "__main__.main"
-            and Path(function.__globals__.get("__file__", function.__code__.co_filename)).resolve()
-            == Path(__file__).with_name("tools").joinpath("direct_sync_relay_runner.py").resolve()
-        ):
-            sink_id = "tools.direct_sync_relay_runner.main"
-        if function.__module__ == "__main__" and Path(
-            function.__globals__.get("__file__", function.__code__.co_filename)
-        ).resolve() == Path(__file__).with_name("tools").joinpath(
-            "register_container_audit_worker_pc.py"
-        ).resolve():
-            sink_id = "tools.register_container_audit_worker_pc." + function.__qualname__
+        module_name = function.__module__
+        if module_name == "__main__":
+            definition_path = Path(
+                function.__globals__.get("__file__", function.__code__.co_filename)
+            ).resolve()
+            try:
+                app_path = definition_path.relative_to(Path(__file__).resolve().parent)
+            except ValueError:
+                pass
+            else:
+                module_name = ".".join(app_path.with_suffix("").parts)
+        sink_id = f"{module_name}.{function.__qualname__}"
         if probe_only and (selected_source, sink_id) not in PROBE_ONLY_WRITER_SINKS:
             raise WriterFencedError(
                 "WRITER_PROBE_ONLY_SINK_NOT_ALLOWED",
