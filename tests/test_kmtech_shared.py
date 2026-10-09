@@ -34,6 +34,24 @@ def test_pinned_shared_source_passes_local_checker():
     assert {"kmtech_shared.catalog", "kmtech_shared.raster", "kmtech_shared.runtime"} <= set(configured["hiddenimports"])
     assert {("kmtech_shared.manifest.json", "."), ("kmtech_shared.lock.json", ".")} <= set(configured["datas"])
     assert ("kmtech_shared/powershell/portable.ps1", "kmtech_shared/powershell") in configured["datas"]
+    assert ("kmtech_shared/powershell/ps51_module_prologue.ps1", "kmtech_shared/powershell") in configured["datas"]
+    assert ("kmtech_shared/diagnostic_log.py", "kmtech_shared") in configured["datas"]
+
+
+@pytest.mark.parametrize("name", ["diagnostic_log.py", "powershell/ps51_module_prologue.ps1"])
+@pytest.mark.parametrize("mutation", ["missing", "changed"])
+def test_local_checker_rejects_new_shared_leaf_drift(tmp_path, name, mutation):
+    shutil.copytree(ROOT / "kmtech_shared", tmp_path / "kmtech_shared")
+    for metadata in ("kmtech_shared.manifest.json", "kmtech_shared.lock.json"):
+        shutil.copyfile(ROOT / metadata, tmp_path / metadata)
+    target = tmp_path / "kmtech_shared" / name
+    if mutation == "missing":
+        target.unlink()
+    else:
+        target.write_bytes(target.read_bytes() + b"\n# drift\n")
+    result = _check(tmp_path)
+    assert result.returncode == 1
+    assert "FAIL:" in result.stderr
 
 
 @pytest.mark.parametrize("mutation", ["missing", "extra", "changed", "manifest", "runtime_missing", "runtime_changed", "powershell_missing", "powershell_changed", "powershell_extra"])
@@ -190,6 +208,7 @@ sys.path.insert(0, sys.argv[1])
 from kmtech_shared import raster, catalog, runtime
 from vendor.kmtech_zero_pe import raster as facade, gdi_print
 import Container_Audit, phs_label_workflow, item_catalog_sync, producer_runtime_client
+assert 'kmtech_shared.diagnostic_log' not in sys.modules
 assert item_catalog_sync._catalog_core is catalog
 assert producer_runtime_client._shared_runtime is runtime
 assert facade.RasterImage.__bases__ == (raster.RasterImage,)

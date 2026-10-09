@@ -93,6 +93,7 @@ def _readonly_installer_source(app_root, expected_inventory_sha256):
 class DataGenerationBlocked(RuntimeError):
     def __init__(self, decision):
         self.decision = decision
+        self.private_cause = getattr(decision, "private_cause", None)
         self.user_message = (generation.REFUSAL_MESSAGE if decision.get("status") == "REFUSE"
                              else generation.UNKNOWN_MESSAGE)
         super().__init__(self.user_message)

@@ -42,6 +42,11 @@ relay가 남거나 preimage 집합이 달라지면 writer fence를 해제하지 
 
 유지보수 active fence가 있으면 중앙 봉인·임대·PIN·등록·relay 전송은 첫 HTTP 전에 거절한다. 원 명령과 멱등 키, pending 임대 요청, UNKNOWN 및 복구 원본은 보존하며 해제 뒤 같은 내구 요청을 재시도한다. 원격 전송은 admission 확인 뒤 쓰기 mutex를 반환한다.
 
+G의 UNKNOWN 결과와 `DataGenerationBlocked`는 정제된 예외 형식·코드 위치를
+비공개 `private_cause` 속성으로 보존한다. 기존 dict/JSON 필드·문구·예외 args는
+그대로이며 공개 투영은 dict/JSON을 사용하고 copy·pickle을 사용하지 않는다.
+diagnostic_log를 import하거나 연결하는 동작은 이 공유 소스 채택에 포함하지 않는다.
+
 G의 REFUSE/UNKNOWN은 직접 등록·지원 명령과 앱 하위 모드에서도 최초 기존 신원·자료
 판독 전에 거절한다. 거절은 기존 온보딩/relay 상태 파일, retry attempt, Run 등록,
 예약 작업, 실행 중 relay를 변경하지 않고 고정 한국어 원인과 복구 안내를 출력한다.

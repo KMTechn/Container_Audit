@@ -133,6 +133,7 @@ PORTABLE_INSTALL_ASSETS = (
     ("INSTALL_THIS_PC.ps1", "INSTALL_THIS_PC.ps1"),
     ("tools/bootstrap_integrity.ps1", "tools/bootstrap_integrity.ps1"),
     ("kmtech_shared/powershell/portable.ps1", "app/kmtech_shared/powershell/portable.ps1"),
+    ("kmtech_shared/powershell/ps51_module_prologue.ps1", "app/kmtech_shared/powershell/ps51_module_prologue.ps1"),
     ("tools/container_writer_fence.ps1", "tools/container_writer_fence.ps1"),
     ("tools/container_writer_session.ps1", "tools/container_writer_session.ps1"),
     ("tools/container_data_generation_transition.json", "tools/container_data_generation_transition.json"),

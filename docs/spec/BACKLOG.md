@@ -149,7 +149,10 @@ CA의 자료-open 3곳과 restore/reinstall 7곳에 호출을 연결했으며 �
 복원 기대는 G 결정과 충돌하여 기존 exact 단언을 보존한 시험 범위 조정을 코디에게 물었다.
 같은 판의 다른 build가 이전 signed 호환 하한을 물려받던 helper 결함은 RED로 확인하고
 새 build/더 엄격한 하한과 신뢰 교집합을 기록하도록 두 leaf를 수정했고31 PASS다.
-shared 0.3.3/7파일 생성 manifest/lock/bootstrap pin을 채택했으며 새 guarded sink 하나를
+shared 0.3.6/9파일 manifest/lock/bootstrap consumer pin을 채택했다.
+diagnostic_log는 미사용 잎이며 UNKNOWN 원인만 비공개 보존한다. 생성 선언·설치기
+preimage/pin의 최종 정합성 및 실제 업데이트 수용은 조립 단계에서 확인한다.
+기존 0.3.3/7파일 채택 때 새 guarded sink 하나를
 표준 재생성했다. d55cc94 stock/native bundled-Python 직접 main·거절은 PASS이고
 동일 기준 FULL 비교의 신규 실패0/기존 실패 해결1이다. 새 기준82ce91c 자체의 표준
 `--check` PASS 뒤 그 위에 변경을 옮겨 선언/pin3곳/최종 `--check`를 재생성했다.
