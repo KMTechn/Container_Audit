@@ -609,6 +609,7 @@ STAGING_PROBE_ONLY_WRITER_SINKS = frozenset(
     for name in ("write_download_bytes", "write_download_chunk", "stage_prepared_copies", "_run_download_attempt")
 ) | frozenset({
     ("gui_tray_state_save", "Container_Audit.ContainerAudit._prepare_tray_state_snapshot"),
+    ("relay_upload_status", "direct_sync_push._prepare_status_temp"),
 })
 
 # The process wrappers also release before a child can acquire admission.

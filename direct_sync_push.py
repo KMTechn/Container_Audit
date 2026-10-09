@@ -44,7 +44,7 @@ from producer_runtime_client import (
     runtime_receipt_result,
     scrub_terminal_runtime_metadata,
 )
-from writer_session_fence import writer_admission, writer_sink
+from writer_session_fence import _WRITER_LOCAL, writer_admission, writer_sink
 
 
 CONTRACT_VERSION = "producer-ingest-source-file-v1"
@@ -966,6 +966,27 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
         raise
 
 
+@writer_sink("relay_upload_status", probe_only=True)
+def _prepare_status_temp(path: Path, payload: Mapping[str, Any]) -> Path:
+    from auto_update import assert_machine_metadata_no_secrets, mixed_status_record
+    encoded = json.dumps(mixed_status_record(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    assert_machine_metadata_no_secrets(encoded)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
+    try:
+        with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return temp_path
+
+
 def _response_json(response: Any) -> tuple[Dict[str, Any], bool]:
     try:
         payload = response.json()
@@ -1320,27 +1341,39 @@ def _with_upload_status_artifact(
     status_write_error_code = ""
     status_write_error_message = ""
     try:
-        with writer_admission("relay_upload_status"):
-            before_status_write = _UPLOAD_STATUS_CHECK.get()
-            if before_status_write is not None and not before_status_write():
-                return result
-            _write_json_atomic(
-                status_path,
-                {
-                    "success": result.success,
-                    "status_code": result.status_code,
-                    "committed": result.committed,
-                    "retryable": result.retryable,
-                    "retry_after_seconds": result.retry_after_seconds,
-                    "receipt": receipt,
-                    "error_code": result.error_code,
-                    "error_message": result.error_message,
-                    "metadata": _upload_status_runtime_safe_metadata(plan.metadata),
-                    "status_context": redact_runtime_secrets(context),
-                    "source_file_path": plan.source_file_path,
-                    "generated_at": utc_now_text(),
-                },
-            )
+        payload = {
+            "success": result.success,
+            "status_code": result.status_code,
+            "committed": result.committed,
+            "retryable": result.retryable,
+            "retry_after_seconds": result.retry_after_seconds,
+            "receipt": receipt,
+            "error_code": result.error_code,
+            "error_message": result.error_message,
+            "metadata": _upload_status_runtime_safe_metadata(plan.metadata),
+            "status_context": redact_runtime_secrets(context),
+            "source_file_path": plan.source_file_path,
+            "generated_at": utc_now_text(),
+        }
+        if int(getattr(_WRITER_LOCAL, "depth", 0)) > 0:
+            with writer_admission("relay_upload_status"):
+                before_status_write = _UPLOAD_STATUS_CHECK.get()
+                if before_status_write is not None and not before_status_write():
+                    return result
+                _write_json_atomic(status_path, payload)
+        else:
+            temporary = _prepare_status_temp(status_path, payload)
+            try:
+                with writer_admission("relay_upload_status"):
+                    before_status_write = _UPLOAD_STATUS_CHECK.get()
+                    if before_status_write is not None and not before_status_write():
+                        return result
+                    os.replace(temporary, status_path)
+            finally:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
     except OSError as exc:
         local_error_message = f"upload status artifact write failed: {exc.__class__.__name__}"
         if result.error_code:

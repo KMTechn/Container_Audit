@@ -3,14 +3,157 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 import socket
 import sqlite3
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
 import direct_sync_push
+import writer_session_fence as fence
 from producer_runtime_client import RuntimePreparation
+
+
+def test_upload_status_fsync_releases_admission_for_scan(tmp_path, monkeypatch):
+    from tests.test_feed_publish_admission import _observe_admissions
+    plan = direct_sync_push.SourceFilePlan(str(tmp_path / "source.csv"), {"idempotency_key": "status-fixture"}, "a" * 64, 1)
+    result = direct_sync_push.UploadResult(True, 200, True, False, {})
+    records = _observe_admissions(monkeypatch, ["upload-status"])
+    started = threading.Event()
+    held, waits, errors = [], [], []
+    sync = os.fsync
+
+    def slow(fd):
+        held.append(int(getattr(fence._WRITER_LOCAL, "depth", 0)))
+        started.set()
+        time.sleep(3)
+        return sync(fd)
+
+    def scan():
+        try:
+            assert started.wait(5)
+            before = time.perf_counter()
+            with fence.writer_admission("scan", timeout_seconds=5):
+                waits.append(time.perf_counter() - before)
+        except BaseException as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(direct_sync_push.os, "fsync", slow)
+    worker = threading.Thread(target=scan)
+    worker.start()
+    try:
+        published = direct_sync_push._with_upload_status_artifact(plan, result, tmp_path / "status")
+    finally:
+        worker.join(6)
+    assert not worker.is_alive() and not errors and published.success
+    assert held and not any(held), held
+    assert waits and max(waits) < 1, waits
+    assert records and max(row["hold_ms"] for row in records) < 500, records
+
+
+def test_prepared_upload_status_bytes_match_existing_writer(tmp_path, monkeypatch):
+    payload = {"error_message": "한글", "receipt": {"ok": True}}
+    reference = tmp_path / "reference.json"
+    direct_sync_push._write_json_atomic(reference, payload)
+    temporary = direct_sync_push._prepare_status_temp(tmp_path / "status.json", payload)
+    assert temporary.read_bytes() == reference.read_bytes()
+    temporary.unlink()
+
+
+def test_upload_status_lost_claim_preserves_target_and_cleans_only_own_temp(tmp_path, monkeypatch):
+    plan = direct_sync_push.SourceFilePlan(str(tmp_path / "source.csv"), {"idempotency_key": "status-fixture"}, "a" * 64, 1)
+    result = direct_sync_push.UploadResult(True, 200, True, False, {})
+    status_dir = tmp_path / "status"
+    previous = direct_sync_push._with_upload_status_artifact(plan, result, status_dir)
+    target = Path(previous.status_path)
+    before = target.read_bytes()
+    unrelated = status_dir / "unrelated.tmp.123.fixture"
+    unrelated.write_bytes(b"keep")
+    synced, claims = [], []
+    sync = os.fsync
+
+    def observe(fd):
+        synced.append(True)
+        return sync(fd)
+
+    def lost_claim():
+        assert synced and int(getattr(fence._WRITER_LOCAL, "depth", 0)) > 0
+        claims.append(True)
+        return False
+
+    monkeypatch.setattr(direct_sync_push.os, "fsync", observe)
+    selected = direct_sync_push._UPLOAD_STATUS_CHECK.set(lost_claim)
+    try:
+        assert direct_sync_push._with_upload_status_artifact(plan, result, status_dir) is result
+    finally:
+        direct_sync_push._UPLOAD_STATUS_CHECK.reset(selected)
+    assert claims == [True] and target.read_bytes() == before and unrelated.read_bytes() == b"keep"
+    assert list(status_dir.glob(target.name + ".tmp.*")) == []
+
+
+@pytest.mark.parametrize("producer_error", ["", "producer_invalid"])
+def test_upload_status_fsync_failure_keeps_existing_error_contract(tmp_path, monkeypatch, producer_error):
+    plan = direct_sync_push.SourceFilePlan(str(tmp_path / "source.csv"), {"idempotency_key": "status-fixture"}, "a" * 64, 1)
+    result = direct_sync_push.UploadResult(True, 200, True, False, {}, error_code=producer_error)
+    monkeypatch.setattr(direct_sync_push.os, "fsync", lambda fd: (_ for _ in ()).throw(OSError("disk failed")))
+    published = direct_sync_push._with_upload_status_artifact(plan, result, tmp_path / "status")
+    assert published.success and published.committed and not published.status_path
+    assert published.error_code == (producer_error or "upload_status_write_failed")
+    if producer_error:
+        assert published.receipt["_local_upload_status_write_error_code"] == "upload_status_write_failed"
+    assert not list((tmp_path / "status").iterdir())
+
+
+def test_upload_status_nested_path_and_prepare_inheritance_guard(tmp_path, monkeypatch):
+    plan = direct_sync_push.SourceFilePlan(str(tmp_path / "source.csv"), {"idempotency_key": "status-fixture"}, "a" * 64, 1)
+    result = direct_sync_push.UploadResult(True, 200, True, False, {})
+    with fence.writer_admission("nested-status"):
+        with pytest.raises(fence.WriterFencedError) as error:
+            direct_sync_push._prepare_status_temp(tmp_path / "never.json", {})
+        assert error.value.code == "STAGING_WRITER_ADMISSION_HELD"
+        monkeypatch.setattr(direct_sync_push, "_prepare_status_temp", lambda *args: pytest.fail("nested preparation"))
+        published = direct_sync_push._with_upload_status_artifact(plan, result, tmp_path / "status")
+        assert Path(published.status_path).is_file()
+
+
+@pytest.mark.parametrize("point", ["fsync", "before_replace", "after_replace"])
+def test_upload_status_process_crash_preserves_atomic_artifact(tmp_path, monkeypatch, point):
+    plan = direct_sync_push.SourceFilePlan(str(tmp_path / "source.csv"), {"idempotency_key": "status-fixture"}, "a" * 64, 1)
+    result = direct_sync_push.UploadResult(True, 200, True, False, {})
+    monkeypatch.setattr(direct_sync_push, "utc_now_text", lambda: "2026-10-09T00:00:00Z")
+    published = direct_sync_push._with_upload_status_artifact(plan, result, tmp_path)
+    target = Path(published.status_path)
+    new_bytes = target.read_bytes()
+    direct_sync_push._write_json_atomic(target, {"old": True})
+    old_bytes = target.read_bytes()
+    code = '''
+import os, sys
+from pathlib import Path
+import direct_sync_push as push
+point, root = sys.argv[1], Path(sys.argv[2])
+plan = push.SourceFilePlan(str(root / "source.csv"), {"idempotency_key": "status-fixture"}, "a" * 64, 1)
+push.utc_now_text = lambda: "2026-10-09T00:00:00Z"
+sync, replace = os.fsync, os.replace
+def crash_sync(fd):
+    sync(fd)
+    if point == "fsync": os._exit(74)
+def crash_replace(source, target):
+    if point == "before_replace": os._exit(74)
+    replace(source, target)
+    if point == "after_replace": os._exit(74)
+os.fsync, os.replace = crash_sync, crash_replace
+push._with_upload_status_artifact(plan, push.UploadResult(True, 200, True, False, {}), root)
+'''
+    child = subprocess.run([sys.executable, "-B", "-c", code, point, str(tmp_path)], capture_output=True,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    assert child.returncode == 74, (child.returncode, len(child.stderr))
+    assert target.read_bytes() == (new_bytes if point == "after_replace" else old_bytes)
+    assert len(list(tmp_path.glob(target.name + ".tmp.*"))) == (0 if point == "after_replace" else 1)
 from event_contracts import plan_b_event_detail
 from event_log_store import append_event_log_entry
 from direct_sync_push import (
