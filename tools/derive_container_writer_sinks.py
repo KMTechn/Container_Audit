@@ -2703,7 +2703,7 @@ def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
     delegated_sources: list[str] = []
     for relative_path in powershell_paths:
         source_bytes = (root / relative_path).read_bytes()
-        lines = source_bytes.decode("utf-8").splitlines()
+        lines = source_bytes.decode("utf-8-sig").splitlines()
         module_prologue_lines = _powershell_module_prologue_lines(source_bytes)
         function_ranges = _powershell_function_ranges(lines)
         entry_guard = _powershell_entry_guard(relative_path, lines, function_ranges)

@@ -14,7 +14,7 @@ def _inventory(tmp_path, source):
     return module._collect_powershell_inventory(tmp_path)
 
 
-@pytest.mark.parametrize("prefix", [b"", b"# library\n", b"[CmdletBinding()]\nparam(\n [string]$Path = ''\n)\n"])
+@pytest.mark.parametrize("prefix", [b"", b"\xef\xbb\xbf", b"# library\n", b"[CmdletBinding()]\nparam(\n [string]$Path = ''\n)\n"])
 def test_validator_accepts_only_exact_os_module_block_at_script_head(tmp_path, prefix):
     module = _load_module()
     assert hashlib.sha256(module.PS_MODULE_PROLOGUE).hexdigest() == "9c5e083b8e332573f3368be3e9592a2e2409aa89891e15942026361be17d0b71"
