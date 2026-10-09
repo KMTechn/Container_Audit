@@ -15795,7 +15795,7 @@ class ContainerAudit:
                     scan_count=snapshot.scan_count,
                     target_count=snapshot.target_count,
                     message=(
-                        f"{snapshot.message}\n중앙 확인 대기 잠금 상태를 저장하지 못했습니다. "
+                        f"{snapshot.message}\n회사 서버 확인 대기 잠금 상태를 저장하지 못했습니다. "
                         "프로그램을 종료하지 말고 담당자에게 알리세요."
                     ),
                     receipt_id=snapshot.receipt_id,
