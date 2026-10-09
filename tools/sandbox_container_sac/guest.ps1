@@ -398,7 +398,7 @@ try {
     while ($null -eq $mainWindow -and [DateTimeOffset]::UtcNow -lt $windowDeadline) {
         $mainWindow = @(
             Get-VisibleWindowsForProcess -ProcessId $guiProcessId |
-                Where-Object { $_.title -like '*(v2.0.100)*' } |
+                Where-Object { $_.title -like '*(v2.0.101)*' } |
                 Select-Object -First 1
         ) | Select-Object -First 1
         if ($null -eq $mainWindow) { Start-Sleep -Milliseconds 250 }
@@ -414,7 +414,7 @@ try {
     $survivedHold = $null -ne (Get-Process -Id $guiProcessId -ErrorAction SilentlyContinue)
     $windowAfterHold = @(
         Get-VisibleWindowsForProcess -ProcessId $guiProcessId |
-            Where-Object { $_.handle -eq $mainWindow.handle -and $_.title -like '*(v2.0.100)*' } |
+            Where-Object { $_.handle -eq $mainWindow.handle -and $_.title -like '*(v2.0.101)*' } |
             Select-Object -First 1
     ) | Select-Object -First 1
     $visibleAfterHold = $null -ne $windowAfterHold
