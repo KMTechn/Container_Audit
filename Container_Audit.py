@@ -219,6 +219,7 @@ from tk_serial_ui_lane import (
     LANE_CLOSED,
     LANE_DRAINING,
     LaneTask,
+    StaleUiCheckpointError,
     TkSerialUiLane,
 )
 from writer_session_fence import _WRITER_LOCAL, WriterFenceError, WriterFencedError, writer_admission, writer_sink
@@ -1977,6 +1978,13 @@ class ContainerAudit:
         return detail
 
     def _quarantine_preflight_hold_for_supervisor(
+        self, *, reason: str, confirm: bool = True,
+        approval: Optional[Dict[str, str]] = None,
+    ) -> bool:
+        return self._run_durable_ui_steps(self._quarantine_preflight_hold_steps(
+            reason=reason, confirm=confirm, approval=approval))
+
+    def _quarantine_preflight_hold_steps(
         self,
         *,
         reason: str,
@@ -1994,7 +2002,7 @@ class ContainerAudit:
                 store = self._preflight_hold_store(owner_worker="")
             snapshot = store.load()
         except PreflightHoldError:
-            messagebox.showerror(
+            self._call_admin_pin_ui(messagebox.showerror,
                 "보류 묶음 확인 필요",
                 "사전조회 보류 파일을 읽지 못해 격리하지 않습니다.",
                 parent=getattr(self, "root", None),
@@ -2004,7 +2012,7 @@ class ContainerAudit:
             self._show_preflight_offline_notice()
             return False
         if snapshot.state not in {HOLD_LOOKUP, HOLD_LOOKUP_FAILED}:
-            messagebox.showerror(
+            self._call_admin_pin_ui(messagebox.showerror,
                 "보류 묶음 격리 차단",
                 "제품 반영이 시작된 보류 묶음은 격리할 수 없습니다. "
                 "현재 트레이와 보류 원본을 함께 보존하고 관리자에게 인계하세요.",
@@ -2016,7 +2024,7 @@ class ContainerAudit:
             or ""
         )
         if current_master:
-            messagebox.showerror(
+            self._call_admin_pin_ui(messagebox.showerror,
                 "보류 묶음 격리 차단",
                 "현재 트레이와 보류 묶음이 함께 남아 있습니다. 두 원본을 보존하고 "
                 "관리자에게 현품표·작업자·남은 스캔 수를 인계하세요. "
@@ -2024,7 +2032,7 @@ class ContainerAudit:
                 parent=getattr(self, "root", None),
             )
             return False
-        if confirm and not messagebox.askyesno(
+        if confirm and not self._call_admin_pin_ui(messagebox.askyesno,
             "보류 묶음 격리 확인",
             f"중앙 조회 보류 {len(snapshot.items)}건을 복원 가능한 격리 목록으로 "
             "옮기고 새 작업을 시작하시겠습니까?",
@@ -2054,27 +2062,27 @@ class ContainerAudit:
                     pass
             return False
 
-        approval = self._admin_pin_approval_for(
+        approval = (yield from self._admin_pin_approval_steps(
             "CA.PRECHECK_HOLD",
             hashlib.sha256(canonical_master_label_key(snapshot.master_raw).encode("utf-8")).hexdigest(),
             source, (snapshot.master_raw,), effect,
-        )
+        ))
         if approval is None:
             return False
         if not self._blocked_work_identity_matches(approval):
             return False
         try:
             pin_intent = self._admin_pin_store().read(approval["operation_key"])
-            quarantined = store.quarantine(
+            quarantined = (yield lambda: store.quarantine(
                 self._preflight_hold_quarantine_directory(),
                 reason=reason,
                 expected_sha256=pin_intent["source_snapshot"]["hold_sha256"],
                 move=lambda source, target, digest: self._admin_pin_move(
                     approval, source, target, digest),
-            )
+            ))
         except (OSError, PreflightHoldError) as exc:
             print(f"사전조회 보류 격리 실패: {exc.__class__.__name__}")
-            messagebox.showerror(
+            self._call_admin_pin_ui(messagebox.showerror,
                 "보류 묶음 격리 실패",
                 "보류 묶음을 안전하게 옮기지 못했습니다. 기존 보류 상태를 유지합니다.",
                 parent=getattr(self, "root", None),
@@ -2093,46 +2101,50 @@ class ContainerAudit:
         )
         try:
             audited = self._blocked_work_identity_matches(approval) and bool(
-                self._log_event(
+                (yield lambda: self._log_event(
                     "PHS2_PREFLIGHT_HOLD_QUARANTINED",
                     detail=detail,
                     synchronous=True,
                     idempotency_key=audit_key,
                     deduplicate=True,
-                )
+                ))
             )
         except Exception:
             audited = False
         if not audited:
             try:
-                store.restore_quarantined(quarantined.path)
+                (yield lambda: store.restore_quarantined(quarantined.path))
             except Exception as rollback_error:
                 print(
                     "사전조회 보류 격리 감사 롤백 실패: "
                     f"{rollback_error.__class__.__name__}"
                 )
-            messagebox.showerror(
+            self._call_admin_pin_ui(messagebox.showerror,
                 "보류 묶음 격리 기록 실패",
                 "격리 감사 기록을 남기지 못해 새 작업을 시작하지 않습니다.",
                 parent=getattr(self, "root", None),
             )
             return False
-        if not self._admin_pin_complete(approval, effect):
+        if not (yield lambda: self._admin_pin_complete(approval, effect)):
             return False
         self._finish_preflight_handoff()
         if hasattr(self, "_update_parked_trays_list"):
-            self._update_parked_trays_list()
-        self.show_status_message(
+            self._call_admin_pin_ui(self._update_parked_trays_list)
+        self._call_admin_pin_ui(self.show_status_message,
             "사전조회 보류 묶음을 복원 가능한 목록으로 옮겼습니다.",
             self.COLOR_PRIMARY,
             duration=0,
         )
-        self._schedule_startup_transfer_recovery()
+        self._call_admin_pin_ui(self._schedule_startup_transfer_recovery)
         return True
 
     def restore_quarantined_preflight_hold(self, filepath: str, *, confirm: bool = True, _confirmed: bool = False) -> bool:
+        return self._run_durable_ui_steps(self._restore_quarantined_preflight_hold_steps(
+            filepath, confirm=confirm, _confirmed=_confirmed))
+
+    def _restore_quarantined_preflight_hold_steps(self, filepath: str, *, confirm: bool = True, _confirmed: bool = False) -> bool:
         if not self._is_preflight_hold_quarantine_path(filepath):
-            messagebox.showwarning(
+            self._call_admin_pin_ui(messagebox.showwarning,
                 "보류 묶음 복원 실패",
                 "격리 목록 폴더 밖의 파일은 복원할 수 없습니다.",
                 parent=getattr(self, "root", None),
@@ -2166,7 +2178,7 @@ class ContainerAudit:
                 raise PreflightHoldError("restoration original is unavailable")
             restoring_paths = (path, *(pin_store.path(row["operation_key"]).resolve() for row in intents))
         except (OSError, ValueError, TypeError, KeyError, PreflightHoldError):
-            messagebox.showerror(
+            self._call_admin_pin_ui(messagebox.showerror,
                 "보류 묶음 복원 실패",
                 "선택한 격리 보류 파일을 읽지 못했습니다.",
                 parent=getattr(self, "root", None),
@@ -2174,7 +2186,7 @@ class ContainerAudit:
             return False
         if self._paired_preflight_blocks_label(snapshot.master_raw, restoring_paths=restoring_paths):
             pin_blocked = any(row.get("state") != "APPLIED" for row in pending_intents)
-            messagebox.showwarning(
+            self._call_admin_pin_ui(messagebox.showwarning,
                 "보류 묶음 복원 차단",
                 ("이 현품표는 관리자 PIN 확인이 끝나지 않아 보류 중입니다. 연결 후 운영 작업의 "
                  "관리자 확인 다시 조회에서 확인하세요. 미확정 인계가 남으면 원본을 보존하고 "
@@ -2188,28 +2200,28 @@ class ContainerAudit:
             str(getattr(self, "worker_name", "") or "")
         )
         if not self._owns_worker_record(snapshot.to_payload()) and not self._is_preflight_hold_supervisor():
-            messagebox.showwarning(
+            self._call_admin_pin_ui(messagebox.showwarning,
                 "보류 묶음 작업자 확인",
                 "원래 작업자 또는 관리자로 로그인해야 복원할 수 있습니다.",
                 parent=getattr(self, "root", None),
             )
             return False
         if not resuming_restore and (store.exists() or self._preflight_context_blocks_mutation()):
-            messagebox.showwarning(
+            self._call_admin_pin_ui(messagebox.showwarning,
                 "보류 묶음 복원 차단",
                 "현재 사전조회 보류 묶음을 먼저 해결해야 합니다.",
                 parent=getattr(self, "root", None),
             )
             return False
         if getattr(getattr(self, "current_tray", None), "master_label_code", ""):
-            messagebox.showwarning(
+            self._call_admin_pin_ui(messagebox.showwarning,
                 "보류 묶음 복원 차단",
                 "현재 트레이를 먼저 보류하거나 완료해야 합니다.",
                 parent=getattr(self, "root", None),
             )
             return False
         if confirm and not _confirmed:
-            self._request_inline_choice(
+            self._call_admin_pin_ui(self._request_inline_choice,
                 "보류 묶음 복원 확인",
                 f"격리된 중앙 조회 보류 {len(snapshot.items)}건을 복원하려면 "
                 "'보류 묶음 복원'을 누르세요. 다음 스캔은 복원하지 않고 계속합니다.",
@@ -2220,16 +2232,16 @@ class ContainerAudit:
             return False
         try:
             for row in intents:
-                pin_store.write(dict(row, restoration={"state": "RESTORING", "source": str(path),
-                                                        "hold_sha256": digest}))
-            restored = store.load() if resuming_restore else store.restore_quarantined(filepath)
+                (yield lambda: pin_store.write(dict(row, restoration={"state": "RESTORING", "source": str(path),
+                                                        "hold_sha256": digest})))
+            restored = store.load() if resuming_restore else (yield lambda: store.restore_quarantined(filepath))
         except (OSError, PreflightHoldError) as exc:
             self._set_preflight_scan_input_locked(
                 self._preflight_context_blocks_mutation()
             )
-            self._update_action_button_states()
+            self._call_admin_pin_ui(self._update_action_button_states)
             print(f"사전조회 보류 복원 실패: {exc.__class__.__name__}")
-            messagebox.showerror(
+            self._call_admin_pin_ui(messagebox.showerror,
                 "보류 묶음 복원 실패",
                 "격리 보류 묶음을 활성 상태로 되돌리지 못했습니다.",
                 parent=getattr(self, "root", None),
@@ -2248,22 +2260,22 @@ class ContainerAudit:
         )
         try:
             audited = bool(
-                self._log_event(
+                (yield lambda: self._log_event(
                     "PHS2_PREFLIGHT_HOLD_RESTORED",
                     detail=detail,
                     synchronous=True,
                     idempotency_key=audit_key,
                     deduplicate=True,
-                )
+                ))
             )
         except Exception:
             audited = False
         if not audited:
             try:
-                store.quarantine(
+                (yield lambda: store.quarantine(
                     self._preflight_hold_quarantine_directory(),
                     reason="restore_audit_failed",
-                )
+                ))
             except Exception as rollback_error:
                 print(
                     "사전조회 보류 복원 감사 롤백 실패: "
@@ -2272,8 +2284,8 @@ class ContainerAudit:
             self._set_preflight_scan_input_locked(
                 self._preflight_context_blocks_mutation()
             )
-            self._update_action_button_states()
-            messagebox.showerror(
+            self._call_admin_pin_ui(self._update_action_button_states)
+            self._call_admin_pin_ui(messagebox.showerror,
                 "보류 묶음 복원 기록 실패",
                 "복원 감사 기록을 남기지 못해 격리 상태를 유지합니다.",
                 parent=getattr(self, "root", None),
@@ -2281,17 +2293,17 @@ class ContainerAudit:
             return False
         try:
             for row in intents:
-                pin_store.write(dict(row, restoration={
+                (yield lambda: pin_store.write(dict(row, restoration={
                     "state": "RESTORED", "source": str(path), "hold_sha256": digest,
                     "master_label_key": canonical_master_label_key(restored.master_raw),
                     "snapshot_hash": restored_hash, "audit_key": audit_key,
-                }))
+                })))
             if restored.state == HOLD_DRAINING:
-                restored = store.mark_failed(error_code="PHS2_QUARANTINE_RESTORE_REVIEW")
+                restored = (yield lambda: store.mark_failed(error_code="PHS2_QUARANTINE_RESTORE_REVIEW"))
         except (OSError, ValueError, PreflightHoldError):
             self._set_preflight_scan_input_locked(self._preflight_context_blocks_mutation())
-            self._update_action_button_states()
-            messagebox.showerror("보류 묶음 복원 기록 대기",
+            self._call_admin_pin_ui(self._update_action_button_states)
+            self._call_admin_pin_ui(messagebox.showerror, "보류 묶음 복원 기록 대기",
                                  "복원 완료 기록을 확인하지 못했습니다. 관리자 확인 다시 조회에서 재개하세요.",
                                  parent=getattr(self, "root", None))
             return False
@@ -2300,7 +2312,7 @@ class ContainerAudit:
             self._preflight_hold_draining = False
             self._master_preflight_pending = False
             self._set_preflight_scan_input_locked(True)
-            messagebox.showinfo(
+            self._call_admin_pin_ui(messagebox.showinfo,
                 "보류 묶음 복원 완료",
                 f"원래 작업자 '{display_operator_name(restored.worker)}'로 다시 로그인해 "
                 "같은 현품표를 재확인하세요.",
@@ -2313,13 +2325,13 @@ class ContainerAudit:
             self._process_barcode_logic(restored.master_raw)
         else:
             self._set_preflight_scan_input_locked(True)
-            self.show_fullscreen_warning(
+            self._call_admin_pin_ui(self.show_fullscreen_warning,
                 "중앙 조회 재확인 필요",
                 "격리 보류 묶음을 복원했습니다. 확인을 누르면 같은 현품표로 다시 조회합니다.",
                 self.COLOR_DANGER,
             )
         if hasattr(self, "_update_parked_trays_list"):
-            self._update_parked_trays_list()
+            self._call_admin_pin_ui(self._update_parked_trays_list)
         return True
 
     def _preflight_hold_writer(self) -> PreflightScanHoldWriter:
@@ -2343,7 +2355,8 @@ class ContainerAudit:
             or getattr(self, "_ui_close_requested", False)
         )
         try:
-            entry.configure(state=tk.DISABLED if should_disable else tk.NORMAL)
+            self._call_admin_pin_ui(
+                entry.configure, state=tk.DISABLED if should_disable else tk.NORMAL)
         except (AttributeError, tk.TclError):
             pass
 
@@ -8469,6 +8482,79 @@ class ContainerAudit:
                 pass
             self._schedule_focus_return()
 
+    def _call_admin_pin_ui(self, callback, *args, **kwargs):
+        """Skip only presentation when an admitted PIN task loses its window."""
+        def present():
+            root = getattr(self, "root", None)
+            if getattr(self, "_admin_pin_ui_pending", False):
+                if root is None:
+                    return None
+                try:
+                    if not root.winfo_exists():
+                        return None
+                except (AttributeError, tk.TclError):
+                    return None
+            return callback(*args, **kwargs)
+
+        lane = getattr(self, "_ui_lane", None)
+        if lane is not None and threading.get_ident() == getattr(lane, "worker_thread_id", None):
+            try:
+                return lane.call_ui_sync(present)
+            except StaleUiCheckpointError:
+                return None
+        return present()
+
+    def _submit_admin_pin_steps(self, steps, name: str) -> bool:
+        lane = self._ui_task_lane()
+        if getattr(self, "_admin_pin_ui_pending", False) or lane.is_busy():
+            steps.close()
+            self._call_admin_pin_ui(
+                messagebox.showwarning, "관리자 확인 대기",
+                "회사 서버 이적 확인 중입니다. 현재 트레이를 유지하세요.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+
+        self._admin_pin_ui_pending = True
+        submitted = False
+
+        def idle():
+            self._admin_pin_ui_pending = False
+
+        def fail(_exc):
+            try:
+                self._call_admin_pin_ui(
+                    messagebox.showwarning, "관리자 확인 대기",
+                    admin_pin_message("VERIFY_UNAVAILABLE"),
+                    parent=getattr(self, "root", None),
+                )
+            finally:
+                self._admin_pin_ui_pending = False
+
+        try:
+            # Run the initial confirmation/PIN step before admitting any HTTP.
+            try:
+                first_operation = next(steps)
+            except StopIteration as done:
+                return bool(done.value)
+            admission = lane.submit(LaneTask(
+                name=name, generation=int(getattr(self, "_scan_callback_epoch", 0)),
+                work=lambda: self._run_durable_ui_steps(
+                    steps, lane=lane, first_operation=first_operation),
+                finish=lambda _result: None, fail=fail, on_idle=idle,
+                on_stale=idle, shutdown_policy=DRAIN_TO_TERMINAL,
+            ))
+            if not admission.accepted:
+                fail(None)
+                return False
+            submitted = True
+            self._admin_pin_ui_task_handle = admission.handle
+            return True
+        finally:
+            if not submitted:
+                steps.close()
+                idle()
+
     def _authorize_blocked_work_supervisor(self) -> Optional[Dict[str, str]]:
         operator = str(getattr(self, "worker_name", "") or "").strip()
         role = str(getattr(self, "worker_role", "") or "").upper()
@@ -8478,7 +8564,7 @@ class ContainerAudit:
             return {"operator": operator, "role": role, "supervisor": "",
                     "login_epoch": getattr(self, "_admin_pin_login_epoch", "")}
         if not operator or role != "WORKER" or operator == PROTECTED_ADMIN_OPERATOR_ID:
-            messagebox.showwarning(
+            self._call_admin_pin_ui(messagebox.showwarning,
                 "관리자 신원 확인 필요",
                 "현재 로그인 작업자와 역할을 확인할 수 없습니다. 다시 로그인한 뒤 관리자 확인을 받으세요.",
                 parent=getattr(self, "root", None),
@@ -8593,7 +8679,7 @@ class ContainerAudit:
         if not self._admin_pin_audit("ADMIN_PIN_HANDOFF_UNKNOWN", handoff):
             raise AdminPinError("AUDIT_UNAVAILABLE", unknown=True)
         self._admin_pin_store().transition(handoff, "HANDED_OFF_UNKNOWN", reason=reason)
-        messagebox.showwarning(
+        self._call_admin_pin_ui(messagebox.showwarning,
             "PIN 지원 인계", "소비된 요청의 원본 효과를 증명할 수 없습니다. "
             "원 operation key와 원본을 보존하고 지원 인계하세요.",
             parent=getattr(self, "root", None),
@@ -8604,7 +8690,7 @@ class ContainerAudit:
         if not self._admin_pin_audit("ADMIN_PIN_SUPERSEDED", changed):
             raise AdminPinError("AUDIT_UNAVAILABLE", unknown=True)
         self._admin_pin_store().transition(changed, "TARGET_CHANGED", reason="TARGET_CHANGED")
-        messagebox.showwarning(
+        self._call_admin_pin_ui(messagebox.showwarning,
             "관리자 확인 다시 조회",
             "원본이 바뀌었습니다. 변경 바이트를 보존했습니다. 관리자 목록에서 다시 조회한 뒤 "
             "이 동작을 새 PIN으로 다시 실행하세요.",
@@ -8777,7 +8863,7 @@ class ContainerAudit:
             self._master_preflight_pending = False
             self._set_preflight_scan_input_locked(False)
             if not startup and hasattr(self, "_update_parked_trays_list"):
-                self._update_parked_trays_list()
+                self._call_admin_pin_ui(self._update_parked_trays_list)
             return not self._preflight_context_blocks_mutation()
         if action in {"CA.PAIR_HANDOFF", "CA.TRAY_HOLD"} and source.get("handoff_id"):
             store = self._paired_preflight_store()
@@ -8809,12 +8895,12 @@ class ContainerAudit:
             self._preflight_hold_draining = False
             self._master_preflight_pending = False
             self.current_tray = TraySession()
-            self._invalidate_pending_scan_callbacks()
+            self._call_admin_pin_ui(self._invalidate_pending_scan_callbacks)
             self._set_preflight_scan_input_locked(False)
             if not startup:
-                self._reset_ui_to_waiting_state()
-                self._update_all_summaries()
-                self._update_parked_trays_list()
+                self._call_admin_pin_ui(self._reset_ui_to_waiting_state)
+                self._call_admin_pin_ui(self._update_all_summaries)
+                self._call_admin_pin_ui(self._update_parked_trays_list)
             return not self._preflight_context_blocks_mutation()
         if action == "CA.TRAY_HOLD" and isinstance(source.get("tray"), dict):
             current = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
@@ -8961,16 +9047,16 @@ class ContainerAudit:
             else:
                 presenter.clear_completion()
             presenter.acknowledge()
-            self._stop_warning_beep()
-            self._invalidate_pending_scan_callbacks()
+            self._call_admin_pin_ui(self._stop_warning_beep)
+            self._call_admin_pin_ui(self._invalidate_pending_scan_callbacks)
             self._set_preflight_scan_input_locked(False)
             if not startup:
-                self.scanned_listbox.delete(0, tk.END)
-                self._reset_ui_to_waiting_state()
-                self._update_all_summaries()
-                self._update_parked_trays_list()
-                self._render_warning_state()
-                self._update_action_button_states()
+                self._call_admin_pin_ui(self.scanned_listbox.delete, 0, tk.END)
+                self._call_admin_pin_ui(self._reset_ui_to_waiting_state)
+                self._call_admin_pin_ui(self._update_all_summaries)
+                self._call_admin_pin_ui(self._update_parked_trays_list)
+                self._call_admin_pin_ui(self._render_warning_state)
+                self._call_admin_pin_ui(self._update_action_button_states)
             return not self._preflight_context_blocks_mutation()
         return False
 
@@ -8992,7 +9078,7 @@ class ContainerAudit:
             reason = ("관리자 보류 원본 형식을 확인할 수 없습니다."
                       if isinstance(exc, (ValueError, TypeError, KeyError))
                       else "원본 readback 또는 활성 슬롯 해제에 실패했습니다.")
-            messagebox.showerror("원본 보류 대기", f"이 건의 보류가 아직 끝나지 않았습니다. {reason}",
+            self._call_admin_pin_ui(messagebox.showerror, "원본 보류 대기", f"이 건의 보류가 아직 끝나지 않았습니다. {reason}",
                                  parent=getattr(self, "root", None))
             return False
         finally:
@@ -9017,7 +9103,7 @@ class ContainerAudit:
     def _admin_pin_failed(self, intent: Mapping[str, Any], code: str, *, unknown: bool) -> None:
         store = self._admin_pin_store()
         failed = dict(intent, reason=code)
-        hold = bool(unknown and messagebox.askyesno(
+        hold = bool(unknown and self._call_admin_pin_ui(messagebox.askyesno,
             "관리자 확인 대기",
             admin_pin_message(code) + "\n\n이 건만 보류하고 다른 작업을 계속하시겠습니까? "
             "아니요를 누르면 같은 건을 다시 확인할 수 있습니다.",
@@ -9031,16 +9117,22 @@ class ContainerAudit:
                                       "UNKNOWN" if unknown else "REJECTED",
                                       reason=code)
         except (OSError, ValueError):
-            messagebox.showerror("관리자 기록 대기", "관리자 확인 기록을 남기지 못했습니다. 원본을 유지합니다.",
+            self._call_admin_pin_ui(messagebox.showerror, "관리자 기록 대기", "관리자 확인 기록을 남기지 못했습니다. 원본을 유지합니다.",
                                  parent=getattr(self, "root", None))
             return
         if hold:
             if not self._admin_pin_finish_unverified_detachment(failed):
                 return
-        messagebox.showwarning("관리자 확인 대기", admin_pin_message(code),
+        self._call_admin_pin_ui(messagebox.showwarning, "관리자 확인 대기", admin_pin_message(code),
                                parent=getattr(self, "root", None))
 
     def _admin_pin_approval_for(self, action: str, target_id: str,
+                                read_source, labels: tuple[str, ...],
+                                effect_readback) -> Optional[Dict[str, str]]:
+        return self._run_durable_ui_steps(self._admin_pin_approval_steps(
+            action, target_id, read_source, labels, effect_readback))
+
+    def _admin_pin_approval_steps(self, action: str, target_id: str,
                                 read_source, labels: tuple[str, ...],
                                 effect_readback) -> Optional[Dict[str, str]]:
         """Reserve and consume one PIN for one item before its existing writer."""
@@ -9066,20 +9158,20 @@ class ContainerAudit:
             if pending:
                 intent = pending[0]
                 if intent.get("state") in {"UNVERIFIED_DETACHING", "UNVERIFIED_OPERATOR_HOLD"}:
-                    self._admin_pin_finish_unverified_detachment(intent)
+                    (yield lambda: self._admin_pin_finish_unverified_detachment(intent))
                     return None
                 if intent.get("state") == "HANDED_OFF_UNKNOWN":
-                    messagebox.showwarning("PIN 지원 인계",
+                    self._call_admin_pin_ui(messagebox.showwarning, "PIN 지원 인계",
                                            "이 건은 원본 효과를 증명할 수 없어 지원 인계 보류 중입니다.",
                                            parent=getattr(self, "root", None))
                     return None
                 verification_id = intent.get("verification_id") or ""
                 if not verification_id:
                     if self._admin_pin_target_missing(intent):
-                        if not self._admin_pin_audit("ADMIN_PIN_HANDOFF_UNKNOWN", intent):
+                        if not (yield lambda: self._admin_pin_audit("ADMIN_PIN_HANDOFF_UNKNOWN", intent)):
                             raise AdminPinError("AUDIT_UNAVAILABLE", unknown=True)
-                        store.transition(intent, "HANDED_OFF_UNKNOWN",
-                                         reason="UNVERIFIED_DETACHED")
+                        (yield lambda: store.transition(intent, "HANDED_OFF_UNKNOWN",
+                                         reason="UNVERIFIED_DETACHED"))
                         return None
                     if intent["operator"] == operator:
                         retry_intent = intent
@@ -9090,21 +9182,21 @@ class ContainerAudit:
                         except (OSError, ValueError, KeyError, TypeError):
                             same_source = False
                         if not same_source:
-                            if not self._admin_pin_audit("ADMIN_PIN_HANDOFF_UNKNOWN", intent):
+                            if not (yield lambda: self._admin_pin_audit("ADMIN_PIN_HANDOFF_UNKNOWN", intent)):
                                 raise AdminPinError("AUDIT_UNAVAILABLE", unknown=True)
-                            store.transition(intent, "HANDED_OFF_UNKNOWN",
-                                             reason="UNVERIFIED_DETACHED")
+                            (yield lambda: store.transition(intent, "HANDED_OFF_UNKNOWN",
+                                             reason="UNVERIFIED_DETACHED"))
                             return None
                         retire_intent = intent
                         retire_reason = "LOGIN_EPOCH_CHANGED"
                     else:
                         raise AdminPinError("TARGET_CHANGED", unknown=True)
                 else:
-                    status = self._admin_pin_client_for_work().status(
-                        verification_id, intent["operation_key"])
+                    status = (yield lambda: self._admin_pin_client_for_work().status(
+                        verification_id, intent["operation_key"]))
                     if status == "CONSUMED":
-                        intent = self._admin_pin_record_resumer(intent)
-                        if not self._admin_pin_check_moves(intent):
+                        intent = (yield lambda: self._admin_pin_record_resumer(intent))
+                        if not (yield lambda: self._admin_pin_check_moves(intent)):
                             return None
                         try:
                             effect_complete = effect_readback(intent)
@@ -9112,19 +9204,19 @@ class ContainerAudit:
                             effect_complete = False
                         if not effect_complete:
                             try:
-                                effect_complete = self._admin_pin_resume_intermediate(intent)
+                                effect_complete = (yield lambda: self._admin_pin_resume_intermediate(intent))
                             except (OSError, ValueError, KeyError, TypeError,
                                     PreflightHoldError, PairedHandoffError):
                                 effect_complete = False
                         if effect_complete:
                             intent = store.read(intent["operation_key"])
-                            if intent.get("state") != "CONSUMED" or not self._admin_pin_check_moves(intent):
+                            if intent.get("state") != "CONSUMED" or not (yield lambda: self._admin_pin_check_moves(intent)):
                                 return None
                             recovery_approval = {"operation_key": intent["operation_key"]}
-                            if not self._admin_pin_complete(recovery_approval, effect_readback):
+                            if not (yield lambda: self._admin_pin_complete(recovery_approval, effect_readback)):
                                 return None
                             self._admin_pin_release_completed_work(intent)
-                            messagebox.showinfo("관리자 확인", "같은 요청의 완료 상태를 확인했습니다.",
+                            self._call_admin_pin_ui(messagebox.showinfo, "관리자 확인", "같은 요청의 완료 상태를 확인했습니다.",
                                                 parent=getattr(self, "root", None))
                             return None
                         if store.read(intent["operation_key"]).get("state") != "CONSUMED":
@@ -9133,18 +9225,18 @@ class ContainerAudit:
                             original = read_source()
                         except (OSError, ValueError, KeyError, TypeError):
                             if self._admin_pin_target_missing(intent):
-                                if not self._admin_pin_audit("ADMIN_PIN_HANDOFF_UNKNOWN", intent):
+                                if not (yield lambda: self._admin_pin_audit("ADMIN_PIN_HANDOFF_UNKNOWN", intent)):
                                     raise AdminPinError("AUDIT_UNAVAILABLE", unknown=True)
-                                store.transition(intent, "HANDED_OFF_UNKNOWN",
-                                                 reason="EFFECT_UNVERIFIED")
+                                (yield lambda: store.transition(intent, "HANDED_OFF_UNKNOWN",
+                                                 reason="EFFECT_UNVERIFIED"))
                                 return None
                             raise
                         source_hash = admin_pin_fingerprint(original)
                         if intent["target"]["state_fingerprint"] != source_hash:
-                            self._admin_pin_target_changed(intent)
+                            (yield lambda: self._admin_pin_target_changed(intent))
                             return None
-                        if not self._admin_pin_audit(
-                                "ADMIN_PIN_CONSUMED", dict(intent, resuming_operator={})):
+                        if not (yield lambda: self._admin_pin_audit(
+                                "ADMIN_PIN_CONSUMED", dict(intent, resuming_operator={}))):
                             raise AdminPinError("AUDIT_UNAVAILABLE", unknown=True)
                         return {**base, "supervisor": intent["admin_id"],
                                 "verification_id": verification_id,
@@ -9156,7 +9248,8 @@ class ContainerAudit:
             source_hash = admin_pin_fingerprint(original)
             target = {"kind": action.split(".", 1)[1].lower(),
                       "id": target_id, "state_fingerprint": source_hash}
-            credentials = self._prompt_blocked_work_admin_pin(
+            credentials = self._call_admin_pin_ui(
+                self._prompt_blocked_work_admin_pin,
                 action=action, target_id=target_id, labels=tuple(labels))
             if credentials is None:
                 return None
@@ -9168,11 +9261,11 @@ class ContainerAudit:
                 intent = retry_intent
             else:
                 if retire_intent is not None:
-                    if not self._admin_pin_audit("ADMIN_PIN_SUPERSEDED",
-                                                 dict(retire_intent, reason=retire_reason)):
+                    if not (yield lambda: self._admin_pin_audit("ADMIN_PIN_SUPERSEDED",
+                                                 dict(retire_intent, reason=retire_reason))):
                         raise AdminPinError("AUDIT_UNAVAILABLE", unknown=True)
-                    store.transition(retire_intent, "SUPERSEDED", reason=retire_reason)
-                intent = store.write({
+                    (yield lambda: store.transition(retire_intent, "SUPERSEDED", reason=retire_reason))
+                intent = (yield lambda: store.write({
                     "schema": "container-admin-pin-intent-v1", "state": "PREPARED",
                     "operation_key": str(uuid.uuid4()), "request_id": str(uuid.uuid4()),
                     "verification_id": "", "admin_id": admin_id, "action": action,
@@ -9180,49 +9273,49 @@ class ContainerAudit:
                     "source_evidence_sha256": source_hash,
                     "source_snapshot": original,
                     "labels": list(labels), "reason": "",
-                })
+                }))
                 active_intent = intent
             try:
                 if not admin_id or not re.fullmatch(r"[0-9]{6}", pin):
                     raise AdminPinError("PIN_FORMAT_INVALID")
                 client = self._admin_pin_client_for_work()
-                verified = client.verify(request_id=intent["request_id"], admin_id=admin_id,
-                                         pin=pin, action=action, target=target, operator=operator)
-                intent = store.write(dict(intent, verification_id=verified["verification_id"],
-                                          state="VERIFIED"))
-                client.redeem(verification_id=verified["verification_id"],
+                verified = (yield lambda: client.verify(request_id=intent["request_id"], admin_id=admin_id,
+                                         pin=pin, action=action, target=target, operator=operator))
+                intent = (yield lambda: store.write(dict(intent, verification_id=verified["verification_id"],
+                                          state="VERIFIED")))
+                (yield lambda: client.redeem(verification_id=verified["verification_id"],
                               proof=verified["proof"], operation_key=intent["operation_key"],
-                              action=action, target=target, operator=operator)
-                intent = store.transition(intent, "CONSUMED")
+                              action=action, target=target, operator=operator))
+                intent = (yield lambda: store.transition(intent, "CONSUMED"))
                 if read_source() != original:
-                    self._admin_pin_target_changed(intent)
+                    (yield lambda: self._admin_pin_target_changed(intent))
                     return None
                 if not self._blocked_work_identity_is_current(base):
-                    messagebox.showwarning(
+                    self._call_admin_pin_ui(messagebox.showwarning,
                         "관리자 확인 다시 조회", "로그인이 바뀌었습니다. 소비된 원 operation key를 "
                         "보존하고 현재 로그인으로 같은 건을 다시 조회하세요.",
                         parent=getattr(self, "root", None),
                     )
                     return None
-                if not self._admin_pin_audit("ADMIN_PIN_CONSUMED", intent):
+                if not (yield lambda: self._admin_pin_audit("ADMIN_PIN_CONSUMED", intent)):
                     raise AdminPinError("AUDIT_UNAVAILABLE", unknown=True)
                 return {**base, "supervisor": admin_id,
                         "verification_id": verified["verification_id"],
                         "operation_key": intent["operation_key"], "action": action,
                         "target": target_id}
             except AdminPinError as exc:
-                self._admin_pin_failed(
+                (yield lambda: self._admin_pin_failed(
                     intent, exc.code,
                     unknown=(exc.unknown or exc.code in {
                         "PIN_BUSY", "PIN_RATE_LIMITED", "CENTRAL_ACTION_UNAVAILABLE"}),
-                )
+                ))
                 return None
         except (OSError, ValueError, KeyError, TypeError, AdminPinError) as exc:
             code = exc.code if isinstance(exc, AdminPinError) else "VERIFY_UNAVAILABLE"
             if active_intent is not None and isinstance(exc, AdminPinError) and exc.unknown:
-                self._admin_pin_failed(active_intent, code, unknown=True)
+                (yield lambda: self._admin_pin_failed(active_intent, code, unknown=True))
                 return None
-            messagebox.showwarning("관리자 확인 대기", admin_pin_message(code),
+            self._call_admin_pin_ui(messagebox.showwarning, "관리자 확인 대기", admin_pin_message(code),
                                    parent=getattr(self, "root", None))
             return None
 
@@ -9269,7 +9362,7 @@ class ContainerAudit:
         except (OSError, ValueError, KeyError, TypeError) as exc:
             if isinstance(exc, PinnedTargetChanged) and intent is not None:
                 self._admin_pin_check_moves(intent)
-            messagebox.showwarning("관리자 확인 대기", "로컬 효과 확인이 불완전합니다. 같은 건을 다시 확인하세요.",
+            self._call_admin_pin_ui(messagebox.showwarning, "관리자 확인 대기", "로컬 효과 확인이 불완전합니다. 같은 건을 다시 확인하세요.",
                                    parent=getattr(self, "root", None))
             return False
 
@@ -9383,13 +9476,13 @@ class ContainerAudit:
         self._master_preflight_pending = False
         if paired:
             self.current_tray = TraySession()
-            self._invalidate_pending_scan_callbacks()
+            self._call_admin_pin_ui(self._invalidate_pending_scan_callbacks)
         self._set_preflight_scan_input_locked(False)
         if paired and not startup:
-            self._reset_ui_to_waiting_state()
-            self._update_all_summaries()
-            self._update_parked_trays_list()
-            self._update_action_button_states()
+            self._call_admin_pin_ui(self._reset_ui_to_waiting_state)
+            self._call_admin_pin_ui(self._update_all_summaries)
+            self._call_admin_pin_ui(self._update_parked_trays_list)
+            self._call_admin_pin_ui(self._update_action_button_states)
 
     def _admin_pin_release_completed_work(self, intent: Mapping[str, Any], *, startup: bool = False) -> None:
         """Apply normal completion cleanup only to this recovered active owner."""
@@ -9418,8 +9511,8 @@ class ContainerAudit:
         if action == "CA.PRECHECK_HOLD" and source.get("hold_sha256"):
             self._finish_preflight_handoff(startup=startup)
             if not startup:
-                self._update_parked_trays_list()
-                self._schedule_startup_transfer_recovery()
+                self._call_admin_pin_ui(self._update_parked_trays_list)
+                self._call_admin_pin_ui(self._schedule_startup_transfer_recovery)
         elif action == "CA.PAIR_HANDOFF" and source.get("handoff_id"):
             self._finish_preflight_handoff(paired=True, startup=startup)
         elif action == "CA.TRAY_HOLD" and isinstance(source.get("tray"), dict):
@@ -9556,51 +9649,58 @@ class ContainerAudit:
         return False
 
     def _recheck_admin_pin_intents(self) -> None:
+        steps = self._recheck_admin_pin_intent_steps()
+        if hasattr(getattr(self, "root", None), "tk"):
+            self._submit_admin_pin_steps(steps, "admin-pin-recheck")
+        else:
+            self._run_durable_ui_steps(steps)
+
+    def _recheck_admin_pin_intent_steps(self) -> None:
         store = self._admin_pin_store()
         try:
             intents = store.list_pending()
         except (OSError, ValueError, TypeError):
-            messagebox.showerror("관리자 확인 다시 조회", "PIN 보류 기록을 읽지 못했습니다. 원본을 보존하고 지원 인계하세요.",
+            self._call_admin_pin_ui(messagebox.showerror, "관리자 확인 다시 조회", "PIN 보류 기록을 읽지 못했습니다. 원본을 보존하고 지원 인계하세요.",
                                  parent=getattr(self, "root", None))
             return
         if not intents:
-            messagebox.showinfo("관리자 확인 다시 조회", "다시 확인할 관리자 PIN 요청이 없습니다.",
+            self._call_admin_pin_ui(messagebox.showinfo, "관리자 확인 다시 조회", "다시 확인할 관리자 PIN 요청이 없습니다.",
                                 parent=getattr(self, "root", None))
             return
         for intent in intents:
             action = intent.get("action")
             if (action == "CA.PRECHECK_HOLD" and intent.get("state") == "APPLIED"
                     and (intent.get("restoration") or {}).get("state") == "RESTORING"):
-                self.restore_quarantined_preflight_hold(intent["restoration"]["source"])
+                (yield from self._restore_quarantined_preflight_hold_steps(intent["restoration"]["source"]))
                 continue
             if intent.get("state") == "APPLIED":
-                if self._admin_pin_complete(
+                if (yield lambda: self._admin_pin_complete(
                         {"operation_key": intent["operation_key"]},
-                        self._admin_pin_recovered_effect):
+                        self._admin_pin_recovered_effect)):
                     self._admin_pin_release_completed_work(intent)
-                    messagebox.showinfo("관리자 확인 완료", "같은 key의 완료 효과와 입력 정리를 확인했습니다.",
+                    self._call_admin_pin_ui(messagebox.showinfo, "관리자 확인 완료", "같은 key의 완료 효과와 입력 정리를 확인했습니다.",
                                         parent=getattr(self, "root", None))
                 continue
             if intent.get("state") == "HANDED_OFF_UNKNOWN":
-                messagebox.showwarning("PIN 지원 인계",
+                self._call_admin_pin_ui(messagebox.showwarning, "PIN 지원 인계",
                                        "이 건의 원 key와 원본은 지원 인계 보류 중입니다.",
                                        parent=getattr(self, "root", None))
                 continue
             if intent.get("state") == "TARGET_CHANGED":
-                messagebox.showinfo(
+                self._call_admin_pin_ui(messagebox.showinfo,
                     "관리자 확인 다시 조회",
                     "원본 변경을 확인했습니다. 같은 동작을 다시 선택해 바뀐 원본으로 새 PIN을 받으세요.",
                     parent=getattr(self, "root", None),
                 )
                 continue
             if intent.get("state") in {"UNVERIFIED_DETACHING", "UNVERIFIED_OPERATOR_HOLD"}:
-                if not self._admin_pin_finish_unverified_detachment(intent):
+                if not (yield lambda: self._admin_pin_finish_unverified_detachment(intent)):
                     continue
                 intent = store.read(intent["operation_key"])
             labels = intent.get("labels") or ()
             detail = (f"동작: {action}\n현품표: {', '.join(labels) or '확인 필요'}\n"
                       f"상태: {intent.get('state')} · 원인: {intent.get('reason') or '확인 대기'}")
-            if not messagebox.askyesno(
+            if not self._call_admin_pin_ui(messagebox.askyesno,
                     "관리자 확인 다시 조회", detail + "\n\n이 요청의 서버 상태를 다시 확인할까요?",
                     parent=getattr(self, "root", None)):
                 continue
@@ -9608,10 +9708,10 @@ class ContainerAudit:
                 verification_id = intent.get("verification_id") or ""
                 if not verification_id:
                     if self._admin_pin_target_missing(intent):
-                        if not self._admin_pin_audit("ADMIN_PIN_HANDOFF_UNKNOWN", intent):
+                        if not (yield lambda: self._admin_pin_audit("ADMIN_PIN_HANDOFF_UNKNOWN", intent)):
                             raise OSError("admin PIN handoff audit failed")
-                        store.transition(intent, "HANDED_OFF_UNKNOWN",
-                                         reason="UNVERIFIED_DETACHED")
+                        (yield lambda: store.transition(intent, "HANDED_OFF_UNKNOWN",
+                                         reason="UNVERIFIED_DETACHED"))
                         continue
                     current = self._authorize_blocked_work_supervisor()
                     current_operator = ({"local_id": operator_local_id(current["operator"]),
@@ -9619,70 +9719,70 @@ class ContainerAudit:
                                         if current else None)
                     if current_operator != intent["operator"]:
                         if self._admin_pin_target_missing(intent):
-                            if not self._admin_pin_audit("ADMIN_PIN_HANDOFF_UNKNOWN", intent):
+                            if not (yield lambda: self._admin_pin_audit("ADMIN_PIN_HANDOFF_UNKNOWN", intent)):
                                 raise OSError("admin PIN handoff audit failed")
-                            store.transition(intent, "HANDED_OFF_UNKNOWN",
-                                             reason="UNVERIFIED_DETACHED")
+                            (yield lambda: store.transition(intent, "HANDED_OFF_UNKNOWN",
+                                             reason="UNVERIFIED_DETACHED"))
                         else:
-                            if not self._admin_pin_audit("ADMIN_PIN_SUPERSEDED",
-                                                         dict(intent, reason="LOGIN_EPOCH_CHANGED")):
+                            if not (yield lambda: self._admin_pin_audit("ADMIN_PIN_SUPERSEDED",
+                                                         dict(intent, reason="LOGIN_EPOCH_CHANGED"))):
                                 raise OSError("admin PIN supersession audit failed")
-                            store.transition(intent, "SUPERSEDED",
-                                             reason="LOGIN_EPOCH_CHANGED")
+                            (yield lambda: store.transition(intent, "SUPERSEDED",
+                                             reason="LOGIN_EPOCH_CHANGED"))
                         continue
-                    credentials = self._prompt_blocked_work_admin_pin(
+                    credentials = self._call_admin_pin_ui(self._prompt_blocked_work_admin_pin,
                         action=action, target_id=intent["target"]["id"], labels=tuple(labels))
                     if credentials is None:
                         continue
                     admin_id, secret = credentials
                     if admin_id != intent["admin_id"]:
                         raise AdminPinError("TARGET_CHANGED")
-                    verified = self._admin_pin_client_for_work().verify(
+                    verified = (yield lambda: self._admin_pin_client_for_work().verify(
                         request_id=intent["request_id"], admin_id=admin_id, pin=secret,
-                        action=action, target=intent["target"], operator=intent["operator"])
-                    intent = store.write(dict(intent, verification_id=verified["verification_id"],
-                                              state="VERIFIED"))
+                        action=action, target=intent["target"], operator=intent["operator"]))
+                    intent = (yield lambda: store.write(dict(intent, verification_id=verified["verification_id"],
+                                              state="VERIFIED")))
                     verification_id = verified["verification_id"]
-                status = self._admin_pin_client_for_work().status(
-                    verification_id, intent["operation_key"])
+                status = (yield lambda: self._admin_pin_client_for_work().status(
+                    verification_id, intent["operation_key"]))
                 if status == "CONSUMED":
-                    intent = self._admin_pin_record_resumer(intent)
-                    if not self._admin_pin_check_moves(intent):
+                    intent = (yield lambda: self._admin_pin_record_resumer(intent))
+                    if not (yield lambda: self._admin_pin_check_moves(intent)):
                         continue
-                    if (self._admin_pin_recovered_effect(intent)
-                            or self._admin_pin_resume_intermediate(intent)):
+                    if ((yield lambda: self._admin_pin_recovered_effect(intent))
+                            or (yield lambda: self._admin_pin_resume_intermediate(intent))):
                         intent = store.read(intent["operation_key"])
-                        if intent.get("state") != "CONSUMED" or not self._admin_pin_check_moves(intent):
+                        if intent.get("state") != "CONSUMED" or not (yield lambda: self._admin_pin_check_moves(intent)):
                             continue
-                        if not self._admin_pin_complete(
+                        if not (yield lambda: self._admin_pin_complete(
                                 {"operation_key": intent["operation_key"]},
-                                self._admin_pin_recovered_effect):
+                                self._admin_pin_recovered_effect)):
                             continue
                         self._admin_pin_release_completed_work(intent)
-                        messagebox.showinfo("관리자 확인 완료", "같은 key의 로컬 효과 전체를 확인했습니다.",
+                        self._call_admin_pin_ui(messagebox.showinfo, "관리자 확인 완료", "같은 key의 로컬 효과 전체를 확인했습니다.",
                                             parent=getattr(self, "root", None))
                     else:
                         if self._admin_pin_target_missing(intent):
-                            if not self._admin_pin_audit("ADMIN_PIN_HANDOFF_UNKNOWN", intent):
+                            if not (yield lambda: self._admin_pin_audit("ADMIN_PIN_HANDOFF_UNKNOWN", intent)):
                                 raise OSError("admin PIN handoff audit failed")
-                            store.transition(intent, "HANDED_OFF_UNKNOWN", reason="EFFECT_UNVERIFIED")
-                        messagebox.showwarning(
+                            (yield lambda: store.transition(intent, "HANDED_OFF_UNKNOWN", reason="EFFECT_UNVERIFIED"))
+                        self._call_admin_pin_ui(messagebox.showwarning,
                             "관리자 확인 계속 필요",
                             "같은 key의 효과가 확인되지 않았습니다. 원래 동작에서 같은 건을 다시 확인하거나 "
                             "PIN 지원 인계로 보류하고 다른 작업을 계속하세요.",
                             parent=getattr(self, "root", None),
                         )
                 else:
-                    if not self._admin_pin_audit("ADMIN_PIN_SUPERSEDED",
-                                                 dict(intent, reason=status)):
+                    if not (yield lambda: self._admin_pin_audit("ADMIN_PIN_SUPERSEDED",
+                                                 dict(intent, reason=status))):
                         raise OSError("admin PIN supersession audit failed")
-                    store.transition(intent, "SUPERSEDED", reason=status)
-                    messagebox.showinfo("관리자 확인 다시 필요", "기존 요청을 보존했습니다. 원본을 재조회한 뒤 새 PIN 확인을 받으세요.",
+                    (yield lambda: store.transition(intent, "SUPERSEDED", reason=status))
+                    self._call_admin_pin_ui(messagebox.showinfo, "관리자 확인 다시 필요", "기존 요청을 보존했습니다. 원본을 재조회한 뒤 새 PIN 확인을 받으세요.",
                                         parent=getattr(self, "root", None))
             except (AdminPinError, OSError, ValueError, KeyError, TypeError,
                     PreflightHoldError, PairedHandoffError) as exc:
                 code = exc.code if isinstance(exc, AdminPinError) else "VERIFY_UNAVAILABLE"
-                messagebox.showwarning("관리자 확인 대기", admin_pin_message(code),
+                self._call_admin_pin_ui(messagebox.showwarning, "관리자 확인 대기", admin_pin_message(code),
                                        parent=getattr(self, "root", None))
 
     def _blocked_work_identity_is_current(self, approval: Mapping[str, str]) -> bool:
@@ -9705,7 +9805,7 @@ class ContainerAudit:
     def _blocked_work_identity_matches(self, approval: Mapping[str, str]) -> bool:
         valid = self._blocked_work_identity_is_current(approval)
         if not valid:
-            messagebox.showwarning(
+            self._call_admin_pin_ui(messagebox.showwarning,
                 "관리자 확인 다시 필요",
                 "로그인 작업자 또는 역할이 바뀌었습니다. 원본은 그대로 두고 다시 관리자 확인을 받으세요.",
                 parent=getattr(self, "root", None),
@@ -9733,9 +9833,14 @@ class ContainerAudit:
         approval = self._authorize_blocked_work_supervisor()
         if approval is None:
             return False
+        if hasattr(getattr(self, "root", None), "tk"):
+            return self._submit_admin_pin_steps(
+                self._quarantine_preflight_hold_steps(
+                    reason="supervisor_new_work_required", approval=approval),
+                "admin-pin-preflight-hold",
+            )
         return self._quarantine_preflight_hold_for_supervisor(
-            reason="supervisor_new_work_required", approval=approval,
-        )
+            reason="supervisor_new_work_required", approval=approval)
 
     @_recovery_item_firewall
     def _defer_paired_preflight_from_operations(self) -> bool:
@@ -14927,7 +15032,7 @@ class ContainerAudit:
                 self.complete_tray()
         return bool(audit_durable)
 
-    def _run_durable_ui_steps(self, steps, *, lane=None):
+    def _run_durable_ui_steps(self, steps, *, lane=None, first_operation=None):
         """Advance UI state on its owner; execute yielded durable work serially.
 
         The synchronous domain/recovery caller uses the identical sequence.
@@ -14940,6 +15045,11 @@ class ContainerAudit:
             except StopIteration as done:
                 return True, done.value
         value, error = None, None
+        if first_operation is not None:
+            try:
+                value = first_operation()
+            except Exception as exc:
+                error = exc
         while True:
             done, operation = (lane.call_ui_sync(advance, value, error)
                                if lane is not None else advance(value, error))
@@ -16811,18 +16921,18 @@ class ContainerAudit:
         else:
             presenter.clear_completion()
         presenter.acknowledge()
-        self._stop_warning_beep()
-        self._invalidate_pending_scan_callbacks()
+        self._call_admin_pin_ui(self._stop_warning_beep)
+        self._call_admin_pin_ui(self._invalidate_pending_scan_callbacks)
         self._set_preflight_scan_input_locked(False)
         if startup:
             return
-        self.scanned_listbox.delete(0, tk.END)
-        self._reset_ui_to_waiting_state()
-        self._update_all_summaries()
-        self._update_parked_trays_list()
-        self._show_left_sidebar_view("parked")
-        self._render_warning_state()
-        self._update_action_button_states()
+        self._call_admin_pin_ui(self.scanned_listbox.delete, 0, tk.END)
+        self._call_admin_pin_ui(self._reset_ui_to_waiting_state)
+        self._call_admin_pin_ui(self._update_all_summaries)
+        self._call_admin_pin_ui(self._update_parked_trays_list)
+        self._call_admin_pin_ui(self._show_left_sidebar_view, "parked")
+        self._call_admin_pin_ui(self._render_warning_state)
+        self._call_admin_pin_ui(self._update_action_button_states)
 
     def _prepare_event_log_entry(
         self,

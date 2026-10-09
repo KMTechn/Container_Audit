@@ -646,6 +646,8 @@ CA-T01의 이름 14개와 실제 register→ValueError, CA-T02의 malformed JSON
 
 ## R29 중앙 PIN 잠금과 root 철회
 
+운영 메뉴의 관리자 PIN 재조회·사전조회 보류 격리는 기존 lane으로 서버 요청과 내구 반영을 옮겼다. 전송 대기 중 화면 이벤트·중복 요청 방지·닫힌 창의 내구 반영은 창 없는 주입 시험으로 확인하며, 실제 PIN 창·메뉴·음성·1366/1920 배율별 맞춤은 별도 화면 수용이 남는다. 다른 관리자 승인 동작은 기존 동기 흐름이며 이번 비동기 전환 범위 밖이다.
+
 격리된 실제 Web HTTP·SQLite와 CA 내구 intent의 7개 성공/거절 경계가 PASS다. 중앙 잠금+root 철회에서 서버 LOCKED/PIN_LOCKED·CA REJECTED·이전 grant REVOKED 및 원본 보존을 확인했고 제품 인증 코드는 변경하지 않았다. 지원 store API로 준비한 격리 source 시험이며 실제 root UI·production 수용은 NOT TESTED. 원 실패·정확한 입력 SHA와 범위는 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)를 따른다.
 
 G6 선택 대기의 다음 현품표·카드는 원본 보류/유지 뒤 공개 입력으로 처리한다. 다른 작업자 preflight 원본은 불변이고 그 현품표만 관리자 PIN 인수·격리 대상으로 남는다. headless 회귀와 실제 화면·스캐너 검증은 구분한다.
