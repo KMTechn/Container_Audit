@@ -11782,7 +11782,13 @@ class ContainerAudit:
             if self._warning_state_presenter().state.is_blocking:
                 self.focus_return_job = None
                 return
-            if hasattr(self, 'scan_entry') and self.scan_entry.winfo_exists() and self.root.focus_get() != self.scan_entry:
+            focused = self.root.focus_get()
+            grabbed = self.root.grab_current()
+            if ((focused is not None and focused.winfo_toplevel() is not self.root)
+                    or (grabbed is not None and grabbed.winfo_toplevel() is not self.root)):
+                self.focus_return_job = None
+                return
+            if hasattr(self, 'scan_entry') and self.scan_entry.winfo_exists() and focused != self.scan_entry:
                 self.scan_entry.focus_set()
             self.focus_return_job = None
         except Exception as e:

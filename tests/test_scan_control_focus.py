@@ -14,20 +14,33 @@ def focus_app():
     app = ca.ContainerAudit.__new__(ca.ContainerAudit)
     events = []
     pending = []
+    jobs = {}
 
     def after(delay, callback):
         events.append(("focus scheduled", delay))
         pending.append(callback)
-        return "focus-job"
+        job = f"focus-job-{len(events)}"
+        jobs[job] = callback
+        return job
+
+    def after_cancel(job):
+        pending.remove(jobs.pop(job))
+
+    def focus_scan():
+        app.root.focused_widget = app.scan_entry
+        events.append("scan focused")
 
     app.root = SimpleNamespace(
-        after=after, after_cancel=lambda _job: None,
+        after=after, after_cancel=after_cancel,
         winfo_pointerx=lambda: 30, winfo_pointery=lambda: 40,
-        focus_get=lambda: "side control",
+        grabbed_widget=None,
     )
+    app.root.focused_widget = SimpleNamespace(winfo_toplevel=lambda: app.root)
+    app.root.focus_get = lambda: app.root.focused_widget
+    app.root.grab_current = lambda: app.root.grabbed_widget
     app.scan_entry = SimpleNamespace(
         winfo_exists=lambda: True,
-        focus_set=lambda: events.append("scan focused"),
+        winfo_toplevel=lambda: app.root, focus_set=focus_scan,
     )
     app.warning_presenter = ca.WarningPresenter()
     app.current_tray = ca.TraySession()
@@ -153,3 +166,92 @@ def test_side_controls_leave_keyboard_tab_navigation_to_inputs(builder, command)
     options = {kw.arg: kw.value for kw in controls[0].keywords}
     assert "takefocus" in options
     assert ast.literal_eval(options["takefocus"]) is False
+
+
+@pytest.mark.parametrize("owner", ["focus", "grab", "focus_and_grab"])
+def test_addendum_menu_command_opens_dialog_after_focus_return_is_scheduled(
+    focus_app, monkeypatch, owner,
+):
+    app, events, pending = focus_app
+    dialog = SimpleNamespace()
+    dialog.winfo_toplevel = lambda: dialog
+    dialog_entry = SimpleNamespace(winfo_toplevel=lambda: dialog)
+    entries = []
+
+    def open_dialog():
+        # Windows dispatches the chosen command after tk_popup has returned.
+        assert events[-1] == ("focus scheduled", 50)
+        app.root.focused_widget = dialog_entry if owner != "grab" else None
+        app.root.grabbed_widget = dialog if owner != "focus" else None
+
+    class Menu:
+        def __init__(self, *_args, **_kwargs): pass
+        def add_command(self, **kwargs): entries.append(kwargs)
+        def add_separator(self): pass
+        def tk_popup(self, *_args): events.append("popup")
+        def grab_release(self): events.append("released")
+
+    app._show_direct_sync_status_details = open_dialog
+    monkeypatch.setattr(ca.tk, "Menu", Menu)
+    app._show_operations_menu()
+    assert len(pending) == 1
+    entries[0]["command"]()
+    expected_focus = app.root.focus_get()
+
+    pending.pop()()
+
+    assert app.root.focus_get() is expected_focus
+    assert "scan focused" not in events
+    assert app.focus_return_job is None
+    assert pending == []
+
+
+@pytest.mark.parametrize("dialog_open", [False, True])
+def test_addendum_details_round_trip_preserves_partial_scan_and_returns_only_once(
+    focus_app, dialog_open,
+):
+    app, events, pending = focus_app
+    partial_scan = "AAA2270730100-LINE-"
+    mutations = []
+    app.scan_entry.get = lambda: partial_scan
+    app.scan_entry.delete = lambda *_args: mutations.append("delete")
+    app.scan_entry.selection_range = lambda *_args: mutations.append("selection")
+    app.scan_entry.selection_clear = lambda: mutations.append("selection clear")
+    app.work_details_button = SimpleNamespace(configure=lambda **_kwargs: None)
+    app._right_context_frame = SimpleNamespace(grid=lambda: None, grid_remove=lambda: None)
+    app._secondary_stats_frame = app._right_context_frame
+    if dialog_open:
+        dialog = SimpleNamespace()
+        dialog.winfo_toplevel = lambda: dialog
+        pin_entry = SimpleNamespace(winfo_toplevel=lambda: dialog)
+        app.root.focused_widget = pin_entry
+        app.root.grabbed_widget = dialog
+
+    app._toggle_work_details()
+    assert app._work_details_expanded is True
+    app._toggle_work_details()
+    assert app._work_details_expanded is False
+    assert len(pending) == 1  # The later return cancels the earlier pending job.
+    pending.pop()()
+
+    assert app.scan_entry.get() == partial_scan
+    assert mutations == []
+    assert app.root.focus_get() is (pin_entry if dialog_open else app.scan_entry)
+    assert events.count("scan focused") == (0 if dialog_open else 1)
+    assert app.focus_return_job is None
+    assert pending == []
+
+
+@pytest.mark.parametrize("grabbed", [False, True])
+def test_addendum_focus_return_allows_widgets_in_the_main_window(focus_app, grabbed):
+    app, events, pending = focus_app
+    app.root.grabbed_widget = app.root.focused_widget if grabbed else None
+
+    app._schedule_focus_return()
+    assert len(pending) == 1
+    pending.pop()()
+
+    assert app.root.focus_get() is app.scan_entry
+    assert events.count("scan focused") == 1
+    assert app.focus_return_job is None
+    assert pending == []
