@@ -121,6 +121,8 @@ def _resolve_reader_sid(reader_principal: str) -> str:
     """Resolve and prove the reader is a user account, not a broad group."""
     principal = _validate_reader_principal(reader_principal)
     script = r"""
+Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
+Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 $ErrorActionPreference = 'Stop'
 $principal = [Environment]::GetEnvironmentVariable('KMTECH_PROTECTED_ADMIN_READER_PRINCIPAL')
 try {
@@ -172,6 +174,8 @@ def _apply_exact_acl(path: Path, reader_sid: str, *, directory: bool) -> None:
     )
     sddl = _expected_acl_sddl(reader_sid, directory=directory)
     script = r"""
+Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
+Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 $ErrorActionPreference = 'Stop'
 $target = [Environment]::GetEnvironmentVariable('KMTECH_PROTECTED_ADMIN_ACL_TARGET')
 $sddl = [Environment]::GetEnvironmentVariable('KMTECH_PROTECTED_ADMIN_ACL_SDDL')
@@ -200,6 +204,8 @@ def _verify_exact_acl(path: Path, reader_sid: str, *, directory: bool) -> None:
     )
     sddl = _expected_acl_sddl(reader_sid, directory=directory)
     script = r"""
+Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
+Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 $ErrorActionPreference = 'Stop'
 $target = [Environment]::GetEnvironmentVariable('KMTECH_PROTECTED_ADMIN_ACL_TARGET')
 $sddl = [Environment]::GetEnvironmentVariable('KMTECH_PROTECTED_ADMIN_ACL_SDDL')

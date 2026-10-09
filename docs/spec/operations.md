@@ -600,6 +600,13 @@ size/hash·aggregate를 검증한다. 기존 record를 다시 쓰거나 writer i
 공백·대소문자·경로·오류 정책 변경과 추가 module load는 예외로 인정하지 않는다.
 진단 로그는 정확히 pin된 미사용 잎일 때만 분석상 제외하며 import·호출은 거절한다.
 이 예외는 생성 선언·설치 pin의 갱신이나 실제 설치 수용을 대신하지 않는다.
+설치·업데이트·writer library와 독립 ACL/예약 작업/JSON 템플릿은 param 뒤,
+첫 OS 명령 전에 같은 두 줄을 직접 가진다. `$PSHOME` 절대 경로의 Utility/Security를
+불러와 PS7 부모에서 상속한 PSModulePath에서도 5.1 명령을 푼다. StrictMode/EAP,
+업무 동작·공개 출력·종료 코드는 바꾸지 않는다. import 실패는 기존 trap보다 앞에서
+즉시 전파되므로 그 실패의 별도 공개 기록은 보장하지 않는다.
+bootstrap의 JSON 전송·관리자 helper·일반 사용자 producer 자식 문자열도 같은
+두 줄로 시작한다. 전송 byte pin·argv 결속·기존 명령 길이 제한은 유지한다.
 
 `kmtech_shared` 0.3.6은 정본 code `531ac40bfd415c3da3f245a487e8e276a4dc3042`의
 9파일(기존 7파일·diagnostic_log·PS 모듈 머리)을 byte 그대로 고정한다. release `dd34e4d`의

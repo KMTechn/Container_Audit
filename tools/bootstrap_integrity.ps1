@@ -1,4 +1,6 @@
-﻿$BootstrapIntegrityFileName = "bootstrap-integrity.json"
+﻿Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
+Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+$BootstrapIntegrityFileName = "bootstrap-integrity.json"
 $BootstrapIntegritySchema = "container-audit-bootstrap-integrity-v1"
 
 function Get-BootstrapWorkerShortcutFolders([string]$Scope='All') {
@@ -1143,6 +1145,8 @@ try{
 }catch{[Console]::Error.WriteLine('Installation launcher transport rejected.');exit 1}
 finally{foreach($s in $streams){$s.Dispose()}}
 '@
+        $bootstrap=("Import-Module -Name (Join-Path `$PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop`n"+
+            "Import-Module -Name (Join-Path `$PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop`n"+$bootstrap)
         $bootstrap=$bootstrap.Replace('@@code-path@@',$paths[0].Replace("'","''")).Replace('@@code-sha@@',$hashes[0]).Replace(
             '@@data-path@@',$paths[1].Replace("'","''")).Replace('@@data-sha@@',$hashes[1])
         $encoded=ConvertTo-InstallationMemoryCommand $bootstrap @()
@@ -1204,7 +1208,9 @@ if($bound.ContainsKey('RepairAbandonedInstallationParent') -or $bound.ContainsKe
 function Get-InstallationElevationWrapperSource {
     # Transport pins protect the wrapper; the independent original source pins
     # and verified AST filename metadata remain mandatory inside it.
-    return ('function Get-InstallationVerifiedScript {'+${function:Get-InstallationVerifiedScript}.ToString()+"}`n"+@'
+    return ("Import-Module -Name (Join-Path `$PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop`n"+
+        "Import-Module -Name (Join-Path `$PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop`n"+
+        'function Get-InstallationVerifiedScript {'+${function:Get-InstallationVerifiedScript}.ToString()+"}`n"+@'
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 if($args.Count -lt 8){exit 1}
@@ -2050,7 +2056,9 @@ function Import-BootstrapCanonicalUserProcessApi([string]$VerifiedProducerRoot) 
 }
 
 function Get-InstallationNormalProducerWrapperSource {
-    return ('function Get-InstallationVerifiedScript {'+${function:Get-InstallationVerifiedScript}.ToString()+"}`n"+@'
+    return ("Import-Module -Name (Join-Path `$PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop`n"+
+        "Import-Module -Name (Join-Path `$PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop`n"+
+        'function Get-InstallationVerifiedScript {'+${function:Get-InstallationVerifiedScript}.ToString()+"}`n"+@'
 $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 if($args.Count -lt 7){exit 1}
 $library=[string]$args[0];$librarySha=[string]$args[1];$resultPath=[string]$args[2]

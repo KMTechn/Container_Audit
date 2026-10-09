@@ -208,6 +208,8 @@ def _stored_password_task_register_command(
     task_args = _quote_cmd([str(part) for part in task_action_parts[1:]])
     script = "\n".join(
         [
+            r"Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop",
+            r"Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop",
             "$ErrorActionPreference = 'Stop'",
             f"$taskName = {_ps_single_quote(task_name)}",
             f"$execute = {_ps_single_quote(str(task_action_parts[0]))}",
@@ -236,6 +238,8 @@ def _system_service_task_register_command(
     task_args = _quote_cmd([str(part) for part in task_action_parts[1:]])
     script = "\n".join(
         [
+            r"Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop",
+            r"Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop",
             "$ErrorActionPreference = 'Stop'",
             f"$taskName = {_ps_single_quote(task_name)}",
             f"$execute = {_ps_single_quote(str(task_action_parts[0]))}",

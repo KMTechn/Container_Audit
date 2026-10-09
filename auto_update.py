@@ -1295,7 +1295,9 @@ def supported_task_present(fixed: Path, sid: str) -> bool:
     import xml.etree.ElementTree as xml
 
     name = task_name(fixed, sid)
-    script = "$ErrorActionPreference='Stop';$s=New-Object -ComObject 'Schedule.Service';$s.Connect();$t=$s.GetFolder('\\').GetTask('" + name + "');[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);[Console]::Write($t.Xml)"
+    script = r"""Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
+Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+""" + "$ErrorActionPreference='Stop';$s=New-Object -ComObject 'Schedule.Service';$s.Connect();$t=$s.GetFolder('\\').GetTask('" + name + "');[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);[Console]::Write($t.Xml)"
     result = subprocess.run([system_executable('WindowsPowerShell/v1.0/powershell.exe'), '-NoLogo', '-NoProfile',
                              '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], capture_output=True, encoding='utf-8',
                             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))

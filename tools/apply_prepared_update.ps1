@@ -4,6 +4,8 @@ param(
     [ValidateSet('Apply','Observe','Verify','Authority')][string]$Mode = 'Apply',
     [string]$CodeRoot = ''
 )
+Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
+Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 $ErrorActionPreference = 'Stop'
 $script:StartupUpdateBootstrapLoaded=$false
 # Pure bootstrap copy: the path must be admitted before that library is loaded.

@@ -684,6 +684,9 @@ def _windows_acl_identity(path: Path) -> dict[str, Any]:
     )
     escaped_path = str(path).replace("'", "''")
     command = (
+        r"""Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
+Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+"""
         "$ErrorActionPreference='Stop';"
         f"$item=Get-Item -LiteralPath '{escaped_path}' -Force;"
         "$sections=([Security.AccessControl.AccessControlSections]::Access -bor "
@@ -775,6 +778,9 @@ def _replacement_identities_match(expected: Mapping[str, Any], actual: Mapping[s
     _require_regular_unredirected_file(powershell, "Windows PowerShell ACL reader")
     escaped = str(helper).replace("'", "''")
     command = (
+        r"""Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
+Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+"""
         "$ErrorActionPreference='Stop';$tokens=$null;$errors=$null;"
         f"$ast=[Management.Automation.Language.Parser]::ParseFile('{escaped}',[ref]$tokens,[ref]$errors);"
         "if($errors.Count){throw 'Invalid ACL library'};"
