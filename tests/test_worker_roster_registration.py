@@ -130,8 +130,11 @@ def test_fsync_failure_keeps_input_unselectable_and_other_names_usable(flow, win
     assert not app.worker_roster.local_path.exists() and windows == []
 
 
-def test_registration_dialog_keeps_one_window_and_original_input_after_save_failure(flow, windows, tmp_path, monkeypatch):
+@pytest.mark.parametrize('scenario', ['failure', 'mapping'])
+def test_registration_dialog_preserves_input_on_failure_and_identity_on_mapping(flow, windows, tmp_path, monkeypatch, scenario):
     app = application(flow, tmp_path)
+    if scenario == 'mapping':
+        app._register_worker_name('동명')
     variables, widgets = [], []
     class Variable:
         def __init__(self):
@@ -142,7 +145,10 @@ def test_registration_dialog_keeps_one_window_and_original_input_after_save_fail
     class Widget:
         def __init__(self, *args, **kwargs):
             self.options, self.destroyed = kwargs, False
+            self.value = ''
             widgets.append(self)
+        def get(self): return self.value
+        def set(self, value): self.value = value
         def pack(self, **kwargs): pass
         def pack_forget(self): pass
         def bind(self, *args): pass
@@ -158,16 +164,29 @@ def test_registration_dialog_keeps_one_window_and_original_input_after_save_fail
     monkeypatch.setattr(ca.tk, 'Toplevel', Widget)
     for name in ('Frame', 'Label', 'Entry', 'Combobox', 'Button'):
         monkeypatch.setattr(ca.ttk, name, Widget)
-    app._register_worker_name = lambda *args, **kwargs: (_ for _ in ()).throw(OSError('synthetic save failure'))
+    if scenario == 'failure':
+        app._register_worker_name = lambda *args, **kwargs: (_ for _ in ()).throw(OSError('synthetic save failure'))
     app.register_worker_from_login()
     count = len(widgets)
     app.register_worker_from_login()
     assert len(widgets) == count
-    variables[0].set('새 이름')
+    variables[0].set('새 이름' if scenario == 'failure' else '동명')
     button, = [widget for widget in widgets if widget.options.get('text') == '등록']
     button.options['command']()
-    assert variables[0].get() == '새 이름' and not widgets[0].destroyed
-    assert any('입력은 남아' in widget.options.get('text', '') for widget in widgets)
+    if scenario == 'failure':
+        assert variables[0].get() == '새 이름' and not widgets[0].destroyed
+        assert any('입력은 남아' in widget.options.get('text', '') for widget in widgets)
+    else:
+        assert not widgets[0].destroyed
+        request, = app.worker_roster.pending_requests()
+        answer = acknowledgement(request, name='동명_1')
+        app.worker_roster.apply_registration(request, answer)
+        same, = [widget for widget in widgets if widget.options.get('text') == '같은 사람']
+        same.options['command']()
+        assert widgets[0].destroyed
+        returned, = app.worker_roster.pending_requests()
+        assert returned['mode'] == 'return' and returned['existing_worker_id'] == answer['worker']['worker_id']
+        assert len(app.worker_roster.local['workers']) == 1
     assert windows == []
 
 

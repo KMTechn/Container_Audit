@@ -3228,7 +3228,7 @@ class ContainerAudit:
                     current = roster.duplicate_workers(value.get()) if roster is not None else []
                 except ValueError:
                     current = []
-                if any(row["worker_id"] == selected["worker_id"] for row in current):
+                if any(roster.same_person(row["worker_id"], selected["worker_id"]) for row in current):
                     save(selected["worker_id"])
                 else:
                     notice.configure(text="이름이 바뀌었습니다. 등록 단추를 다시 눌러 주세요.")
