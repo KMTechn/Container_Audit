@@ -3453,6 +3453,17 @@ if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRet
     $Script:CanonicalInstallerSourceInventorySha256 = Get-InventoryAggregate @(Get-CodeInventory $source)
 }
 $wanted = Command $install
+# Admit the original public caller before evidence or other user-state writers.
+# The existing UAC child enters INSTALL_THIS_PC.ps1, not this controller.
+try {
+    $publicCaller = Get-CanonicalRelaySecurity $PID
+    if ($publicCaller.elevated -or $publicCaller.integrity_level -ne 8192 -or $publicCaller.session_id -le 0) {
+        throw 'Owned repair parent is not the ordinary operator.'
+    }
+} catch {
+    Write-CanonicalInstallationPublicRecord -ExitCode 1
+    exit 1
+}
 $lad = Full $env:LOCALAPPDATA 'LOCALAPPDATA'
 $operatorSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $supportedRemovalResume=if ($Uninstall -and -not $CompleteRetiredRemoval) { Read-CanonicalSupportedRemovalResume } else { $null }

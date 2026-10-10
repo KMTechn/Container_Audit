@@ -269,6 +269,20 @@ def _portable_release_fixture(
     # Tests customize these disposable copies; preserve frozen source bytes
     # without carrying its read-only attribute into the fixture packet.
     shutil.copyfile(PORTABLE_INSTALLER, release / "INSTALL_CANONICAL_PORTABLE.ps1")
+    # Supply the native original-caller token in this disposable packet only.
+    # Keep admission active; refusal tests exercise non-ordinary callers.
+    canonical = release / "INSTALL_CANONICAL_PORTABLE.ps1"
+    canonical_source = canonical.read_text(encoding="utf-8-sig")
+    caller_read = "$publicCaller = Get-CanonicalRelaySecurity $PID"
+    assert canonical_source.count(caller_read) == 1
+    canonical.write_text(
+        canonical_source.replace(
+            caller_read,
+            "$publicCaller = [pscustomobject]@{elevated=$false;integrity_level=8192;session_id=7}",
+            1,
+        ),
+        encoding="utf-8-sig",
+    )
     shutil.copyfile(INSTALLER, release / "INSTALL_THIS_PC.ps1")
     shutil.copyfile(INTEGRITY_HELPER, release / "tools" / "bootstrap_integrity.ps1")
     shutil.copyfile(
