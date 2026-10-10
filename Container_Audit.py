@@ -8487,6 +8487,8 @@ class ContainerAudit:
         def present():
             root = getattr(self, "root", None)
             if getattr(self, "_admin_pin_ui_pending", False):
+                if getattr(self, "_ui_close_requested", False):
+                    return None
                 if root is None:
                     return None
                 try:
@@ -8494,6 +8496,15 @@ class ContainerAudit:
                         return None
                 except (AttributeError, tk.TclError):
                     return None
+            if callback == self._invalidate_pending_scan_callbacks:
+                before = int(getattr(self, "_scan_callback_epoch", 0))
+                owned = (getattr(self, "_admin_pin_ui_pending", False)
+                         and before == getattr(self, "_admin_pin_task_epoch", None))
+                try:
+                    return callback(*args, **kwargs)
+                finally:
+                    if owned:
+                        self._admin_pin_task_epoch = int(self._scan_callback_epoch)
             return callback(*args, **kwargs)
 
         lane = getattr(self, "_ui_lane", None)
@@ -8516,10 +8527,37 @@ class ContainerAudit:
             return False
 
         self._admin_pin_ui_pending = True
+        request = {"steps": steps, "resume": None, "job": None}
+        self._admin_pin_ui_request = request
         submitted = False
 
-        def idle():
-            self._admin_pin_ui_pending = False
+        def current():
+            return (getattr(self, "_admin_pin_ui_request", None) is request
+                    and int(getattr(self, "_scan_callback_epoch", 0))
+                    == getattr(self, "_admin_pin_task_epoch", None))
+
+        def settled():
+            if getattr(self, "_admin_pin_ui_request", None) is not request:
+                steps.close()
+                return
+            try:
+                if request["job"] is not None:
+                    try:
+                        self.root.after_cancel(request["job"])
+                    except Exception:
+                        pass
+                    request["job"] = None
+                steps.close()
+            finally:
+                self._admin_pin_ui_request = None
+                self._admin_pin_task_epoch = None
+                self._admin_pin_ui_pending = False
+                if getattr(self, "_admin_pin_close_deferred", False):
+                    self._admin_pin_close_deferred = False
+                    try:
+                        self.root.after(0, lambda: self.on_closing(_confirmed=True))
+                    except Exception:
+                        self.on_closing(_confirmed=True)
 
         def fail(_exc):
             try:
@@ -8529,7 +8567,47 @@ class ContainerAudit:
                     parent=getattr(self, "root", None),
                 )
             finally:
-                self._admin_pin_ui_pending = False
+                settled()
+
+        def admit(*, first_operation=None, resume=None):
+            generation = int(getattr(self, "_scan_callback_epoch", 0))
+            self._admin_pin_task_epoch = generation
+            request["resume"] = None
+            admission = lane.submit(LaneTask(
+                name=name, generation=generation,
+                work=lambda: self._run_admin_pin_ui_steps(
+                    steps, lane=lane, request=request,
+                    first_operation=first_operation, resume=resume),
+                finish=lambda _result: None, fail=fail, on_idle=idle,
+                on_stale=lambda: None, shutdown_policy=DRAIN_TO_TERMINAL,
+            ))
+            if not admission.accepted:
+                fail(None)
+                return False
+            self._admin_pin_ui_task_handle = admission.handle
+            return True
+
+        def resume():
+            request["job"] = None
+            if not current():
+                settled()
+                return
+            checkpoint = request["resume"]
+            try:
+                admit(resume=checkpoint)
+            except Exception as exc:
+                fail(exc)
+
+        def idle():
+            # on_stale still owns the active slot; on_idle is inside the lane's
+            # idle barrier. Defer once, as CoalescingTrigger does, then recheck.
+            if request["resume"] is not None and current():
+                try:
+                    request["job"] = self.root.after(0, resume)
+                except Exception as exc:
+                    fail(exc)
+            else:
+                settled()
 
         try:
             # Run the initial confirmation/PIN step before admitting any HTTP.
@@ -8537,23 +8615,44 @@ class ContainerAudit:
                 first_operation = next(steps)
             except StopIteration as done:
                 return bool(done.value)
-            admission = lane.submit(LaneTask(
-                name=name, generation=int(getattr(self, "_scan_callback_epoch", 0)),
-                work=lambda: self._run_durable_ui_steps(
-                    steps, lane=lane, first_operation=first_operation),
-                finish=lambda _result: None, fail=fail, on_idle=idle,
-                on_stale=idle, shutdown_policy=DRAIN_TO_TERMINAL,
-            ))
-            if not admission.accepted:
-                fail(None)
+            if not admit(first_operation=first_operation):
                 return False
             submitted = True
-            self._admin_pin_ui_task_handle = admission.handle
             return True
         finally:
             if not submitted:
-                steps.close()
-                idle()
+                settled()
+
+    def _run_admin_pin_ui_steps(self, steps, *, lane, request,
+                                first_operation=None, resume=None):
+        """Carry an unsent checkpoint across only this PIN task's invalidation."""
+        def advance(value, error):
+            try:
+                return False, steps.throw(error) if error is not None else steps.send(value)
+            except StopIteration as done:
+                return True, done.value
+
+        value, error = resume if resume is not None else (None, None)
+        if first_operation is not None:
+            try:
+                value = first_operation()
+            except Exception as exc:
+                error = exc
+        while True:
+            try:
+                done, operation = lane.call_ui_sync(advance, value, error)
+            except StaleUiCheckpointError:
+                if (getattr(self, "_admin_pin_ui_request", None) is request
+                        and int(getattr(self, "_scan_callback_epoch", 0))
+                        == getattr(self, "_admin_pin_task_epoch", None)):
+                    request["resume"] = (value, error)
+                return None
+            if done:
+                return operation
+            try:
+                value, error = operation(), None
+            except Exception as exc:
+                value, error = None, exc
 
     def _authorize_blocked_work_supervisor(self) -> Optional[Dict[str, str]]:
         operator = str(getattr(self, "worker_name", "") or "").strip()
@@ -16380,6 +16479,7 @@ class ContainerAudit:
         return True, True
 
     def _abort_application_close(self) -> None:
+        self._admin_pin_close_silent = False
         self._ui_close_requested = False
         self._ui_close_lane_drained = False
         self._preflight_close_writer_draining = False
@@ -16423,6 +16523,11 @@ class ContainerAudit:
                 print(f"앱 멈춤 요청 정리 실패: {type(exc).__name__}")
 
     def on_closing(self, *, _confirmed: bool = False):
+        if getattr(self, "_admin_pin_ui_pending", False):
+            self._ui_close_requested = True
+            self._admin_pin_close_silent = True
+            self._admin_pin_close_deferred = True
+            return
         if getattr(self, "_short_confirmation_undo", None):
             if getattr(self, "_closing_short_settlement_pending", False):
                 return
@@ -16466,11 +16571,12 @@ class ContainerAudit:
         self._set_scan_callback_pending(False)
         lane = getattr(self, "_ui_lane", None)
         if lane is not None and not getattr(self, "_ui_close_lane_drained", False):
-            self.show_status_message(
-                "진행 중인 처리를 안전하게 마친 뒤 종료합니다.",
-                self.COLOR_PRIMARY,
-                duration=0,
-            )
+            if not getattr(self, "_admin_pin_close_silent", False):
+                self.show_status_message(
+                    "진행 중인 처리를 안전하게 마친 뒤 종료합니다.",
+                    self.COLOR_PRIMARY,
+                    duration=0,
+                )
 
             def resume_after_lane() -> None:
                 self._ui_close_lane_drained = True
@@ -16487,11 +16593,12 @@ class ContainerAudit:
             if getattr(self, "_preflight_close_writer_draining", False):
                 return
             self._preflight_close_writer_draining = True
-            self.show_status_message(
-                "보류 입력 저장을 마친 뒤 종료합니다.",
-                self.COLOR_PRIMARY,
-                duration=0,
-            )
+            if not getattr(self, "_admin_pin_close_silent", False):
+                self.show_status_message(
+                    "보류 입력 저장을 마친 뒤 종료합니다.",
+                    self.COLOR_PRIMARY,
+                    duration=0,
+                )
 
             def resume_after_hold_writer() -> None:
                 self._preflight_close_writer_draining = False
