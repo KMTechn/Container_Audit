@@ -166,7 +166,7 @@ def test_selection_is_roster_only_and_recent_order_is_by_id(flow, windows, tmp_p
     assert windows == []
 
 
-def test_temporarily_selects_existing_local_names_without_registration(flow, windows, tmp_path):
+def test_temporarily_selects_existing_local_names_and_registers_only_explicitly(flow, windows, tmp_path):
     app = flow(transition=False)
     registry = _registry(tmp_path / "workers.json")
     _login(app, registry, tmp_path)
@@ -174,17 +174,19 @@ def test_temporarily_selects_existing_local_names_without_registration(flow, win
     assert "이 PC" in app._worker_roster_notice_text()
     assert app._ensure_worker_login_name("tester") == "tester"
     assert app._ensure_worker_login_name("unlisted") is None
-    assert not hasattr(ContainerAudit, "register_worker_from_login")
+    assert callable(ContainerAudit.register_worker_from_login)
     assert windows == []
 
 
-def test_actual_selector_has_no_edit_or_registration_control(flow, tmp_path, monkeypatch):
+def test_actual_selector_is_readonly_with_separate_name_registration(flow, tmp_path, monkeypatch):
     app = flow(transition=False)
     registry = _registry(tmp_path / "workers.json")
     _login(app, registry, tmp_path)
+    widgets = []
     class Widget:
         def __init__(self, *args, **kwargs):
             self.options = kwargs
+            widgets.append(self)
         def pack(self, *args, **kwargs): pass
         def grid(self, *args, **kwargs): pass
         def grid_rowconfigure(self, *args, **kwargs): pass
@@ -206,6 +208,8 @@ def test_actual_selector_has_no_edit_or_registration_control(flow, tmp_path, mon
     assert app.worker_entry.options["state"] == "readonly"
     assert [button.options["text"] for button in app._worker_login_buttons] == ["관리자", "작업 시작"]
     assert app.worker_entry.options["values"] == ["tester"]
+    registration, = [widget for widget in widgets if widget.options.get("text") == "새 이름 등록"]
+    assert registration.options["command"] == app.register_worker_from_login
 
 
 @pytest.mark.parametrize("name,eligible", [("홍길", True), ("홍길동", True), ("Alex", True),

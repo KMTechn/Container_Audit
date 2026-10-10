@@ -711,7 +711,8 @@ class ParkedTrayStore:
         return [row for row in self.scan_for_worker(worker_name) if not row.problem]
 
     def scan_for_worker(self, worker_name: str, *, tray_size: int = 60,
-                        strict: bool = False, worker_id: str = "") -> List[ParkedTraySummary]:
+                        strict: bool = False, worker_id: str = "",
+                        worker_id_aliases: tuple[str, ...] = ()) -> List[ParkedTraySummary]:
         if not self.directory.exists():
             return []
         summaries: List[ParkedTraySummary] = []
@@ -734,7 +735,8 @@ class ParkedTrayStore:
                 requested_worker = persistent_operator_name(worker_name)
                 if stored_worker:
                     from worker_roster import record_owner_matches
-                    if not record_owner_matches(data, worker_name=requested_worker, worker_id=worker_id):
+                    if not any(record_owner_matches(data, worker_name=requested_worker, worker_id=identity)
+                               for identity in (worker_id, *worker_id_aliases)):
                         continue
                 elif not any(f"_{part}_" in path.name for part in (
                         _safe_worker_filename(requested_worker), _worker_name_part(requested_worker))):

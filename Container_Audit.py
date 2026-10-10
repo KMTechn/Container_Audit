@@ -294,7 +294,8 @@ from update_service import (
     verify_update_manifest_signature,
 )
 from worker_registry import WorkerRegistry
-from worker_roster import WorkerRoster, record_identity, record_identity_enabled, record_owner_matches
+from worker_roster import (WorkerRoster, record_identity, record_identity_enabled, record_owner_matches,
+                           registration_enabled, normalize_registration_name, worker_choice_label)
 from warning_presenter import (
     CompletionOutcome,
     CompletionOutcomeSnapshot,
@@ -3088,6 +3089,9 @@ class ContainerAudit:
         self.worker_entry.bind('<Return>', self.start_work)
         self.worker_entry.bind('<<ComboboxSelected>>', self._update_worker_input_mask)
         self.worker_entry.focus()
+        register_button = ttk.Button(center_frame, text="새 이름 등록",
+                                     command=self.register_worker_from_login, style='Secondary.TButton')
+        register_button.pack()
         button_container = ttk.Frame(center_frame, style='TFrame')
         self._worker_login_button_container = button_container
         button_container.pack()
@@ -3108,7 +3112,7 @@ class ContainerAudit:
         self._worker_login_buttons = [admin_button, start_button]
         admin_button.pack(side=tk.LEFT)
         start_button.pack(side=tk.LEFT)
-        self._worker_roster_notice = ttk.Label(center_frame, text=self._worker_roster_notice_text(), style='TLabel')
+        self._worker_roster_notice = ttk.Label(center_frame, text=self._worker_roster_notice_text(), style='TLabel', wraplength=480)
         self._worker_roster_notice.pack()
         self._apply_worker_login_layout()
         self.worker_input_frame.bind('<Configure>', self._schedule_worker_login_layout_refresh)
@@ -3130,16 +3134,116 @@ class ContainerAudit:
 
     def _worker_selection_names(self):
         roster = getattr(self, "worker_roster", None)
-        if roster is None or not roster.has_rows:
+        if roster is None:
             return self.worker_registry.list_workers()
-        return [row["display_name"] for row in self.worker_registry.order_roster(roster.active_workers())
-                if row["display_name"] not in {PROTECTED_ADMIN_OPERATOR_ID, PROTECTED_ADMIN_DISPLAY_NAME}]
+        rows = self.worker_registry.order_roster(roster.active_workers())
+        labels = [worker_choice_label(row) for row in rows
+                  if row["display_name"] not in {PROTECTED_ADMIN_OPERATOR_ID, PROTECTED_ADMIN_DISPLAY_NAME}]
+        if not roster.has_rows:
+            represented = {row["display_name"] for row in rows}
+            labels += [name for name in self.worker_registry.list_workers() if name not in represented and name not in labels]
+        return labels
 
     def _worker_roster_notice_text(self):
         roster = getattr(self, "worker_roster", None)
+        if roster is not None:
+            if roster.local_blocked:
+                return "이름 등록 기록 확인 필요 · 기존 이름으로 작업하고 관리자에게 알리세요."
+            errors = [item["error"] for item in roster.local["requests"] if item["state"] == "REVIEW"]
+            if errors:
+                return "이 PC에서 이름을 쓸 수 있습니다 · 회사 서버의 이름은 관리자 확인 필요."
+            if any(item["state"] == "PENDING" for item in roster.local["requests"]):
+                return "이 PC에 저장됨 · 이름은 바로 쓸 수 있습니다. 회사 서버로는 나중에 보냅니다."
         if (roster is None or not roster.has_rows) and self.worker_registry.list_workers():
-            return "이 PC에 저장된 이름으로 한시 선택합니다. 관리자에게 명단 등록을 요청하세요."
-        return "관리자에게 명단 등록을 요청하세요"
+            return "이 PC에 저장된 이름을 고르거나 새 이름을 등록하세요."
+        return "이름을 고르거나 새 이름을 등록하세요."
+
+    def _register_worker_name(self, name, *, existing_worker_id=""):
+        roster = getattr(self, "worker_roster", None)
+        if roster is None:
+            raise ValueError("이 PC의 이름 등록 준비가 필요합니다. 기존 이름으로 작업하고 관리자에게 알리세요.")
+        row = roster.register_local(name, existing_worker_id=existing_worker_id)
+        self._refresh_worker_entry_options()
+        self._set_worker_entry_value(worker_choice_label(row))
+        self._refresh_worker_roster()
+        return row
+
+    def register_worker_from_login(self):
+        if getattr(self, "worker_name", ""):
+            return
+        previous = getattr(self, "_worker_registration_dialog", None)
+        if previous is not None:
+            try:
+                if previous.winfo_exists():
+                    previous.lift()
+                    return
+            except tk.TclError:
+                pass
+        dialog = tk.Toplevel(self.root)
+        self._worker_registration_dialog = dialog
+        dialog.title("새 이름 등록")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        frame = ttk.Frame(dialog, padding=16)
+        frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frame, text="이름만 적어 주세요. 저장한 뒤 바로 작업할 수 있습니다.").pack()
+        value = tk.StringVar()
+        entry = ttk.Entry(frame, textvariable=value, width=28)
+        entry.pack(pady=8)
+        notice = ttk.Label(frame, text="")
+        notice.pack()
+        candidates = ttk.Combobox(frame, state='readonly', width=28)
+        choices = []
+        question_name = [None]
+        different_from = [None]
+        decision = ttk.Frame(frame)
+        def save(existing_worker_id=""):
+            try:
+                name = normalize_registration_name(value.get())
+                if different_from[0] == name:
+                    raise ValueError("다른 분이면 구분할 이름을 적어 주세요. 예: 이름B")
+                roster = getattr(self, "worker_roster", None)
+                duplicates = roster.duplicate_workers(name) if roster is not None else []
+                if duplicates and not existing_worker_id:
+                    question_name[0] = name
+                    choices[:] = duplicates
+                    labels = [worker_choice_label(row) for row in choices]
+                    candidates.configure(values=labels)
+                    candidates.set(labels[0])
+                    candidates.pack(pady=4)
+                    decision.pack()
+                    notice.configure(text="같은 이름이 있습니다. 같은 분인가요?")
+                    return
+                self._register_worker_name(name, existing_worker_id=existing_worker_id)
+            except (OSError, ValueError, WriterFencedError) as exc:
+                notice.configure(text=str(exc) if isinstance(exc, ValueError) else
+                                 "이름을 저장하지 못했습니다. 입력은 남아 있습니다. 다시 등록하세요.")
+                return
+            dialog.destroy()
+        def same():
+            selected = next((row for row in choices if worker_choice_label(row) == candidates.get()), None)
+            if selected is not None:
+                roster = getattr(self, "worker_roster", None)
+                try:
+                    current = roster.duplicate_workers(value.get()) if roster is not None else []
+                except ValueError:
+                    current = []
+                if any(row["worker_id"] == selected["worker_id"] for row in current):
+                    save(selected["worker_id"])
+                else:
+                    notice.configure(text="이름이 바뀌었습니다. 등록 단추를 다시 눌러 주세요.")
+        def different():
+            different_from[0] = question_name[0]
+            candidates.pack_forget()
+            decision.pack_forget()
+            notice.configure(text="다른 분이면 구분할 이름을 적어 주세요. 예: 이름B")
+            entry.focus_set()
+        ttk.Button(decision, text="같은 사람", command=same).pack(side=tk.LEFT)
+        ttk.Button(decision, text="다른 사람", command=different).pack(side=tk.LEFT)
+        ttk.Button(frame, text="등록", command=save).pack(pady=8)
+        ttk.Button(frame, text="취소", command=dialog.destroy).pack()
+        entry.bind('<Return>', lambda event: save())
+        entry.focus_set()
 
     def _refresh_worker_roster(self):
         job = getattr(self, "_roster_refresh_job", None)
@@ -3159,26 +3263,18 @@ class ContainerAudit:
         attempt = uuid.uuid4().hex
         self._roster_attempt = attempt
         requested_version = roster.known_version
+        pending = roster.pending_requests()
         results = queue.Queue(maxsize=1)
         def read():
             client = None
-            try:
-                client = self._admin_pin_client_for_work()
-                answer = client.query_roster(authority_scope_id=roster.authority_scope_id,
-                                             known_version=requested_version)
-            except Exception:
-                answer = None
-            finally:
-                if client is not None and getattr(self, "_admin_pin_client", None) is not client:
-                    session = getattr(client, "session", None)
-                    if session is not None:
-                        session.close()
             capability_client = None
-            enabled = False
+            enabled, stage_b = False, False
             try:
                 capability_client = logistics_transfer_client_from_env(probe_required=False)
                 if capability_client is not None:
-                    enabled = record_identity_enabled(capability_client.get_capabilities())
+                    capability = capability_client.get_capabilities()
+                    enabled = record_identity_enabled(capability)
+                    stage_b = registration_enabled(capability)
             except Exception:
                 pass
             finally:
@@ -3186,22 +3282,70 @@ class ContainerAudit:
                     session = getattr(capability_client, "session", None)
                     if session is not None:
                         session.close()
-            if attempt == getattr(self, "_roster_attempt", None) and epoch == getattr(self, "_admin_pin_login_epoch", ""):
-                self._worker_record_identity_enabled = enabled
-            results.put(answer)
+            registrations = []
+            try:
+                client = self._admin_pin_client_for_work()
+                try:
+                    answer = client.query_roster_v2(authority_scope_id=roster.authority_scope_id)
+                except AdminPinError as exc:
+                    if exc.status not in {404, 405}:
+                        raise
+                    answer = client.query_roster(authority_scope_id=roster.authority_scope_id,
+                                                 known_version=requested_version)
+            except Exception:
+                answer = None
+            if stage_b and client is not None:
+                disabled = set()
+                try:
+                    snapshot = roster._validate(answer)
+                    if requested_version is None or snapshot["version"] >= requested_version:
+                        disabled = {row["worker_id"] for row in snapshot["workers"] if row["status"] == "DISABLED"}
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    pass
+                for request in pending:
+                    if epoch != getattr(self, "_admin_pin_login_epoch", "") or attempt != getattr(self, "_roster_attempt", None):
+                        break
+                    try:
+                        if request.get("existing_worker_id") in disabled:
+                            raise AdminPinError("WORKER_DISABLED", status=403)
+                        acknowledgement = client.register_roster(request)
+                        registrations.append((request, acknowledgement, None))
+                    except Exception as exc:
+                        registrations.append((request, None, exc))
+                        if (getattr(exc, "status", None) in {401, 429, 503}
+                                or getattr(exc, "status", None) is None
+                                or (getattr(exc, "status", None) == 403 and getattr(exc, "code", "") != "WORKER_DISABLED")):
+                            if getattr(exc, "code", "") == "ROSTER_V2_REGISTER_DISABLED":
+                                stage_b = False
+                            break
+            if client is not None and getattr(self, "_admin_pin_client", None) is not client:
+                session = getattr(client, "session", None)
+                if session is not None:
+                    session.close()
+            results.put({"roster_answer": answer, "registrations": registrations,
+                         "identity_enabled": enabled, "stage_b": stage_b})
         self._roster_thread = threading.Thread(target=read, name="container-audit-roster", daemon=True)
         self._roster_thread.start()
-        self._poll_worker_roster(results, attempt, epoch, requested_version)
+        self._poll_worker_roster(results, attempt, epoch, requested_version, expected_roster=roster)
 
-    def _poll_worker_roster(self, results, attempt, epoch, requested_version):
-        if (getattr(self, "_ui_close_requested", False) or attempt != getattr(self, "_roster_attempt", None)):
+    def _poll_worker_roster(self, results, attempt, epoch, requested_version, *, expected_roster=None):
+        if (getattr(self, "_ui_close_requested", False) or attempt != getattr(self, "_roster_attempt", None)
+                or (expected_roster is not None and expected_roster is not getattr(self, "worker_roster", None))):
             return
         try:
             answer = results.get_nowait()
         except queue.Empty:
-            self.root.after(50, lambda: self._poll_worker_roster(results, attempt, epoch, requested_version))
+            self.root.after(50, lambda: self._poll_worker_roster(results, attempt, epoch, requested_version,
+                                                              expected_roster=expected_roster))
             return
-        if epoch == getattr(self, "_admin_pin_login_epoch", "") and answer is not None:
+        current = epoch == getattr(self, "_admin_pin_login_epoch", "")
+        registrations = []
+        if current and isinstance(answer, dict) and "roster_answer" in answer:
+            self._worker_roster_stage_b = answer["stage_b"]
+            self._worker_record_identity_enabled = answer["identity_enabled"] or answer["stage_b"]
+            registrations = answer["registrations"]
+            answer = answer["roster_answer"]
+        if current and answer is not None:
             try:
                 self.worker_roster.apply(answer, requested_version=requested_version)
                 self._refresh_worker_entry_options()
@@ -3209,6 +3353,13 @@ class ContainerAudit:
                     self._disable_remembered_worker_start()
             except (OSError, ValueError, TypeError, WriterFencedError):
                 pass  # Keep the last valid cache and the current tray's original owner.
+        if current:
+            for request, acknowledgement, error in registrations:
+                try:
+                    self.worker_roster.apply_registration(request, acknowledgement, error)
+                except (OSError, ValueError, TypeError, KeyError, WriterFencedError):
+                    pass  # Keep the original request after an ACK cannot be saved.
+            self._refresh_worker_entry_options()
         job = getattr(self, "_roster_refresh_job", None)
         if job:
             self.root.after_cancel(job)
@@ -3216,10 +3367,12 @@ class ContainerAudit:
 
     def _current_roster_worker_active(self):
         roster = getattr(self, "worker_roster", None)
-        if roster is None or not roster.has_rows or getattr(self, "worker_role", "") == "ADMIN":
+        if roster is None or (not roster.has_rows and not roster.local["workers"]) or getattr(self, "worker_role", "") == "ADMIN":
             return True
         name = getattr(self, "worker_name", "") or self.worker_registry.recent_worker() or ""
         worker_id = getattr(self, "_selected_roster_id", "") if getattr(self, "worker_name", "") else self.worker_registry.recent_worker_id()
+        if not roster.has_rows and not worker_id and self.worker_registry.has_worker(name):
+            return True
         return roster.active_worker(worker_id=worker_id, name=name) is not None
 
     def _selected_worker_identity(self):
@@ -3239,9 +3392,17 @@ class ContainerAudit:
             identity = record_identity(vars(tray)) if getattr(tray, "worker_name_snapshot", "") else {}
         else:
             identity = self._selected_worker_identity()
-        return {**identity, "enabled": getattr(self, "_worker_record_identity_enabled", False) is True} if identity else {}
+        enabled = getattr(self, "_worker_record_identity_enabled", False) is True
+        roster = getattr(self, "worker_roster", None)
+        if roster is not None and any(row["worker_id"] == identity.get("worker_id") for row in roster.local["workers"]):
+            enabled = getattr(self, "_worker_roster_stage_b", False) is True
+        return {**identity, "enabled": enabled} if identity else {}
 
     def _owns_worker_record(self, value):
+        roster = getattr(self, "worker_roster", None)
+        identity = record_identity(value)
+        if roster is not None and identity.get("worker_id"):
+            return roster.same_person(identity["worker_id"], getattr(self, "_selected_roster_id", ""))
         return record_owner_matches(value,
             worker_name=persistent_operator_name(getattr(self, "worker_name", "")),
             worker_id=getattr(self, "_selected_roster_id", ""))
@@ -3345,10 +3506,12 @@ class ContainerAudit:
         if name == PROTECTED_ADMIN_DISPLAY_NAME and getattr(self, "_authenticated_protected_admin", False):
             return PROTECTED_ADMIN_OPERATOR_ID
         if name not in self._worker_selection_names():
-            self.show_status_message("관리자에게 명단 등록을 요청하세요", self.COLOR_DANGER, duration=0)
+            self.show_status_message("이름을 골라 주세요. 목록에 없으면 새 이름을 등록하세요.", self.COLOR_DANGER, duration=0)
             return None
         roster = getattr(self, "worker_roster", None)
-        row = roster.active_worker(name=name) if roster is not None and roster.has_rows else None
+        row = next((row for row in roster.active_workers() if worker_choice_label(row) == name), None) if roster is not None else None
+        if row is not None:
+            name = row["display_name"]
         local_id = self.worker_registry.worker_id_for_name(name) if row is None else ""
         try:
             WorkerRegistry._validate_name(name, roster_identity=row is not None or bool(local_id),
@@ -3376,9 +3539,10 @@ class ContainerAudit:
                 or self.transfer_seal_coordinator.client is None):
             return
         remembered_name = worker_name
+        row = None
         try:
             roster = getattr(self, "worker_roster", None)
-            if roster is not None and roster.has_rows:
+            if roster is not None and (roster.has_rows or self.worker_registry.recent_worker_id()):
                 row = roster.active_worker(worker_id=self.worker_registry.recent_worker_id(), name=worker_name)
                 if row is None:
                     self._disable_remembered_worker_start()
@@ -3387,7 +3551,7 @@ class ContainerAudit:
                 worker_name = row["display_name"]
             if (not self.worker_registry.automatic_start_enabled()
                 or self.worker_registry.recent_worker() != remembered_name
-                    or worker_name not in self._worker_selection_names()
+                    or (worker_choice_label(row) if row is not None else worker_name) not in self._worker_selection_names()
                     or (Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE).exists()
                     or self._paired_preflight_store().unidentified_pending()):
                 return
@@ -3403,7 +3567,7 @@ class ContainerAudit:
                     return
         except (OSError, ValueError, PreflightHoldError, PairedHandoffError):
             return
-        self._set_worker_entry_value(worker_name)
+        self._set_worker_entry_value(worker_choice_label(row) if row is not None else worker_name)
         self.start_work(_automatic=True)
 
     def start_work(self, event=None, *, _automatic=False):
@@ -19637,6 +19801,8 @@ class ContainerAudit:
             summaries = self._parked_store().scan_for_worker(
                 self.worker_name, tray_size=getattr(self, "TRAY_SIZE", 60), strict=True,
                 worker_id=getattr(self, "_selected_roster_id", ""),
+                worker_id_aliases=(self.worker_roster.identity_aliases(getattr(self, "_selected_roster_id", ""))
+                                   if getattr(self, "worker_roster", None) is not None else ()),
             )
             self._invalid_parked_rows = {
                 str(summary.path): summary.problem for summary in summaries if summary.problem

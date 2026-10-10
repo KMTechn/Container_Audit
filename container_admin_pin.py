@@ -32,9 +32,10 @@ _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}
 
 
 class AdminPinError(RuntimeError):
-    def __init__(self, code: str, *, unknown: bool = False):
+    def __init__(self, code: str, *, unknown: bool = False, status: int | None = None):
         self.code = code
         self.unknown = unknown
+        self.status = status
         super().__init__(code)
 
 
@@ -109,6 +110,23 @@ class AdminPinClient:
                                  response_limit=262144, expected_status=200)
 
     @writer_sink("admin_pin_network", probe_only=True)
+    def query_roster_v2(self, *, authority_scope_id: str) -> dict[str, Any]:
+        return self._post_signed("/api/worker-roster/v2/query", {"authority_scope_id": authority_scope_id},
+                                 response_limit=262144, expected_status=200)
+
+    @writer_sink("admin_pin_network", probe_only=True)
+    def register_roster(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        from worker_roster import normalize_registration_name
+        mode = payload.get("mode")
+        fields = {"mode", "authority_scope_id", "request_id", "display_name", "action_at",
+                  "temp_uuid" if mode == "create" else "existing_worker_id"}
+        if (mode not in {"create", "return"} or set(payload) != fields
+                or normalize_registration_name(payload["display_name"]) != payload["display_name"]):
+            raise AdminPinError("INVALID_REQUEST", status=400)
+        return self._post_signed("/api/worker-roster/v2/register", payload,
+                                 response_limit=262144, expected_status=201 if mode == "create" else 200)
+
+    @writer_sink("admin_pin_network", probe_only=True)
     def _post_signed(self, path: str, payload: Mapping[str, Any], *,
                      response_limit: int, expected_status: int) -> dict[str, Any]:
         from direct_sync_push import admit_credential_security_inputs
@@ -157,6 +175,8 @@ class AdminPinClient:
             raise AdminPinError("VERIFY_UNAVAILABLE", unknown=True) from None
         if type(status) is not int or len(raw) > response_limit:
             raise AdminPinError("VERIFY_UNAVAILABLE", unknown=True)
+        if path == "/api/worker-roster/v2/query" and status in {404, 405}:
+            raise AdminPinError("ROSTER_V2_UNAVAILABLE", status=status)
         try:
             answer = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
         except (UnicodeError, ValueError, TypeError):
@@ -165,6 +185,9 @@ class AdminPinClient:
             raise AdminPinError("VERIFY_UNAVAILABLE", unknown=True)
         error = answer.get("error")
         code = error.get("code") if isinstance(error, dict) and type(error.get("code")) is str else ""
+        if path.startswith("/api/worker-roster/v2/") and (status != expected_status or answer.get("ok") is not True):
+            raise AdminPinError(code or "VERIFY_UNAVAILABLE", status=status,
+                                unknown=status in {429, 503} or status >= 500 or not bool(code))
         if status >= 500:
             raise AdminPinError("PIN_BUSY" if code == "PIN_BUSY" else "VERIFY_UNAVAILABLE", unknown=True)
         if status != expected_status or answer.get("ok") is not True:

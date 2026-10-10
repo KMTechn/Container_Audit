@@ -1,4 +1,4 @@
-﻿Set-StrictMode -Version Latest
+Set-StrictMode -Version Latest
 
 $Script:ContainerWriterFenceActiveSchema = 'container-audit-all-writer-fence-active-v1'
 $Script:ContainerWriterFenceReleaseSchema = 'container-audit-all-writer-fence-release-v1'
@@ -7,7 +7,7 @@ $Script:ContainerWriterFenceTupleVersion = 'container-audit-deployment-session-a
 $Script:ContainerWriterFenceSessionMutexPrefix = 'Local\KMTech.ContainerAudit.DeploymentSession.'
 $Script:ContainerWriterFenceAdmissionMutexName = 'Local\KMTech.ContainerAudit.WriterAdmission.v1'
 $Script:ContainerWriterFenceAdmissionProductionRoot = ''
-$Script:ContainerWriterFenceInventorySha256 = 'c32acb303ea5f2320765d6f823417e9e30e75d2d93768eff4867f660e7a139c6'
+$Script:ContainerWriterFenceInventorySha256 = '27a9de05a9b0117835fa0414281a8013056110b0bb5b0441f20671d3b44f29fe'
 $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''
 $Script:ContainerWriterFenceMaximumBytes = 262144
 $Script:ContainerWriterFenceActiveFields = @(
