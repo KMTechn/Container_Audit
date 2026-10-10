@@ -9676,7 +9676,7 @@ class ContainerAudit:
                 # The physical row owns restoration; the intent also survives a missing original.
                 if not any(set(row.labels) & set(other.labels) for other in preflight_entries
                            if other.kind == "preflight_quarantine"):
-                    messagebox.showwarning("사전조회 격리 원본 확인",
+                    messagebox.showwarning("격리 원본 없음",
                                            "격리 원본을 찾지 못했습니다. 이 현품표는 계속 보류합니다. "
                                            "원본과 복원 기록을 다시 확인하세요.", parent=self.root)
                 continue
@@ -9685,7 +9685,7 @@ class ContainerAudit:
             elif row.evidence_id and messagebox.askyesno(
                     "사전조회 격리 원본 확인",
                     f"{row.path.name}: {row.problem or '현품표 확인 필요'}\n"
-                    "원 현품표를 중앙에서 확인하고 이 건만 보류할까요?", parent=self.root):
+                    "원 현품표를 회사 서버에서 확인하고 이 건만 보류할까요?", parent=self.root):
                 self._identify_unreadable_audit(row.evidence_id, approval,
                                                 label_count=1, known_labels=row.labels)
             else:
@@ -10331,7 +10331,7 @@ class ContainerAudit:
                 return
             if kind == "exchange" and status.startswith("ACKED:"):
                 messagebox.showinfo(
-                    "회사 서버 교체 확인 · 로컬 대조 필요",
+                    "회사 서버 교환 확인 · 이 PC 기록과 대조 필요",
                     "중앙 교체 영수증은 확인됐지만 이 PC의 제품 목록 반영은 "
                     "아직 확인되지 않았습니다. 원 묶음을 보존하고 관리자에게 "
                     "중앙 영수증과 현재 트레이 대조를 요청하세요.",
@@ -12718,7 +12718,7 @@ class ContainerAudit:
             len(snapshot.items) if isinstance(snapshot, PreflightHoldSnapshot) else 0
         )
         self.show_status_message(
-            f"서버 연결 끊김 · 제품 {held_count}개 저장 · 대기 {len(self._offline_waiting_preflight_holds())}개. "
+            f"회사 서버 연결 끊김 · 제품 {held_count}개 저장 · 대기 {len(self._offline_waiting_preflight_holds())}개. "
             "제품은 계속 스캔하세요. 현재 현품표는 30초마다 자동 확인합니다. "
             "다음 현품표를 스캔하면 지금 것은 대기합니다. "
             "대기는 연결되면 그 현품표를 다시 스캔하세요. 제품은 다시 스캔하지 마세요.",

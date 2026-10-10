@@ -47,7 +47,7 @@ def operator_message(code: str) -> str:
         return "관리자 확인이 바쁩니다. 잠시 뒤 다시 확인하세요. 이 건만 보류할 수 있습니다."
     if code == "CENTRAL_ACTION_UNAVAILABLE":
         return "이 관리자 동작만 서버 확인을 사용할 수 없습니다. 이 건만 보류할 수 있습니다."
-    return "관리자 확인 상태가 불확실합니다. 다시 확인하거나 이 건만 보류하고 다른 작업을 계속하세요."
+    return "관리자 확인 결과를 알 수 없습니다. 이 건만 보류하고 다른 작업을 계속하세요."
 
 
 def fingerprint(value: Mapping[str, Any]) -> str:
