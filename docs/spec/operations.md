@@ -9,11 +9,9 @@ bound evidence root·journal SHA로 읽는다. 일반 caller 사본의 존재를
 startup preimage 두 필드는 한 쌍으로 검증하며 원 preimage.json의 SHA가 같아야 한다.
 PS5.1/7 실제 소비자·기존 export/startup 34 PASS, 랩 G 기록은 보존하고 native 복구는 별도 판정이다.
 
-공개 설치기는 작업자 일반 화면 세션에서 시작한다. 상승·High/System·Session 0 호출은 사용자 상태를 쓰기 전에 기존 공개 실패 한 줄과 exit 1로 멈춘다. 보호 보고서를 만들지 않으며, 정상 호출의 내부 UAC 승인은 유지한다. 관리자 SSH 숨김 설치는 아직 지원하지 않는다.
-
 일반 설치는 authority 인계 전에 코드/runtime 변경을 시작하지 않는다. helper가
 같은 tuple을 인수한 뒤 배치와 onboarding 결과를 기다리고, 필요한 보상과 readback,
-마지막 fence 해제를 맡는다. 승인된 설치의 내부 helper launcher는 RunAs이며 이미 상승된 관리자 셸·SSH
+마지막 fence 해제를 맡는다. 기본 launcher는 RunAs이며 이미 상승된 관리자 셸·SSH
 토큰에서는 직접 실행한다. 실패 시 두 번째 RunAs로 복구하지 않는다. 승인 횟수는
 factory/noncanonical 전용 launcher 주입점 하나에서 계측한다. 수동 지원 복구는
 기존 경로를 사용한다.

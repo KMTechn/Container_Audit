@@ -644,8 +644,6 @@ legacy receipt self-path 규칙은 그대로이고, 새 journal로 검증된 사
 
 ## sub-189 지원 설치와 상태 판정 (2026-10-04)
 
-공개 설치 입구는 최초 PowerShell PID를 기존 보안 판독 함수로 검사한다. 상승 토큰·Medium 밖 무결성·Session 0 호출과 판독 실패는 evidence 초기화·사용자 상태 쓰기 전에 exit 1과 기존 `CONTAINER_AUDIT_INSTALL_CANONICAL` 실패 한 줄로 거절한다. 일반 작업자 호출 뒤 내부 UAC 자식은 유지한다. 같은 화면 세션의 다른 비상승 계정을 구분하는 작업자 결속과 관리자 원격 숨김 설치는 다음 판 범위다.
-
 정상 자동 적용 뒤 fixed owner A와 actual active B가 다를 때만 지원 설치가 versions/C를 준비하고 B→C를 선택한다. A와 B는 이동하지 않는다. 기존 immutable replacement receipt에 active_version 선택, A/B/C 전체 파일·record·ACL identity, 원 제어 preimage와 허용된 게시 cut의 SHA를 결속한다. 같은 protected rollback journal, 원 receipt 사본, 복구 권한, Run 복원, ordinary relay READY와 끝 상태를 소비한다. 첫 설치와 A=B의 current 교체는 기존 경로다.
 
 설치/이종 active 등록은 실제 stock 기록·bytes·보호·신뢰 키와 derived SYSTEM task를 확인한다. 불안정/잔재/namespace 충돌은 한국어 지원 제거 안내로 멈춘다. 제거와 사용자 정리는 손상된 machine control 해석을 전제로 삼지 않는다. 오류는 제한된 cause chain/native errno·winerror/exit code를 보존하고 credential text를 마스킹한다. data/API 동일성으로 unsigned 쌍을 승인하던 미사용 fallback은 제거했다.
