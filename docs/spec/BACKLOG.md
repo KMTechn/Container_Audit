@@ -43,7 +43,7 @@ sub-248 제거 P2: 별도 관리 SourceRoot의 실제 canonical을 oldSource 문
 
 ﻿# 남은 요구·검증·문서·추가 제안
 
-행 6 후속: 암호 API 오류의 자기 판 fallback, 설치 onboarding의 허가 밖 검증, 실제 feed 모양의 64 KiB·공식 bootstrap 비밀 검사 시험을 추가했다. writer inventory와 data-generation transition의 낡은 생성 선언은 출시 레인의 재생성·검토가 남는다([운영 범위](operations.md)).
+행 6 후속: 암호 API 오류의 자기 판 fallback, 설치 onboarding의 허가 밖 검증, 실제 feed 모양의 64 KiB·공식 bootstrap 비밀 검사 시험을 추가했다. 이 가지의 writer inventory·data-generation transition과 기존 consumer pin은 생성기로 갱신했다. 실제 서명 출시 packet·현장 되돌림 수용은 남는다([운영 범위](operations.md)).
 
 sub-172 새 미완 rollback 계약은 보호 불변 journal/receipt 사본으로 일반 재진입을
 지원한다. PS5.1/7 실제 NTFS·코드/Run/task/pointer/relay 회귀와 변조 변경 0을
