@@ -1,4 +1,5 @@
 """Canonical preflight refuses before state writes; no G adapter is replaced."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -53,6 +54,11 @@ def test_canonical_powershell_readonly_child(tmp_path,engine,case):
     assert result['unchanged'] is True
     assert result['report_exists'] is False
     assert result['authority_released'] is True
+    admission=json.loads((tmp_path/'machine-admission.json').read_text(encoding='utf-8-sig'))
+    assert admission['status']=='NO_ARGUMENTS_UNELEVATED_CURRENT_USER'
+    assert admission['machine_worker_null'] is True
+    assert admission['source_sha256']==hashlib.sha256((Path.cwd()/'INSTALL_CANONICAL_PORTABLE.ps1').read_bytes()).hexdigest()
+    assert len(admission['admission_sha256'])==64
     assert result['exit']==(0 if case in {'same','absent','restore-same','restore-absent'} else 4)
 
 

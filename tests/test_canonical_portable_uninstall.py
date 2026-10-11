@@ -770,8 +770,22 @@ def _assert_canonical_public_failure(result, root, expected_cause, source=None):
         # the exact semantic rejection tested by this fixture.
         assert source is not None
         lines = (source / 'INSTALL_CANONICAL_PORTABLE.ps1').read_text(encoding='utf-8-sig').splitlines()
-        guards = [number for number, line in enumerate(lines, 1)
-                  if 'throw' in line and expected_cause in line]
+        if expected_cause == 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER':
+            # Bind the current-user preflight guard, independently of machine
+            # guards that report the same cause earlier in the source file.
+            starts = [number for number, line in enumerate(lines, 1)
+                      if line.strip() == '$preflightCandidate = InstalledManifest $install $SkipSignatureValidationForTest']
+            assert len(starts) == 1
+            ends = [number for number, line in enumerate(lines, 1)
+                    if number > starts[0] and line.startswith('$lad = Full $env:LOCALAPPDATA ')]
+            assert len(ends) == 1
+            guards = [number for number, line in enumerate(lines, 1)
+                      if starts[0] < number < ends[0]
+                      and line.strip() == "throw 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER'"]
+            assert len(guards) == 1
+        else:
+            guards = [number for number, line in enumerate(lines, 1)
+                      if 'throw' in line and expected_cause in line]
         assert guards and failure['location_line'] == min(guards)
         assert failure['exception_type'] == 'System.Management.Automation.RuntimeException'
         return

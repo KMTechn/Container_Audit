@@ -124,7 +124,7 @@ raise SystemExit(onboarding_main(sys.argv[2:]))
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile({quote(repo/'INSTALL_CANONICAL_PORTABLE.ps1')},[ref]$tokens,[ref]$errors)
 if($errors.Count){{throw 'parse errors'}}
-foreach($name in @('Write-CanonicalInstallationPublicRecord','Full','Arg','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalOnboardingInputBinding','Write-CanonicalPreparationAdmissionFailure','Invoke-ContainerSourceDataAdmission','Get-CanonicalFailureDetails','Assert-CanonicalRestoreCodeBinding','Exit-RetirementResumeClaim')){{
+foreach($name in @('Write-CanonicalInstallationPublicRecord','Full','Arg','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalOnboardingInputBinding','Write-CanonicalPreparationAdmissionFailure','Invoke-ContainerSourceDataAdmission','Get-CanonicalFailureDetails','Assert-CanonicalRestoreCodeBinding','Exit-RetirementResumeClaim','Resolve-CanonicalMachineWorker','Write-CanonicalMachinePublicRecord')){{
  $found=$ast.FindAll({{param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name}},$true)
  if($found.Count -ne 1){{throw 'preflight function unavailable'}}
  Invoke-Expression $found[0].Extent.Text
@@ -141,6 +141,22 @@ function Read-ContainerWriterFence {{param([switch]$AllowAbsent) return $null}}
 function Abort-ContainerWriterFence {{throw 'unexpected fence mutation'}}
 function Remove-Item {{throw 'unexpected cleanup'}}
 function StartRaw {{throw 'unexpected relay change'}}
+# Execute the actual top-level admission, before the extracted placement prefix.
+# Only the caller identity boundary is supplied as this fixture's ordinary user.
+function Get-CanonicalInstallationCallerSecurity {{return [pscustomobject]@{{sid={quote(registration._current_user_sid())};session_id=1;elevated=$false}}}}
+$WorkerAccount='';$WorkerSurveyInventory='';$RecoverMachineInstallation=$false
+$machineAdmission=@($ast.EndBlock.Statements|Where-Object {{
+ $_ -is [Management.Automation.Language.TryStatementAst] -and
+ @($_.Body.Statements|Where-Object {{$_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+  $_.Left.Extent.Text -ceq '$machineWorker' -and $_.Extent.Text.Contains('Resolve-CanonicalMachineWorker')}}).Count -eq 1
+}})
+if($machineAdmission.Count -ne 1){{throw 'TEST_MACHINE_ADMISSION_NOT_UNIQUE'}}
+Invoke-Expression $machineAdmission[0].Extent.Text
+if($null -ne $machineWorker){{throw 'TEST_ORDINARY_CALLER_MACHINE_WORKER_NOT_NULL'}}
+$admissionProof=@{{status='NO_ARGUMENTS_UNELEVATED_CURRENT_USER';machine_worker_null=($null -eq $machineWorker);
+ source_sha256=(Get-FileHash -LiteralPath {quote(repo/'INSTALL_CANONICAL_PORTABLE.ps1')} -Algorithm SHA256).Hash.ToLowerInvariant();
+ admission_sha256=(Get-BootstrapStringSha256 $machineAdmission[0].Extent.Text)}}
+[IO.File]::WriteAllText({quote(root.parent/'machine-admission.json')},($admissionProof|ConvertTo-Json -Compress))
 $mainCandidates=@($ast.FindAll({{param($n)
  $n -is [Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally -and
  @($n.CatchClauses|Where-Object {{$_.Body.Extent.Text.Contains('if (-not $enteredPlacementTry)')}}).Count -eq 1 -and
