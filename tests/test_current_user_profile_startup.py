@@ -213,7 +213,7 @@ def test_no_profile_sends_no_request_and_startup_shows_setup_action(
     assert app_module.main([]) == 0
 
     assert launcher == []
-    assert calls == ["app-created", "after", "run", "release"]
+    assert calls == ["app-created", "run", "release"]
     assert dialogs == []  # DESIGN §0/§1: guidance stays in the work screen.
     message = catalog_notice_text(cards[0])
     assert SETUP_TITLE in message
