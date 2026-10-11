@@ -221,6 +221,8 @@
   - 「옛 현품표 받기」 HKLM 값 readback(켬).
 - **설치 뒤 확인**:
   - 완료 화면, 판·build SHA, 로그온 자동 실행(HKCU Run) readback.
+  - 작업자와 공용 바로 가기가 설치된 `current/launch-container-audit.cmd`를 가리키는지 확인한다.
+    같은 설치 루트의 없어진 파일을 가리킨 옛 바로 가기는 원 자리에 고치며, 원본은 되돌림 기록에 보존한다.
   - 이 PC 등록과 HTTPS 기록 파일 업로드 1건(nginx 2xx +1).
   - 작업자 명단 받기.
 

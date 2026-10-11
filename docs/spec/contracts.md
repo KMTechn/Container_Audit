@@ -505,6 +505,10 @@ source/target identity·membership·topology·version 및 action을 대조하고
 <a id="ca-c10"></a>
 ## CA-C10 현재 사용자 등록·설치 식별자·소유 증명
 
+작업자 바로 가기는 설치 readback 뒤 이 앱 설치 루트 안의 없는 대상만 전환한다.
+원 대상·인수·아이콘과 원 `.lnk` 바이트를 변경 전에 보존하며, 옛 앱 복원/제거 때 원본을
+되돌리고 새 링크는 지운다. 사용자/공용 범위와 기록 위치는 [CA-O05](operations.md#ca-o05)를 따른다.
+
 **은퇴 제거 마감:** canonical의 `CompleteRetiredRemoval`은 관리 `SourceRoot`를 자기결속 검증한 뒤,
 별도 `OldSourceRoot`의 manifest·helper/guard pin·writer 계약을 검증한다. 배치할 새 코드가 없는 제거
 연산이며 installed의 의미·manifest·aggregate·원 integrity record는 exact old 패키지와 대조한다.

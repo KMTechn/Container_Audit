@@ -1592,6 +1592,8 @@ if ($RestoreVerifiedReplacement.IsPresent) {
             $result.failed_new_preserved -isnot [bool] -or
             -not $result.failed_new_preserved
         ) { throw 'Replacement restore result Boolean evidence is invalid.' }
+        $shortcutRecord=Get-BootstrapWorkerShortcutRecordPath $installRootFull (Join-Path (Get-InstallationEvidenceControlRoot) 'worker-shortcuts')
+        [void](Restore-BootstrapWorkerShortcuts $installRootFull $shortcutRecord 'Common')
         $evidence = [ordered]@{
             schema_version = 'container-audit-verified-replacement-code-restore-v1'
             status = 'PASS'
@@ -2166,6 +2168,8 @@ if ($Uninstall.IsPresent) {
         if (-not $gateHeld) { throw 'REMOVAL_UPDATE_GATE_BUSY' }
         if ($UninstallAuditPath) { Write-ContainerSupportedRemovalJournal $excluded }
         $removed = Invoke-ContainerConvergentRemoval -InstallRoot $installRootFull -TaskFolder $folder -ExcludeProcessIds $excluded -OnlyUncommittedCurrent:$RemoveUncommittedPlacement
+        $shortcutRecord=Get-BootstrapWorkerShortcutRecordPath $installRootFull (Join-Path (Get-InstallationEvidenceControlRoot) 'worker-shortcuts')
+        [void](Restore-BootstrapWorkerShortcuts $installRootFull $shortcutRecord 'Common')
         'uninstall_status=PASS_KNOWN_FILES_REMOVED_STATE_PRESERVED'
         'lifecycle_state=REMOVED'
         ConvertTo-KmtechRedactedSinkText -Text ('removal_evidence_root='+[string]$removed.evidence_root)

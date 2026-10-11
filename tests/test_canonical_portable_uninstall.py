@@ -361,6 +361,7 @@ def _setup(tmp_path, fault='', *, stock_version_identity=False):
         target.mkdir()
         env[name] = str(target)
     env.update(PYTHONDONTWRITEBYTECODE='1', KMTECH_FACTORY_INSTALL_TEST_MODE='1',
+               KMTECH_TEST_CA_WORKER_SHORTCUT_ROOT=str(tmp_path / 'known-folders'),
                CA_UNINSTALL_REPO=str(ROOT), CA_UNINSTALL_ROOT=str(tmp_path), CA_UNINSTALL_INJECT='1',
                CA_UNINSTALL_PYTHON=str(native_python_executable()),
                CA_UNINSTALL_VENV_LAUNCHER=sys.executable,
@@ -378,6 +379,8 @@ def _setup(tmp_path, fault='', *, stock_version_identity=False):
         "runpy.run_path(os.environ['CA_UNINSTALL_HOST'], run_name='__main__')\n", encoding='utf-8')
     env['CA_UNINSTALL_PREFLIGHT'] = str(preflight)
     source = _portable_release_fixture(tmp_path, directory='packet')
+    (source / 'app/assets').mkdir(exist_ok=True)
+    (source / 'app/assets/logo.ico').write_bytes(b'isolated-shortcut-icon')
     if stock_version_identity:
         # 416 source admission reads the stock manifest/version before install.
         # Supply real version bytes to this partial packet while retaining both

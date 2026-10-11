@@ -1,6 +1,184 @@
 ﻿$BootstrapIntegrityFileName = "bootstrap-integrity.json"
 $BootstrapIntegritySchema = "container-audit-bootstrap-integrity-v1"
 
+function Get-BootstrapWorkerShortcutFolders([string]$Scope='All') {
+    if($Scope -cnotin @('All','User','Common')){throw 'Worker shortcut scope is invalid.'}
+    foreach($name in @('DesktopDirectory','Programs','CommonDesktopDirectory','CommonPrograms')){
+        $common=$name.StartsWith('Common')
+        if($Scope -cne 'All' -and $common -ne ($Scope -ceq 'Common')){continue}
+        if([string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -ceq '1'){
+            if(-not $env:KMTECH_TEST_CA_WORKER_SHORTCUT_ROOT){throw 'Isolated worker shortcut known folders are required in test mode.'}
+            $path=Join-Path $env:KMTECH_TEST_CA_WORKER_SHORTCUT_ROOT $name
+        }else{$path=[Environment]::GetFolderPath([Environment+SpecialFolder]::$name)}
+        if(-not $path){throw 'Worker shortcut known folder is unavailable.'}
+        [pscustomobject]@{path=$path;common=$common}
+    }
+}
+
+function Get-BootstrapWorkerShortcutRecordPath([string]$InstallRoot,[string]$RecordRoot) {
+    $identity=Get-BootstrapStringSha256 ([IO.Path]::GetFullPath($InstallRoot).ToLowerInvariant())
+    return Join-Path $RecordRoot ('worker-shortcuts-'+$identity.Substring(0,24)+'.json')
+}
+
+function Assert-BootstrapWorkerShortcutPath([string]$Path) {
+    $existing=[IO.Path]::GetFullPath($Path)
+    while(-not (Test-Path -LiteralPath $existing)){
+        $existing=Split-Path -Parent $existing
+        if(-not $existing){throw 'Worker shortcut path has no existing ancestor.'}
+    }
+    Assert-BootstrapNoReparsePoint $existing 'worker shortcut path' -PathOnly
+}
+
+function Write-BootstrapWorkerShortcutRecord([string]$Path,$Record) {
+    $parent=Split-Path -Parent $Path
+    Assert-BootstrapWorkerShortcutPath $parent
+    [void][IO.Directory]::CreateDirectory($parent)
+    Assert-BootstrapWorkerShortcutPath $Path
+    # Original arguments are private recovery data, never an output/evidence sink.
+    $json=($Record|ConvertTo-Json -Depth 8 -Compress)+"`n"
+    if([Text.Encoding]::UTF8.GetByteCount($json) -gt 131072){throw 'Worker shortcut record exceeds its bound.'}
+    $temporary=$Path+'.tmp.'+[Guid]::NewGuid().ToString('N')
+    [IO.File]::WriteAllText($temporary,$json,[Text.UTF8Encoding]::new($false))
+    if([IO.File]::Exists($Path)){[IO.File]::Replace($temporary,$Path,[System.Management.Automation.Language.NullString]::Value)}
+    else{[IO.File]::Move($temporary,$Path)}
+}
+
+function Read-BootstrapWorkerShortcutRecord([string]$InstallRoot,[string]$RecordPath,[string]$Scope) {
+    $root=[IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+    $folders=@(Get-BootstrapWorkerShortcutFolders $Scope)
+    Assert-BootstrapWorkerShortcutPath $RecordPath
+    if(-not [IO.File]::Exists($RecordPath)){
+        return [pscustomobject]@{schema='container-audit-worker-shortcuts-v1';install_root=$root;scope=$Scope;entries=@()}
+    }
+    if((Get-Item -LiteralPath $RecordPath).Length -gt 131072){throw 'Worker shortcut record exceeds its bound.'}
+    $record=Get-Content -LiteralPath $RecordPath -Raw -Encoding UTF8|ConvertFrom-Json
+    if([string]$record.schema -cne 'container-audit-worker-shortcuts-v1' -or
+        [string]$record.install_root -ine $root -or [string]$record.scope -cne $Scope){throw 'Worker shortcut record binding differs.'}
+    $seen=@{}
+    foreach($entry in @($record.entries)){
+        $path=[IO.Path]::GetFullPath([string]$entry.path)
+        $allowed=@($folders|Where-Object {$path.StartsWith(([IO.Path]::GetFullPath($_.path).TrimEnd('\')+'\'),[StringComparison]::OrdinalIgnoreCase)})
+        if($allowed.Count -ne 1 -or [IO.Path]::GetExtension($path) -ine '.lnk' -or $seen.ContainsKey($path) -or
+            [string]$entry.action -cnotin @('updated','created')){throw 'Worker shortcut record path is outside its scope.'}
+        $seen[$path]=$true
+        Assert-BootstrapWorkerShortcutPath $path
+        if([string]$entry.action -ceq 'updated'){
+            if(-not ([string]$entry.original_target).StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase) -or
+                [string]$entry.backup_name -cnotmatch '^[0-9a-f]{32}\.lnk$' -or
+                [string]$entry.original_sha256 -cnotmatch '^[0-9a-f]{64}$'){throw 'Worker shortcut preimage binding differs.'}
+            $backup=Join-Path ($RecordPath+'.preimages') ([string]$entry.backup_name)
+            Assert-BootstrapWorkerShortcutPath $backup
+            if(-not [IO.File]::Exists($backup) -or (Get-FileSha256 $backup) -cne [string]$entry.original_sha256){throw 'Worker shortcut preimage differs.'}
+        }
+    }
+    return $record
+}
+
+function Write-BootstrapWorkerShortcut([string]$Path,[string]$Launcher,[string]$Icon) {
+    $shell=New-Object -ComObject WScript.Shell
+    try{
+        $link=$shell.CreateShortcut($Path)
+        $link.TargetPath=$Launcher;$link.Arguments='';$link.WorkingDirectory=Split-Path -Parent $Launcher
+        $link.IconLocation=$Icon+',0';$link.WindowStyle=7;$link.Description='이적 검사'
+        $link.Save()
+        $readback=$shell.CreateShortcut($Path)
+        if($readback.TargetPath -ine $Launcher -or $readback.Arguments -cne '' -or
+            $readback.IconLocation -ine ($Icon+',0') -or $readback.WindowStyle -ne 7){throw 'Worker shortcut readback failed.'}
+    }finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}
+}
+
+function Install-BootstrapWorkerShortcuts([string]$InstallRoot,[string]$RecordPath,[string]$Scope='All') {
+    $root=[IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+    $launcher=Join-Path $root 'launch-container-audit.cmd'
+    $icon=Join-Path $root 'app\assets\logo.ico'
+    if(-not [IO.File]::Exists($launcher) -or -not [IO.File]::Exists($icon)){throw 'Verified worker entrypoint/icon is absent.'}
+    Assert-BootstrapNoReparsePoint $launcher 'worker entrypoint' -PathOnly
+    Assert-BootstrapNoReparsePoint $icon 'worker icon' -PathOnly
+    $record=Read-BootstrapWorkerShortcutRecord $root $RecordPath $Scope
+    $folders=@(Get-BootstrapWorkerShortcutFolders $Scope)
+    $shell=New-Object -ComObject WScript.Shell
+    $candidates=@();$present=$false
+    try{
+        foreach($folder in $folders){
+            if(-not [IO.Directory]::Exists($folder.path)){continue}
+            Assert-BootstrapNoReparsePoint $folder.path 'worker shortcut folder'
+            foreach($file in @(Get-ChildItem -LiteralPath $folder.path -Filter '*.lnk' -File -Recurse)){
+                $link=$shell.CreateShortcut($file.FullName)
+                $target=[string]$link.TargetPath
+                if(-not $target -or -not [IO.Path]::IsPathRooted($target)){continue}
+                $target=[IO.Path]::GetFullPath($target)
+                if(-not $target.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)){continue}
+                $present=$true
+                # Existing files, other roots and other apps are never retargeted.
+                if(Test-Path -LiteralPath $target -ErrorAction Stop){continue}
+                $candidates+=,[pscustomobject]@{path=$file.FullName;link=$link;action='updated'}
+            }
+        }
+        if(-not $present){
+            foreach($folder in @($folders|Where-Object common)){
+                $path=Join-Path $folder.path '이적 검사.lnk'
+                $suffix=1
+                while(Test-Path -LiteralPath $path){
+                    $path=Join-Path $folder.path ('이적 검사 (새 프로그램 '+$suffix+').lnk')
+                    $suffix++
+                }
+                $candidates+=,[pscustomobject]@{path=$path;link=$null;action='created'}
+            }
+        }
+        foreach($candidate in $candidates){
+            $path=[string]$candidate.path
+            if(@($record.entries|Where-Object {$_.path -ieq $path}).Count -eq 0){
+                $entry=[ordered]@{path=$path;action=$candidate.action}
+                if($candidate.action -ceq 'updated'){
+                    $backupRoot=$RecordPath+'.preimages'
+                    Assert-BootstrapWorkerShortcutPath $backupRoot
+                    [void][IO.Directory]::CreateDirectory($backupRoot)
+                    $entry.backup_name=[Guid]::NewGuid().ToString('N')+'.lnk'
+                    $entry.original_target=[string]$candidate.link.TargetPath
+                    $entry.original_arguments=[string]$candidate.link.Arguments
+                    $entry.original_icon=[string]$candidate.link.IconLocation
+                    $entry.original_sha256=Get-FileSha256 $path
+                    [IO.File]::Copy($path,(Join-Path $backupRoot $entry.backup_name),$false)
+                    if((Get-FileSha256 (Join-Path $backupRoot $entry.backup_name)) -cne $entry.original_sha256 -or
+                        (Get-FileSha256 $path) -cne $entry.original_sha256){throw 'Worker shortcut preimage copy differs.'}
+                }
+                $record.entries=@($record.entries)+@([pscustomobject]$entry)
+                Write-BootstrapWorkerShortcutRecord $RecordPath $record
+            }
+            Assert-BootstrapWorkerShortcutPath $path
+            [void][IO.Directory]::CreateDirectory((Split-Path -Parent $path))
+            Write-BootstrapWorkerShortcut $path $launcher $icon
+        }
+    }finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}
+    return [pscustomobject]@{status='PASS';scope=$Scope;record_path=$RecordPath;changed_count=$candidates.Count}
+}
+
+function Restore-BootstrapWorkerShortcuts([string]$InstallRoot,[string]$RecordPath,[string]$Scope='All') {
+    $record=Read-BootstrapWorkerShortcutRecord $InstallRoot $RecordPath $Scope
+    $launcher=Join-Path $InstallRoot 'launch-container-audit.cmd'
+    # A restored portable version still uses the same entrypoint and keeps links.
+    if([IO.File]::Exists($launcher)){return [pscustomobject]@{status='PORTABLE_ENTRYPOINT_RETAINED';scope=$Scope}}
+    $shell=New-Object -ComObject WScript.Shell
+    try{
+        foreach($entry in @($record.entries)){
+            $path=[string]$entry.path
+            if([IO.File]::Exists($path)){
+                if($entry.action -ceq 'updated' -and (Get-FileSha256 $path) -ceq [string]$entry.original_sha256){continue}
+                $link=$shell.CreateShortcut($path)
+                if($link.TargetPath -ine $launcher -or $link.Arguments -cne ''){throw 'Worker shortcut changed after installation; preserved.'}
+            }elseif($entry.action -ceq 'created'){continue}
+            if($entry.action -ceq 'updated'){
+                [IO.File]::Copy((Join-Path ($RecordPath+'.preimages') ([string]$entry.backup_name)),$path,$true)
+                if((Get-FileSha256 $path) -cne [string]$entry.original_sha256){throw 'Worker shortcut restore readback failed.'}
+            }else{
+                Remove-Item -LiteralPath $path
+                if(Test-Path -LiteralPath $path){throw 'Created worker shortcut removal readback failed.'}
+            }
+        }
+    }finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}
+    return [pscustomobject]@{status='PASS_RESTORED';scope=$Scope;record_path=$RecordPath}
+}
+
 function ConvertTo-KmtechPublicRecord {
     param([Parameter(Mandatory)][Collections.IDictionary]$Fields,
           [AllowEmptyCollection()][string[]]$AllowedCodes=@(),
@@ -1408,7 +1586,7 @@ function Invoke-CanonicalTransactionCompensation($Configuration,$Placement,$Leas
             -DelegationToken $Script:CanonicalWriterFenceDelegationToken -DelegatedSources $canonicalWriterFenceDelegatedSources `
             -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(20).ToString('o')) -AuthorityLease $Lease)
     }else{Assert-ContainerWriterSessionAuthority $active $Lease}
-    foreach($step in @('runtime_quiescence','code_preimage','run_preimage','legacy_writer_preimage','scheduled_writer_preimage','generation_readback')){
+    foreach($step in @('runtime_quiescence','code_preimage','worker_shortcuts','run_preimage','legacy_writer_preimage','scheduled_writer_preimage','generation_readback')){
         $failure=$null
         try{
             Set-InstallationEvidenceStage ('rollback.transaction.'+$step) 'rollback'
@@ -1472,6 +1650,11 @@ function Invoke-CanonicalTransactionCompensation($Configuration,$Placement,$Leas
                             [string]$surviving.source_tree -cne [string]$candidate.source_tree){throw 'Transaction unchanged code preimage differs.'}
                         $codeExact=$true
                     }
+                }
+                'worker_shortcuts' {
+                    if(-not $codeExact){throw 'Shortcut recovery requires proven code recovery.'}
+                    $shortcutRecord=Get-BootstrapWorkerShortcutRecordPath $install (Join-Path (Get-InstallationEvidenceControlRoot) 'worker-shortcuts')
+                    [void](Restore-BootstrapWorkerShortcuts $install $shortcutRecord 'Common')
                 }
                 'run_preimage' {
                     Restore $before
@@ -1648,6 +1831,9 @@ function Invoke-InstallationTransactionCoordinator($Configuration) {
                 if($point -cne 'REACHED'){throw 'Installation transaction commit point is unproven.'}
                 if(-not $released){throw 'Installation transaction runtime release is unproven.'}
                 Assert-CanonicalTransactionCommit $Configuration
+                $shortcutRoot=[string]$Configuration.install_root
+                $shortcutRecord=Get-BootstrapWorkerShortcutRecordPath $shortcutRoot (Join-Path (Get-InstallationEvidenceControlRoot) 'worker-shortcuts')
+                $shortcutResult=Install-BootstrapWorkerShortcuts $shortcutRoot $shortcutRecord 'Common'
                 $finished=$true;$reason='COMMITTED';$exitCode=0;break
             }
             if($null -eq $placement -and [IO.File]::Exists($place)){
@@ -1693,7 +1879,7 @@ function Invoke-InstallationTransactionCoordinator($Configuration) {
             $captureSealed=$true
             Publish-InstallationTransactionResponse $Configuration 'outcome-ready' ([string]$compensation.status) @{
                 reason=$reason;compensation=$compensation;evidence_summary=$summary}
-        }elseif($finished){Publish-InstallationTransactionResponse $Configuration 'outcome-ready' 'COMMITTED' @{reason=$reason}}
+        }elseif($finished){Publish-InstallationTransactionResponse $Configuration 'outcome-ready' 'COMMITTED' @{reason=$reason;worker_shortcuts=$shortcutResult}}
         if($null -ne $lease){
             # Keep the authority alive through the parent's final audit seal. A
             # dead parent cannot acknowledge; compensation has already read back.

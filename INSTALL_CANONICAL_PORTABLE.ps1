@@ -64,7 +64,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '1acfc74d81bd292a4e687e9b34cb1e59732ee93768f0fdb11411565483c6a5ec'
+$ExpectedBootstrapIntegritySha256 = 'cba1a4d0d984e834d74bd2b9cc2fe339495ccc70d612665eb587a99e4d182eb4'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -3654,6 +3654,7 @@ $retirement = if ($CompleteRetiredRemoval) { Read-CanonicalRetiredRemoval } else
 $retirementAuditSealed=$false
 $runId = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')+'-'+[Guid]::NewGuid().ToString('N')
 $auditRoot = Join-Path $activeDataRoot 'install-audit'
+$workerShortcutRecordPath=Get-BootstrapWorkerShortcutRecordPath $install $auditRoot
 $abandonedRecovery=$null
 try{$abandonedPending=if($rollbackContinuation -or $Uninstall){$null}else{Read-InstallationAbandonedRollback $install $lad $operatorSid}}
 catch{throw [InvalidOperationException]::new('이전 설치 복구 상태를 확인할 수 없습니다. 지원 담당자에게 문의하세요.',$_.Exception)}
@@ -4221,6 +4222,7 @@ $enteredPlacementTry = $true
         if($old.Count -gt 0){[void](Start-CanonicalRelayAfterFenceRelease -Root $install -RunCommand ([string]$before.data))}
         [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
         $audit.status = 'PASS_RESTORED_VERIFIED_DATA_PRESERVED'
+        $audit['worker_shortcuts']=Restore-BootstrapWorkerShortcuts $install $workerShortcutRecordPath 'User'
         $audit.rollback.applied = $true
         $audit.rollback.runtime_restored = $true
         $audit.rollback.code_exact = $true
@@ -4285,6 +4287,7 @@ $enteredPlacementTry = $true
         Clear-CanonicalWriterFenceReleaseDelegation
         Stop-CanonicalWriterFenceRelease $releaseAuthorization
         $canonicalWriterFenceActive=$false
+        $audit['worker_shortcuts']=Restore-BootstrapWorkerShortcuts $install $workerShortcutRecordPath 'User'
         $audit.status='PASS_UNINSTALLED_DATA_PRESERVED';$audit.completed_at=[DateTime]::UtcNow.ToString('o')
         Save $auditPath $audit
         if($evidenceFull){Save $evidenceFull $audit}
@@ -4417,6 +4420,7 @@ $enteredPlacementTry = $true
         $canonicalWriterFenceActive = $false
         $retirementAuditSealed=$false
         $audit.status = if ($CompleteRetiredRemoval) { 'PASS_RETIRED_REMOVAL_DATA_PRESERVED' } else { 'PASS_UNINSTALLED_DATA_PRESERVED' }
+        $audit['worker_shortcuts']=Restore-BootstrapWorkerShortcuts $install $workerShortcutRecordPath 'User'
         $audit.completed_at = [DateTime]::UtcNow.ToString('o')
         Save $auditPath $audit $true
         if ($evidenceFull) { Save $evidenceFull $audit $true }
@@ -4747,6 +4751,12 @@ $enteredPlacementTry = $true
         $audit.exact_launch=$Script:CanonicalRelayProof
     }
     if($pidValue -le 0 -or [string]$audit.exact_launch.status -cne 'PROVEN'){throw 'Resident relay acceptance is absent.'}
+    Set-InstallationEvidenceStage 'canonical.worker_shortcuts'
+    $audit['worker_shortcuts']=Install-BootstrapWorkerShortcuts $install $workerShortcutRecordPath 'User'
+    if($testMode -and $null -eq $canonicalTransactionJob){
+        $commonRecord=Get-BootstrapWorkerShortcutRecordPath $install (Join-Path (Get-InstallationEvidenceControlRoot) 'worker-shortcuts')
+        $audit['common_worker_shortcuts']=Install-BootstrapWorkerShortcuts $install $commonRecord 'Common'
+    }
     $audit.status=$terminalStatus
     $audit.completed_at=(Get-Date).ToUniversalTime().ToString('o')
     Save $auditPath $audit
@@ -4754,6 +4764,7 @@ $enteredPlacementTry = $true
     if($null -ne $canonicalTransactionJob){
         $transactionOutcome=Complete-InstallationTransaction $canonicalTransactionJob 'COMMIT'
         if([string]$transactionOutcome.status -cne 'COMMITTED'){throw 'Canonical transaction commit acknowledgement differs.'}
+        $audit['common_worker_shortcuts']=$transactionOutcome.worker_shortcuts
         $audit.persistent_helper.status='COMMITTED'
     }
     (ConvertTo-KmtechRedactedSinkText -Text ([string]("install_status=$terminalStatus")))
@@ -4836,6 +4847,7 @@ catch {
                 $audit.status=[string]$proof.status
                 $legacyRelayRestoreNeeded=$false;$legacyRelayRestoreAttempted=$true
                 if([string]$proof.status -cnotin @('FAILED_ROLLED_BACK','FAILED_RUNTIME_RESTORED_CODE_RETAINED')){throw 'Persistent helper recovery is unproven; fence retained.'}
+                $audit['worker_shortcuts']=Restore-BootstrapWorkerShortcuts $install $workerShortcutRecordPath 'User'
                 Save-CanonicalRecoveryDiagnostics 'rollback.persistent_helper_complete'
             }catch{
                 Write-InstallationCaughtFailure $_
@@ -5526,6 +5538,7 @@ catch {
         Record-CanonicalRollbackStep 'completion' 'FAILED' $fenceReleaseFailure
         throw [InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text "CANONICAL_WRITER_FENCE_RELEASE_FAILED: $fenceReleaseFailure" -UserLine),$original.Exception)
     }
+    if($codeRestoredExact){$audit['worker_shortcuts']=Restore-BootstrapWorkerShortcuts $install $workerShortcutRecordPath 'User'}
     $audit.status=Get-CanonicalRollbackSuccessStatus -Restore ([bool]$RestoreVerifiedReplacement) -CommitPoint $canonicalInstallationCommitPoint
     Record-CanonicalRollbackStep 'completion' 'PASS' ''
     if ($Script:CanonicalRollbackContinuationCreated -and [bool]$audit.rollback.code_exact -and [bool]$audit.rollback.runtime_restored) {

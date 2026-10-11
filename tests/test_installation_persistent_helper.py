@@ -25,11 +25,13 @@ $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 $env:PSModulePath='C:\Windows\System32\WindowsPowerShell\v1.0\Modules'
 $env:KMTECH_FACTORY_INSTALL_TEST_MODE='1'
+$env:KMTECH_TEST_CA_WORKER_SHORTCUT_ROOT=Join-Path $Root 'known-folders'
 $env:LOCALAPPDATA=Join-Path $Root 'L';$env:APPDATA=Join-Path $Root 'A'
 $env:CONTAINER_AUDIT_DATA_ROOT=Join-Path $Root 'data'
 [void][IO.Directory]::CreateDirectory($env:LOCALAPPDATA)
 [void][IO.Directory]::CreateDirectory($env:CONTAINER_AUDIT_DATA_ROOT)
 . (Join-Path $Source 'tools\bootstrap_integrity.ps1')
+function Get-InstallationEvidenceControlRoot {return (Join-Path $env:KMTECH_TEST_CA_WORKER_SHORTCUT_ROOT 'control')}
 . (Get-BootstrapSharedPortableLeaf $Source)
 . (Join-Path $Source 'tools\container_writer_fence.ps1')
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $Source 'INSTALL_CANONICAL_PORTABLE.ps1'),[ref]$null,[ref]$null)
@@ -55,7 +57,8 @@ $actualCoordinator=${function:Invoke-InstallationTransactionCoordinator}.ToStrin
 $anchor='. (Get-InstallationVerifiedScript (Join-Path $source ''tools\container_writer_fence.ps1'') ([string]$Configuration.fence_helper_sha256))'
 if($actualCoordinator.Split(@($anchor),[StringSplitOptions]::None).Count -ne 2){throw 'Fixture coordinator anchor differs.'}
 $initialization='$Script:ContainerWriterFenceAdmissionProductionRoot=[string]$Configuration.context.fixture_production_control_root'+"`n"+
-    'if((Get-ContainerWriterAdmissionMutexName) -cne [string]$Configuration.context.fixture_admission_mutex_name){throw ''Fixture helper admission mutex differs.''}'
+    'if((Get-ContainerWriterAdmissionMutexName) -cne [string]$Configuration.context.fixture_admission_mutex_name){throw ''Fixture helper admission mutex differs.''}'+"`n"+
+    'function Get-InstallationEvidenceControlRoot {return (Join-Path $env:KMTECH_TEST_CA_WORKER_SHORTCUT_ROOT ''control'')}'
 $actualCoordinator=$actualCoordinator.Replace($anchor,($anchor+"`n"+$initialization))
 . ([scriptblock]::Create('function Invoke-InstallationTransactionCoordinator {'+$actualCoordinator+'}'))
 Invoke-InstallationTransactionCoordinator $configuration

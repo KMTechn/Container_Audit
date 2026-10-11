@@ -829,6 +829,23 @@ prepared checkpoint → 기존 중앙 attempt → 완료 계약/CSV ACK → stat
 <a id="ca-o05"></a>
 ## CA-O05 설치·교체·재설치·롤백·백업
 
+설치된 입구·상주 전송 프로그램의 readback을 통과한 뒤 작업자 바로 가기를 준비한다.
+작업자 세션 설치기는 그 사용자의 바탕화면·시작 메뉴를 처리하고, 기존 권한 상승 helper의
+기계 단계는 공용 바탕화면·공용 시작 메뉴를 처리한다. 대상이 이 앱의 설치 루트 아래이며
+그 파일이 없는 `.lnk`만 그 자리에서 `current/launch-container-audit.cmd`로 바꾼다.
+다른 앱·다른 설치 루트·존재하는 파일을 가리키는 바로 가기는 보존한다. 공용에 이 앱의
+바로 가기가 없으면 「이적 검사」를 두 공용 폴더에 만든다(같은 이름의 다른 바로 가기는 보존).
+앱 아이콘 `app/assets/logo.ico`와 최소화 창 상태를 사용하며 인수는 비워 둔다.
+
+원 대상·인수·아이콘은 `worker-shortcuts-<설치 루트 식별값>.json`에, 원 `.lnk` 바이트는
+그 JSON 옆 `.preimages` 폴더에 변경 전에 보존한다. 사용자 기록은 업무 루트의 `install-audit`,
+공용 기록은 보호된 `update-control/worker-shortcuts`에 둔다. 옛 실행 파일을 복원하는 되돌림이나
+제거 뒤에는 원 바이트를 복원하고 새로 만든 링크는 삭제한다. 앞 portable 판도 같은 입구를
+쓰는 복원은 링크를 유지한다. 설치 뒤 사람이 다른 대상으로 바꾼 링크는 덮어쓰지 않고
+복구 미확인으로 남긴다. 관리자 직접 설치의 사용자 프로필 처리는 첫 시작 onboarding에서
+`Install-BootstrapWorkerShortcuts(..., 'User')`를 받을 자리이며 이 변경의 구현 범위에는 없다.
+PS5.1·PS7 검증은 격리 known folder에서만 수행하며 실제 화면·현장 설치는 별도 확인한다.
+
 | 설치 코드 배치 전 실패 코드 | 작업자 안내·조치 |
 |---|---|
 | `CONTAINER_PLACEMENT_OTHER_SESSION_RUNNING` | 같은 PC 의 다른 Windows 사용자 세션에서 이적 검사 프로그램이 실행 중입니다. 그 사용자를 로그아웃한 뒤 다시 설치하세요. |
