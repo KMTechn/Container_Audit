@@ -154,6 +154,19 @@ if($arguments -is [Management.Automation.Language.VariableExpressionAst]){
     if(-not $assignments.Count){throw 'product argument assignment missing'}
     $arguments=$assignments[0].Right
 }
+$builders=@($arguments.FindAll({param($n)
+    $n -is [Management.Automation.Language.CommandAst] -and
+    $n.GetCommandName() -ceq 'Get-CanonicalMachinePlacementArguments'
+},$true))
+if($builders.Count){
+    if($builders.Count -ne 1){throw 'ambiguous child argument builder'}
+    $definitions=@($ast.FindAll({param($n)
+        $n -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $n.Name -ceq 'Get-CanonicalMachinePlacementArguments'
+    },$true))
+    if($definitions.Count -ne 1){throw 'missing child argument builder'}
+    $arguments=$definitions[0].Body
+}
 $values=@($arguments.FindAll({param($n)
     $n -is [Management.Automation.Language.StringConstantExpressionAst]
 },$true)|ForEach-Object {$_.Value})

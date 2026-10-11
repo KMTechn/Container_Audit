@@ -204,7 +204,7 @@ function Product([string]$Root, [string]$Mode, [string]$AppRoot='') {
 }
 function Get-CimInstance {
     [CmdletBinding()]
-    param([string]$ClassName, [string]$Filter)
+    param([string]$ClassName, [string]$Filter, [string[]]$Property, [uint32]$OperationTimeoutSec)
     if ($ClassName -ceq 'Win32_Process' -and $Filter -match '^ProcessId = (\d+)$') {
         $selectedPid = [int]$Matches[1]
         foreach ($relay in @(Relays)) {

@@ -365,15 +365,15 @@ def test_container_writer_sink_inventory_has_expected_current_findings(tmp_path)
         path.as_posix() for path in module._discover_shipped_powershell_paths(ROOT)
     ]
     assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
-    "call_operator": 17,
-    "com_wmi_process_create": 5,
-    "dot_source": 24,
+    "call_operator": 19,
+    "com_wmi_process_create": 7,
+    "dot_source": 30,
     "dotnet_process_start": 2,
     "invoke_expression": 1,
     "native_process_api": 4,
-    "reflective_invocation": 6,
+    "reflective_invocation": 8,
     "scheduler_com": 5,
-    "start_process": 2
+    "start_process": 4
 }
     preflight_calls = [
         row for row in payload["powershell_execution_inventory"]["execution_sites"]
@@ -451,7 +451,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings(tmp_path)
         # The earlier recovery function declaration is not a main-flow call.
         < installer.index("[void](Assert-BootstrapIntegrityRecord $install)",
                           installer.rindex(". $BootstrapIntegrityFunctions"))
-        < installer.index("[void](Start-ContainerWriterFence")
+        < installer.index("[void](Start-ContainerWriterFence", installer.rindex("$BootstrapIntegrityFunctions"))
     )
     raster_write = next(
         row

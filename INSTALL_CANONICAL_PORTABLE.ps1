@@ -4046,11 +4046,12 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
             if ($hashArgument -lt 0) { throw 'MACHINE_UNINSTALL_AUDIT_BINDING_ABSENT' }
             $arguments[$hashArgument+1]=Sha $path
         }
-        $child=Invoke-InstallationEvidenceChild 'machine-placement-helper' $engine $arguments -OnStarted {
+        $placementStarted=if (-not $Uninstall) { {
             param($ChildProcessId,$StartedAtUtc)
             $audit.placement_child.process_id=$ChildProcessId;$audit.placement_child.started_at_utc=$StartedAtUtc
             Save $path $audit
-        }
+        } } else { $null }
+        $child=Invoke-InstallationEvidenceChild 'machine-placement-helper' $engine $arguments -OnStarted $placementStarted
         $audit.placement_child.status='EXITED';$audit.placement_child.exit_code=[int]$child.ExitCode
         if (-not $testMode) {
             $binding=Read-InstallationHelperEvidenceBinding @($child.Stdout -split "`r?`n") `
