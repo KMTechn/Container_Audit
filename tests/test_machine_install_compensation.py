@@ -10,6 +10,35 @@ INSTALLER = Path(__file__).resolve().parents[1] / "INSTALL_CANONICAL_PORTABLE.ps
 
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
+def test_unproved_child_compensation_is_recorded_under_product_strict_mode(tmp_path, engine):
+    result = run_functions(tmp_path, INSTALLER,
+        ["Full", "Same", "ConvertFrom-CanonicalMachineArtifactJournal", "Restore-CanonicalMachineArtifacts",
+         "Restore-CanonicalMachineInstallationPrestate"], r'''
+Set-StrictMode -Version Latest
+$state=Join-Path $env:CA_CONTRACT_ROOT 'state'
+[void][IO.Directory]::CreateDirectory($state)
+function Get-ContainerMachineInstallStateRoot {return $state}
+function Invoke-InstallationEvidenceChild {throw 'unproved child must not cause another launch'}
+function Save-CanonicalMachineFailureAudit {}
+function Stop-ContainerWriterFence {throw 'unproved child fence must remain'}
+$items=@('pending-onboarding.json','shortcut.lnk' | ForEach-Object {
+ [pscustomobject]@{path=(Join-Path $state $_);exists=$false;bytes=$null;sha256='';acl_sddl=''}
+})
+$prestate=[ordered]@{run_id=('b'*32);startup_before=@();artifact_before=$items;worker_preparation=$null;worker_run_before=$null}
+$audit=[ordered]@{placement_child=@{status='EXIT_UNPROVEN'};compensation_child=@{status='NOT_STARTED'};
+ machine_prestate=@{path='';sha256=''};code_replacement=@{status='';receipt_path=''}}
+$worker=[pscustomobject]@{same_caller=$false;sid='unused-compensation-principal'}
+$root=Join-Path $env:CA_CONTRACT_ROOT 'current'
+if(Restore-CanonicalMachineInstallationPrestate $worker $root $root @{} $prestate @() '' (Join-Path $state 'audit.json') $audit $null){throw 'unproved compensation was released'}
+if($audit.compensation.child_exit -cne 'UNPROVEN' -or $audit.artifact_restore -cne 'PASS' -or -not $audit.fence_retained){throw 'strict-mode compensation record differs'}
+'STRICT_COMPENSATION_PASS'
+''', engine=engine)
+    (tmp_path / "strict-stderr.log").write_text(result.stderr, encoding="utf-8")
+    assert result.returncode == 0, "Strict-mode diagnostic is retained in the owned test directory"
+    assert "STRICT_COMPENSATION_PASS" in result.stdout
+
+
+@pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 def test_machine_artifact_compensation_restores_original_bytes_acl_and_absence(tmp_path, engine):
     result = run_functions(tmp_path, INSTALLER,
         ["Full", "Sha", "Get-CanonicalMachineArtifactPreimage", "Restore-CanonicalMachineArtifacts"], r'''
@@ -28,6 +57,25 @@ if((Test-Path -LiteralPath $added) -or (Test-Path -LiteralPath $absent)){throw '
 ''', engine=engine)
     assert result.returncode == 0, result.stderr
     assert "PASS" in result.stdout
+
+
+@pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
+def test_machine_recovery_recreates_withheld_preimage_from_persisted_journal(tmp_path, engine):
+    result = run_functions(tmp_path, INSTALLER,
+        ["Full", "Sha", "Get-CanonicalMachineArtifactPreimage", "Restore-CanonicalMachineArtifacts",
+         "ConvertTo-CanonicalMachineArtifactJournal", "ConvertFrom-CanonicalMachineArtifactJournal"], r'''
+$prior=Join-Path $env:CA_CONTRACT_ROOT 'withheld-pending.json'
+[IO.File]::WriteAllText($prior,'old incomplete onboarding intent')
+$sha=Sha $prior;$acl=Get-BootstrapAclComparisonKey ((Get-Acl -LiteralPath $prior).Sddl)
+$before=Get-CanonicalMachineArtifactPreimage @($prior)
+$journal=ConvertTo-CanonicalMachineArtifactJournal $before | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+Remove-Item -LiteralPath $prior -ErrorAction Stop
+Restore-CanonicalMachineArtifacts (ConvertFrom-CanonicalMachineArtifactJournal @($journal))
+if((Sha $prior) -cne $sha -or (Get-BootstrapAclComparisonKey ((Get-Acl -LiteralPath $prior).Sddl)) -cne $acl){throw 'Withheld publication bytes or ACL differ'}
+'RECREATED_PREIMAGE_PASS'
+''', engine=engine)
+    assert result.returncode == 0, "Recovery artifact evidence stays in the owned test directory"
+    assert "RECREATED_PREIMAGE_PASS" in result.stdout
 
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))

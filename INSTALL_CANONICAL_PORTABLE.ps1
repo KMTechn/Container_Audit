@@ -7,6 +7,9 @@ param(
     [string]$WorkerAccount = "",
     [string]$WorkerSurveyInventory = "",
     [switch]$PlanOnly,
+    [switch]$RecoverMachineInstallation,
+    [string]$MachineRecoveryAuditPath = "",
+    [string]$MachineRecoveryAuditSha256 = "",
     [switch]$Uninstall,
     [switch]$CompleteRetiredRemoval,
     [string]$OldSourceRoot = "",
@@ -3401,11 +3404,43 @@ function Get-CanonicalWorkerProfileRoot([string]$Sid) {
     if ([string]::IsNullOrWhiteSpace($value)) { throw 'PENDING_TARGET_AMBIGUOUS' }
     return Full ([Environment]::ExpandEnvironmentVariables($value)) 'worker profile'
 }
+function Get-CanonicalConsoleWorkerSecurity {
+    # WMI's computer-system principal identifies the console user. Resolve its
+    # one live Explorer session using read-only process owner observations.
+    $console=@(Get-CimInstance Win32_ComputerSystem -Property UserName -ErrorAction Stop)
+    if ($console.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$console[0].UserName)) { throw 'PENDING_TARGET_AMBIGUOUS' }
+    $sid=Resolve-CanonicalWorkerSid ([string]$console[0].UserName)
+    if ($sid -cnotmatch '^S-1-5-21-(?:[0-9]+-){3}[0-9]+$') { throw 'PENDING_TARGET_AMBIGUOUS' }
+    $owners=@(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop | ForEach-Object {
+        $owner=Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop
+        if ([uint32]$owner.ReturnValue -ne 0 -or [string]$owner.Sid -cnotmatch '^S-1-5-21-(?:[0-9]+-){3}[0-9]+$') { throw 'PENDING_TARGET_AMBIGUOUS' }
+        [pscustomobject]@{sid=[string]$owner.Sid;session_id=[int]$_.SessionId}
+    })
+    $sessions=@($owners | Where-Object {$_.sid -ceq $sid -and $_.session_id -gt 0} | ForEach-Object {$_.session_id} | Select-Object -Unique)
+    if ($sessions.Count -ne 1) { throw 'PENDING_TARGET_AMBIGUOUS' }
+    $sids=@($owners | Where-Object {$_.session_id -eq $sessions[0]} | ForEach-Object {$_.sid} | Select-Object -Unique)
+    if ($sids.Count -ne 1 -or $sids[0] -cne $sid) { throw 'PENDING_TARGET_AMBIGUOUS' }
+    return [pscustomobject]@{sid=$sid;session_id=[int]$sessions[0]}
+}
 function Resolve-CanonicalMachineWorker([string]$Account,[string]$InventoryPath,$Caller) {
     $privileged=[bool]$Caller.elevated -or [int]$Caller.session_id -le 0
     if (-not $privileged) {
         if ($Account -or $InventoryPath) { throw 'MACHINE_WORKER_ARGUMENTS_REQUIRE_ADMINISTRATOR' }
         return $null
+    }
+    if ([string]::IsNullOrWhiteSpace($Account) -and [string]::IsNullOrWhiteSpace($InventoryPath)) {
+        $console=Get-CanonicalConsoleWorkerSecurity
+        $sid=[string]$console.sid
+        $profile=Get-CanonicalWorkerProfileRoot $sid
+        if ($sid -ceq [string]$Caller.sid -and [int]$console.session_id -eq [int]$Caller.session_id -and -not $RecoverMachineInstallation) {
+            # Keep the established elevated console path (normal-user coordinator).
+            return $null
+        }
+        # Session 0/another administrator can bind one current console worker
+        # read-only. Interactive completion remains deferred to that worker.
+        $sha=Get-BootstrapStringSha256 ($sid+"`n"+$profile+"`n"+[string]$console.session_id)
+        return [pscustomobject]@{sid=$sid;profile_root=$profile;survey_sha256=$sha;survey_path='';
+            same_caller=($sid -ceq [string]$Caller.sid);target_source='CURRENT_CONSOLE'}
     }
     if ([string]::IsNullOrWhiteSpace($Account) -or [string]::IsNullOrWhiteSpace($InventoryPath)) {
         throw 'PENDING_TARGET_AMBIGUOUS'
@@ -3474,11 +3509,25 @@ function Restore-CanonicalMachineArtifacts($Before) {
     foreach ($item in $Before) {
         try {
             if (-not [bool]$item.exists -and -not (Test-Path -LiteralPath ([string]$item.path))) { continue }
-            Assert-BootstrapNoReparsePoint ([string]$item.path) 'machine artifact restore' -PathOnly
+            $present=Test-Path -LiteralPath ([string]$item.path)
+            if ($present) {
+                Assert-BootstrapNoReparsePoint ([string]$item.path) 'machine artifact restore' -PathOnly
+            } else {
+                # Restore a withheld old intent without following a replacement leaf.
+                if ($null -ne (Get-Item -LiteralPath ([string]$item.path) -Force -ErrorAction SilentlyContinue)) { throw 'Machine artifact restore boundary differs.' }
+                $ancestor=Split-Path -Parent ([string]$item.path)
+                Assert-BootstrapNoReparsePoint $ancestor 'machine artifact restore parent' -PathOnly
+            }
             if ([bool]$item.exists) {
-                [IO.File]::WriteAllBytes([string]$item.path,[byte[]]$item.bytes)
+                if ($present) { [IO.File]::WriteAllBytes([string]$item.path,[byte[]]$item.bytes) }
+                else {
+                    $stream=[IO.File]::Open([string]$item.path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+                    try { $stream.Write([byte[]]$item.bytes,0,([byte[]]$item.bytes).Length) } finally { $stream.Dispose() }
+                }
                 Set-Acl -LiteralPath ([string]$item.path) -AclObject $item.acl
-                if ((Sha ([string]$item.path)) -cne [string]$item.sha256) { throw 'Machine artifact restore readback failed.' }
+                if ((Sha ([string]$item.path)) -cne [string]$item.sha256 -or
+                    (Get-BootstrapAclComparisonKey ([string](Get-Acl -LiteralPath ([string]$item.path)).Sddl)) -cne
+                    (Get-BootstrapAclComparisonKey ([string]$item.acl.Sddl))) { throw 'Machine artifact restore readback failed.' }
             } elseif (Test-Path -LiteralPath ([string]$item.path)) {
                 if (-not (Test-Path -LiteralPath ([string]$item.path) -PathType Leaf)) { throw 'Machine artifact restore boundary differs.' }
                 Remove-Item -LiteralPath ([string]$item.path) -ErrorAction Stop
@@ -3486,6 +3535,22 @@ function Restore-CanonicalMachineArtifacts($Before) {
         } catch { $failed=$true }
     }
     if ($failed) { throw 'Machine artifact restore failed.' }
+}
+function Test-CanonicalMachineCodePrestate([string]$Root,[string]$ManifestSha256,$StartupBefore) {
+    try {
+        if (-not $ManifestSha256) {
+            if (Test-Path -LiteralPath $Root) { return $false }
+        } else {
+            if ((Sha (Join-Path $Root 'portable-manifest.json')) -cne $ManifestSha256) { return $false }
+            [void](Assert-BootstrapIntegrityRecord $Root)
+        }
+        foreach ($item in $StartupBefore) {
+            $exists=Test-Path -LiteralPath ([string]$item.path) -PathType Leaf
+            if ($exists -ne [bool]$item.exists) { return $false }
+            if ($exists -and (Sha ([string]$item.path)) -cne [string]$item.sha256) { return $false }
+        }
+        return $true
+    } catch { return $false }
 }
 function Remove-CanonicalMachineArtifacts([string]$Root,$Worker,[string[]]$Paths) {
     $pending=$Paths[0];$shortcut=$Paths[1]
@@ -3581,6 +3646,225 @@ function Restore-CanonicalWorkerPreparationDirectories($Paths) {
         }
     }
 }
+function Get-CanonicalMachinePlacementArguments($Worker,[string]$Source,[string]$Root,$Manifest,$Prepared,[string]$Control,[string]$Run) {
+    $local=Join-Path ([string]$Worker.profile_root) 'AppData\Local'
+    $state=Get-ContainerMachineInstallStateRoot
+    $arguments=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $Source 'INSTALL_THIS_PC.ps1'),
+        '-InstallRoot',$Root,'-OperatorSid',([string]$Worker.sid),'-OperatorLocalAppDataRoot',$local,'-OperatorDataRoot',(Join-Path $local 'KMTech\ContainerAudit'),
+        '-MachineControlRoot',$Control,'-ElevationLogPath',(Join-Path $state ('install-audit\placement-'+$Run+'.jsonl')),
+        '-WriterFenceHelperPath',(Join-Path $Source 'tools\container_writer_fence.ps1'),
+        '-ExpectedWriterFenceHelperSha256',([string]$Manifest.writer_fence_helper_sha256),
+        '-WriterFencePreparedReceiptPath',$Prepared.path,'-WriterFencePreparedReceiptSha256',$Prepared.sha256,
+        '-WriterFenceSessionId',$Script:CanonicalWriterFenceSessionId,'-WriterFenceAttemptId',$Script:CanonicalWriterFenceAttemptId,
+        '-WriterFenceReplacementTransactionId',$Run,'-WriterFenceDelegationToken',$Script:CanonicalWriterFenceDelegationToken)
+    if ($testMode) { $arguments+='-AllowNoncanonicalLayoutForTest' }
+    return $arguments
+}
+function ConvertTo-CanonicalMachineArtifactJournal($Before) {
+    if ($null -eq $Before) { return @() }
+    return @($Before | ForEach-Object {
+        [ordered]@{path=$_.path;exists=[bool]$_.exists;bytes=$_.bytes;sha256=$_.sha256;
+            acl_sddl=if([bool]$_.exists){[string]$_.acl.Sddl}else{''}}
+    })
+}
+function ConvertFrom-CanonicalMachineArtifactJournal($Before) {
+    if ($null -eq $Before) { return @() }
+    return @($Before | ForEach-Object {
+        $acl=$null
+        if ([bool]$_.exists) {
+            $acl=New-Object Security.AccessControl.FileSecurity
+            $acl.SetSecurityDescriptorSddlForm([string]$_.acl_sddl)
+        }
+        [pscustomobject]@{path=$_.path;exists=[bool]$_.exists;bytes=$_.bytes;sha256=$_.sha256;acl=$acl}
+    })
+}
+function Save-CanonicalMachineFailureAudit([string]$Path,$Audit) {
+    # A reporting hook/failure must not hide a completed compensation proof.
+    try { Save $Path $Audit }
+    catch { Write-Utf8Json $Path $Audit }
+}
+function Restore-CanonicalMachineInstallationPrestate($Worker,[string]$Source,[string]$Root,$Manifest,$Prestate,
+    [string[]]$PlacementArguments,[string]$Receipt,[string]$AuditPath,$Audit,$AuthorityLease) {
+    $state=Get-ContainerMachineInstallStateRoot
+    $control=Join-Path $state 'control\writer-session'
+    $run=[string]$Prestate.run_id
+    $engine=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $startup=ConvertFrom-CanonicalMachineArtifactJournal $Prestate.startup_before
+    $artifacts=ConvertFrom-CanonicalMachineArtifactJournal $Prestate.artifact_before
+    $proof=[ordered]@{child_exit='UNPROVEN';code_restore='UNPROVEN';artifact_restore='UNPROVEN';worker_run_restore='NOT_CHANGED';worker_directory_restore='NOT_CHANGED'}
+    if ($null -eq $Audit.compensation_child) { $Audit.compensation_child=@{status='NOT_STARTED'} }
+    if ([string]$Audit.placement_child.status -cin @('NOT_STARTED','EXITED') -and
+        [string]$Audit.compensation_child.status -cin @('NOT_STARTED','EXITED')) { $proof.child_exit='PASS' }
+    if ($proof.child_exit -ceq 'PASS') {
+        try {
+            if (-not (Test-CanonicalMachineCodePrestate $Root ([string]$Prestate.before_manifest_sha256) @())) {
+                if ([string]$Prestate.before_manifest_sha256 -and (Test-Path -LiteralPath $Receipt -PathType Leaf)) {
+                    $original=Read-BootstrapReplacementReceipt $Receipt (Sha $Receipt)
+                    if ([string]$original.transaction_id -cne $run -or -not (Same ([string]$original.install_root) $Root) -or
+                        [string]$original.old.manifest_sha256 -cne [string]$Prestate.before_manifest_sha256) { throw 'MACHINE_RECOVERY_REPLACEMENT_BINDING_DIFFERS' }
+                    $arguments=@($PlacementArguments)+@('-RestoreVerifiedReplacement','-ReplacementTransactionId',$run,
+                        '-ReplacementReceiptPath',$Receipt,'-ReplacementReceiptSha256',(Sha $Receipt),
+                        '-RestoreEvidencePath',(Join-Path $state ('install-audit\failed-restore-'+$run+'-'+[Guid]::NewGuid().ToString('N')+'.json')))
+                    $Audit.compensation_child=@{status='EXIT_UNPROVEN'}
+                    Save-CanonicalMachineFailureAudit $AuditPath $Audit
+                    $child=Invoke-InstallationEvidenceChild 'machine-failure-code-restore' $engine $arguments
+                    $Audit.compensation_child=@{status='EXITED';exit_code=[int]$child.ExitCode}
+                    if ($child.ExitCode -ne 0) { throw 'MACHINE_FAILURE_CODE_RESTORE_FAILED' }
+                    $Audit.code_replacement.status='RESTORED_AFTER_FAILURE'
+                } elseif (-not [string]$Prestate.before_manifest_sha256 -and (Test-Path -LiteralPath $Root -PathType Container)) {
+                    if ((Sha (Join-Path $Root 'portable-manifest.json')) -cne [string]$Prestate.source_manifest_sha256) { throw 'MACHINE_RECOVERY_NEW_CODE_BINDING_DIFFERS' }
+                    [void](Assert-BootstrapIntegrityRecord $Root)
+                    $arguments=@($PlacementArguments)+@('-SourceRoot',$Source,'-Uninstall','-RemovalControllerProcessId',[string]$PID,
+                        '-RemovalControllerStartedAtUtc',(Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o'),
+                        '-RemovalControllerCanonicalPath',$PSCommandPath)
+                    $Audit.compensation_child=@{status='EXIT_UNPROVEN'}
+                    Save-CanonicalMachineFailureAudit $AuditPath $Audit
+                    $child=Invoke-InstallationEvidenceChild 'machine-failure-new-code-remove' $engine $arguments
+                    $Audit.compensation_child=@{status='EXITED';exit_code=[int]$child.ExitCode}
+                    if ($child.ExitCode -ne 0) { throw 'MACHINE_FAILURE_NEW_CODE_REMOVE_FAILED' }
+                    $Audit.code_replacement.status='NEW_CODE_REMOVED_AFTER_FAILURE'
+                }
+            }
+            if (Test-CanonicalMachineCodePrestate $Root ([string]$Prestate.before_manifest_sha256) @()) {
+                Restore-CanonicalMachineArtifacts $startup
+                if (Test-CanonicalMachineCodePrestate $Root ([string]$Prestate.before_manifest_sha256) $startup) { $proof.code_restore='PASS' }
+            }
+        } catch { $Audit.code_replacement.status='RESTORE_FAILED' }
+    }
+    if ([string]$Audit.compensation_child.status -cnotin @('NOT_STARTED','EXITED')) { $proof.child_exit='UNPROVEN' }
+    if ($proof.code_restore -cne 'PASS') {
+        # The immutable journal retains the old intent for a later proved restore.
+        $pending=Join-Path $state 'pending-onboarding.json'
+        $artifacts=@($artifacts | ForEach-Object {
+            if (Same ([string]$_.path) $pending) { [pscustomobject]@{path=$_.path;exists=$false;bytes=$null;sha256='';acl=$null} } else { $_ }
+        })
+        $Audit.pending_restore='WITHHELD_CODE_PRESTATE_DIFFERS'
+    } else { $Audit.pending_restore='CODE_AND_CONTROL_PRESTATE_VERIFIED' }
+    try { Restore-CanonicalMachineArtifacts $artifacts; $proof.artifact_restore='PASS' } catch { $proof.artifact_restore='FAILED' }
+    if ($null -ne $Prestate.worker_preparation) {
+        $proof.worker_run_restore='FAILED';$proof.worker_directory_restore='FAILED'
+        if ([bool]$Worker.same_caller) {
+            try {
+                Restore $Prestate.worker_run_before
+                if ((Snapshot | ConvertTo-Json -Compress) -cne ($Prestate.worker_run_before | ConvertTo-Json -Compress)) { throw 'MACHINE_RECOVERY_WORKER_RUN_READBACK_FAILED' }
+                $proof.worker_run_restore='PASS'
+            } catch {}
+            try {
+                Restore-CanonicalWorkerPreparationDirectories $Prestate.worker_preparation
+                foreach ($directory in $Prestate.worker_preparation.created_directories) {
+                    if (Test-Path -LiteralPath $directory) { throw 'MACHINE_RECOVERY_WORKER_DIRECTORY_READBACK_FAILED' }
+                }
+                $proof.worker_directory_restore='PASS'
+            } catch {}
+        }
+    }
+    $Audit.compensation=$proof
+    $Audit.artifact_restore=$proof.artifact_restore
+    $Audit.worker_run_restore=$proof.worker_run_restore
+    $Audit.worker_directory_restore=$proof.worker_directory_restore
+    $Audit.fence_retained=$true
+    $Audit.support_recovery='RecoverMachineInstallation: exact machine audit path/SHA256 and original admitted packet/worker required'
+    try { Save-CanonicalMachineFailureAudit $AuditPath $Audit } catch {}
+    $proven=($proof.child_exit -ceq 'PASS' -and $proof.code_restore -ceq 'PASS' -and $proof.artifact_restore -ceq 'PASS' -and
+        $proof.worker_run_restore -cin @('PASS','NOT_CHANGED') -and $proof.worker_directory_restore -cin @('PASS','NOT_CHANGED'))
+    if (-not $proven) { return $false }
+    try {
+        $proofPath=Join-Path $state ('install-audit\compensated-'+$run+'-'+[Guid]::NewGuid().ToString('N')+'.json')
+        Write-Utf8Json $proofPath ([ordered]@{schema='container-audit-machine-compensation-v1';status='COMPENSATED_FAILURE';
+            run_id=$run;install_root=$Root;worker_sid=[string]$Worker.sid;session_id=$Script:CanonicalWriterFenceSessionId;
+            attempt_id=$Script:CanonicalWriterFenceAttemptId;prestate_path=$Audit.machine_prestate.path;
+            prestate_sha256=$Audit.machine_prestate.sha256;compensation=$proof;secret_values_recorded=$false})
+        $authorization=New-CanonicalWriterFenceReleaseAuthorization (Join-Path $state ('install-audit\failure-release-'+[Guid]::NewGuid().ToString('N')+'.json')) 'ROLLBACK_COMPLETE' $proofPath
+        [void](Set-ContainerWriterFencePrepared -ControlRoot $control -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $run -PreparedReceiptPath $authorization.path -PreparedReceiptSha256 $authorization.sha256 -Status 'PREPARED' -AuthorityLease $AuthorityLease)
+        [void](Clear-ContainerWriterFenceDelegation -ControlRoot $control -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $run -DelegationToken $Script:CanonicalWriterFenceDelegationToken -AuthorityLease $AuthorityLease)
+        [void](Stop-ContainerWriterFence -ControlRoot $control -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $run -ReleaseAuthorizationPath $authorization.path -ReleaseAuthorizationSha256 $authorization.sha256 -AuthorityLease $AuthorityLease)
+        $Audit.fence_retained=$false
+        $Audit.fence_release='PROVEN_FAILURE_COMPENSATION'
+        try { Save-CanonicalMachineFailureAudit $AuditPath $Audit } catch {}
+        return $true
+    } catch {
+        $Audit.fence_release_failure_type=$_.Exception.GetType().FullName
+        $Audit.fence_release_failure_line=$_.InvocationInfo.ScriptLineNumber
+        if ($_.Exception.Message -cmatch '^[A-Z][A-Z0-9_]{4,127}$') { $Audit.fence_release_failure_code=$_.Exception.Message }
+        try { Save-CanonicalMachineFailureAudit $AuditPath $Audit } catch {}
+        return $false
+    }
+}
+function Read-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[string]$Root,$Manifest,[string]$AuditPath,[string]$AuditSha256) {
+    if (-not $testMode -and -not (Test-InstallationEvidencePrivileged)) { throw 'MACHINE_RECOVERY_ADMINISTRATOR_REQUIRED' }
+    $state=Get-ContainerMachineInstallStateRoot
+    $control=Join-Path $state 'control\writer-session'
+    $auditFull=Full $AuditPath 'machine recovery audit'
+    Assert-BootstrapNoReparsePoint $auditFull 'machine recovery audit' -PathOnly
+    Assert-InstallationEvidenceProtectedPath $auditFull
+    if ($AuditSha256 -cnotmatch '^[0-9a-f]{64}$' -or (Get-Item -LiteralPath $auditFull).Length -gt 131072 -or (Sha $auditFull) -cne $AuditSha256) { throw 'MACHINE_RECOVERY_AUDIT_CHANGED' }
+    $recordPayload=Get-Content -LiteralPath $auditFull -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson
+    # Recovery extends the persisted audit with the current compensation result.
+    # Keep its existing fields while giving PS 5.1 and PS 7 the same mutable record.
+    $record=[ordered]@{}
+    foreach ($property in $recordPayload.PSObject.Properties) { $record[$property.Name]=$property.Value }
+    $run=[string]$record.run_id
+    if ($run -cnotmatch '^[0-9a-f]{32}$' -or -not (Same $auditFull (Join-Path $state ('install-audit\canonical-portable-'+$run+'.json'))) -or
+        [string]$record.schema -cne 'container-audit-canonical-portable-install-v2' -or [string]$record.operation -cne 'INSTALL' -or
+        [string]$record.status -cne 'MACHINE_INSTALL_FAILED' -or -not (Same ([string]$record.install_root) $Root) -or
+        [string]$record.worker_sid -cne [string]$Worker.sid -or [string]$record.placement_child.status -cnotin @('NOT_STARTED','EXITED') -or
+        [string]$record.compensation_child.status -cnotin @('NOT_STARTED','EXITED') -or
+        [string]$record.source_manifest_sha256 -cne (Sha (Join-Path $Source 'portable-manifest.json'))) { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
+    $journal=Join-Path $state ('install-audit\machine-prestate-'+$run+'\prestate.json')
+    Assert-BootstrapNoReparsePoint $journal 'machine recovery prestate' -PathOnly
+    Assert-InstallationEvidenceProtectedPath $journal
+    if (-not (Same ([string]$record.machine_prestate.path) $journal) -or (Get-Item -LiteralPath $journal).Length -gt 1048576 -or
+        (Sha $journal) -cne [string]$record.machine_prestate.sha256) { throw 'MACHINE_RECOVERY_PRESTATE_CHANGED' }
+    $prestate=Get-Content -LiteralPath $journal -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson
+    $fence=Read-ContainerWriterFence $control
+    if ([string]$prestate.schema -cne 'container-audit-machine-install-prestate-v1' -or [string]$prestate.run_id -cne $run -or
+        -not (Same ([string]$prestate.install_root) $Root) -or [string]$prestate.worker_sid -cne [string]$Worker.sid -or
+        -not (Same ([string]$prestate.profile_root) ([string]$Worker.profile_root)) -or
+        [string]$prestate.source_manifest_sha256 -cne [string]$record.source_manifest_sha256 -or
+        [string]$fence.owner_kind -cne 'canonical_installer' -or [string]$fence.replacement_transaction_id -cne $run -or
+        [string]$fence.session_id -cne [string]$prestate.session_id -or [string]$fence.attempt_id -cne [string]$prestate.attempt_id -or
+        [string]$fence.orchestrator_sha256 -cne (Sha $PSCommandPath) -or [string]$fence.orchestrator_sha256 -cne [string]$prestate.orchestrator_sha256 -or
+        [string]$fence.writer_contract_sha256 -cne [string]$Manifest.writer_session_contract_sha256 -or
+        [string]$fence.writer_inventory_sha256 -cne $Script:ContainerWriterFenceInventorySha256 -or
+        ($null -ne $prestate.worker_preparation -and -not [bool]$Worker.same_caller)) { throw 'MACHINE_RECOVERY_AUTHORITY_BINDING_DIFFERS' }
+    $prepared=$prestate.prepared_receipt
+    if ((Sha ([string]$prepared.path)) -cne [string]$prepared.sha256) { throw 'MACHINE_RECOVERY_PREPARED_RECEIPT_CHANGED' }
+    return [pscustomobject]@{state=$state;control=$control;run_id=$run;prepared=$prepared;prestate=$prestate;fence=$fence;audit=$record;audit_path=$auditFull}
+}
+function Invoke-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[string]$Root,$Manifest,$Context,$AuthorityLease) {
+    $state=$Context.state;$control=$Context.control;$run=$Context.run_id;$prepared=$Context.prepared
+    $prestate=$Context.prestate;$fence=$Context.fence;$record=$Context.audit;$auditFull=$Context.audit_path
+    $authority=$AuthorityLease
+    $Script:ContainerMachineInstallControlRoot=$control
+    $Script:ContainerWriterFenceAdmissionProductionRoot=$control
+    $Script:CanonicalWriterFenceSessionId=[string]$fence.session_id
+    $Script:CanonicalWriterFenceAttemptId=[string]$fence.attempt_id
+    $Script:CanonicalWriterFenceTransactionId=$run
+    try {
+        [void](Assert-ContainerWriterFenceOwner -ControlRoot $control -SessionId $fence.session_id -AttemptId $fence.attempt_id -ReplacementTransactionId $run -AuthorityLease $authority)
+        [void](Initialize-InstallationEvidence (Join-Path $state ('install-audit\recovery-'+$run+'-'+[Guid]::NewGuid().ToString('N')+'.json')) ([string]$Worker.sid) @())
+        [void](Set-ContainerWriterFencePrepared -ControlRoot $control -SessionId $fence.session_id -AttemptId $fence.attempt_id -ReplacementTransactionId $run `
+            -PreparedReceiptPath $prepared.path -PreparedReceiptSha256 $prepared.sha256 -Status 'INSTALLING' -AuthorityLease $authority)
+        $Script:CanonicalWriterFenceDelegationToken=[Guid]::NewGuid().ToString('N')+[Guid]::NewGuid().ToString('N')
+        [void](Set-ContainerWriterFenceDelegation -ControlRoot $control -SessionId $fence.session_id -AttemptId $fence.attempt_id -ReplacementTransactionId $run `
+            -DelegationToken $Script:CanonicalWriterFenceDelegationToken -DelegatedSources @('canonical_code_placement') -LifetimeSeconds 300 -AuthorityLease $authority)
+        $arguments=Get-CanonicalMachinePlacementArguments $Worker $Source $Root $Manifest $prepared $control $run
+        if (-not (Restore-CanonicalMachineInstallationPrestate $Worker $Source $Root $Manifest $prestate $arguments ([string]$record.code_replacement.receipt_path) $auditFull $record $authority)) {
+            throw 'MACHINE_RECOVERY_COMPENSATION_UNPROVEN'
+        }
+        if ($EvidencePath) { Save (Full $EvidencePath 'EvidencePath') $record }
+        Write-Output 'install_status=PASS_MACHINE_RECOVERED'
+        Write-CanonicalMachinePublicRecord 'PASS_MACHINE_RECOVERED' 'PASS'
+    } finally {
+        # The public entry's finally owns and releases the original authority.
+        $Script:ContainerMachineInstallControlRoot=''
+        $Script:ContainerWriterFenceAdmissionProductionRoot=''
+    }
+}
+
 function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Root,$Manifest,$AuthorityLease) {
     if (-not $testMode -and -not (Test-InstallationEvidencePrivileged)) {
         throw 'Machine installation requires an already privileged token.'
@@ -3610,6 +3894,10 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
             throw 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER'
         }
     }
+    $workerPreparation=$null
+    if ([bool]$Worker.same_caller -and -not $Uninstall -and -not $RestoreVerifiedReplacement) {
+        $workerPreparation=Get-CanonicalWorkerPreparationPaths $Worker
+    }
     if ($PlanOnly) { Write-Output 'install_status=PLAN_ONLY'; return }
     $Script:ContainerMachineInstallControlRoot=$control
     $Script:ContainerWriterFenceAdmissionProductionRoot=$control
@@ -3628,14 +3916,22 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         after=@{scope='WORKER_HKCU';observation_status='NOT_CHANGED'};
         code_replacement=@{transaction_id=$run;receipt_path=$receipt};created_at=$started;secret_values_recorded=$false}
     $artifactPaths=Get-CanonicalMachineArtifactPaths $state
-    $workerPreparation=$null;$workerRunBefore=$null
-    if ([bool]$Worker.same_caller -and -not $Uninstall -and -not $RestoreVerifiedReplacement) {
-        $workerPreparation=Get-CanonicalWorkerPreparationPaths $Worker
+    $workerRunBefore=$null
+    if ($null -ne $workerPreparation) {
         $artifactPaths+=@($workerPreparation.shortcuts)
         $workerRunBefore=Snapshot
     }
     $artifactBefore=Get-CanonicalMachineArtifactPreimage $artifactPaths
-    $complete=$false;$placementBaseArguments=$null;$replacementApplied=$false
+    $beforeManifestSha256=if(Test-Path -LiteralPath (Join-Path $Root 'portable-manifest.json') -PathType Leaf){Sha (Join-Path $Root 'portable-manifest.json')}else{''}
+    $startupBefore=@()
+    if (-not $Uninstall -and -not $RestoreVerifiedReplacement) {
+        $startupControl=Join-Path (Split-Path -Parent $Root) 'update-control'
+        $startupBefore=Get-CanonicalMachineArtifactPreimage (@('policy.json','active.json','transition.json' | ForEach-Object {Join-Path $startupControl $_})+@(Join-Path (Split-Path -Parent $Root) 'removed.json'))
+    }
+    $complete=$false;$placementBaseArguments=$null;$prestate=$null
+    $audit.placement_child=@{status='NOT_STARTED'}
+    $audit.compensation_child=@{status='NOT_STARTED'}
+    $audit.machine_prestate=@{path='';sha256=''}
     try {
         [void](Initialize-InstallationEvidence $path ([string]$Worker.sid) @($Script:CanonicalWriterFenceDelegationToken))
         $audit.stage_evidence_root=$Script:InstallationEvidenceRoot
@@ -3650,6 +3946,21 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         $prepared=New-CanonicalWriterFencePreparedReceipt (Join-Path $state ('install-audit\prepared-'+$run+'.json')) `
             $Script:CanonicalWriterFenceSessionId $Script:CanonicalWriterFenceAttemptId $run $started (Sha $PSCommandPath) `
             ([string]$Manifest.writer_session_contract_sha256) (Sha (Join-Path $Source 'portable-manifest.json')) ([string]$Worker.sid) $local
+        # Persist the bound recovery prestate before publishing a machine fence.
+        $prestate=[ordered]@{schema='container-audit-machine-install-prestate-v1';run_id=$run;install_root=$Root;
+            worker_sid=[string]$Worker.sid;profile_root=[string]$Worker.profile_root;source_manifest_sha256=$audit.source_manifest_sha256;
+            before_manifest_sha256=$beforeManifestSha256;artifact_before=@(ConvertTo-CanonicalMachineArtifactJournal $artifactBefore);
+            startup_before=@(ConvertTo-CanonicalMachineArtifactJournal $startupBefore);worker_preparation=$workerPreparation;worker_run_before=$workerRunBefore;
+            session_id=$Script:CanonicalWriterFenceSessionId;attempt_id=$Script:CanonicalWriterFenceAttemptId;orchestrator_sha256=Sha $PSCommandPath;
+            prepared_receipt=$prepared;secret_values_recorded=$false}
+        $privatePrestate=Join-Path $state ('install-audit\machine-prestate-'+$run)
+        New-InstallationProtectedDirectory $privatePrestate 'S-1-5-32-544'
+        $journal=Join-Path $privatePrestate 'prestate.json'
+        Write-Utf8Json $journal $prestate
+        if ((Get-Item -LiteralPath $journal).Length -gt 1048576) { throw 'MACHINE_PRESTATE_TOO_LARGE' }
+        $audit.machine_prestate=@{path=$journal;sha256=Sha $journal}
+        if ($Uninstall) { $audit.status='PREIMAGE_SAVED' }
+        Save $path $audit
         [void](Start-ContainerWriterFence -ControlRoot $control -Status 'INSTALLING' -OwnerKind 'canonical_installer' `
             -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
             -ReplacementTransactionId $run -SessionStartedAtUtc $started -OrchestratorSha256 (Sha $PSCommandPath) `
@@ -3658,17 +3969,7 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
             -DelegatedSources @('canonical_code_placement') -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(15).ToString('o')) `
             -AuthorityLease $authority)
         $active=$true
-        if ($Uninstall) { $audit.status='PREIMAGE_SAVED' }
-        Save $path $audit
-        $arguments=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $Source 'INSTALL_THIS_PC.ps1'),
-            '-InstallRoot',$Root,'-OperatorSid',([string]$Worker.sid),'-OperatorLocalAppDataRoot',$local,'-OperatorDataRoot',$data,
-            '-MachineControlRoot',$control,'-ElevationLogPath',(Join-Path $state ('install-audit\placement-'+$run+'.jsonl')),
-            '-WriterFenceHelperPath',(Join-Path $Source 'tools\container_writer_fence.ps1'),
-            '-ExpectedWriterFenceHelperSha256',([string]$Manifest.writer_fence_helper_sha256),
-            '-WriterFencePreparedReceiptPath',$prepared.path,'-WriterFencePreparedReceiptSha256',$prepared.sha256,
-            '-WriterFenceSessionId',$Script:CanonicalWriterFenceSessionId,'-WriterFenceAttemptId',$Script:CanonicalWriterFenceAttemptId,
-            '-WriterFenceReplacementTransactionId',$run,'-WriterFenceDelegationToken',$Script:CanonicalWriterFenceDelegationToken)
-        if ($testMode) { $arguments+='-AllowNoncanonicalLayoutForTest' }
+        $arguments=Get-CanonicalMachinePlacementArguments $Worker $Source $Root $Manifest $prepared $control $run
         $placementBaseArguments=@($arguments)
         if ($RestoreVerifiedReplacement) {
             $original=Read-BootstrapReplacementReceipt $RestoreReceiptPath $RestoreReceiptSha256
@@ -3688,8 +3989,16 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         }
         # INSTALL_THIS_PC reuses its existing already-elevated placement path.
         $engine=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $audit.placement_child.status='EXIT_UNPROVEN'
+        Save $path $audit
+        if ($Uninstall) {
+            # Bind the exact checkpoint handed to the already-elevated remover.
+            $hashArgument=[Array]::IndexOf([string[]]$arguments,'-UninstallAuditSha256')
+            if ($hashArgument -lt 0) { throw 'MACHINE_UNINSTALL_AUDIT_BINDING_ABSENT' }
+            $arguments[$hashArgument+1]=Sha $path
+        }
         $child=Invoke-InstallationEvidenceChild 'machine-placement-helper' $engine $arguments
-        if ($child.ExitCode -ne 0) { throw 'MACHINE_INSTALL_FAILED' }
+        $audit.placement_child=@{status='EXITED';exit_code=[int]$child.ExitCode}
         if (-not $testMode) {
             $binding=Read-InstallationHelperEvidenceBinding @($child.Stdout -split "`r?`n") `
                 (Join-Path $state ('install-audit\placement-'+$run+'.jsonl')) $child.ProcessId ([string]$Manifest.helper_sha256)
@@ -3703,7 +4012,7 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
                 $audit.code_replacement.receipt_sha256=Sha $receipt
             }
         }
-        $replacementApplied=($arguments -ccontains '-ReplaceExistingVerifiedPortable')
+        if ($child.ExitCode -ne 0) { throw 'MACHINE_INSTALL_FAILED' }
         if ($Uninstall) {
             $removed=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Split-Path -Parent $Root) 'removed.json') | ConvertFrom-Json
             if ([string]$removed.lifecycle_state -cne 'REMOVED') { throw 'Machine removal readback failed.' }
@@ -3756,25 +4065,25 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         throw
     } finally {
         if (-not $complete) {
-            # Compensation must run even when publishing the failure audit fails.
-            if ($replacementApplied -and $active -and (Test-Path -LiteralPath $receipt -PathType Leaf)) {
+            # Independent compensation and its protected proof survive audit errors.
+            # Publication can succeed before its readback throws. Only reclaim our tuple.
+            if (-not $active -and $null -ne $prestate -and $audit.machine_prestate.sha256) {
                 try {
-                    $original=Read-BootstrapReplacementReceipt $receipt (Sha $receipt)
-                    $rollbackArguments=@($placementBaseArguments)+@('-RestoreVerifiedReplacement',
-                        '-ReplacementTransactionId',([string]$original.transaction_id),'-ReplacementReceiptPath',$receipt,
-                        '-ReplacementReceiptSha256',(Sha $receipt),'-RestoreEvidencePath',(Join-Path $state ('install-audit\failed-restore-'+$run+'.json')))
-                    $rollbackChild=Invoke-InstallationEvidenceChild 'machine-failure-code-restore' $engine $rollbackArguments
-                    if ($rollbackChild.ExitCode -ne 0) { throw 'Machine failure code restore failed.' }
-                    $audit.code_replacement.status='RESTORED_AFTER_FAILURE'
-                } catch { $audit.code_replacement.status='RESTORE_FAILED' }
+                    [void](Assert-ContainerWriterFenceOwner -ControlRoot $control -SessionId $Script:CanonicalWriterFenceSessionId `
+                        -AttemptId $Script:CanonicalWriterFenceAttemptId -ReplacementTransactionId $run -AuthorityLease $authority)
+                    $active=$true
+                } catch {}
             }
-            try { Restore-CanonicalMachineArtifacts $artifactBefore; $audit.artifact_restore='PASS' }
-            catch { $audit.artifact_restore='FAILED' }
-            if ($null -ne $workerPreparation) {
-                try { Restore $workerRunBefore; $audit.worker_run_restore='PASS' } catch { $audit.worker_run_restore='FAILED' }
-                try { Restore-CanonicalWorkerPreparationDirectories $workerPreparation } catch { $audit.worker_directory_restore='FAILED' }
+            if ($active -and $null -ne $prestate) {
+                try {
+                    if (Restore-CanonicalMachineInstallationPrestate $Worker $Source $Root $Manifest $prestate $placementBaseArguments $receipt $path $audit $authority) { $active=$false }
+                } catch {
+                    $audit.fence_retained=$true
+                    $audit.compensation_failure_type=$_.Exception.GetType().FullName
+                    $audit.compensation_failure_line=$_.InvocationInfo.ScriptLineNumber
+                }
             }
-            if ($machineStateReady) { try { Save $path $audit } catch {} }
+            if ($machineStateReady) { try { Save-CanonicalMachineFailureAudit $path $audit } catch {} }
         }
         $Script:ContainerMachineInstallControlRoot=''
         $Script:ContainerWriterFenceAdmissionProductionRoot=''
@@ -3857,6 +4166,10 @@ if (-not (Test-Path -LiteralPath $writerFenceHelperPath -PathType Leaf)) {
     throw 'Portable tree is missing the all-writer fence helper.'
 }
 . $writerFenceHelperPath
+if ($RecoverMachineInstallation) {
+    if ($null -eq $machineWorker -or $PlanOnly -or $Uninstall -or $RestoreVerifiedReplacement -or $CompleteRetiredRemoval -or $ServerBaseUrl -or
+        -not $MachineRecoveryAuditPath -or $MachineRecoveryAuditSha256 -cnotmatch '^[0-9a-f]{64}$') { throw 'MACHINE_RECOVERY_ARGUMENTS_INVALID' }
+} elseif ($MachineRecoveryAuditPath -or $MachineRecoveryAuditSha256) { throw 'Machine recovery audit arguments require -RecoverMachineInstallation.' }
 $sourceManifestSha256 = Sha (Join-Path $source 'portable-manifest.json')
 $sourceHelperSha256 = Sha (Join-Path $source 'INSTALL_THIS_PC.ps1')
 $sourceIntegrityHelperSha256 = Sha (Join-Path $source 'tools\bootstrap_integrity.ps1')
@@ -4257,6 +4570,16 @@ $audit=$null
     $Script:CanonicalWriterFenceTransactionId=[Guid]::NewGuid().ToString('N')
     $canonicalWriterFenceOrchestratorSha256=Sha $PSCommandPath
     $canonicalWriterFenceContractSha256=[string]$sourceManifest.writer_session_contract_sha256
+    $machineRecovery=$null
+    if ($RecoverMachineInstallation) {
+        try { $machineRecovery=Read-CanonicalMachineInstallationRecovery $machineWorker $source $install $sourceManifest $MachineRecoveryAuditPath $MachineRecoveryAuditSha256 }
+        catch { $outputFailure=$_;Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED';exit 4 }
+        $Script:CanonicalWriterFenceSessionId=[string]$machineRecovery.fence.session_id
+        $Script:CanonicalWriterFenceAttemptId=[string]$machineRecovery.fence.attempt_id
+        $Script:CanonicalWriterFenceTransactionId=[string]$machineRecovery.fence.replacement_transaction_id
+        $canonicalWriterFenceOrchestratorSha256=[string]$machineRecovery.fence.orchestrator_sha256
+        $canonicalWriterFenceContractSha256=[string]$machineRecovery.fence.writer_contract_sha256
+    }
 }
 try {
 if ($retirementResume) { $retirementResumeClaim = Enter-RetirementResumeClaim $retirementResume }
@@ -4270,7 +4593,10 @@ $canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority `
     -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
     -WriterContractSha256 $canonicalWriterFenceContractSha256
 if ($null -ne $machineWorker) {
-    try { Invoke-CanonicalMachineInstallation $machineWorker $source $install $sourceManifest $canonicalWriterFenceAuthority }
+    try {
+        if ($RecoverMachineInstallation) { Invoke-CanonicalMachineInstallationRecovery $machineWorker $source $install $sourceManifest $machineRecovery $canonicalWriterFenceAuthority }
+        else { Invoke-CanonicalMachineInstallation $machineWorker $source $install $sourceManifest $canonicalWriterFenceAuthority }
+    }
     catch { $outputFailure=$_;Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED';exit 4 }
     exit 0
 }

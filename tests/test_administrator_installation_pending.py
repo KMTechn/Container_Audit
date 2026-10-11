@@ -55,6 +55,7 @@ $other=Join-Path $env:CA_CONTRACT_ROOT 'administrator'
 [IO.File]::WriteAllText((Join-Path $profile 'legacy-data.txt'),'old worker data')
 [IO.File]::WriteAllText((Join-Path $other 'admin-data.txt'),'old administrator data')
 function Get-CanonicalWorkerProfileRoot {param($Sid) return $profile}
+function Get-CanonicalConsoleWorkerSecurity {throw 'PENDING_TARGET_AMBIGUOUS'}
 $caller=[pscustomobject]@{sid='S-1-5-21-111-222-333-1000';session_id=0;elevated=$true}
 $account='S-1-5-21-111-222-333-1001'
 $path=Join-Path $env:CA_CONTRACT_ROOT 'survey.json'
@@ -383,7 +384,7 @@ if(-not $rejected){throw 'new shortcut became a legacy candidate'}
 
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
-@pytest.mark.parametrize("first_start", (False, True, "pending_acl_failure", "shortcut_failure", "audit_failure", "same_sid", "same_sid_failure"))
+@pytest.mark.parametrize("first_start", (False, True, "pending_acl_failure", "shortcut_failure", "audit_failure", "same_sid", "same_sid_failure", "pending_reinstall_failure", "pending_reinstall_restore_failure", "console_worker", "placement_child_failure_new", "placement_child_failure_reinstall", "placement_child_exit_unproven", "pending_reinstall_compensation_child_unproven", "prestate_capture_failure", "fence_publication_failure"))
 def test_machine_placement_existing_restore_and_removal_preserve_profiles(tmp_path, engine, first_start):
     from tests.test_canonical_portable_uninstall import _setup, _tree, _sha, OS_BOUNDARIES, HELPER_OS
     from tests.test_canonical_installation_callers import _distinct_replacement, _bind_packet
@@ -394,6 +395,10 @@ def test_machine_placement_existing_restore_and_removal_preserve_profiles(tmp_pa
         pytest.skip(f"{engine} is required")
     env, source, installed, protected = _setup(tmp_path, stock_version_identity=True)
     old_commit = json.loads((installed / "portable-manifest.json").read_text())["source_commit"]
+    if first_start == "placement_child_failure_new":
+        assert installed.resolve().is_relative_to(tmp_path.resolve())
+        assert not installed.is_symlink() and not installed.is_junction()
+        shutil.rmtree(installed)  # Only the explicitly owned fixture code root.
     _distinct_replacement(source)  # Preserve actual placement/delegation validation.
     worker = tmp_path / "worker-profile"
     worker.mkdir()
@@ -413,6 +418,9 @@ function Get-CanonicalInstallationCallerSecurity {
  return [pscustomobject]@{sid='S-1-5-21-111-222-333-1000';session_id=0;elevated=$true}
 }
 function Get-CanonicalWorkerProfileRoot {param($Sid) return $env:CA_MACHINE_PROFILE}
+function Get-CanonicalConsoleWorkerSecurity {
+ return [pscustomobject]@{sid=$env:CA_MACHINE_SID;session_id=1}
+}
 function Get-CanonicalMachineArtifactPaths {param($State)
  return @((Join-Path $State 'pending-onboarding.json'),(Join-Path $env:CA_UNINSTALL_ROOT 'machine-shortcut.json'))
 }
@@ -421,7 +429,12 @@ function New-CanonicalMachineShortcut {param($Root,[string]$Directory='')
  [IO.File]::WriteAllText($path,
    (@{TargetPath=(Join-Path $Root 'runtime\pythonw.exe');Arguments=(Get-CanonicalMachineShortcutArguments $Root);
       WorkingDirectory=(Join-Path $Root 'app')}|ConvertTo-Json))
- if($env:CA_MACHINE_FAILURE -ceq 'shortcut_failure'){throw 'Simulated post-shortcut failure'}
+ if($env:CA_MACHINE_FAILURE -cin @('pending_reinstall_failure','pending_reinstall_restore_failure','pending_reinstall_compensation_child_unproven')){
+   $active=Join-Path (Split-Path -Parent $Root) 'update-control\active.json'
+   [IO.File]::WriteAllText($active,(@{schema='container-audit-startup-update-v1';sha=([string](InstalledManifest $Root $true).source_commit)}|ConvertTo-Json))
+   throw 'Simulated post-code-and-pointer failure'
+  }
+  if($env:CA_MACHINE_FAILURE -ceq 'shortcut_failure'){throw 'Simulated post-shortcut failure'}
  if($Directory -and $env:CA_MACHINE_FAILURE -ceq 'same_sid_failure'){throw 'Simulated worker shortcut failure'}
 }
 function Start-InstallationTransaction {throw 'Administrator path reached interactive coordinator'}
@@ -438,6 +451,16 @@ $removeBody=${function:Remove-CanonicalMachineArtifacts}.ToString().Replace('New
 $removeBody=$removeBody.Replace('[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)','')
 Set-Item Function:Remove-CanonicalMachineArtifacts ([scriptblock]::Create($removeBody))
 '''
+    if first_start in ("prestate_capture_failure", "fence_publication_failure"):
+        # Instrument the original file body so PSCommandPath retains its real binding.
+        capture = "function ConvertTo-CanonicalMachineArtifactJournal($Before) {\n"
+        assert text.count(capture) == 1
+        text = text.replace(capture, capture +
+            "    if ($env:CA_MACHINE_FAILURE -ceq 'prestate_capture_failure') { throw 'Simulated prestate capture failure' }\n")
+        publication = "\n        $active=$true\n"
+        assert text.count(publication) == 1
+        text = text.replace(publication,
+            "\n        if ($env:CA_MACHINE_FAILURE -ceq 'fence_publication_failure') { throw 'Simulated post-publication readback failure' }\n        $active=$true\n")
     if first_start == "pending_acl_failure":
         injected += r'''
 $pendingAcl=${function:Set-InstallationEvidenceAcl}
@@ -452,6 +475,29 @@ $saveBody=${function:Save}
 function Save([string]$Path,$Value,[bool]$SanitizeDiagnostics=$false) {
  if($Value.status -cin @('PASS_MACHINE_WORKER_PENDING','MACHINE_INSTALL_FAILED')){throw 'Simulated success and failure audit write failure'}
  & $saveBody $Path $Value $SanitizeDiagnostics
+}
+'''
+    if first_start in ("pending_reinstall_restore_failure", "pending_reinstall_compensation_child_unproven"):
+        injected += r'''
+$realChild=${function:Invoke-InstallationEvidenceChild}
+function Invoke-InstallationEvidenceChild([string]$Stage,[string]$File,[string[]]$Arguments) {
+ if($Stage -ceq 'machine-failure-code-restore' -and $env:CA_MACHINE_FAILURE -cin @('pending_reinstall_restore_failure','pending_reinstall_compensation_child_unproven')){
+  if($env:CA_MACHINE_FAILURE -ceq 'pending_reinstall_compensation_child_unproven'){throw 'Simulated unknown compensation child'}
+  return [pscustomobject]@{ExitCode=1;Stdout='';Stderr=''}
+ }
+ return & $realChild $Stage $File $Arguments
+}
+'''
+    if first_start in ("placement_child_failure_new", "placement_child_failure_reinstall", "placement_child_exit_unproven"):
+        injected += r'''
+$realChild=${function:Invoke-InstallationEvidenceChild}
+function Invoke-InstallationEvidenceChild([string]$Stage,[string]$File,[string[]]$Arguments) {
+ $child=& $realChild $Stage $File $Arguments
+ if($Stage -ceq 'machine-placement-helper' -and $env:CA_MACHINE_FAILURE -like 'placement_child_*'){
+  if($env:CA_MACHINE_FAILURE -ceq 'placement_child_exit_unproven'){throw 'Simulated unproved child transport'}
+  $child.ExitCode=1
+ }
+ return $child
 }
 '''
     admission = "# Admit the worker before any installation evidence, authority or profile writer."
@@ -470,8 +516,23 @@ function Save([string]$Path,$Value,[bool]$SanitizeDiagnostics=$false) {
         local.mkdir(parents=True)
         env["LOCALAPPDATA"] = str(local)
     env["CA_MACHINE_PROFILE"] = str(worker)
+    env["CA_MACHINE_SID"] = sid
     env["CA_MACHINE_FAILURE"] = str(first_start)
     _bind_packet(source)
+    prior_pending = prior_active = None
+    if first_start in ("pending_reinstall_failure", "pending_reinstall_restore_failure", "pending_reinstall_compensation_child_unproven"):
+        state = Path(env["PROGRAMDATA"]) / "KMTech/ContainerAudit/machine-install"
+        state.mkdir(parents=True)
+        prior_pending = json.dumps({"schema": "container-audit-machine-pending-v1", "status": "PENDING",
+            "install_id": "d" * 32, "target_sid": sid, "source_commit": old_commit,
+            "version": json.loads((installed / "portable-manifest.json").read_text())["version"],
+            "install_root": str(installed)}).encode()
+        (state / "pending-onboarding.json").write_bytes(prior_pending)
+        control = installed.parent / "update-control"
+        control.mkdir()
+        prior_active = json.dumps({"schema": "container-audit-startup-update-v1", "sha": old_commit}).encode()
+        (control / "active.json").write_bytes(prior_active)
+    code_before = _tree(installed)
     profiles_before = (_tree(Path(env["LOCALAPPDATA"])), _tree(worker))
     registry_before = json.loads((tmp_path / "registry.json").read_text(encoding="utf-8"))
 
@@ -480,7 +541,7 @@ function Save([string]$Path,$Value,[bool]$SanitizeDiagnostics=$false) {
         result = run_powershell([
             executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(canonical),
             "-SourceRoot", str(source), "-InstallRoot", str(installed),
-            "-WorkerAccount", sid, "-WorkerSurveyInventory", str(inventory),
+            *([] if first_start == "console_worker" else ["-WorkerAccount", sid, "-WorkerSurveyInventory", str(inventory)]),
             "-EvidencePath", str(audit), "-AllowNoncanonicalLayoutForTest", "-SkipSignatureValidationForTest",
             *arguments,
         ], env=env)
@@ -493,11 +554,122 @@ function Save([string]$Path,$Value,[bool]$SanitizeDiagnostics=$false) {
         assert all(path.read_bytes() == b"protected-fixture-must-be-preserved" for path in protected)
         return json.loads(audit.read_text(encoding="utf-8")) if expected_exit == 0 else result
 
+    if first_start in ("pending_reinstall_failure", "pending_reinstall_restore_failure", "pending_reinstall_compensation_child_unproven"):
+        run("pending-reinstall-failed", expected_exit=4)
+        state = Path(env["PROGRAMDATA"]) / "KMTech/ContainerAudit/machine-install"
+        fence = state / "control/writer-session/active.json"
+        assert fence.is_file() == (first_start != "pending_reinstall_failure")
+        pointer = installed.parent / "update-control/active.json"
+        code = json.loads((installed / "portable-manifest.json").read_text())["source_commit"]
+        assert json.loads(pointer.read_bytes())["sha"] == code
+        marker = state / "pending-onboarding.json"
+        assert not (tmp_path / "machine-shortcut.json").exists()
+        if first_start in ("pending_reinstall_restore_failure", "pending_reinstall_compensation_child_unproven"):
+            assert code == "c" * 40 and not marker.exists()
+            audits = [p for p in (state / "install-audit").glob("canonical-portable-*.json")
+                      if re.fullmatch(r"canonical-portable-[0-9a-f]{32}\.json", p.name)]
+            assert len(audits) == 1
+            recovery_audit = audits[0]
+            failure = json.loads(recovery_audit.read_bytes())
+            assert failure["compensation"]["code_restore"] == "UNPROVEN"
+            fence_bytes = fence.read_bytes()
+            if first_start == "pending_reinstall_compensation_child_unproven":
+                assert failure["compensation_child"]["status"] == "EXIT_UNPROVEN"
+                env["CA_MACHINE_FAILURE"] = ""
+                run("unproved-compensation-refused", "-RecoverMachineInstallation", "-MachineRecoveryAuditPath", str(recovery_audit),
+                    "-MachineRecoveryAuditSha256", _sha(recovery_audit), expected_exit=4)
+                assert fence.read_bytes() == fence_bytes
+                return
+            # Audit and prestate mismatches are rejected before authority or writes.
+            run("recovery-bad-audit", "-RecoverMachineInstallation", "-MachineRecoveryAuditPath", str(recovery_audit),
+                "-MachineRecoveryAuditSha256", "0" * 64, expected_exit=4)
+            assert fence.read_bytes() == fence_bytes
+            journal = Path(failure["machine_prestate"]["path"])
+            journal_bytes = journal.read_bytes()
+            journal.write_bytes(journal_bytes + b" ")
+            run("recovery-bad-prestate", "-RecoverMachineInstallation", "-MachineRecoveryAuditPath", str(recovery_audit),
+                "-MachineRecoveryAuditSha256", _sha(recovery_audit), expected_exit=4)
+            assert fence.read_bytes() == fence_bytes
+            journal.write_bytes(journal_bytes)
+            env["CA_MACHINE_FAILURE"] = ""
+            recovered = run("recovery-supported", "-RecoverMachineInstallation", "-MachineRecoveryAuditPath", str(recovery_audit),
+                            "-MachineRecoveryAuditSha256", _sha(recovery_audit))
+            assert recovered["fence_retained"] is False
+            assert not fence.exists()
+            assert json.loads((installed / "portable-manifest.json").read_bytes())["source_commit"] == old_commit
+            assert pointer.read_bytes() == prior_active and marker.read_bytes() == prior_pending
+            assert run("recovery-retry")["status"] == "PASS_MACHINE_WORKER_PENDING"
+            assert run("recovery-uninstall", "-Uninstall")["status"] == "PASS_UNINSTALLED_DATA_PRESERVED"
+            assert not marker.exists() and not (tmp_path / "machine-shortcut.json").exists()
+        else:
+            assert code == old_commit and pointer.read_bytes() == prior_active
+            assert marker.read_bytes() == prior_pending
+            # Product compensation lowered the fence; the real pending reader accepts the old release.
+            assert not fence.exists()
+            completed = []
+            assert consume_pending_machine_onboarding(installed / "app", environ=env,
+                sid_reader=lambda: sid, completion_reader=lambda: "", completion_writer=completed.append,
+                onboarder=lambda *_args, **_kwargs: {"status": "READY"})["status"] == "READY"
+            assert completed == ["d" * 32]
+        return
+    if first_start in ("prestate_capture_failure", "fence_publication_failure"):
+        run("fence-preparation-failed", expected_exit=4)
+        state = Path(env["PROGRAMDATA"]) / "KMTech/ContainerAudit/machine-install"
+        fence = state / "control/writer-session/active.json"
+        assert not fence.exists()
+        assert _tree(installed) == code_before
+        assert not (state / "pending-onboarding.json").exists()
+        assert not (tmp_path / "machine-shortcut.json").exists()
+        audits = [p for p in (state / "install-audit").glob("canonical-portable-*.json")
+                  if re.fullmatch(r"canonical-portable-[0-9a-f]{32}\.json", p.name)]
+        assert len(audits) == 1
+        failure = json.loads(audits[0].read_bytes())
+        assert failure["placement_child"]["status"] == "NOT_STARTED"
+        if first_start == "fence_publication_failure":
+            assert failure["compensation"]["code_restore"] == "PASS"
+            assert failure["fence_retained"] is False
+            assert Path(failure["machine_prestate"]["path"]).is_file()
+        env["CA_MACHINE_FAILURE"] = ""
+        assert run("fence-preparation-retry")["status"] == "PASS_MACHINE_WORKER_PENDING"
+        assert run("fence-preparation-uninstall", "-Uninstall")["status"] == "PASS_UNINSTALLED_DATA_PRESERVED"
+        assert not fence.exists() and not installed.exists()
+        return
+    if first_start in ("placement_child_failure_new", "placement_child_failure_reinstall", "placement_child_exit_unproven"):
+        run("placement-child-failed", expected_exit=4)
+        state = Path(env["PROGRAMDATA"]) / "KMTech/ContainerAudit/machine-install"
+        fence = state / "control/writer-session/active.json"
+        audits = [p for p in (state / "install-audit").glob("canonical-portable-*.json")
+                  if re.fullmatch(r"canonical-portable-[0-9a-f]{32}\.json", p.name)]
+        assert len(audits) == 1
+        failure = json.loads(audits[0].read_bytes())
+        if first_start == "placement_child_exit_unproven":
+            assert fence.is_file() and failure["compensation"]["child_exit"] == "UNPROVEN"
+            env["CA_MACHINE_FAILURE"] = ""
+            run("unproved-child-recovery-refused", "-RecoverMachineInstallation", "-MachineRecoveryAuditPath", str(audits[0]),
+                "-MachineRecoveryAuditSha256", _sha(audits[0]), expected_exit=4)
+            assert fence.is_file()
+            return
+        assert not fence.exists() and failure["fence_retained"] is False
+        assert failure["compensation"]["child_exit"] == "PASS"
+        assert failure["compensation"]["code_restore"] == "PASS"
+        assert failure["artifact_restore"] == "PASS"
+        assert not (state / "pending-onboarding.json").exists()
+        assert not (tmp_path / "machine-shortcut.json").exists()
+        if first_start == "placement_child_failure_new":
+            assert not installed.exists()
+        else:
+            assert json.loads((installed / "portable-manifest.json").read_bytes())["source_commit"] == old_commit
+        env["CA_MACHINE_FAILURE"] = ""
+        assert run("child-failure-retry")["status"] == "PASS_MACHINE_WORKER_PENDING"
+        assert run("child-failure-uninstall", "-Uninstall")["status"] == "PASS_UNINSTALLED_DATA_PRESERVED"
+        assert not fence.exists() and not installed.exists()
+        assert not (state / "pending-onboarding.json").exists() and not (tmp_path / "machine-shortcut.json").exists()
+        return
     if first_start in ("pending_acl_failure", "shortcut_failure", "audit_failure", "same_sid_failure"):
         failed = run("machine-install-failed", expected_exit=4)
         assert "PASS_MACHINE_WORKER_PENDING" not in failed.stdout
         state = Path(env["PROGRAMDATA"]) / "KMTech/ContainerAudit/machine-install"
-        assert (state / "control/writer-session/active.json").is_file()
+        assert not (state / "control/writer-session/active.json").exists()
         machine_audits = [path for path in (state / "install-audit").glob("canonical-portable-*.json")
                           if re.fullmatch(r"canonical-portable-[0-9a-f]{32}\.json", path.name)]
         assert len(machine_audits) == 1
@@ -508,7 +680,7 @@ function Save([string]$Path,$Value,[bool]$SanitizeDiagnostics=$false) {
         assert json.loads((installed / "portable-manifest.json").read_text())["source_commit"] == old_commit
         if first_start != "audit_failure":
             failure = json.loads(machine_audits[0].read_text(encoding="utf-8"))
-            assert failure["status"] == "MACHINE_INSTALL_FAILED" and failure["fence_retained"] is True
+            assert failure["status"] == "MACHINE_INSTALL_FAILED" and failure["fence_retained"] is False
             assert failure["artifact_restore"] == "PASS"
             assert failure["code_replacement"]["status"] == "RESTORED_AFTER_FAILURE"
         return
@@ -518,7 +690,12 @@ function Save([string]$Path,$Value,[bool]$SanitizeDiagnostics=$false) {
     marker = Path(env["PROGRAMDATA"]) / "KMTech/ContainerAudit/machine-install/pending-onboarding.json"
     marker_before = marker.read_bytes()
     payload = json.loads(marker_before)
-    assert payload["survey_sha256"] == _sha(inventory)
+    if first_start != "console_worker":
+        assert payload["survey_sha256"] == _sha(inventory)
+    if first_start == "console_worker":
+        assert payload["target_sid"] == sid and payload["status"] == "PENDING"
+        assert not (tmp_path / "relay.ready").exists()
+        return
     if first_start == "same_sid":
         assert audit["worker_setup"] == "USER_SCOPE_PREPARED_INTERACTIVE_PENDING"
         assert audit["after"]["observation_status"] == "PREPARED"

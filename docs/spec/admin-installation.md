@@ -47,7 +47,30 @@ supported removal journal을 쓰는 기계 코드 복원/제거다. 작업자 HK
 두 작업은 대상 SID·설치 루트가 맞는 PENDING과 제품의 직접 공용 링크도 정리한다.
 변경된 링크와 옛 앱 링크는 보존한다. 설치 전 표지·링크 원바이트와 ACL을 캡처하며,
 이후 설치가 실패하면 새 항목을 지우고 원본을 복원한다. 교체 receipt가 있으면 앞 코드 판도
-복원한다. 실패 기록 쓰기가 실패해도 보상은 실행하며, 복구 fence는 유지한다.
+복원한다. 실패 기록 쓰기가 실패해도 보상은 실행한다. 자식 종료·코드·표지/링크·작업자
+Run·새 폴더 복원이 모두 확인되면 실패 승인 receipt로 fence를 해제한다. 확인되지 않은
+보상만 fence를 유지한다.
 격리 시험의 첫 시작은 주입한 onboarding READY와 완료 기록으로 연결을 확인한다.
 실제 등록·DPAPI·HKCU·ACL·공용 바로가기 및 옛 앱 복원·켜짐은 랩 VM 실제 설치 회차에서
 별도로 검증해야 한다. 키트 `-Rollback` 끝까지의 결과를 제품 fixture PASS로 대신하지 않는다.
+
+### 현재 콘솔 작업자의 자동 선택
+
+`-WorkerAccount`와 `-WorkerSurveyInventory`를 모두 생략한 승격 호출은 현재 활성 콘솔 세션의 explorer 소유 SID가 하나이고 그 SID의 ProfileList가 확인될 때만 받는다. 호출자 SID와 세션이 콘솔 작업자와 같으면 기존 일반 설치·업데이트·지원 재개 길을 유지한다. Session 0 또는 다른 관리자는 그 작업자를 기계 배치 대상으로 결속하고 대화형 완료를 PENDING으로 남긴다. 콘솔 없음·소유자 판정 실패·여러 SID는 쓰기 전에 거절한다. 둘 중 하나만 넘긴 명시적 인수는 계속 거절하며, 두 인수를 넘기면 기존 READY inventory 검증을 유지한다.
+
+기계 배치 실패 시 검증된 앞 코드와 startup control 원본을 함께 복원한 뒤에만 옛 PENDING을 복원한다. 코드·control 원본을 확인하지 못하면 옛 PENDING을 게시하지 않고 기계 복구 fence를 유지한다. 이 fence는 관리자 복구가 끝나기 전 작업자 첫 시작을 막는다.
+
+### 기계 배치 실패의 지원 재개
+
+키트 설치/되돌림은 남은 fence를 직접 지우지 않는다. 원래 관리 패킷의 설치기를 이미
+승격된 지원 셸에서 `-RecoverMachineInstallation -MachineRecoveryAuditPath <기계 audit>
+-MachineRecoveryAuditSha256 <SHA256> -WorkerAccount <작업자 SID>
+-WorkerSurveyInventory <READY inventory>`로 호출한다. audit는 기계 상태의
+`install-audit/canonical-portable-<run>.json`이다. 이 입구는 audit·사전 상태 파일·원래
+패킷·작업자·fence tuple을 읽기로 대조하고 같은 authority를 새로 독점한 뒤 보상을
+재시도한다. 원래 자식의 종료가 증명되지 않았거나 같은 authority가 살아 있으면
+해제를 거절한다. 같은 SID에서 준비한 HKCU는 그 작업자 본인으로만 복원한다.
+원본 표지·바로가기·Run을 담는 사전 상태 폴더는 관리자·SYSTEM만 읽고 쓴다.
+성공 상태 `PASS_MACHINE_RECOVERED`를 확인한 다음 설치 또는 `-Uninstall`을 다시
+호출한다. 새 설치 보상은 제품 helper의 검증된 제거로 배치 코드를 없애며 자료는 보존한다.
+`PlanOnly`도 같은 SID의 LOCALAPPDATA·개인 바로가기·reparse 읽기 검사를 먼저 실행한다.
