@@ -22015,11 +22015,6 @@ def _prepare_gui_startup(*, data_root=None):
                 pass
             _show_item_catalog_startup_error(exc.cause_code)
             return ITEM_CATALOG_STARTUP_EXIT_CODE
-        from auto_update import control_root, read_json
-
-        startup_control = control_root(Path(application_path))
-        if startup_control is None or not read_json(startup_control / "policy.json").get("feed_url"):
-            app.root.after(500, lambda: schedule_update_check(app.root))
         startup_complete = True
         return app, instance_lease
     finally:

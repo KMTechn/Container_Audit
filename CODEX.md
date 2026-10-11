@@ -15,7 +15,7 @@
 - 작업 중인 트레이를 보류/복구하고, 비정상 종료 후 현재 트레이 상태를 복구한다.
 - 교환 카드/단추 → 불량 대상 → 대체품 스캔으로 로컬 intent·checkpoint·감사 기록을 남긴다. 검사 단계 묶음의 제품은 자동 이동하고 미검사품은 GOOD 등록하며, 중앙 CAS 검증은 배경에서 한다. 원래 PHS2 identity와 목표 근거를 유지한다.
 - `native_audio.WavSound`의 Windows `winsound` 기반 성공/오류 사운드와 Tkinter GUI를 제공한다. 이미지는 `vendor.kmtech_zero_pe.raster`가 처리한다.
-- 배포본은 서명된 업데이트 후보를 확인해 관리자 배포가 필요하다고 안내한다. 일반 사용자 런타임은 코드 루트를 수정하지 않는다. 공개 설치 진입점은 `INSTALL_CANONICAL_PORTABLE.ps1`이며 관리자 코드 배치는 내부 `INSTALL_THIS_PC.ps1`가 담당한다.
+- 서명된 업데이트는 관리자 설치 경로로 적용하며 업무 시작 뒤 옛 설치 안내를 예약하지 않는다. 일반 사용자 런타임은 코드 루트를 수정하지 않는다. 공개 설치 진입점은 `INSTALL_CANONICAL_PORTABLE.ps1`이며 관리자 코드 배치는 내부 `INSTALL_THIS_PC.ps1`가 담당한다.
 - 기본 business state 루트는 `%LOCALAPPDATA%\KMTech\ContainerAudit`, DirectSync 루트는 `%LOCALAPPDATA%\KMTech\DirectSync\container_audit`다.
 
 ## 기술 스택

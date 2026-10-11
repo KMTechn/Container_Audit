@@ -882,7 +882,7 @@ def test_container_audit_keeps_worker_registry_import_compatibility():
     assert WorkerRegistry is worker_registry.WorkerRegistry
 
 
-def test_main_schedules_update_check_after_app_creation(monkeypatch):
+def test_main_starts_work_without_scheduling_update_notice(monkeypatch):
     calls = []
 
     class FakeRoot:
@@ -890,7 +890,7 @@ def test_main_schedules_update_check_after_app_creation(monkeypatch):
             calls.append(("after", delay_ms))
             self.callback = callback
 
-    class FakeApp:
+    class FakeApp(ContainerAudit):
         def __init__(self):
             calls.append("init")
             self.root = FakeRoot()
@@ -913,7 +913,8 @@ def test_main_schedules_update_check_after_app_creation(monkeypatch):
 
     container_audit_module.main()
 
-    assert calls == ["init", ("after", 500), "run", "release"]
+    assert calls == ["init", "run", "release"]
+
 
 
 def test_main_completes_current_user_onboarding_before_catalog_and_client(
@@ -929,7 +930,7 @@ def test_main_completes_current_user_onboarding_before_catalog_and_client(
         def after(self, _delay_ms, _callback):
             calls.append("update-scheduled")
 
-    class FakeApp:
+    class FakeApp(ContainerAudit):
         def __init__(self):
             calls.append("client-created")
             self.root = FakeRoot()
@@ -972,10 +973,10 @@ def test_main_completes_current_user_onboarding_before_catalog_and_client(
         ),
         "catalog",
         "client-created",
-        "update-scheduled",
         "run",
         "release",
     ]
+
 
 
 def test_main_warns_and_continues_with_verified_catalog_cache(monkeypatch, tmp_path):
@@ -1003,7 +1004,7 @@ def test_main_warns_and_continues_with_verified_catalog_cache(monkeypatch, tmp_p
         def after(self, delay_ms, _callback):
             calls.append(("after", delay_ms))
 
-    class FakeApp:
+    class FakeApp(ContainerAudit):
         _apply_direct_sync_health = ContainerAudit._apply_direct_sync_health
         _consume_direct_sync_wake_results = lambda self: ""
 
@@ -1054,12 +1055,13 @@ def test_main_warns_and_continues_with_verified_catalog_cache(monkeypatch, tmp_p
     assert result == 0
     assert calls[0] == "catalog"
     assert calls[1][0] == "diagnostic"
-    assert calls[2:] == ["client-created", ("after", 500), "run", "release"]
+    assert calls[2:] == ["client-created", "run", "release"]
     assert dialogs == []  # DESIGN §0/§1: no acknowledgement before scanning.
     notice = catalog_notice_text(cards[0])
     assert container_audit_module.ITEM_CATALOG_CACHE_WARNING_TITLE in notice
     assert "2026-08-28" in notice
     assert "UNKNOWN" not in notice
+
 
 
 def test_main_blocks_duplicate_same_pc_runtime_before_catalog_or_ui(monkeypatch):
@@ -10674,3 +10676,11 @@ def test_exchange_handler_enters_inline_mode_without_window_dependency():
     assert "_inline_exchange_mode" in source
     assert "Toplevel" not in source and "messagebox" not in source
     assert not hasattr(container_audit_module, "calculate_exchange_dialog_size")
+
+
+def test_guarded_startup_has_no_worker_update_notice_consumer():
+    import ast
+    import inspect
+    startup = ast.parse(inspect.getsource(container_audit_module._prepare_gui_startup))
+    assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                   and node.func.id == "schedule_update_check" for node in ast.walk(startup))
