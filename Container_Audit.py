@@ -28,6 +28,7 @@ from urllib.parse import urlsplit
 
 # Capture this process's start before application imports and startup work.
 _APP_PROCESS_STARTED_AT = datetime.datetime.now(datetime.timezone.utc)
+_APP_STOP_DEFERRED_MESSAGE = "관리자가 프로그램 종료를 요청했습니다. 지금 트레이를 마친 뒤 [종료] 를 누르세요."
 
 from runtime_dependency_guard import install_charset_normalizer_block
 
@@ -4814,6 +4815,9 @@ class ContainerAudit:
 
     def _current_tray_state_snapshot(self) -> Dict[str, Any]:
         state = tray_session_to_state(self.current_tray, worker_name=self._record_worker_name())
+        deferred_stop = getattr(self, "_deferred_app_stop_request", None)
+        if deferred_stop:
+            state["deferred_app_stop_request"] = dict(deferred_stop)
         activation_event = self._active_activation_event_contract()
         if activation_event is not None:
             state[ACTIVATION_EVENT_STATE_KEY] = activation_event
@@ -15253,7 +15257,7 @@ class ContainerAudit:
             except Exception as exc:
                 value, error = None, exc
 
-    def _submit_scan_steps(self, steps, *, finish=None, on_idle=None, barcode=""):
+    def _submit_scan_steps(self, steps, *, finish=None, on_idle=None, barcode="", task_name="scan-persistence"):
         lane = self._ui_task_lane()
         def idle():
             self._live_scan_save_pending = False
@@ -15268,7 +15272,7 @@ class ContainerAudit:
                 self.COLOR_DANGER, duration=0,
             )
         admission = lane.submit(LaneTask(
-            name="scan-persistence",
+            name=task_name,
             generation=int(getattr(self, "_scan_callback_epoch", 0)),
             work=lambda: self._run_durable_ui_steps(steps, lane=lane),
             finish=finish or (lambda result: None), fail=fail,
@@ -16048,6 +16052,9 @@ class ContainerAudit:
                     title = "서버 전송 대기 없음"
                     message = "완료는 이 PC에 저장했습니다."
 
+        if getattr(self, "_deferred_app_stop_request", None) and _APP_STOP_DEFERRED_MESSAGE not in message:
+            message += "\n" + _APP_STOP_DEFERRED_MESSAGE
+
         palette = {
             NoticeSeverity.INFO: ("#EFF6FF", "#93C5FD", "#1D4ED8", self.COLOR_TEXT),
             NoticeSeverity.SUCCESS: ("#F0FDF4", "#86EFAC", "#166534", self.COLOR_TEXT),
@@ -16239,7 +16246,8 @@ class ContainerAudit:
     def _apply_notice_visibility(self) -> None:
         """Reserve the notice band for feedback and the selected exchange task."""
         state = self._warning_state_presenter().state
-        has_notice = state.active_notice is not None or state.is_blocking
+        has_notice = bool(state.active_notice is not None or state.is_blocking
+                          or getattr(self, "_deferred_app_stop_request", None))
         panel = getattr(self, "phs_label_exchange_frame", None)
         try:
             exchange_open = (
@@ -16605,17 +16613,49 @@ class ContainerAudit:
         request = read_app_stop_request(direct_sync_root)
         if request is None:
             return
+        keep_request = False
         try:
             requested_at = datetime.datetime.fromisoformat(request["requested_at"])
             if requested_at < _APP_PROCESS_STARTED_AT:
                 print("앱 시작 전 멈춤 요청을 무시했습니다.")
                 return
+            saving = any(getattr(self, flag, False) for flag in (
+                "_live_scan_save_pending", "_completion_lane_busy", "_preflight_hold_draining",
+                "_preflight_hold_append_pending", "_preflight_hold_switch_pending", "_scan_callback_pending",
+            ))
+            deferred = getattr(self, "_deferred_app_stop_request", None)
+            if saving or getattr(getattr(self, "current_tray", None), "scanned_barcodes", ()) or deferred:
+                keep_request = True
+                if not deferred or deferred["request_id"] != request["request_id"]:
+                    self._deferred_app_stop_request = request
+                    self._deferred_app_stop_checkpoint_pending = True
+                    self.show_status_message(_APP_STOP_DEFERRED_MESSAGE, self.COLOR_PRIMARY, duration=0)
+                lane = getattr(self, "_ui_lane", None)
+                if (getattr(self, "_deferred_app_stop_checkpoint_pending", False) and not saving
+                        and (lane is None or not lane.is_busy())):
+                    try:
+                        save = self._current_tray_save_operation()
+                    except Exception:
+                        save = lambda: False
+                    def record():
+                        try:
+                            yield lambda: self._log_event("APP_STOP_DEFERRED", detail=request, synchronous=True)
+                        except Exception as exc:
+                            print(f"종료 요청 미룸 기록 실패: {type(exc).__name__}")
+                        try:
+                            yield save
+                        except Exception as exc:
+                            print(f"종료 요청 미룸 상태 저장 실패: {type(exc).__name__}")
+                    if self._submit_scan_steps(record(), task_name="app-stop-deferred"):
+                        self._deferred_app_stop_checkpoint_pending = False
+                return
             self.on_closing()
         finally:
-            try:
-                consume_app_stop_request(direct_sync_root, request["request_id"])
-            except (OSError, WriterFenceError) as exc:
-                print(f"앱 멈춤 요청 정리 실패: {type(exc).__name__}")
+            if not keep_request:
+                try:
+                    consume_app_stop_request(direct_sync_root, request["request_id"])
+                except (OSError, WriterFenceError) as exc:
+                    print(f"앱 멈춤 요청 정리 실패: {type(exc).__name__}")
 
     def on_closing(self, *, _confirmed: bool = False):
         if getattr(self, "_admin_pin_ui_pending", False):
@@ -16833,6 +16873,13 @@ class ContainerAudit:
         self._application_destroy_attempted = True
         self.root.destroy()
         self._application_close_complete = True
+        deferred = getattr(self, "_deferred_app_stop_request", None)
+        if deferred:
+            from user_relay import consume_app_stop_request
+            try:
+                consume_app_stop_request(self.direct_sync_program_data_root, deferred["request_id"])
+            except Exception as exc:
+                print(f"앱 멈춤 요청 정리 실패: {type(exc).__name__}")
 
     def _event_log_outbox(self, log_file_path: str) -> EventLogOutbox:
         store = getattr(self, "_event_log_outbox_instance", None)

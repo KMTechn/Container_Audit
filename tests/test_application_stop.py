@@ -74,6 +74,16 @@ def test_clock_stop_uses_normal_close_and_preserves_unfinished_tray(tmp_path, mo
     app.current_tray = application.TraySession(master_label_code="ACTIVE", scanned_barcodes=["fixture scan"])
     app.current_exchange_session = application.ProductExchangeSession()
     calls = []
+    deferred, notices = [], []
+    app.COLOR_PRIMARY = "primary"
+    app._log_event = lambda event, **kwargs: deferred.append(event) or True
+    app.show_status_message = lambda message, *args, **kwargs: notices.append(message)
+    app._current_tray_save_operation = lambda: app._save_current_tray_state
+    def settle_record(steps, **kwargs):
+        for operation in steps:
+            operation()
+        return True
+    app._submit_scan_steps = settle_record
     app.root = SimpleNamespace(
         winfo_exists=lambda: "destroy" not in calls,
         after=lambda delay, callback: calls.append((delay, callback)),
@@ -99,11 +109,18 @@ def test_clock_stop_uses_normal_close_and_preserves_unfinished_tray(tmp_path, mo
 
     app._update_clock()
 
+    assert app.root.winfo_exists() and not getattr(app, "_application_close_complete", False)
+    assert not getattr(app, "_ui_close_requested", False)
+    assert user_relay.app_stop_path(tmp_path).exists()
+    assert deferred == ["APP_STOP_DEFERRED"]
+    assert notices == [application._APP_STOP_DEFERRED_MESSAGE]
+    app.on_closing()  # The worker explicitly consents through the normal exit.
+
     assert "save" in calls
     assert ("destroy" in calls) is save_ok
     assert ("work_end" in calls) is save_ok
     assert app.current_tray.scanned_barcodes == ["fixture scan"]
-    assert not user_relay.app_stop_path(tmp_path).exists()
+    assert user_relay.app_stop_path(tmp_path).exists() is not save_ok
     assert calls[0] == (1000, app._update_clock)
     if not save_ok:
         assert "notice" in calls
