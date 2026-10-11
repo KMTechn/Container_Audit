@@ -3157,8 +3157,8 @@ class ContainerAudit:
             if any(item["state"] == "PENDING" for item in roster.local["requests"]):
                 return "이 PC에 저장됨 · 이름은 바로 쓸 수 있습니다. 회사 서버로는 나중에 보냅니다."
         if (roster is None or not roster.has_rows) and self.worker_registry.list_workers():
-            return "이 PC에 저장된 이름을 고르거나 새 이름을 등록하세요."
-        return "이름을 고르거나 새 이름을 등록하세요."
+            return "이 PC에 저장된 이름을 고르세요. 목록에 없으면 『새 이름 등록』을 누르세요."
+        return "이름을 고르세요. 목록에 없으면 『새 이름 등록』을 누르세요."
 
     def _register_worker_name(self, name, *, existing_worker_id=""):
         roster = getattr(self, "worker_roster", None)
@@ -3508,7 +3508,7 @@ class ContainerAudit:
         if name == PROTECTED_ADMIN_DISPLAY_NAME and getattr(self, "_authenticated_protected_admin", False):
             return PROTECTED_ADMIN_OPERATOR_ID
         if name not in self._worker_selection_names():
-            self.show_status_message("이름을 골라 주세요. 목록에 없으면 새 이름을 등록하세요.", self.COLOR_DANGER, duration=0)
+            self.show_status_message("이름을 골라 주세요. 목록에 없으면 『새 이름 등록』을 누르세요.", self.COLOR_DANGER, duration=0)
             return None
         roster = getattr(self, "worker_roster", None)
         row = next((row for row in roster.active_workers() if worker_choice_label(row) == name), None) if roster is not None else None
