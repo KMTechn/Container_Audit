@@ -216,7 +216,7 @@ function Test-MzFile {
 function Get-PeInventory {
     param([Parameter(Mandatory = $true)][string]$Root)
     $rows = @()
-    foreach ($file in @(Get-ChildItem -LiteralPath $Root -Recurse -File | Sort-Object FullName)) {
+    foreach ($file in @(Get-ChildItem -Force -LiteralPath $Root -Recurse -File | Sort-Object FullName)) {
         if (-not (Test-MzFile -File $file)) { continue }
         $signature = Get-AuthenticodeSignature -FilePath $file.FullName
         $rows += [pscustomobject][ordered]@{

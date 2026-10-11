@@ -22,7 +22,7 @@ function Assert-Protected([string]$Path, [switch]$Recursive, [hashtable]$Verifie
     $leaf = $true
     while ($full) {
         if (-not $Verified.ContainsKey($full) -or ($leaf -and -not $Verified[$full])) {
-        $entry = Get-Item -LiteralPath $full -ErrorAction Stop
+        $entry = Get-Item -Force -LiteralPath $full -ErrorAction Stop
         if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse point in update storage.' }
         $acl = Get-Acl -LiteralPath $full -ErrorAction Stop
         $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value

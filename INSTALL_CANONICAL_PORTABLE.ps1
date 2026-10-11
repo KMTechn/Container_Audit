@@ -2247,7 +2247,7 @@ function Read-CanonicalRollbackContinuation([string]$InstallRoot,[string]$LocalA
     if (-not (Test-Path -LiteralPath $store -PathType Container)) {return $null}
     Assert-BootstrapNoReparsePoint $store 'rollback continuation store' -PathOnly
     Assert-InstallationEvidenceProtectedPath $store
-    $directories=@(Get-ChildItem -LiteralPath $store -Directory)
+    $directories=@(Get-ChildItem -Force -LiteralPath $store -Directory)
     $found=@()
     foreach($directory in $directories) {
         if ($directory.Name -cnotmatch '^[0-9a-f]{32}$') {throw 'Rollback continuation directory differs.'}

@@ -115,7 +115,7 @@ function Assert-LowRiskNativeFreePackage {
         'bcrypt', 'numpy', 'numpy.libs', 'psutil', 'pywin32_system32',
         'rpds', 'win32', 'yaml'
     )
-    foreach ($candidate in Get-ChildItem -LiteralPath $Root -Recurse -File) {
+    foreach ($candidate in Get-ChildItem -Force -LiteralPath $Root -Recurse -File) {
         $relative = [IO.Path]::GetRelativePath($Root, $candidate.FullName).Replace('\', '/')
         $parts = @($relative.ToLowerInvariant().Split('/'))
         if (@($parts | Where-Object { $_ -like 'pygame*' }).Count -gt 0) {

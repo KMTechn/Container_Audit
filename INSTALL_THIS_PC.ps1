@@ -919,7 +919,7 @@ function Assert-ProtectedCodeAncestors([string]$Path) {
     $leaf = $true
     while ($full) {
         if (Test-Path -LiteralPath $full) {
-            $entry = Get-Item -LiteralPath $full -ErrorAction Stop
+            $entry = Get-Item -Force -LiteralPath $full -ErrorAction Stop
             if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Unsafe update path component.' }
             $acl = Get-Acl -LiteralPath $full -ErrorAction Stop
             if (-not (Test-BootstrapPrivilegedOwnerSid $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value)) {

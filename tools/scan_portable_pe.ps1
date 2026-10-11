@@ -13,7 +13,7 @@ if (-not (Test-Path -LiteralPath $resolvedRoot -PathType Container)) {
 }
 
 $rows = @()
-foreach ($file in @(Get-ChildItem -LiteralPath $resolvedRoot -Recurse -File)) {
+foreach ($file in @(Get-ChildItem -Force -LiteralPath $resolvedRoot -Recurse -File)) {
     if ($file.Length -lt 2) { continue }
     $stream = [IO.File]::OpenRead($file.FullName)
     try {

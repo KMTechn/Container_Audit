@@ -282,6 +282,7 @@ def test_public_machine_admission_denial_has_one_line_and_zero_writes(tmp_path, 
     local.mkdir()
     program = tmp_path / "program"
     program.mkdir()
+    _mark_hidden_fixture_directory(program)
     inventory = tmp_path / "survey.json"
     sid = "S-1-5-21-111-222-333-1001"
     payload = {"status": "READY", "target_sid": sid, "target_profile_root": str(worker)}
@@ -383,6 +384,21 @@ if(-not $rejected){throw 'new shortcut became a legacy candidate'}
     assert expected in result.stdout
 
 
+def _mark_hidden_fixture_directory(path):
+    import ctypes
+    import os
+    path.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetFileAttributesW.argtypes = [ctypes.c_wchar_p]
+        kernel.GetFileAttributesW.restype = ctypes.c_uint32
+        kernel.SetFileAttributesW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
+        attributes = kernel.GetFileAttributesW(str(path))
+        assert attributes != 0xFFFFFFFF
+        assert kernel.SetFileAttributesW(str(path), attributes | 2)
+        assert kernel.GetFileAttributesW(str(path)) & 2
+
+
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 @pytest.mark.parametrize("first_start", (False, True, "pending_acl_failure", "shortcut_failure", "audit_failure", "same_sid", "same_sid_failure", "pending_reinstall_failure", "pending_reinstall_restore_failure", "console_worker", "placement_child_failure_new", "placement_child_failure_reinstall", "placement_child_exit_unproven", "pending_reinstall_compensation_child_unproven", "prestate_capture_failure", "fence_publication_failure"))
 def test_machine_placement_existing_restore_and_removal_preserve_profiles(tmp_path, engine, first_start):
@@ -394,6 +410,7 @@ def test_machine_placement_existing_restore_and_removal_preserve_profiles(tmp_pa
     if not executable:
         pytest.skip(f"{engine} is required")
     env, source, installed, protected = _setup(tmp_path, stock_version_identity=True)
+    _mark_hidden_fixture_directory(Path(env["PROGRAMDATA"]))
     old_commit = json.loads((installed / "portable-manifest.json").read_text())["source_commit"]
     if first_start == "placement_child_failure_new":
         assert installed.resolve().is_relative_to(tmp_path.resolve())
@@ -402,6 +419,7 @@ def test_machine_placement_existing_restore_and_removal_preserve_profiles(tmp_pa
     _distinct_replacement(source)  # Preserve actual placement/delegation validation.
     worker = tmp_path / "worker-profile"
     worker.mkdir()
+    _mark_hidden_fixture_directory(worker / "AppData")
     (worker / "legacy-data.txt").write_text("legacy worker data", encoding="utf-8")
     inventory = tmp_path / "worker-survey.json"
     sid = "S-1-5-21-111-222-333-1001"
