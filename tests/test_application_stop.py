@@ -2,6 +2,7 @@
 
 import json
 import queue
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -131,3 +132,32 @@ def test_consuming_an_older_request_preserves_a_newer_request(tmp_path, monkeypa
     user_relay.consume_app_stop_request(tmp_path, first["request_id"])
 
     assert user_relay.read_app_stop_request(tmp_path)["request_id"] == second["request_id"]
+
+
+@pytest.mark.parametrize("after_start", [False, True], ids=["before-start", "after-start"])
+def test_clock_stop_ignores_requests_before_process_start(tmp_path, monkeypatch, capsys, after_start):
+    started_at = datetime(2026, 10, 11, 12, 0, 0, 500000, tzinfo=timezone.utc)
+    requested_at = started_at + timedelta(microseconds=100 if after_start else -100)
+
+    class RequestClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return requested_at.astimezone(tz)
+
+    monkeypatch.setattr(user_relay, "datetime", RequestClock)
+    monkeypatch.setattr(application, "_APP_PROCESS_STARTED_AT", started_at, raising=False)
+    monkeypatch.setattr(user_relay, "request_user_relay_stop", lambda *args, **kwargs: {"status": "ABSENT"})
+    user_relay.request_app_stop(tmp_path)
+    app = application.ContainerAudit.__new__(application.ContainerAudit)
+    app.direct_sync_program_data_root = str(tmp_path)
+    closed = []
+    app.on_closing = lambda: closed.append(True)
+    app.root = SimpleNamespace(winfo_exists=lambda: True, after=lambda *args: None)
+    app._check_short_confirmation_expiry = lambda: None
+
+    app._update_clock()
+
+    assert bool(closed) is after_start
+    assert not user_relay.app_stop_path(tmp_path).exists()
+    if not after_start:
+        assert "앱 시작 전 멈춤 요청을 무시했습니다." in capsys.readouterr().out

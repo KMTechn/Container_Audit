@@ -101,6 +101,12 @@ def read_app_stop_request(direct_sync_root: str | os.PathLike[str]) -> dict[str,
         return None
     if any(character not in "0123456789abcdef" for character in request_id):
         return None
+    try:
+        requested_at = datetime.fromisoformat(request["requested_at"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if requested_at.tzinfo is None:
+        return None
     return request
 
 
@@ -554,7 +560,7 @@ def request_app_stop(
     _write_json_atomic(path, {
         "schema_version": APP_STOP_SCHEMA,
         "request_id": request_id,
-        "requested_at": _now(),
+        "requested_at": datetime.now(timezone.utc).isoformat(),
     })
     relay = request_user_relay_stop(root, timeout_seconds=timeout_seconds)
     return {

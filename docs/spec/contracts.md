@@ -125,6 +125,8 @@ relay 읽기 예외·DB open/schema 실패는 마지막 정상 읽기의 실제 
 GUI의 기존 1초 Tk 시계가 정상 닫기를 호출하며 현재 입력 저장·진행 중 처리 배수·
 저장 실패 시 종료 거절 계약을 유지한다. 소비하는 요청 ID와 현재 파일의 ID가
 같을 때만 요청을 지운다. 요청 접수와 실제 GUI·relay 종료 증명은 구분한다.
+요청 시각은 소수 초를 보존한다. GUI 프로세스 시작보다 앞선 요청은 기록 후
+지우고 무시하므로 앱이 없을 때 남긴 요청이 다음 실행을 종료하지 않는다.
 WAL 연결의 close는 미완료 거래를 commit하지 않고 rollback한 뒤 대기 없는
 TRUNCATE checkpoint를 시도한다. BUSY·실패는 기록만 남기고 close를 계속하며
 read-only relay 조회에는 checkpoint를 추가하지 않는다.

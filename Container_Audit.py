@@ -26,6 +26,9 @@ from functools import wraps
 from pathlib import Path
 from urllib.parse import urlsplit
 
+# Capture this process's start before application imports and startup work.
+_APP_PROCESS_STARTED_AT = datetime.datetime.now(datetime.timezone.utc)
+
 from runtime_dependency_guard import install_charset_normalizer_block
 
 install_charset_normalizer_block()
@@ -16217,6 +16220,10 @@ class ContainerAudit:
         if request is None:
             return
         try:
+            requested_at = datetime.datetime.fromisoformat(request["requested_at"])
+            if requested_at < _APP_PROCESS_STARTED_AT:
+                print("앱 시작 전 멈춤 요청을 무시했습니다.")
+                return
             self.on_closing()
         finally:
             try:
