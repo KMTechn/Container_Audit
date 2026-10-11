@@ -55,18 +55,19 @@ def test_marker_write_failure_prevents_gui_constructor(tmp_path, monkeypatch):
 
     data = tmp_path / "data"
     data.mkdir()
-    constructors, messages = [], []
+    constructors, messages, notices = [], [], []
     monkeypatch.setattr(app, "verify_factory_contract_startup", lambda: None)
     monkeypatch.setattr(app, "ContainerAudit", lambda: constructors.append(True))
     from startup_check_report import NOTICE
-    monkeypatch.setattr(app, "_show_startup_unavailable", lambda: messages.append(NOTICE))
-    monkeypatch.setattr(app.messagebox, "showerror", lambda *args: pytest.fail("legacy refusal notice"))
+    monkeypatch.setattr(app, "_show_startup_unavailable", lambda: notices.append(NOTICE))
+    monkeypatch.setattr(app.messagebox, "showerror", lambda *args: messages.append(args))
     def denied(*args, **kwargs):
         raise PermissionError("synthetic marker refusal")
     monkeypatch.setattr(generation, "record_generation", denied)
     assert app.main(["--data-root", str(data)]) == 1
     assert not constructors
-    assert messages == [NOTICE]
+    assert not notices
+    assert messages == [("자료 판 확인", app.DataGenerationBlocked({"status": "UNKNOWN", "allowed": False}).user_message)]
 
 
 def test_onboarding_refusal_prevents_state_or_ledger_open(tmp_path, monkeypatch):

@@ -22685,7 +22685,15 @@ def _show_bootstrap_integrity_warning(report_path: object) -> None:
         pass
 
 
-def _show_item_catalog_startup_error(cause_code: str, *, http_status_code: int | None = None) -> None:
+def _show_item_catalog_startup_error(cause_code: str, *, http_status_code: int | None = None,
+                                    exception_type: str | None = None) -> None:
+    try:
+        from startup_check import catalog_refusal_reason
+        _startup_check_observe("note", "ITEM_CATALOG_UNAVAILABLE")
+        _startup_check_observe("note", catalog_refusal_reason(
+            cause_code, http_status_code=http_status_code, exception_type=exception_type))
+    except Exception:
+        _startup_check_observe("note", "UNKNOWN_CATALOG")
     if _startup_refusal("ITEM_CATALOG_UNAVAILABLE"):
         return
     reason = ""
@@ -22985,6 +22993,7 @@ def _prepare_gui_startup(*, data_root=None):
                 pass
             _show_item_catalog_startup_error(
                 exc.cause_code, http_status_code=exc.diagnostic_context.get("http_status_code"),
+                exception_type=exc.diagnostic_context.get("exception_type"),
             )
             return ITEM_CATALOG_STARTUP_EXIT_CODE
         startup_complete = True

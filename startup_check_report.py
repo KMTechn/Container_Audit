@@ -91,12 +91,11 @@ def publish(reason=None, *, refused=False):
     try:
         if reason:
             note(reason)
-        if state["published"] != state["revision"]:
+        if state["published"] != state["revision"] or refused:
             reasons = ["TEST_" + state["forced"]] if state["forced"] else state["reasons"]
             result = startup_result(state["version"], state["build_sha"], reasons)
-            state["published"] = state["revision"]
-            _write_result(result)
-        return bool(refused)
+            state["published"] = state["revision"] if _write_result(result) else -1
+        return bool(refused and state["published"] == state["revision"])
     except Exception:
         return False
 
@@ -144,21 +143,25 @@ def _write_result(result):
     try:
         program_data = Path(os.environ["PROGRAMDATA"])
         if not program_data.is_absolute():
-            return
+            return False
         folder = program_data / "KMTech/start-check"
         if not folder.is_dir():
-            return
+            return False
         _assert_no_reparse_components(folder)
         # Rebuild the public envelope: discard any unapproved raw fields.
         result = startup_result(result["version"], result["build_sha"], result["reasons"])
         destination = folder / (result["checked_at"][:10].replace("-", "") + "-CA.json")
         _assert_no_reparse_components(destination)
         temporary = folder / ("." + destination.name + "." + uuid.uuid4().hex + ".tmp")
+        payload = (json.dumps(result, ensure_ascii=True, separators=(",", ":")) + "\n").encode("ascii")
         with temporary.open("x", encoding="utf-8", newline="\n") as stream:
-            stream.write(json.dumps(result, ensure_ascii=True, separators=(",", ":")) + "\n")
+            stream.write(payload.decode("ascii"))
         os.replace(temporary, destination)
+        _assert_no_reparse_components(destination)
+        with destination.open("rb") as stream:
+            return stream.read(len(payload) + 1) == payload
     except Exception:
-        pass
+        return False
     finally:
         if temporary is not None:
             try:

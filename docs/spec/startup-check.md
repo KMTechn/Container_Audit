@@ -30,15 +30,24 @@ HTTP 라이브러리의 import 시 loopback 기능 검사까지 포함해 CLI �
 
 `main`은 화면 전에 관찰을 시작한다. CLI를 다시 실행하지 않고 기존 관문이 이미 읽고
 판정한 결과를 받아 같은 JSON을 만든다. 정상 시작은 GUI 생성 전, writer admission 밖에서
-기록한다. 같은 결과는 다시 쓰지 않으며 생성 중 기존 거부가 발생하면 같은 파일을 고친다.
+기록한다. 같은 정상 결과는 다시 쓰지 않으며 생성 중 기존 거부가 발생하면 같은 파일을 고친다.
 설치기가 만든 `%PROGRAMDATA%\KMTech\start-check\YYYYMMDD-CA.json`에 임시 파일→
 `os.replace`로 한 줄을 원자 기록한다. 폴더를 만들지 않는다. 폴더 없음·쓰기 실패는 조용히 넘어간다.
 이 파일은 실행 허가·자료 판 표지가 아니다. ACL과 알림·SSH 원격 고침은 설치 키트 몫이다.
 
-G0: 기존 거부의 종료 코드만 유지하며 그 거부 화면을 닫기 단추 하나의 Tk 안내로 바꾼다.
+G0: 기존 거부의 종료 코드만 유지한다. 원자 저장 후 한 줄을 제한된 길이로 다시 읽어
+바이트 일치를 확인한 경우에만 그 거부 화면을 닫기 단추 하나의 Tk 안내로 바꾼다.
+폴더 없음·저장 실패·읽기 실패·불일치면 기존 구체 messagebox를 그대로 사용한다.
+거부 안내를 바꾸기 전에는 이전 저장 성공 여부와 관계없이 다시 저장·확인한다.
 「이 PC 는 지금 새 프로그램을 열 수 없습니다. 관리자에게 알렸습니다. 다른 작업대로 옮겨 주세요.」
 경고 후 계속, bootstrap 복구 인계, 이미 실행 중인 경우의 기존 흐름을 따른다.
 새 관찰이 실패해 UNKNOWN이면 기존 시작 흐름을 계속하고 기존 관문이 최종 판정한다.
+품목 목록 거부는 ITEM_CATALOG_UNAVAILABLE에 고정 세부 코드 하나를 더한다. 403은
+ITEM_CATALOG_HTTP_403, 다른 HTTP 오류는 ITEM_CATALOG_HTTP_ERROR, 시간 초과는
+ITEM_CATALOG_TIMEOUT, 연결 실패는 ITEM_CATALOG_UNREACHABLE이다. 기존 고정 원인은
+ITEM_CATALOG_{REQUEST_FAILED_NO_CACHE,PROFILE_LOAD_FAILED,PROFILE_INCOMPLETE,PROFILE_ABSENT,
+URL_NOT_TRUSTED,SNAPSHOT_UNAVAILABLE_AFTER_VERIFY,SNAPSHOT_PARSE_FAILED}로 보존한다.
+값·원문은 넣지 않는다. REASON_CATEGORIES가 K1 허용 목록이며 미등록 원인은 UNKNOWN_CATALOG다.
 G 결과와 H 화면 준비 표지의 두 고정 report sink만 admission 예외로 등록한다.
 다른 sink의 `report_only` 사용과 기존 admission 안의 결과 쓰기는 거부한다.
 관찰 추가로 네트워크·writer 허가·mutex를 획득하지 않는다.

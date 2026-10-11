@@ -508,6 +508,7 @@ CA 세션 변환의 `pcs_completed`는 완료 barcode 수에서 계산되고 해
 
 읽기 전용 시작 확인은 같은 인증된 cache·복구본 판정을 사용한다. 인증된 저장 목록이 없고
 과도기 스위치도 꺼진 경우만 CATALOG_OFFLINE이다. [확인 계약](startup-check.md)을 따른다.
+거부 안내 교체는 결과 원자 저장·읽기 확인 성공 때만 허용하며 실패하면 기존 구체 안내를 보존한다.
 평상시 화면 준비의 `app_gui_ready.v1` 표지는 시작 가능 판정과 별개인 관측이며,
 기존 관문 결론·업데이트 시험 staging 표지·자료 writer admission을 바꾸지 않는다.
 

@@ -24,6 +24,17 @@ REASON_CATEGORIES = {
     "FIRST_RUN_SETUP_REQUIRED": "ACCOUNT_MISMATCH",
     "MACHINE_ONBOARDING_PENDING": "ACCOUNT_MISMATCH",
     "ITEM_CATALOG_UNAVAILABLE": "CATALOG_OFFLINE",
+    "ITEM_CATALOG_HTTP_403": "CATALOG_OFFLINE",
+    "ITEM_CATALOG_HTTP_ERROR": "CATALOG_OFFLINE",
+    "ITEM_CATALOG_TIMEOUT": "CATALOG_OFFLINE",
+    "ITEM_CATALOG_UNREACHABLE": "CATALOG_OFFLINE",
+    "ITEM_CATALOG_REQUEST_FAILED_NO_CACHE": "CATALOG_OFFLINE",
+    "ITEM_CATALOG_PROFILE_LOAD_FAILED": "CATALOG_OFFLINE",
+    "ITEM_CATALOG_PROFILE_INCOMPLETE": "CATALOG_OFFLINE",
+    "ITEM_CATALOG_PROFILE_ABSENT": "CATALOG_OFFLINE",
+    "ITEM_CATALOG_URL_NOT_TRUSTED": "CATALOG_OFFLINE",
+    "ITEM_CATALOG_SNAPSHOT_UNAVAILABLE_AFTER_VERIFY": "CATALOG_OFFLINE",
+    "ITEM_CATALOG_SNAPSHOT_PARSE_FAILED": "CATALOG_OFFLINE",
     "ALREADY_RUNNING": "ALREADY_RUNNING",
     "UNKNOWN_UPDATE": "UNKNOWN",
     "UNKNOWN_DEPLOY_FENCE": "UNKNOWN",
@@ -59,6 +70,25 @@ def startup_result(version="", build_sha="", reasons=()):
         "categories": (["READY"] if ready else []) + categories,
         "checked_at": datetime.now(timezone(timedelta(hours=9))).isoformat(timespec="seconds"),
     }
+
+
+def catalog_refusal_reason(cause_code, *, http_status_code=None, exception_type=None):
+    """Project existing refusal diagnostics to fixed codes; never emit their values."""
+    candidate = "ITEM_CATALOG_" + cause_code if isinstance(cause_code, str) else ""
+    if candidate not in REASON_CATEGORIES:
+        return "UNKNOWN_CATALOG"
+    if cause_code == "REQUEST_FAILED_NO_CACHE":
+        if type(http_status_code) is int and http_status_code == 403:
+            return "ITEM_CATALOG_HTTP_403"
+        if type(http_status_code) is int and 400 <= http_status_code <= 599:
+            return "ITEM_CATALOG_HTTP_ERROR"
+        if exception_type in ("Timeout", "ConnectTimeout", "ReadTimeout", "TimeoutError"):
+            return "ITEM_CATALOG_TIMEOUT"
+        if exception_type in ("ConnectionError", "ProxyError", "SSLError", "ConnectError"):
+            return "ITEM_CATALOG_UNREACHABLE"
+        if exception_type not in (None, "", "ItemCatalogSyncError"):
+            return "UNKNOWN_CATALOG"
+    return candidate
 
 
 def _already_running(app_root):
