@@ -2711,7 +2711,7 @@ class ContainerAudit:
         )
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
         self.direct_sync_status_label = tk.Label(
-            status_bar, text="회사 서버 확인 중", anchor=tk.E, wraplength=0,
+            status_bar, text="회사 서버: 첫 이적 때 확인", anchor=tk.E, wraplength=0,
             bg=self.COLOR_SIDEBAR_BG, fg=self.COLOR_TEXT_SUBTLE,
         )
         self.direct_sync_status_label.pack(side=tk.RIGHT, padx=10, pady=4)
@@ -17076,7 +17076,7 @@ class ContainerAudit:
                 long_text += f" · 보낼 것 {pending}건"
                 short_text += f" · {pending}건"
         else:
-            long_text, short_text = "회사 서버 확인 중", "확인 중"
+            long_text, short_text = "회사 서버: 첫 이적 때 확인", "첫 이적 때 확인"
         size = max(9, int(11 * float(getattr(self, "scale_factor", 1.0))))
         available, required = 0, 1
         width = 0

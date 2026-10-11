@@ -43,7 +43,7 @@ def footer_app(monkeypatch):
     ("disconnected", "review", 1, 2, "", "관리자 확인 필요 3건 · 보낼 것 5건", "관리자 확인 3건", "review"),
     ("disconnected", "pending", 0, 0, "", "회사 서버 연결 안 됨 · 이 PC에 저장 중 · 보낼 것 5건", "연결 안 됨 · 보낼 것 5건", "disconnected"),
     ("normal", "pending", 0, 0, (NOW - datetime.timedelta(minutes=11)).isoformat(), "회사 서버로 못 보낸 것 5건", "못 보낸 것 5건", "delayed"),
-    ("unknown", "pending", 0, 0, "", "회사 서버 확인 중", "확인 중", "neutral"),
+    ("unknown", "pending", 0, 0, "", "회사 서버: 첫 이적 때 확인", "첫 이적 때 확인", "neutral"),
     ("normal", "pending", 0, 0, (NOW - datetime.timedelta(minutes=1)).isoformat(), "회사 서버 연결됨 · 보낼 것 5건", "연결됨 · 5건", "neutral"),
 ])
 def test_five_footer_states_have_approved_text_and_colors(
@@ -63,6 +63,33 @@ def test_five_footer_states_have_approved_text_and_colors(
     }[tone]
     assert options["bg"] == (app.COLOR_IDLE_BG if tone == "disconnected" else app.COLOR_SIDEBAR_BG)
     assert ("bold" in options["font"]) is (tone == "review")
+
+
+@pytest.mark.parametrize("width,initial,connected,disconnected", [
+    (1366, "회사 서버: 첫 이적 때 확인", "회사 서버 연결됨 · 보낼 것 0건",
+     "회사 서버 연결 안 됨 · 이 PC에 저장 중 · 보낼 것 0건"),
+    (1024, "첫 이적 때 확인", "연결됨 · 0건", "연결 안 됨 · 보낼 것 0건"),
+])
+def test_idle_footer_stays_neutral_until_transfer_client_has_a_result(
+    footer_app, width, initial, connected, disconnected,
+):
+    app = footer_app
+    app.root.width = app.direct_sync_status_label.parent.width = width
+    app._pending_seal_intent_count = 0
+    client = app.transfer_seal_coordinator.client
+    client.connection_state = "unknown"
+    app._render_direct_sync_status_line()
+    assert app.direct_sync_status_label.options["text"] == initial
+    for _ in range(3):
+        app._apply_direct_sync_health(RelayHealth("ready", 0, 0, 0, "", "", ""))
+        assert app.direct_sync_status_label.options["text"] == initial
+        assert client.connection_state == "unknown"
+    for connection, expected in (
+        ("normal", connected), ("disconnected", disconnected), ("normal", connected),
+    ):
+        client.connection_state = connection
+        app._apply_direct_sync_health(RelayHealth("ready", 0, 0, 0, "", "", ""))
+        assert app.direct_sync_status_label.options["text"] == expected
 
 
 def test_footer_zero_pending_and_unknown_counts_are_distinct(footer_app):
@@ -107,6 +134,7 @@ def test_footer_is_in_separate_bottom_frame_and_sidebar_has_no_sync_card(monkeyp
     monkeypatch.setattr(ca.ttk, "PanedWindow", Widget)
     app.root = Widget()
     app._setup_core_ui_structure()
+    assert app.direct_sync_status_label.options["text"] == "회사 서버: 첫 이적 때 확인"
     footer = app.direct_sync_status_label.parent
     assert footer is app.status_label.parent
     assert footer.parent is app.root
