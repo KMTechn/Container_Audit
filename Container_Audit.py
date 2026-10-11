@@ -9802,9 +9802,7 @@ class ContainerAudit:
                 f"SHA256: {result.sha256 or '읽기 실패'}\n"
                 f"원 현품표: {', '.join(result.value['labels']) if result.verified else '확인 필요'}"
             )
-            if messagebox.askyesno("현재 상태 보류 목록", detail + "\n\n원 현품표를 회사 서버에서 다시 확인할까요?", parent=self.root):
-                self._recheck_stale_hold_entry(marker, result, approval)
-            elif messagebox.askyesno("현재 상태 보류 목록", detail + "\n\n이 건만 보류하고 다른 현품표를 계속할까요?", parent=self.root):
+            if messagebox.askyesno("현재 상태 보류 목록", detail + "\n\n이 건을 보류한 채 원 현품표를 다시 확인할까요?", parent=self.root):
                 self._recheck_stale_hold_entry(marker, result, approval)
         for row in stale_current_entries:
             if not self._blocked_work_identity_matches(approval):
@@ -19734,9 +19732,8 @@ class ContainerAudit:
             + ("원본 없음, 보류 표시만 남음. " if marker_only and not source.exists() else "")
             + "남은 근거는 그대로 보존합니다. 원 현품표를 회사 서버에서 읽기 전용으로 재확인합니다."
         )
-        if not messagebox.askyesno("손상 보류 작업", detail + "\n\n원 현품표를 다시 확인할까요?", parent=self.root):
-            if not messagebox.askyesno("이 건만 보류", detail + "\n\n이 건만 보류하고 다른 현품표를 계속할까요?", parent=self.root):
-                return
+        if not messagebox.askyesno("손상 보류 작업", detail + "\n\n이 건을 보류한 채 원 현품표를 다시 확인할까요?", parent=self.root):
+            return
         parsed = read_recovery_file(path, "json")
         candidate = str(parsed.value.get("label" if marker_only else "master_label_code") or "") if parsed.verified else ""
         label = candidate if temporary_target is None and self._parse_new_format_qr(candidate) else simpledialog.askstring(

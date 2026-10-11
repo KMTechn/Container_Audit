@@ -9035,7 +9035,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "e3b75b7e737776d3fd7d437159530f0fc6004374623665b42d73b4a476d78ee0",
+  "inventory_sha256": "b80fe5d369aa35aeac173916a86068570b5d3b5cb68a0f64274b6e23c894c390",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -20350,7 +20350,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 21862,
+      "line": 21859,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },

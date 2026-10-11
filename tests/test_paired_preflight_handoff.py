@@ -773,7 +773,8 @@ def test_fixed_seed_parked_damage_keeps_healthy_row_and_manager_action(tmp_path,
     assert damaged.read_bytes() == original
 
 
-def test_invalid_parked_manager_readback_binds_label_without_touching_source(tmp_path, monkeypatch):
+@pytest.mark.parametrize("confirm", [True, False])
+def test_invalid_parked_manager_readback_binds_label_without_touching_source(tmp_path, monkeypatch, confirm):
     app, _, current = _app(tmp_path, monkeypatch)
     store = app._parked_store()
     path = store.save_state(current, worker_name=app.worker_name,
@@ -781,7 +782,9 @@ def test_invalid_parked_manager_readback_binds_label_without_touching_source(tmp
     invalid = {**current, "scanned_barcodes": 1}
     path.write_text(json.dumps(invalid), encoding="utf-8")
     original = path.read_bytes()
-    monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda *_a, **_k: True)
+    questions = []
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno",
+                        lambda *args, **_k: questions.append(args) or confirm)
     monkeypatch.setattr("Container_Audit.messagebox.showinfo", lambda *_a, **_k: None)
     app._log_event = lambda *_a, **_k: True
     calls = []
@@ -793,6 +796,11 @@ def test_invalid_parked_manager_readback_binds_label_without_touching_source(tmp
     tasks = []
     app._ui_task_lane = lambda: SimpleNamespace(is_busy=lambda: False, submit=tasks.append)
     app._show_invalid_parked_tray(str(path))
+    assert len(questions) == 1
+    if not confirm:
+        assert tasks == [] and calls == []
+        assert path.read_bytes() == original
+        return
     assert len(tasks) == 1
     tasks[0].finish(tasks[0].work())
     assert calls == [current["master_label_code"]]
@@ -1514,7 +1522,7 @@ def test_stale_hold_damage_remains_a_manager_row_and_can_bind_two_keys(tmp_path,
     monkeypatch.setattr("Container_Audit.messagebox.askyesno",
                         lambda _title, detail, **_kwargs: notices.append(detail) or False)
     app._show_paired_preflight_handoffs()
-    assert notices and marker.name in notices[0]
+    assert len(notices) == 1 and marker.name in notices[0]
     store.bind_unidentified_stale(marker, ("OTHER-MASTER", current["master_label_code"]))
     assert app._paired_preflight_blocks_label("OTHER-MASTER")
     assert app._paired_preflight_blocks_label(current["master_label_code"])
