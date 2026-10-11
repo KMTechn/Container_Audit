@@ -269,8 +269,10 @@ def test_builder_without_proof_preserves_baseline_metadata_bytes(tmp_path, metad
     import subprocess
 
     source_root = Path(__file__).resolve().parents[1]
+    # Row 1 adds a required PS module to the package. Compare against the
+    # committed state immediately before row 6 so its asset counts match.
     baseline_bytes = subprocess.check_output([
-        "git", "show", "f9c0d9babba8aa1316f390556f93d2812e38ec83:tools/build_portable_release_candidate.py",
+        "git", "show", "9ab73f75c8a6c2a8ec54e82236723be66221446a:tools/build_portable_release_candidate.py",
     ], cwd=source_root)
     baseline_path = tmp_path / "baseline_builder.py"
     baseline_path.write_bytes(baseline_bytes)
