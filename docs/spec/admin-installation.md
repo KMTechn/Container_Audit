@@ -6,7 +6,7 @@ w9firstupdsub62의 제품 범위는 관리자 입구, 기계 배치, PENDING과 
 canonical은 상승 또는 Session 0에서만 `-WorkerAccount <SID 또는 DOMAIN\이름>`와
 `-WorkerSurveyInventory <JSON 경로>`를 함께 받는다. inventory에서 해석하는 값은
 문자열 `status=READY`, `target_sid`, `target_profile_root` 세 개다. SID는 계정 해석 결과와
-같고 호출 관리자 SID와 달라야 한다. 프로필은 해당 SID의 ProfileList 값과 같아야 한다.
+같아야 한다. 상승된 SSH 호출자와 같은 SID도 받으며, 프로필은 해당 SID의 ProfileList 값과 같아야 한다.
 파일 없음·잘못된 JSON·필드 불일치는 쓰기 전에 공개 실패 한 줄로 거절한다.
 나머지 필드는 해석하지 않고 전체 파일 SHA256만 PENDING에 결속한다.
 일반 세션에 두 인수 중 하나라도 넘기면 거절하며 인수 없는 일반 길은 기존대로다.
@@ -14,7 +14,11 @@ canonical은 상승 또는 Session 0에서만 `-WorkerAccount <SID 또는 DOMAIN
 키트 관리자 입구는 패키지 SHA·pins·plan 컴퓨터 이름을 확인하고 작업자 맥락에서
 만든 READY inventory를 넘겨야 한다. 인수 없는 직접 관리자 호출은 계속 거절한다.
 제품은 기존 INSTALL_THIS_PC 배치·무결성·writer authority를 사용하며 내부 UAC를
-추가 요청하지 않는다. 작업자 프로필, 관리자 HKCU Run, 옛 앱과 옛 바로가기를 변경하지 않는다.
+추가 요청하지 않는다. 다른 SID의 작업자 프로필과 호출자 HKCU Run은 변경하지 않는다.
+같은 SID는 호출자 LOCALAPPDATA가 검증한 프로필과 일치할 때 자기 자료 폴더·HKCU Run·
+개인 시작 메뉴/바탕화면 링크를 준비한다. 옛 앱 링크는 보존하며 등록·일반 사용자 relay·
+화면 시작은 PENDING을 소비하는 작업자 세션/다음 로그온/첫 시작으로 넘긴다.
+개인 준비 실패도 원래 Run·링크를 복원하며 새로 만든 빈 폴더만 지운다.
 관리자 기계 배치와 작업자 설치·첫 시작 준비·다음 로그온에서 호출하는 PowerShell은
 자식 인수에 `-ExecutionPolicy Bypass`를 명시한다. 기존/배치된 코드 무결성 확인과
 지원 제거 자식도 같은 규칙을 따른다. 적용 범위는 자식 프로세스이며 OS·GPO 정책은 변경하지 않는다.

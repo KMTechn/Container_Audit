@@ -77,10 +77,11 @@ if($path -and $env:CA_SCENARIO -cne 'missing_file'){
 $before=@(Get-ChildItem -LiteralPath $env:CA_CONTRACT_ROOT -Recurse -File | ForEach-Object { $_.FullName+':'+(Get-FileHash -LiteralPath $_.FullName).Hash })
 $accepted=$false;$value=$null
 try{$value=Resolve-CanonicalMachineWorker $account $path $caller;$accepted=$true}catch{}
-$wanted=$env:CA_SCENARIO -cin @('ready','ordinary')
+$wanted=$env:CA_SCENARIO -cin @('ready','same_sid','ordinary')
 if($accepted -ne $wanted){throw 'worker inventory admission differs'}
-if($env:CA_SCENARIO -ceq 'ready'){
- if($value.sid -cne $inventory.target_sid -or $value.survey_sha256 -cne (Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant()){throw 'admitted identity/digest differs'}
+if($env:CA_SCENARIO -cin @('ready','same_sid')){
+  if($value.sid -cne $inventory.target_sid -or $value.survey_sha256 -cne (Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant()){throw 'admitted identity/digest differs'}
+  if([bool]$value.same_caller -ne ($env:CA_SCENARIO -ceq 'same_sid')){throw 'caller ownership differs'}
 }
 if($env:CA_SCENARIO -ceq 'ordinary' -and $null -ne $value){throw 'ordinary route changed'}
 $after=@(Get-ChildItem -LiteralPath $env:CA_CONTRACT_ROOT -Recurse -File | ForEach-Object { $_.FullName+':'+(Get-FileHash -LiteralPath $_.FullName).Hash })
@@ -264,7 +265,7 @@ def test_first_start_accepts_only_current_or_exact_managed_release(machine_inten
 
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
-@pytest.mark.parametrize("case", ("no_account", "no_inventory", "same_sid", "not_ready", "other_sid", "other_profile", "invalid_json"))
+@pytest.mark.parametrize("case", ("no_account", "no_inventory", "not_ready", "other_sid", "other_profile", "invalid_json"))
 def test_public_machine_admission_denial_has_one_line_and_zero_writes(tmp_path, engine, case):
     from tests.test_zero_touch_installer import _portable_release_fixture
     from tests.test_canonical_portable_uninstall import _tree
@@ -382,7 +383,7 @@ if(-not $rejected){throw 'new shortcut became a legacy candidate'}
 
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
-@pytest.mark.parametrize("first_start", (False, True, "pending_acl_failure", "shortcut_failure", "audit_failure"))
+@pytest.mark.parametrize("first_start", (False, True, "pending_acl_failure", "shortcut_failure", "audit_failure", "same_sid", "same_sid_failure"))
 def test_machine_placement_existing_restore_and_removal_preserve_profiles(tmp_path, engine, first_start):
     from tests.test_canonical_portable_uninstall import _setup, _tree, _sha, OS_BOUNDARIES, HELPER_OS
     from tests.test_canonical_installation_callers import _distinct_replacement, _bind_packet
@@ -415,12 +416,22 @@ function Get-CanonicalWorkerProfileRoot {param($Sid) return $env:CA_MACHINE_PROF
 function Get-CanonicalMachineArtifactPaths {param($State)
  return @((Join-Path $State 'pending-onboarding.json'),(Join-Path $env:CA_UNINSTALL_ROOT 'machine-shortcut.json'))
 }
-function New-CanonicalMachineShortcut {param($Root)
- [IO.File]::WriteAllText((Join-Path $env:CA_UNINSTALL_ROOT 'machine-shortcut.json'),
+function New-CanonicalMachineShortcut {param($Root,[string]$Directory='')
+ $path=if($Directory){Join-Path $Directory 'KMTech 이적 검사.lnk'}else{Join-Path $env:CA_UNINSTALL_ROOT 'machine-shortcut.json'}
+ [IO.File]::WriteAllText($path,
    (@{TargetPath=(Join-Path $Root 'runtime\pythonw.exe');Arguments=(Get-CanonicalMachineShortcutArguments $Root);
       WorkingDirectory=(Join-Path $Root 'app')}|ConvertTo-Json))
  if($env:CA_MACHINE_FAILURE -ceq 'shortcut_failure'){throw 'Simulated post-shortcut failure'}
+ if($Directory -and $env:CA_MACHINE_FAILURE -ceq 'same_sid_failure'){throw 'Simulated worker shortcut failure'}
 }
+function Start-InstallationTransaction {throw 'Administrator path reached interactive coordinator'}
+function Invoke-BootstrapNormalFiniteProducer {throw 'Administrator path reached normal interactive producer'}
+function StartRaw {throw 'Administrator path reached Session 0 relay guard'}
+function Product {throw 'Administrator path reached deferred onboarding'}
+$workerPathsBody=${function:Get-CanonicalWorkerPreparationPaths}.ToString().Replace(
+ '[Environment]::GetFolderPath([Environment+SpecialFolder]::$folder,[Environment+SpecialFolderOption]::DoNotVerify)',
+ '(Join-Path ([string]$Worker.profile_root) $folder)')
+Set-Item Function:Get-CanonicalWorkerPreparationPaths ([scriptblock]::Create($workerPathsBody))
 $script:machineShell=[pscustomobject]@{}
 $script:machineShell | Add-Member ScriptMethod CreateShortcut {param($Path);return (Get-Content -LiteralPath $Path -Raw|ConvertFrom-Json)}
 $removeBody=${function:Remove-CanonicalMachineArtifacts}.ToString().Replace('New-Object -ComObject WScript.Shell','$script:machineShell')
@@ -450,10 +461,19 @@ function Save([string]$Path,$Value,[bool]$SanitizeDiagnostics=$false) {
     diagnostic = "[IO.File]::WriteAllText((Join-Path $env:CA_UNINSTALL_ROOT 'machine-error.json'),(@{details=(Get-CanonicalFailureDetails $_ 'MACHINE_FIXTURE');stack=$_.ScriptStackTrace}|ConvertTo-Json -Depth 8));"
     text = text.replace("Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED';", diagnostic + "Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED';")
     canonical.write_text(text, encoding="utf-8-sig")
+    same_caller = first_start in ("same_sid", "same_sid_failure")
+    if same_caller:
+        sid = sid.rsplit("-", 1)[0] + "-1000"
+        inventory.write_text(json.dumps({"status": "READY", "target_sid": sid,
+                                         "target_profile_root": str(worker)}), encoding="utf-8")
+        local = worker / "AppData/Local"
+        local.mkdir(parents=True)
+        env["LOCALAPPDATA"] = str(local)
     env["CA_MACHINE_PROFILE"] = str(worker)
     env["CA_MACHINE_FAILURE"] = str(first_start)
     _bind_packet(source)
     profiles_before = (_tree(Path(env["LOCALAPPDATA"])), _tree(worker))
+    registry_before = json.loads((tmp_path / "registry.json").read_text(encoding="utf-8"))
 
     def run(label, *arguments, expected_exit=0):
         audit = tmp_path / (label + ".json")
@@ -467,11 +487,13 @@ function Save([string]$Path,$Value,[bool]$SanitizeDiagnostics=$false) {
         (tmp_path / (label + "-stdout.log")).write_text(result.stdout, encoding="utf-8")
         (tmp_path / (label + "-stderr.log")).write_text(result.stderr, encoding="utf-8")
         assert result.returncode == expected_exit, f"{label}: exit {result.returncode}; evidence in {tmp_path}"
-        assert (_tree(Path(env["LOCALAPPDATA"])), _tree(worker)) == profiles_before
+        if not same_caller or expected_exit:
+            assert (_tree(Path(env["LOCALAPPDATA"])), _tree(worker)) == profiles_before
+        assert (worker / "legacy-data.txt").read_text(encoding="utf-8") == "legacy worker data"
         assert all(path.read_bytes() == b"protected-fixture-must-be-preserved" for path in protected)
         return json.loads(audit.read_text(encoding="utf-8")) if expected_exit == 0 else result
 
-    if first_start in ("pending_acl_failure", "shortcut_failure", "audit_failure"):
+    if first_start in ("pending_acl_failure", "shortcut_failure", "audit_failure", "same_sid_failure"):
         failed = run("machine-install-failed", expected_exit=4)
         assert "PASS_MACHINE_WORKER_PENDING" not in failed.stdout
         state = Path(env["PROGRAMDATA"]) / "KMTech/ContainerAudit/machine-install"
@@ -481,6 +503,8 @@ function Save([string]$Path,$Value,[bool]$SanitizeDiagnostics=$false) {
         assert len(machine_audits) == 1
         assert not (state / "pending-onboarding.json").exists()
         assert not (tmp_path / "machine-shortcut.json").exists()
+        assert not list(worker.rglob("*.lnk"))
+        assert json.loads((tmp_path / "registry.json").read_text(encoding="utf-8")) == registry_before
         assert json.loads((installed / "portable-manifest.json").read_text())["source_commit"] == old_commit
         if first_start != "audit_failure":
             failure = json.loads(machine_audits[0].read_text(encoding="utf-8"))
@@ -495,6 +519,19 @@ function Save([string]$Path,$Value,[bool]$SanitizeDiagnostics=$false) {
     marker_before = marker.read_bytes()
     payload = json.loads(marker_before)
     assert payload["survey_sha256"] == _sha(inventory)
+    if first_start == "same_sid":
+        assert audit["worker_setup"] == "USER_SCOPE_PREPARED_INTERACTIVE_PENDING"
+        assert audit["after"]["observation_status"] == "PREPARED"
+        registry = json.loads((tmp_path / "registry.json").read_text(encoding="utf-8"))
+        assert registry["exists"] is True and registry["kind"] == "String"
+        assert "--container-audit-user-relay" in registry["data"]
+        for folder in ("Programs", "DesktopDirectory"):
+            shortcut = json.loads((worker / folder / "KMTech 이적 검사.lnk").read_text(encoding="utf-8"))
+            assert Path(shortcut["TargetPath"]) == installed / "runtime/pythonw.exe"
+        assert (Path(env["LOCALAPPDATA"]) / "KMTech/ContainerAudit/events").is_dir()
+        assert not (tmp_path / "relay.ready").exists()
+        assert payload["status"] == "PENDING"
+        return
     if first_start:
         completed = []
         result = consume_pending_machine_onboarding(

@@ -3409,7 +3409,6 @@ function Resolve-CanonicalMachineWorker([string]$Account,[string]$InventoryPath,
         throw 'PENDING_TARGET_AMBIGUOUS'
     }
     $sid=Resolve-CanonicalWorkerSid $Account
-    if ($sid -ceq [string]$Caller.sid) { throw 'PENDING_TARGET_AMBIGUOUS' }
     $profile=Get-CanonicalWorkerProfileRoot $sid
     $path=Full $InventoryPath 'worker survey inventory'
     Assert-BootstrapNoReparsePoint $path 'worker survey inventory' -PathOnly
@@ -3427,7 +3426,7 @@ function Resolve-CanonicalMachineWorker([string]$Account,[string]$InventoryPath,
     $digest=[Security.Cryptography.SHA256]::Create()
     try { $sha=([BitConverter]::ToString($digest.ComputeHash($bytes))).Replace('-','').ToLowerInvariant() }
     finally { $digest.Dispose() }
-    return [pscustomobject]@{sid=$sid;profile_root=$profile;survey_sha256=$sha;survey_path=$path}
+    return [pscustomobject]@{sid=$sid;profile_root=$profile;survey_sha256=$sha;survey_path=$path;same_caller=($sid -ceq [string]$Caller.sid)}
 }
 function Write-CanonicalMachinePublicRecord([string]$Code,[string]$Status='FAILED') {
     $message='작업자 계정과 살펴보기 기록을 확인하고 관리자 설치 키트로 다시 실행하세요.'
@@ -3536,6 +3535,50 @@ function New-CanonicalMachineShortcut([string]$Root,[string]$Directory='') {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Machine shortcut readback failed.' }
 }
 
+function Get-CanonicalWorkerPreparationPaths($Worker) {
+    $local=Join-Path ([string]$Worker.profile_root) 'AppData\Local'
+    if (-not (Same (Full $env:LOCALAPPDATA 'caller local application data') $local)) { throw 'Worker profile differs from caller local application data.' }
+    $data=Join-Path $local 'KMTech\ContainerAudit'
+    $direct=Join-Path $local 'KMTech\DirectSync\container_audit'
+    $directories=@($data,(Join-Path $data 'events'),$direct)
+    foreach ($name in @('queue','spool','status','logs')) { $directories+=Join-Path $direct $name }
+    $shortcuts=@()
+    foreach ($folder in @('Programs','DesktopDirectory')) {
+        $directory=[Environment]::GetFolderPath([Environment+SpecialFolder]::$folder,[Environment+SpecialFolderOption]::DoNotVerify)
+        if (-not $directory -or -not (Full $directory 'worker shortcut directory').StartsWith(([string]$Worker.profile_root).TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Worker shortcut directory differs from the admitted profile.'
+        }
+        $directories+=$directory
+        $shortcuts+=Join-Path $directory 'KMTech 이적 검사.lnk'
+    }
+    $created=@()
+    foreach ($directory in $directories) {
+        $ancestor=$directory
+        while (-not (Test-Path -LiteralPath $ancestor)) {
+            if ($created -cnotcontains $ancestor) { $created+=$ancestor }
+            $ancestor=Split-Path -Parent $ancestor
+        }
+        Assert-BootstrapNoReparsePoint $ancestor 'worker preparation ancestor' -PathOnly
+    }
+    return [pscustomobject]@{directories=$directories;shortcuts=$shortcuts;created_directories=$created}
+}
+function Initialize-CanonicalSameWorkerScope([string]$Root,$Paths) {
+    foreach ($directory in $Paths.directories) { [void][IO.Directory]::CreateDirectory([string]$directory) }
+    $command=Command $Root -Installed -InstalledPacket $Root
+    Restore @{exists=$true;kind='String';data=$command}
+    $run=Snapshot
+    if (-not [bool]$run.exists -or [string]$run.kind -cne 'String' -or [string]$run.data -cne $command) { throw 'Worker Run preparation readback failed.' }
+    foreach ($shortcut in $Paths.shortcuts) { New-CanonicalMachineShortcut $Root (Split-Path -Parent $shortcut) }
+    # Registration, limited relay and GUI belong to PENDING consumption at logon/first start.
+}
+function Restore-CanonicalWorkerPreparationDirectories($Paths) {
+    foreach ($directory in @($Paths.created_directories | Sort-Object Length -Descending)) {
+        if (Test-Path -LiteralPath $directory) {
+            Assert-BootstrapNoReparsePoint $directory 'worker preparation cleanup' -PathOnly
+            if ([IO.Directory]::GetFileSystemEntries($directory).Length -eq 0) { [IO.Directory]::Delete($directory,$false) }
+        }
+    }
+}
 function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Root,$Manifest,$AuthorityLease) {
     if (-not $testMode -and -not (Test-InstallationEvidencePrivileged)) {
         throw 'Machine installation requires an already privileged token.'
@@ -3550,7 +3593,7 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
     $data=Join-Path $local 'KMTech\ContainerAudit'
     $workerFence=Join-Path $local 'KMTech\DirectSync\container_audit\control\writer-session\active.json'
     if (Test-Path -LiteralPath $workerFence) { throw 'Existing worker deployment requires recovery.' }
-    # Admission is read-only. The target user's directories are never created.
+    # Admission is read-only; another user's profile remains untouched.
     Assert-ContainerDataGenerationTarget -CandidateRoot $Source -TargetSid ([string]$Worker.sid) `
         -LocalAppDataRoot $local -DataRoot $data -HelperRoot $Source
     if (Test-Path -LiteralPath $Root -PathType Container) {
@@ -3583,6 +3626,12 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         after=@{scope='WORKER_HKCU';observation_status='NOT_CHANGED'};
         code_replacement=@{transaction_id=$run;receipt_path=$receipt};created_at=$started;secret_values_recorded=$false}
     $artifactPaths=Get-CanonicalMachineArtifactPaths $state
+    $workerPreparation=$null;$workerRunBefore=$null
+    if ([bool]$Worker.same_caller -and -not $Uninstall -and -not $RestoreVerifiedReplacement) {
+        $workerPreparation=Get-CanonicalWorkerPreparationPaths $Worker
+        $artifactPaths+=@($workerPreparation.shortcuts)
+        $workerRunBefore=Snapshot
+    }
     $artifactBefore=Get-CanonicalMachineArtifactPreimage $artifactPaths
     $complete=$false;$placementBaseArguments=$null;$replacementApplied=$false
     try {
@@ -3669,6 +3718,11 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
                 (Sha (Join-Path $Root 'portable-manifest.json')) -cne (Sha (Join-Path $Source 'portable-manifest.json'))) {
                 throw 'Machine installed identity differs.'
             }
+            if ($null -ne $workerPreparation) {
+                Initialize-CanonicalSameWorkerScope $Root $workerPreparation
+                $audit.after.observation_status='PREPARED'
+                $audit.worker_setup='USER_SCOPE_PREPARED_INTERACTIVE_PENDING'
+            }
             $marker=[ordered]@{schema='container-audit-machine-pending-v1';status='PENDING';install_id=$run;
                 target_sid=[string]$Worker.sid;version=[string]$Manifest.version;source_commit=[string]$Manifest.source_commit;
                 install_root=$Root;survey_sha256=[string]$Worker.survey_sha256;installed_at_utc=$started;
@@ -3714,6 +3768,10 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
             }
             try { Restore-CanonicalMachineArtifacts $artifactBefore; $audit.artifact_restore='PASS' }
             catch { $audit.artifact_restore='FAILED' }
+            if ($null -ne $workerPreparation) {
+                try { Restore $workerRunBefore; $audit.worker_run_restore='PASS' } catch { $audit.worker_run_restore='FAILED' }
+                try { Restore-CanonicalWorkerPreparationDirectories $workerPreparation } catch { $audit.worker_directory_restore='FAILED' }
+            }
             if ($machineStateReady) { try { Save $path $audit } catch {} }
         }
         $Script:ContainerMachineInstallControlRoot=''
