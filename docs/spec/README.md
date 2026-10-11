@@ -255,6 +255,7 @@
 
 ### 8-4. 되돌림
 - **설치 도중 실패**: 코드·로그온 자동 실행·작업·전송을 되돌린다. 첫 기동이 실패하면 자료 세대가 그대로일 때만 앞 판으로 돌아가고, 올라갔으면 후보를 남긴다(`auto_update.py:245`). UNPROVEN.
+- **설치 도중 끊김**: 관리자 지원 복구는 원래 설치 기록, authority 독점, 자식 PID·생성 시각과 같은 run ID 프로세스 0을 확인한 뒤 기존 복원을 재개한다. PID 미기록도 같은 run ID 프로세스가 0이면 복구하며, 살아 있는 자식/손자나 관측 실패는 기록과 중지 표시를 보존한다([지원 입구](admin-installation.md)). 실제 PC 수용은 별도다.
 - **검증된 교체 되돌리기**: `-RestoreVerifiedReplacement -RestoreReceiptPath <원 receipt> -RestoreReceiptSha256 <값>`(`INSTALL_CANONICAL_PORTABLE.ps1:4116`). UNPROVEN.
 - **설치 성공 뒤 옛 이적 v2.0.4 로 돌아가기**: 증명이 없다.
   - 그래서 늦은 창은 최대 두 대만 깔고, 셋째 PC 를 옛 판으로 남겨 실패한 PC 의 대신 자리로 둔다(G-a).

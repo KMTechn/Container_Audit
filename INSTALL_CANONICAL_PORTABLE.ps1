@@ -3473,11 +3473,14 @@ function Write-CanonicalMachinePublicRecord([string]$Code,[string]$Status='FAILE
         $message='프로그램 제거가 끝났습니다. 작업자 자료는 보존했습니다.'
     } elseif ($Code -ceq 'PASS_RESTORED_VERIFIED') {
         $message='프로그램 코드 복원이 끝났습니다. 작업자 설정은 변경하지 않았습니다.'
+    } elseif ($Code -clike 'MACHINE_RECOVERY_CHILD_*') {
+        $message='설치 자식의 종료를 확인하지 못했습니다. 자료와 설치 기록을 보존하고 관리자 지원 복구를 요청하세요.'
     }
     $fields=[ordered]@{status=$Status;code=$Code;stage='machine_install';guidance=$message;report_status='REPORT_UNAVAILABLE'}
     $public=ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes @('FAILED','PASS','machine_install',
         'PENDING_TARGET_AMBIGUOUS','MACHINE_WORKER_ARGUMENTS_REQUIRE_ADMINISTRATOR','MACHINE_INSTALL_FAILED',
-        'PASS_MACHINE_WORKER_PENDING','PASS_UNINSTALLED_DATA_PRESERVED','PASS_RESTORED_VERIFIED','REPORT_UNAVAILABLE') -SafeMessages @($message)
+        'PASS_MACHINE_WORKER_PENDING','PASS_UNINSTALLED_DATA_PRESERVED','PASS_RESTORED_VERIFIED','REPORT_UNAVAILABLE',
+        'MACHINE_RECOVERY_CHILD_UNRECORDED','MACHINE_RECOVERY_CHILD_IDENTITY_INVALID','MACHINE_RECOVERY_CHILD_ACTIVE','MACHINE_RECOVERY_CHILD_EXIT_UNPROVEN') -SafeMessages @($message)
     Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+($public|ConvertTo-Json -Depth 4 -Compress))
 }
 
@@ -3707,8 +3710,12 @@ function Restore-CanonicalMachineInstallationPrestate($Worker,[string]$Source,[s
                         '-RestoreEvidencePath',(Join-Path $state ('install-audit\failed-restore-'+$run+'-'+[Guid]::NewGuid().ToString('N')+'.json')))
                     $Audit.compensation_child=@{status='EXIT_UNPROVEN'}
                     Save-CanonicalMachineFailureAudit $AuditPath $Audit
-                    $child=Invoke-InstallationEvidenceChild 'machine-failure-code-restore' $engine $arguments
-                    $Audit.compensation_child=@{status='EXITED';exit_code=[int]$child.ExitCode}
+                    $child=Invoke-InstallationEvidenceChild 'machine-failure-code-restore' $engine $arguments -OnStarted {
+                        param($ChildProcessId,$StartedAtUtc)
+                        $Audit.compensation_child.process_id=$ChildProcessId;$Audit.compensation_child.started_at_utc=$StartedAtUtc
+                        Save-CanonicalMachineFailureAudit $AuditPath $Audit
+                    }
+                    $Audit.compensation_child.status='EXITED';$Audit.compensation_child.exit_code=[int]$child.ExitCode
                     if ($child.ExitCode -ne 0) { throw 'MACHINE_FAILURE_CODE_RESTORE_FAILED' }
                     $Audit.code_replacement.status='RESTORED_AFTER_FAILURE'
                 } elseif (-not [string]$Prestate.before_manifest_sha256 -and (Test-Path -LiteralPath $Root -PathType Container)) {
@@ -3719,8 +3726,12 @@ function Restore-CanonicalMachineInstallationPrestate($Worker,[string]$Source,[s
                         '-RemovalControllerCanonicalPath',$PSCommandPath)
                     $Audit.compensation_child=@{status='EXIT_UNPROVEN'}
                     Save-CanonicalMachineFailureAudit $AuditPath $Audit
-                    $child=Invoke-InstallationEvidenceChild 'machine-failure-new-code-remove' $engine $arguments
-                    $Audit.compensation_child=@{status='EXITED';exit_code=[int]$child.ExitCode}
+                    $child=Invoke-InstallationEvidenceChild 'machine-failure-new-code-remove' $engine $arguments -OnStarted {
+                        param($ChildProcessId,$StartedAtUtc)
+                        $Audit.compensation_child.process_id=$ChildProcessId;$Audit.compensation_child.started_at_utc=$StartedAtUtc
+                        Save-CanonicalMachineFailureAudit $AuditPath $Audit
+                    }
+                    $Audit.compensation_child.status='EXITED';$Audit.compensation_child.exit_code=[int]$child.ExitCode
                     if ($child.ExitCode -ne 0) { throw 'MACHINE_FAILURE_NEW_CODE_REMOVE_FAILED' }
                     $Audit.code_replacement.status='NEW_CODE_REMOVED_AFTER_FAILURE'
                 }
@@ -3806,12 +3817,15 @@ function Read-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[stri
     # Keep its existing fields while giving PS 5.1 and PS 7 the same mutable record.
     $record=[ordered]@{}
     foreach ($property in $recordPayload.PSObject.Properties) { $record[$property.Name]=$property.Value }
+    $replacement=[ordered]@{}
+    foreach ($property in $record.code_replacement.PSObject.Properties) { $replacement[$property.Name]=$property.Value }
+    $record.code_replacement=$replacement
     $run=[string]$record.run_id
     if ($run -cnotmatch '^[0-9a-f]{32}$' -or -not (Same $auditFull (Join-Path $state ('install-audit\canonical-portable-'+$run+'.json'))) -or
         [string]$record.schema -cne 'container-audit-canonical-portable-install-v2' -or [string]$record.operation -cne 'INSTALL' -or
-        [string]$record.status -cne 'MACHINE_INSTALL_FAILED' -or -not (Same ([string]$record.install_root) $Root) -or
-        [string]$record.worker_sid -cne [string]$Worker.sid -or [string]$record.placement_child.status -cnotin @('NOT_STARTED','EXITED') -or
-        [string]$record.compensation_child.status -cnotin @('NOT_STARTED','EXITED') -or
+        [string]$record.status -cnotin @('MACHINE_PREPARING','MACHINE_INSTALL_FAILED') -or -not (Same ([string]$record.install_root) $Root) -or
+        [string]$record.worker_sid -cne [string]$Worker.sid -or [string]$record.placement_child.status -cnotin @('NOT_STARTED','EXITED','EXIT_UNPROVEN') -or
+        [string]$record.compensation_child.status -cnotin @('NOT_STARTED','EXITED','EXIT_UNPROVEN') -or
         [string]$record.source_manifest_sha256 -cne (Sha (Join-Path $Source 'portable-manifest.json'))) { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
     $journal=Join-Path $state ('install-audit\machine-prestate-'+$run+'\prestate.json')
     Assert-BootstrapNoReparsePoint $journal 'machine recovery prestate' -PathOnly
@@ -3834,6 +3848,39 @@ function Read-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[stri
     if ((Sha ([string]$prepared.path)) -cne [string]$prepared.sha256) { throw 'MACHINE_RECOVERY_PREPARED_RECEIPT_CHANGED' }
     return [pscustomobject]@{state=$state;control=$control;run_id=$run;prepared=$prepared;prestate=$prestate;fence=$fence;audit=$record;audit_path=$auditFull}
 }
+function Confirm-CanonicalMachineRecoveryChildExit($Audit) {
+    if ([string]$Audit.status -cne 'MACHINE_PREPARING' -and
+        [string]$Audit.placement_child.status -cne 'EXIT_UNPROVEN' -and [string]$Audit.compensation_child.status -cne 'EXIT_UNPROVEN') { return }
+    try { $processSnapshot=@(Get-CimInstance -ClassName Win32_Process -Property ProcessId,CommandLine -OperationTimeoutSec 5 -ErrorAction Stop) }
+    catch { throw 'MACHINE_RECOVERY_CHILD_EXIT_UNPROVEN' }
+    # Command lines may contain delegation credentials; compare only in memory.
+    $runPattern='(?i)(?:^|\s)"?-WriterFenceReplacementTransactionId"?(?:\s+|:)\s*"?'+[regex]::Escape([string]$Audit.run_id)+'"?(?=\s|$)'
+    $runActive=@($processSnapshot | Where-Object { $_.CommandLine -and [regex]::IsMatch($_.CommandLine,$runPattern) }).Count -gt 0
+    $processSnapshot=$null
+    foreach ($child in @($Audit.placement_child,$Audit.compensation_child)) {
+        if ([string]$child.status -ceq 'NOT_STARTED') { continue }
+        $fields=if($child -is [Collections.IDictionary]){@($child.Keys)}else{@($child.PSObject.Properties.Name)}
+        if ('process_id' -cnotin $fields) {
+            if($runActive){throw 'MACHINE_RECOVERY_CHILD_UNRECORDED'}
+            continue
+        }
+        if ('started_at_utc' -cnotin $fields) { throw 'MACHINE_RECOVERY_CHILD_IDENTITY_INVALID' }
+        $started=[DateTime]::MinValue
+        if (($child.process_id -isnot [int] -and $child.process_id -isnot [long]) -or
+            $child.process_id -le 0 -or $child.process_id -gt [int]::MaxValue -or $child.started_at_utc -isnot [string] -or
+            -not [DateTime]::TryParseExact($child.started_at_utc,[string[]]@('o','yyyy-MM-ddTHH:mm:ss.FFFFFFFK'),[Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::RoundtripKind,[ref]$started) -or $started.Kind -ne [DateTimeKind]::Utc) { throw 'MACHINE_RECOVERY_CHILD_IDENTITY_INVALID' }
+        try { Initialize-InstallationChildCapture;$currentStart=[KMTechInstallationChildCapture]::ReadProcessStartTimeUtc([int]$child.process_id) }
+        catch { throw 'MACHINE_RECOVERY_CHILD_EXIT_UNPROVEN' }
+        if ($currentStart -and ([DateTime]::ParseExact($currentStart,'o',[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind)).Ticks -eq $started.Ticks) { throw 'MACHINE_RECOVERY_CHILD_ACTIVE' }
+    }
+    if($runActive){throw 'MACHINE_RECOVERY_CHILD_ACTIVE'}
+    # Only termination is proved; no child exit code or placement success is inferred.
+    foreach ($child in @($Audit.placement_child,$Audit.compensation_child)) {
+        if ([string]$child.status -ceq 'EXIT_UNPROVEN') { $child.status='EXITED' }
+    }
+    $Audit.recovery_child_exit='PASS'
+}
 function Invoke-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[string]$Root,$Manifest,$Context,$AuthorityLease) {
     $state=$Context.state;$control=$Context.control;$run=$Context.run_id;$prepared=$Context.prepared
     $prestate=$Context.prestate;$fence=$Context.fence;$record=$Context.audit;$auditFull=$Context.audit_path
@@ -3845,6 +3892,8 @@ function Invoke-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[st
     $Script:CanonicalWriterFenceTransactionId=$run
     try {
         [void](Assert-ContainerWriterFenceOwner -ControlRoot $control -SessionId $fence.session_id -AttemptId $fence.attempt_id -ReplacementTransactionId $run -AuthorityLease $authority)
+        Confirm-CanonicalMachineRecoveryChildExit $record
+        Save-CanonicalMachineFailureAudit $auditFull $record
         [void](Initialize-InstallationEvidence (Join-Path $state ('install-audit\recovery-'+$run+'-'+[Guid]::NewGuid().ToString('N')+'.json')) ([string]$Worker.sid) @())
         [void](Set-ContainerWriterFencePrepared -ControlRoot $control -SessionId $fence.session_id -AttemptId $fence.attempt_id -ReplacementTransactionId $run `
             -PreparedReceiptPath $prepared.path -PreparedReceiptSha256 $prepared.sha256 -Status 'INSTALLING' -AuthorityLease $authority)
@@ -3997,8 +4046,12 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
             if ($hashArgument -lt 0) { throw 'MACHINE_UNINSTALL_AUDIT_BINDING_ABSENT' }
             $arguments[$hashArgument+1]=Sha $path
         }
-        $child=Invoke-InstallationEvidenceChild 'machine-placement-helper' $engine $arguments
-        $audit.placement_child=@{status='EXITED';exit_code=[int]$child.ExitCode}
+        $child=Invoke-InstallationEvidenceChild 'machine-placement-helper' $engine $arguments -OnStarted {
+            param($ChildProcessId,$StartedAtUtc)
+            $audit.placement_child.process_id=$ChildProcessId;$audit.placement_child.started_at_utc=$StartedAtUtc
+            Save $path $audit
+        }
+        $audit.placement_child.status='EXITED';$audit.placement_child.exit_code=[int]$child.ExitCode
         if (-not $testMode) {
             $binding=Read-InstallationHelperEvidenceBinding @($child.Stdout -split "`r?`n") `
                 (Join-Path $state ('install-audit\placement-'+$run+'.jsonl')) $child.ProcessId ([string]$Manifest.helper_sha256)
@@ -4591,13 +4644,18 @@ $canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority `
     -AttemptId $Script:CanonicalWriterFenceAttemptId `
     -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
     -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
-    -WriterContractSha256 $canonicalWriterFenceContractSha256
+    -WriterContractSha256 $canonicalWriterFenceContractSha256 `
+    -RecoverExisting:$RecoverMachineInstallation
 if ($null -ne $machineWorker) {
     try {
         if ($RecoverMachineInstallation) { Invoke-CanonicalMachineInstallationRecovery $machineWorker $source $install $sourceManifest $machineRecovery $canonicalWriterFenceAuthority }
         else { Invoke-CanonicalMachineInstallation $machineWorker $source $install $sourceManifest $canonicalWriterFenceAuthority }
     }
-    catch { $outputFailure=$_;Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED';exit 4 }
+    catch {
+        $outputFailure=$_
+        $code=if($RecoverMachineInstallation -and $_.Exception.Message -cin @('MACHINE_RECOVERY_CHILD_UNRECORDED','MACHINE_RECOVERY_CHILD_IDENTITY_INVALID','MACHINE_RECOVERY_CHILD_ACTIVE','MACHINE_RECOVERY_CHILD_EXIT_UNPROVEN')){$_.Exception.Message}else{'MACHINE_INSTALL_FAILED'}
+        Write-CanonicalMachinePublicRecord $code;exit 4
+    }
     exit 0
 }
 if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {

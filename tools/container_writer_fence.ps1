@@ -315,7 +315,8 @@ function Enter-ContainerWriterSessionAuthority {
         [string]$OrchestratorSha256,
         [string]$ReplacementTransactionId,
         [string]$WriterContractSha256,
-        [string]$ObserverSid = ''
+        [string]$ObserverSid = '',
+        [switch]$RecoverExisting
     )
     $name = Get-ContainerWriterSessionAuthorityMutexName $SessionId $AttemptId $OrchestratorSha256 $ReplacementTransactionId $WriterContractSha256
     $created = $false
@@ -338,8 +339,11 @@ function Enter-ContainerWriterSessionAuthority {
         }else{$mutex=[Threading.MutexAcl]::Create($true,$name,[ref]$created,$security)}
     }else{$mutex = New-Object Threading.Mutex($true, $name, [ref]$created)}
     if (-not $created) {
-        $mutex.Dispose()
-        throw 'CONTAINER_WRITER_SESSION_AUTHORITY_ALREADY_EXISTS'
+        $owned=$false
+        if($RecoverExisting){
+            try{$owned=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$owned=$true}
+        }
+        if(-not $owned){$mutex.Dispose();throw 'CONTAINER_WRITER_SESSION_AUTHORITY_ALREADY_EXISTS'}
     }
     return [pscustomobject][ordered]@{ mutex = $mutex; name = $name; acquired = $true }
 }

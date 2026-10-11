@@ -68,8 +68,29 @@ Run·새 폴더 복원이 모두 확인되면 실패 승인 receipt로 fence를 
 -WorkerSurveyInventory <READY inventory>`로 호출한다. audit는 기계 상태의
 `install-audit/canonical-portable-<run>.json`이다. 이 입구는 audit·사전 상태 파일·원래
 패킷·작업자·fence tuple을 읽기로 대조하고 같은 authority를 새로 독점한 뒤 보상을
-재시도한다. 원래 자식의 종료가 증명되지 않았거나 같은 authority가 살아 있으면
-해제를 거절한다. 같은 SID에서 준비한 HKCU는 그 작업자 본인으로만 복원한다.
+재시도한다. `MACHINE_PREPARING`과 `MACHINE_INSTALL_FAILED`, 자식 상태
+`NOT_STARTED`·`EXITED`·`EXIT_UNPROVEN`만 받는다. 준비 중이거나 자식 종료가 미증명이면,
+이미 시작한 모든 자식의 기록된 `process_id`와 UTC `started_at_utc`를 현재 프로세스와
+대조하고, 한 번 읽은 Win32_Process의 명령줄에 같은 `-WriterFenceReplacementTransactionId`
+인수의 run ID를 가진 살아 있는 프로세스가
+0일 때만 보상을 시작한다. 해당 PID가 없거나 시작 시각이 다르면 원래 자식의 종료로
+인정한다. PID 미기록도 run ID 프로세스가 0이면 종료로 인정한다. 같은 PID·같은 시각의
+자식, 같은 run ID의 손자 프로세스, 살아 있는 원 authority는 거절하며
+담장과 원본을 보존한다. 새 배치·보상 자식은 시작 직후 같은 audit 쓰기 경로로 두 값을
+기록한다. PID/시각 없는 미증명 자식의 run ID 프로세스가 남으면 `MACHINE_RECOVERY_CHILD_UNRECORDED`,
+잘못된 기록은 `MACHINE_RECOVERY_CHILD_IDENTITY_INVALID`, 살아 있는 자식은
+`MACHINE_RECOVERY_CHILD_ACTIVE`, 관측 실패는 `MACHINE_RECOVERY_CHILD_EXIT_UNPROVEN`으로
+거절한다. 프로세스를 멈추거나 신호를 보내지 않는다. 같은 SID에서 준비한 HKCU는
+그 작업자 본인으로만 복원한다. 보상 실패 시 기존과 같이 담장을 유지한다.
+버려진 authority mutex는 복구 호출이 대기 없이 획득한 것으로 인정한다. mutex는 0초,
+Win32_Process 조회와 각 PID 생성 시각 읽기는 각각 5초 상한이며 대기 반복은 없다.
+명령줄은 메모리에서 run ID 맞춤 여부만 확인하고 출력·저장하지 않는다. 부팅 시각은 쓰지 않는다.
+전원 끊김 뒤 `ALREADY_ACTIVE`/`ACTIVE_WRITER_FENCE`가 보이면, 기계 상태 폴더
+`%ProgramData%/KMTech/ContainerAudit/machine-install`의
+`control/writer-session/active.json`에서 `replacement_transaction_id`만 확인한다.
+그 값이 `<run>`이며 같은 상태 폴더의 `install-audit/canonical-portable-<run>.json`과
+`(Get-FileHash -Algorithm SHA256 -LiteralPath <그 audit 경로>).Hash.ToLowerInvariant()`
+결과를 위 복구 인수로 사용한다.
 원본 표지·바로가기·Run을 담는 사전 상태 폴더는 관리자·SYSTEM만 읽고 쓴다.
 성공 상태 `PASS_MACHINE_RECOVERED`를 확인한 다음 설치 또는 `-Uninstall`을 다시
 호출한다. 새 설치 보상은 제품 helper의 검증된 제거로 배치 코드를 없애며 자료는 보존한다.

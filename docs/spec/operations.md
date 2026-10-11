@@ -1575,3 +1575,6 @@ Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRIT
 Rollback continuation의 기록된 owner PID가 현재 프로세스에 있어도 UTC 시작 시각이 기록과 다르면 PID 재사용으로 보고 재개한다(R-PID, 1차 결정 2026-10-08). 같은 시작 시각이면 기존 AllowLiveOwner·Depth 0 조건에서만 허용하고, 그 밖에는 `ROLLBACK_OWNER_ALIVE`로 거부한다. 시작 시각을 읽을 수 없으면 `ROLLBACK_OWNER_START_UNREADABLE`로 거부한다. 고정 코드와 보호 보고서 규칙을 적용하며 lineage·receipt·manifest 검증은 그대로 유지한다.
 
 관리자 원격 설치는 [관리자 설치 받기 v0](admin-installation.md)을 따른다. 키트의 READY inventory와 대상 계정이 없으면 거절한다. 기계 배치 뒤 작업자 첫 onboarding이 필요하며, 옛 앱 Rollback·랩 VM 실제 설치 수용은 제품 격리 시험과 별도로 판정한다.
+
+설치 도중 전원이 끊기거나 자식 종료가 미증명인 기계 기록도 같은 지원 입구로 재개한다.
+원 authority(버려진 mutex 포함), audit의 자식 PID·생성 시각과 같은 run ID의 살아 있는 프로세스 0을 먼저 확인한다. PID 미기록도 run ID 프로세스가 0이면 복구하며, 살아 있는 자식/손자·관측 실패는 담장과 원본을 유지한다. 명령줄 출력·부팅 시각 사용·대기 반복은 없다. 담장을 직접 지우거나 자식을 종료하지 않는다. audit를 모르면 active fence의 replacement_transaction_id로 install-audit/canonical-portable-<run>.json을 찾는다([지원 입구](admin-installation.md#기계-배치-실패의-지원-재개)).

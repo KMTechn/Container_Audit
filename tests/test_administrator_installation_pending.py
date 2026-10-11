@@ -498,19 +498,19 @@ function Save([string]$Path,$Value,[bool]$SanitizeDiagnostics=$false) {
     if first_start in ("pending_reinstall_restore_failure", "pending_reinstall_compensation_child_unproven"):
         injected += r'''
 $realChild=${function:Invoke-InstallationEvidenceChild}
-function Invoke-InstallationEvidenceChild([string]$Stage,[string]$File,[string[]]$Arguments) {
+function Invoke-InstallationEvidenceChild([string]$Stage,[string]$File,[string[]]$Arguments,[scriptblock]$OnStarted=$null) {
  if($Stage -ceq 'machine-failure-code-restore' -and $env:CA_MACHINE_FAILURE -cin @('pending_reinstall_restore_failure','pending_reinstall_compensation_child_unproven')){
   if($env:CA_MACHINE_FAILURE -ceq 'pending_reinstall_compensation_child_unproven'){throw 'Simulated unknown compensation child'}
   return [pscustomobject]@{ExitCode=1;Stdout='';Stderr=''}
  }
- return & $realChild $Stage $File $Arguments
+  return & $realChild $Stage $File $Arguments -OnStarted $OnStarted
 }
 '''
     if first_start in ("placement_child_failure_new", "placement_child_failure_reinstall", "placement_child_exit_unproven"):
         injected += r'''
 $realChild=${function:Invoke-InstallationEvidenceChild}
-function Invoke-InstallationEvidenceChild([string]$Stage,[string]$File,[string[]]$Arguments) {
- $child=& $realChild $Stage $File $Arguments
+function Invoke-InstallationEvidenceChild([string]$Stage,[string]$File,[string[]]$Arguments,[scriptblock]$OnStarted=$null) {
+  $child=& $realChild $Stage $File $Arguments -OnStarted $OnStarted
  if($Stage -ceq 'machine-placement-helper' -and $env:CA_MACHINE_FAILURE -like 'placement_child_*'){
   if($env:CA_MACHINE_FAILURE -ceq 'placement_child_exit_unproven'){throw 'Simulated unproved child transport'}
   $child.ExitCode=1
@@ -594,10 +594,7 @@ function Invoke-InstallationEvidenceChild([string]$Stage,[string]$File,[string[]
             if first_start == "pending_reinstall_compensation_child_unproven":
                 assert failure["compensation_child"]["status"] == "EXIT_UNPROVEN"
                 env["CA_MACHINE_FAILURE"] = ""
-                run("unproved-compensation-refused", "-RecoverMachineInstallation", "-MachineRecoveryAuditPath", str(recovery_audit),
-                    "-MachineRecoveryAuditSha256", _sha(recovery_audit), expected_exit=4)
-                assert fence.read_bytes() == fence_bytes
-                return
+                assert "process_id" not in failure["compensation_child"]
             # Audit and prestate mismatches are rejected before authority or writes.
             run("recovery-bad-audit", "-RecoverMachineInstallation", "-MachineRecoveryAuditPath", str(recovery_audit),
                 "-MachineRecoveryAuditSha256", "0" * 64, expected_exit=4)
@@ -614,6 +611,9 @@ function Invoke-InstallationEvidenceChild([string]$Stage,[string]$File,[string[]
                             "-MachineRecoveryAuditSha256", _sha(recovery_audit))
             assert recovered["fence_retained"] is False
             assert not fence.exists()
+            restored_audit = json.loads(recovery_audit.read_bytes())
+            assert restored_audit["compensation_child"]["process_id"] > 0
+            assert restored_audit["compensation_child"]["started_at_utc"].endswith("Z")
             assert json.loads((installed / "portable-manifest.json").read_bytes())["source_commit"] == old_commit
             assert pointer.read_bytes() == prior_active and marker.read_bytes() == prior_pending
             assert run("recovery-retry")["status"] == "PASS_MACHINE_WORKER_PENDING"
@@ -662,10 +662,16 @@ function Invoke-InstallationEvidenceChild([string]$Stage,[string]$File,[string[]
         failure = json.loads(audits[0].read_bytes())
         if first_start == "placement_child_exit_unproven":
             assert fence.is_file() and failure["compensation"]["child_exit"] == "UNPROVEN"
+            assert failure["placement_child"]["process_id"] > 0
+            assert failure["placement_child"]["started_at_utc"].endswith("Z")
             env["CA_MACHINE_FAILURE"] = ""
-            run("unproved-child-recovery-refused", "-RecoverMachineInstallation", "-MachineRecoveryAuditPath", str(audits[0]),
-                "-MachineRecoveryAuditSha256", _sha(audits[0]), expected_exit=4)
-            assert fence.is_file()
+            recovered = run("unproved-child-recovery-supported", "-RecoverMachineInstallation", "-MachineRecoveryAuditPath", str(audits[0]),
+                            "-MachineRecoveryAuditSha256", _sha(audits[0]))
+            assert recovered["fence_retained"] is False and not fence.exists()
+            assert recovered["recovery_child_exit"] == "PASS"
+            assert _tree(installed) == code_before
+            assert not (state / "pending-onboarding.json").exists()
+            assert not (tmp_path / "machine-shortcut.json").exists()
             return
         assert not fence.exists() and failure["fence_retained"] is False
         assert failure["compensation"]["child_exit"] == "PASS"
@@ -704,6 +710,8 @@ function Invoke-InstallationEvidenceChild([string]$Stage,[string]$File,[string[]
         return
     audit = run("machine-install")
     assert audit["status"] == "PASS_MACHINE_WORKER_PENDING"
+    assert audit["placement_child"]["process_id"] > 0
+    assert audit["placement_child"]["started_at_utc"].endswith("Z")
     assert json.loads((installed / "portable-manifest.json").read_text())["source_commit"] == "c" * 40
     marker = Path(env["PROGRAMDATA"]) / "KMTech/ContainerAudit/machine-install/pending-onboarding.json"
     marker_before = marker.read_bytes()

@@ -86,6 +86,12 @@ target-generation preflight 전용 호출에서만 사용할 수 있다.
 해제하고 옛 relay를 다시 시작한다. 불일치/미확인은 fence를 유지하고 한국어 지원 복구를
 안내한다. G가 거절한 code 복원은 실행하지 않으며 기존 rollback 오류 코드를 보존한다.
 
+기계 설치의 지원 재개는 `MACHINE_PREPARING` 또는 자식 `EXIT_UNPROVEN` 기록도 받되,
+원 authority 독점(버려진 mutex 포함), 기록된 자식 PID·UTC 생성 시각의 현재 종료 증명과
+한 번 읽은 Win32_Process의 같은 run ID 프로세스 0 뒤에만 기존 보상을 실행한다.
+PID 미기록도 같은 run ID 프로세스가 0이면 인정한다. 같은 자식/run 프로세스가 살아 있거나 관측이 미확인이면 원 audit·fence·자료를 보존하고
+고정 원인 코드로 거절한다. audit·prestate·packet·작업자·fence tuple 결속은 유지한다.
+
 작업자 선택은 ACTIVE 공용 명단과 이 PC에 내구 저장한 B 이름을 사용한다. 이름 등록·번호·재시도는 [이름 등록 B](worker-roster-b.md)가 정본이며 stage_a=false이다. v1 호환 조회는 그대로 유지한다. 기존 생산자 HMAC으로 `POST /api/worker-roster/v1/query`에 현장 ID와 `known_version`을 보내고 명단 응답만 262,144B까지 받는다. 시작·변경·60초 배경 조회는 writer admission 밖에서 수행하며 현재 조회 시도·로그인 epoch가 같은 응답만 적용한다. 조회 지연·실패는 스캔 내구 저장을 기다리게 하지 않는다.
 
 사용자 config의 `roster.json`은 contract_version·authority_scope_id·version·workers·source_row_count·fetched_at·sha256을 원자 저장한다. 동일 판 응답은 정상 캐시가 있어야 적용하며 실패는 빈 명단으로 바꾸지 않는다. 형식·현장·번호 중복·digest 손상은 원본을 `.bad-*`로 보존하고 `roster.last-good.json`을 사용한다. 정상본도 없거나 정상 응답 원본 행이 0개면 기존 PC 이름 목록에서 한시 선택한다. 원본 행 수는 잘못된 이름을 제외한 뒤에도 보존하여, 행은 있는데 ACTIVE가 0인 명단에서는 로컬 선택을 허용하지 않는다. 새 작업 세션·현재 트레이·hold·보류·완료 intent·교환·감사 outbox에는 optional worker_id(UUID 또는 null)와 worker_name_snapshot(묶음 시작 이름)을 함께 저장한다. 번호 있는 기록의 복구 소유는 UUID로 비교하며 번호 없는 옛 기록은 기존 이름 절차를 유지한다. 명단 없는 한시 선택은 번호를 만들거나 과거 설정에서 추정하지 않는다. 서버는 이름을 trim·NFC 정규화하고 Zs를 일반 공백으로 바꾸며 연속 공백을 합친다. 앱은 받은 이름을 trim하고 빈 이름·65자 이상(code point)·경로 문자 `\ / : * ? " < > |`·첫 글자 `= + - @`·Cc/Cf/Cs/Zl/Zp가 섞인 이름의 행만 버린다. 최소 길이·언어 제한은 없다. 파일 이름과 CSV 형식은 기준 판 그대로이며 이름을 해시로 바꾸지 않는다. 기존 PC의 무번호 로컬 이름은 기준 등록 규칙으로 한시 선택하므로 기존 65자 이상 이름과 기준에서 허용했던 숨은 문자도 유지한다.

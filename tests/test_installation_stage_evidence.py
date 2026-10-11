@@ -20,6 +20,56 @@ FUNCTIONS = [
 
 
 @pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
+def test_child_start_callback_runs_before_exit_and_preserves_native_identity(tmp_path, engine):
+    result = run_functions(tmp_path, SOURCE, FUNCTIONS, r'''
+$childScript=Join-Path $env:CA_CONTRACT_ROOT 'start-child.ps1'
+$record=Join-Path $env:CA_CONTRACT_ROOT 'started.json'
+$code=@'
+param([string]$Record)
+$watch=[Diagnostics.Stopwatch]::StartNew()
+while(-not (Test-Path -LiteralPath $Record) -and $watch.ElapsedMilliseconds -lt 2000){Start-Sleep -Milliseconds 10}
+if(-not (Test-Path -LiteralPath $Record)){exit 9}
+$identity=Get-Content -LiteralPath $Record -Raw|ConvertFrom-Json
+if($identity.process_id -ne $PID -or [DateTime]::Parse($identity.started_at_utc).ToUniversalTime().Ticks -ne (Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks){exit 10}
+exit 0
+'@
+[IO.File]::WriteAllText($childScript,$code,[Text.UTF8Encoding]::new($true))
+$callback={param($ChildProcessId,$StartedAtUtc)
+ [IO.File]::WriteAllText($record,(@{process_id=$ChildProcessId;started_at_utc=$StartedAtUtc}|ConvertTo-Json))
+}
+$child=Invoke-InstallationEvidenceChild 'start-record' (Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe') `
+ @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$childScript,'-Record',$record) -OnStarted $callback
+if($child.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $record)){throw 'child start callback did not precede exit'}
+$saved=Get-Content -LiteralPath $record -Raw|ConvertFrom-Json
+if($saved.process_id -ne $child.ProcessId){throw 'native child identity differs'}
+'CHILD_START_CONTRACT_PASS'
+''', engine=engine)
+    (tmp_path / 'start-stderr.log').write_text(result.stderr, encoding='utf-8')
+    assert result.returncode == 0, f'Child start diagnostic retained in {tmp_path}'
+    assert 'CHILD_START_CONTRACT_PASS' in result.stdout
+
+
+@pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
+def test_failed_start_record_waits_for_its_child_and_preserves_failure(tmp_path, engine):
+    result = run_functions(tmp_path, SOURCE, FUNCTIONS, r'''
+$childScript=Join-Path $env:CA_CONTRACT_ROOT 'record-failure-child.ps1'
+$finished=Join-Path $env:CA_CONTRACT_ROOT 'child-finished.txt'
+[IO.File]::WriteAllText($childScript,'param($Finished); [IO.File]::WriteAllText($Finished,"finished"); exit 0',[Text.UTF8Encoding]::new($true))
+$caught=$false
+try{
+ Invoke-InstallationEvidenceChild 'record-failed' (Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe') `
+ @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$childScript,'-Finished',$finished) `
+ -OnStarted {param($ChildProcessId,$StartedAtUtc) throw 'START_RECORD_FAILED'}
+}catch{$caught=$_.Exception.ToString().Contains('START_RECORD_FAILED')}
+if(-not $caught -or -not (Test-Path -LiteralPath $finished)){throw 'start record failure or child exit was lost'}
+'CHILD_RECORD_FAILURE_PASS'
+''', engine=engine)
+    (tmp_path / 'record-failure-stderr.log').write_text(result.stderr, encoding='utf-8')
+    assert result.returncode == 0, f'Child record failure diagnostic retained in {tmp_path}'
+    assert 'CHILD_RECORD_FAILURE_PASS' in result.stdout
+
+
+@pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
 @pytest.mark.parametrize('exit_code', (0, 7))
 def test_finite_child_streams_survive_success_and_failure_with_private_acl(tmp_path, engine, exit_code):
     result = run_functions(tmp_path, SOURCE, FUNCTIONS, r'''

@@ -2290,13 +2290,24 @@ public static class KMTechInstallationChildCapture {
   foreach(char c in value) { if(c=='\\') { slashes++; continue; } if(c=='\"') { b.Append('\\',slashes*2+1); b.Append(c); } else { b.Append('\\',slashes); b.Append(c); } slashes=0; }
   b.Append('\\',slashes*2); b.Append('"'); return b.ToString();
  }
- public static Result Run(string executable,string[] arguments,string directory) {
+ public static string ReadProcessStartTimeUtc(int processId) {
+  var read=System.Threading.Tasks.Task.Factory.StartNew(()=>{
+   Process process; try { process=Process.GetProcessById(processId); } catch(ArgumentException) { return ""; }
+   using(process) { return process.StartTime.ToUniversalTime().ToString("o"); }
+  });
+  if(!read.Wait(5000)) throw new TimeoutException("MACHINE_RECOVERY_CHILD_EXIT_UNPROVEN");
+  return read.Result;
+ }
+ public static Result Run(string executable,string[] arguments,string directory,Action<int,string> started) {
   ProcessStartInfo info=new ProcessStartInfo(executable); info.Arguments=String.Join(" ",Array.ConvertAll(arguments,Quote)); info.WorkingDirectory=directory;
   info.UseShellExecute=false; info.CreateNoWindow=true; info.RedirectStandardOutput=true; info.RedirectStandardError=true;
-  using(Process p=new Process()) { p.StartInfo=info; if(!p.Start()) throw new IOException("Installer child did not start.");
+   using(Process p=new Process()) { p.StartInfo=info; if(!p.Start()) throw new IOException("Installer child did not start.");
+   Exception startedFailure=null;
+   try { if(started!=null) started(p.Id,p.StartTime.ToUniversalTime().ToString("o")); } catch(Exception ex) { startedFailure=ex; }
    Reader output=new Reader(),error=new Reader(); Thread a=new Thread(()=>output.Read(p.StandardOutput.BaseStream)),b=new Thread(()=>error.Read(p.StandardError.BaseStream)); a.IsBackground=b.IsBackground=true; a.Start(); b.Start(); p.WaitForExit();
    // Wait only for this process. A persistent descendant may retain pipe handles.
-   bool outDone=a.Join(750),errDone=b.Join(750); if(!outDone) p.StandardOutput.Dispose(); if(!errDone) p.StandardError.Dispose();
+    bool outDone=a.Join(750),errDone=b.Join(750); if(!outDone) p.StandardOutput.Dispose(); if(!errDone) p.StandardError.Dispose();
+    if(startedFailure!=null) throw startedFailure;
    return new Result {pid=p.Id,exit_code=p.ExitCode,stdout=output.Snapshot(),stderr=error.Snapshot()};
   }
  }
@@ -2341,12 +2352,13 @@ function ConvertTo-SafeInstallationOutput($Output) {
     return @{bytes=[byte[]]$saved;redacted=$redacted;truncated=$truncated;encoding='utf-8'}
 }
 
-function Invoke-InstallationEvidenceChild([string]$Name,[string]$Executable,[string[]]$Arguments,[string]$WorkingDirectory='') {
+function Invoke-InstallationEvidenceChild([string]$Name,[string]$Executable,[string[]]$Arguments,[string]$WorkingDirectory='',[scriptblock]$OnStarted=$null) {
     Initialize-InstallationChildCapture
     if (-not $WorkingDirectory) { $WorkingDirectory=[IO.Path]::GetDirectoryName($Executable) }
     Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_START';stage=$Name;executable_leaf=[IO.Path]::GetFileName($Executable);byte_cap_per_stream=(Protect-InstallationText -Configuration).full_byte_cap;arguments_recorded=$false})
     $watch=[Diagnostics.Stopwatch]::StartNew()
-    $result=[KMTechInstallationChildCapture]::Run($Executable,$Arguments,$WorkingDirectory)
+    $startedCallback=if($null -ne $OnStarted){[Action[int,string]]$OnStarted}else{$null}
+    $result=[KMTechInstallationChildCapture]::Run($Executable,$Arguments,$WorkingDirectory,$startedCallback)
     $watch.Stop(); $streams=@{}; $texts=@{}; $evidenceFailure=$null
     # Decode/redact both native streams before attempting any evidence writes.
     # The child exit and original output must survive a failed protected writer.
