@@ -820,3 +820,7 @@ NOT TESTED이며 coordinator의 랩 예행과 독립 확인에 남긴다.
 ### Bootstrap relay 시작의 일시 admission 대기
 
 Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRITER_GATE_TIMEOUT`만 기존 240초 창에서 0.1초씩 쉬며 재시도한다. 각 시도는 기존 launch_version의 admission을 다시 얻으며 시도 사이에는 admission을 보유하지 않는다. 상한은 240초 + 마지막 admission 대기 최대 5초이며 마감 뒤에는 기존 실패 출구를 유지한다. fence 확정·버려진 소유권 등 다른 거절과 GUI 실행 자체의 timeout은 재시도하지 않는다. 포인터·trial claim·READY·CONFIRMED·G 허가·cohort·잠금 순서는 유지한다. bootstrap 밖의 relay launcher admission과 실제 로그온/pythonw 수용은 별도 범위다.
+
+### 매일 갱신·시작 경합의 실기 수용
+
+시작/relay/bootstrap의 유한 갱신 잠금 대기와 현재 G 허용 판 복귀, 실패 prepared의 반복 쓰기 억제, 첫 실행 최종 비교의 잠금 아래 재판독을 구현했다. native 별도 프로세스의 6/30초 경합과 서명 검증 실패 반복은 격리 headless 회귀로 확인하며 실제 HDD 로그온·SYSTEM·pythonw 화면의 수용은 별도 랩에 남는다.

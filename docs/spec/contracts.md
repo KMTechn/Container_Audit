@@ -759,4 +759,12 @@ locator를 준비하므로, owner가 높은 판으로 바뀌면 locator 재판�
 
 Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRITER_GATE_TIMEOUT`만 기존 240초 창에서 0.1초씩 쉬며 재시도한다. 각 시도는 기존 launch_version의 admission을 다시 얻으며 시도 사이에는 admission을 보유하지 않는다. 상한은 240초 + 마지막 admission 대기 최대 5초이며 마감 뒤에는 기존 실패 출구를 유지한다. fence 확정·버려진 소유권 등 다른 거절과 GUI 실행 자체의 timeout은 재시도하지 않는다. 포인터·trial claim·READY·CONFIRMED·G 허가·cohort·잠금 순서는 유지한다. bootstrap 밖의 relay launcher admission과 실제 로그온/pythonw 수용은 별도 범위다.
 
+### 매일 갱신과 앱 시작의 경합
+
+- 앱 시작과 bootstrap은 갱신 mutex를 5초씩 다시 기다린다. apply 증거가 없으면 60초, LIVE/UNKNOWN이면 240초이며 bootstrap의 기존 전체 창을 넘기지 않는다. writer admission을 쥐고 기다리지 않는다.
+- 상한 뒤에는 현재 active·기동 판 일치, G ALLOW, `START_CURRENT` 종점을 확인한 일반 시작만 허용한다. `UPDATE_LOCK_WAIT_EXPIRED`와 종료 값 0을 기록하며 포인터·trial·READY·CONFIRMED를 쓰지 않는다. 다른 판·시험·복구·자료 거절과 abandoned는 기존 출구를 유지한다.
+- 적용 전 실패는 보호 transition에 `failed_prepared_sha`와 `failed_prepared_marker_sha256`를 남긴다. 같은 후보 또는 같은 무효 marker는 다음 SYSTEM 호출에서 claim/실패/transition을 다시 쓰지 않는다. prepared와 실패 증거는 보존하며 다른 후보는 서명·stock·pin 검증을 다시 거친다. 적용 여부가 UNKNOWN인 실패는 격리로 종결하지 않는다.
+- 첫 실행의 최종 비교가 달라지면 갱신 잠금 아래 한 번 다시 읽는다. policy·pointer와 transition의 업무/시험/복구 의미가 같고 진단 시각/문장만 바뀌었으면 통과한다. 앱 시작의 실제 변경·판독 불가는 `UPDATE_LIFECYCLE_CHANGED`/`UPDATE_LIFECYCLE_UNKNOWN`과 값 0을 남기고 호출한 현재 코드 루트로 계속한다. 기존 무결성·자료·등록 검증은 계속 실행하며 관리자 수동 인자의 실제 변경 거절은 유지한다.
+- 위 시작 사유는 표준 출력이 없는 pythonw에서도 기존 사용자 staging의 `startup-support.json`에 남긴다. 기존 writer admission을 거치며 진단 저장 실패가 안전한 현재 판 시작을 막지 않는다.
+
 관리자 설치의 인수 검증·읽기 전용 PENDING·작업자 HKCU 완료 id·기계 복원/제거 계약은 [관리자 설치 받기 v0](admin-installation.md)에 있다. 일반 작업자 길은 유지한다.

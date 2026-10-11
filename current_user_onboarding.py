@@ -1953,6 +1953,8 @@ def consume_pending_machine_onboarding(
         _observe_startup_onboarding({"status": "PENDING"}, machine=True)
         runner = onboarder or onboard_current_user
         options = {"environ": environ, "require_bootstrap_integrity": True}
+        if onboarder is None:
+            options["startup"] = True
         if marker.get("server_base_url"):
             options["server_base_url"] = marker["server_base_url"]
         result = runner(app_root, **options)
@@ -1984,6 +1986,7 @@ def onboard_current_user(
     autostart_installer: Callable[..., Mapping[str, Any]] = install_user_relay_autostart,
     relay_launcher: Callable[..., Mapping[str, Any]] = start_user_relay_process,
     expected_input_binding: str = "",
+    startup: bool = False,
 ) -> dict[str, Any]:
     from data_generation_guard import warm_runtime_release
     warm_runtime_release()
@@ -1993,7 +1996,9 @@ def onboard_current_user(
         owner = _read_json(managed / 'current/portable-manifest.json', 'fixed owner manifest')
         pointer = _read_json(managed / 'update-control/active.json', 'active pointer')
         if pointer.get('sha') != owner.get('source_commit'):
-            app_root = resolve_lifecycle_context(managed, operation='register')['active_app_root']
+            context = resolve_lifecycle_context(managed, operation='register', startup=startup)
+            if context['status'] == 'PASS':
+                app_root = context['active_app_root']
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
     if managed is not None:
         namespaces = tuple(managed / name for name in ('current', 'versions', 'update-control', 'removal-evidence', 'removed.json'))

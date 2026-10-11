@@ -130,7 +130,7 @@
 | F-63–F-64 | 옛 코드 폴더 상태 이전(C:\Sync 거부), 정상 종료(작업 중 원격 요청은 현장 [종료] 동의까지 미룸) | 자동·필수 | 맞음 | `legacy_state_migration.py:178`·`Container_Audit.py:_poll_app_stop_request`·[정상 멈춤 운영](operations.md#관리자-정상-멈춤-요청) | 원격 요청 미룸 추가 |
 | F-65–F-67 | 이 사용자 준비·등록, 전송 상주 모드, 사용자 준비 제거·교체 뒤 복구 | 설치 | 맞음 | `current_user_onboarding.py:1800`·`container_audit_product_host.py:163` | 그대로 |
 | F-68 | 설치·제거·되돌림(공개 설치기) | 설치 | 이상함 | `INSTALL_CANONICAL_PORTABLE.ps1:1`. 현장 키트가 작업자 세션에서만 돌고 상승은 제품 안 Windows 허용 창 → 관리자 원격 숨김 설치 길 없음 | §7 CA-2 |
-| F-69 | 다음 판 준비·로그온 때 적용·시험 실패 때 앞 판 | 자동·설치 | 맞음(실제 PC 미증명) | `auto_update.py:2583` | §8-3 에서 증명(CA-4) |
+| F-69 | 다음 판 준비·로그온 때 적용·시작 경합 대기·실패 준비 격리·시험 실패 때 앞 판 | 자동·설치 | 맞음(실제 PC 미증명) | `auto_update.py:2583` | §8-3 에서 증명(CA-4) |
 | F-70 | 업무 시작 뒤 옛 업데이트 안내를 예약하지 않음 | 자동 | 맞음 | 시작 예약 호출 제거. 설치·업데이트의 서명·해시·복구 검증 유지 | 그대로 |
 | F-71 | 개발용 시험 입력 셋(특수 바코드) | 개발 | 맞음 | `container_audit_test_harness.py:15`. 출시 판에서는 빠진다 | 그대로 |
 | F-72 | 전송 관리 명령 여섯(명령 줄) | 관리자 | 맞음 | `tools/direct_sync_relay_operator.py:94` | 그대로 |

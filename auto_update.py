@@ -16,7 +16,7 @@ import re
 import sys
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from typing import Any, Mapping
 
 if __name__ == "__main__":
@@ -880,7 +880,7 @@ PUBLIC_CODES = frozenset({
     'UPDATE_APPLY_REQUEST_FAILED', 'UPDATE_APPLY_NO_PROGRESS',
     'UPDATE_PREPARATION_FAILED', 'UPDATE_TERMINAL_RECOVERED',
     'UPDATE_GENERATION_UNKNOWN', 'UPDATE_PREVIOUS_CONFIRMED',
-    'UPDATE_IN_PROGRESS',
+    'UPDATE_IN_PROGRESS', 'UPDATE_LOCK_WAIT_EXPIRED', 'UPDATE_LIFECYCLE_CHANGED', 'UPDATE_LIFECYCLE_UNKNOWN',
     'UPDATE_SUPERVISION_UNAVAILABLE', 'UPDATE_EXISTING_WRITER',
     'TRIAL_GENERATION_UNCHANGED', 'TRIAL_GENERATION_ADVANCED', 'TRIAL_GENERATION_UNKNOWN',
     'PASS', 'FAIL', 'FAILED', 'BLOCKED', 'UNKNOWN', 'SKIPPED', 'READY', 'ABSENT',
@@ -951,9 +951,15 @@ def support_record(fields=None, *, stage, error=None):
     return public_record(values, PUBLIC_CODES, SAFE_MESSAGES)
 
 
-def emit_support_record(fields=None, *, stage, error=None, file=None):
+def emit_support_record(fields=None, *, stage, error=None, file=None, policy=None):
+    record = support_record(fields, stage=stage, error=error)
+    if policy is not None:
+        try:
+            write_json_durable(Path(policy['staging_root']) / 'startup-support.json', record)
+        except (OSError, ValueError, TypeError, KeyError, WriterFencedError):
+            pass  # Keep the safe launch when its existing diagnostic sink is unavailable.
     print('CONTAINER_AUDIT_SUPPORT=' + json.dumps(
-        support_record(fields, stage=stage, error=error),
+        record,
         ensure_ascii=True, separators=(',', ':')), file=file or sys.stdout)
 
 
@@ -1322,7 +1328,7 @@ Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Mi
         return False
 
 
-def resolve_lifecycle_context(root: Path, *, operation: str = 'inspect', expected_from_commit: str | None = None) -> dict[str, Any]:
+def resolve_lifecycle_context(root: Path, *, operation: str = 'inspect', expected_from_commit: str | None = None, startup: bool = False) -> dict[str, Any]:
     """Removal needs scope; install/register require actual healthy stock bytes."""
     if operation not in {'inspect', 'install', 'register', 'uninstall', 'user_remove'}:
         raise ValueError('lifecycle_operation_invalid')
@@ -1383,8 +1389,23 @@ def resolve_lifecycle_context(root: Path, *, operation: str = 'inspect', expecte
                 raise ValueError('lifecycle_active_trust_key_mismatch')
             if supported_task_present(fixed, policy.get('operator_sid')) is not True:
                 raise ValueError('lifecycle_task_absence_or_unknown')
-            if [read_json(path) for path in records] != [policy, pointer, state]:
-                raise ValueError('lifecycle_state_changed_during_verification')
+            try:
+                if [read_json(path) for path in records] != [policy, pointer, state]:
+                    if not startup: raise ValueError('lifecycle_state_changed_during_verification')
+                    with startup_update_lock(control, policy) as acquired:
+                        if not acquired:
+                            raise RuntimeError('lifecycle_state_unobservable')
+                        latest = [read_json(path) for path in records]
+                        diagnostic = {'deferred_at', 'reason', 'failure_details', 'failure_evidence'}
+                        semantic = lambda value: {key: item for key, item in value.items() if key not in diagnostic}
+                        if latest[:2] != [policy, pointer] or semantic(latest[2]) != semantic(state):
+                            raise ValueError('lifecycle_state_changed_during_verification')
+            except (OSError, ValueError, RuntimeError) as error:
+                if not startup:
+                    raise
+                status = 'CHANGED' if str(error) == 'lifecycle_state_changed_during_verification' else 'UNKNOWN'
+                emit_support_record({'reason_code': 'UPDATE_LIFECYCLE_' + status, 'exit_code': 0}, stage='onboarding', policy=policy)
+                return {'status': status}
         if expected_from_commit is not None and _sha(expected_from_commit) != active_sha:
             raise ValueError('lifecycle_from_commit_mismatch')
         return dict(status='PASS', lifecycle_state='HEALTHY', fixed_root=str(fixed), owner_app_root=str(fixed / 'app'),
@@ -1499,7 +1520,7 @@ def optional_record(path: Path) -> dict[str, Any] | None:
 
 
 @contextmanager
-def update_lock(control: Path, operator_sid: str, *, trial: bool = False):
+def update_lock(control: Path, operator_sid: str, *, trial: bool = False, timeout_ms: int = 5000):
     """One cross-session mutex shared by SYSTEM and the installed operator SID."""
     import ctypes
     from ctypes import wintypes
@@ -1534,10 +1555,12 @@ def update_lock(control: Path, operator_sid: str, *, trial: bool = False):
         raise OSError(ctypes.get_last_error(), "update mutex cannot be opened")
     acquired = False
     try:
-        result = kernel.WaitForSingleObject(handle, 5000)
+        result = kernel.WaitForSingleObject(handle, timeout_ms)
         acquired = result in {0, 0x80}
         if result != 0:
-            raise RuntimeError("update mutex ownership is busy or abandoned")
+            error = RuntimeError("update mutex ownership is busy or abandoned")
+            error.wait_result = result
+            raise error
         yield
     finally:
         if acquired:
@@ -1725,10 +1748,16 @@ def apply_prepared(control: Path) -> int:
                     not_applied = not_applied and read_json(control / "active.json") == before
                 except (OSError, ValueError):
                     not_applied = False
+            try:
+                failed_prepared_sha = _sha(read_json(Path(policy["staging_root"]) / "prepared.json").get("source_commit")) if policy and not_applied else ""
+            except (OSError, ValueError, KeyError, TypeError):
+                failed_prepared_sha = ""
             failure = {**(state or {}), "schema": SCHEMA,
                        "phase": "DEFERRED" if not_applied else "UNKNOWN",
                        "deferred_at": now_utc(), "reason_code": "UPDATE_PREPARATION_FAILED",
-                       "reason": type(error).__name__, "failure_details": _failure_details(error), "failure_evidence": []}
+                       "reason": type(error).__name__, "failure_details": _failure_details(error), "failure_evidence": [],
+                       "failed_prepared_sha": failed_prepared_sha,
+                       "failed_prepared_marker_sha256": prepared_failure_identity(policy) if policy and not_applied else ""}
             failure = mixed_status_record(failure)
             write_json_durable(control / ("failure-" + uuid.uuid4().hex + ".json"), failure)
             write_json_durable(control / "transition.json", failure)
@@ -1764,8 +1793,10 @@ def _apply_prepared(control: Path) -> int:
     os.environ["LOCALAPPDATA"] = policy["operator_local_app_data"]
     stage = Path(policy["staging_root"])
     with update_lock(control, policy["operator_sid"]):
-        write_json_durable(control / "apply-claim.json", new_apply_claim())
         state = optional_record(control / "transition.json")
+        if state and state.get("reason_code") == "UPDATE_PREPARATION_FAILED" and state["phase"] == "DEFERRED" and not state.get("recovery_pending") and not prepared_pending(control, policy, state):
+            return 0
+        write_json_durable(control / "apply-claim.json", new_apply_claim())
         if state and state["phase"] == "CONFIRMED":
             state = record_confirmed_policy(control, state)
         if state and state.get("recovery_pending") is True:
@@ -2153,10 +2184,25 @@ def trial_context(app_root: Path) -> tuple[Path, dict[str, Any], dict[str, Any]]
     return control, read_json(control / "policy.json"), state
 
 
+def prepared_failure_identity(policy: Mapping[str, Any]) -> str:
+    if not isinstance(policy.get("staging_root"), str) or not policy["staging_root"]: return ""
+    path = Path(policy["staging_root"]) / "prepared.json"
+    try:
+        _assert_no_reparse_components(path)
+        with path.open("rb") as source:
+            return hashlib.sha256(source.read(1024 * 1024 + 1)).hexdigest()
+    except (OSError, ValueError):
+        return hashlib.sha256(b"unreadable prepared marker:" + os.fsencode(path)).hexdigest()
+
+
 def prepared_pending(control: Path, policy: Mapping[str, Any], state: Mapping[str, Any] | None) -> bool:
     if not policy.get("feed_url"):
         return False
     path = Path(policy["staging_root"]) / "prepared.json"
+    if (state or {}).get("reason_code") == "UPDATE_PREPARATION_FAILED":
+        identity = prepared_failure_identity(policy)
+        if identity and identity == state.get("failed_prepared_marker_sha256"):
+            return False
     try:
         marker = optional_record(path)
     except (OSError, ValueError):
@@ -2168,7 +2214,7 @@ def prepared_pending(control: Path, policy: Mapping[str, Any], state: Mapping[st
     except ValueError:
         return True
     active = read_json(control / "active.json")
-    return sha != active["sha"] and sha not in (state or {}).get("failed_shas", [])
+    return sha != active["sha"] and sha not in (state or {}).get("failed_shas", []) and sha != (state or {}).get("failed_prepared_sha")
 
 
 def prepare_feed_packet(app_root: Path) -> dict[str, Any]:
@@ -2457,6 +2503,29 @@ def startup_requires_bootstrap(state, *, prepared_present, running_sha, active_s
     )
 
 
+@contextmanager
+def startup_update_lock(control: Path, policy: Mapping[str, Any], *, deadline: float | None = None):
+    started = time.monotonic()
+    limit = started + APPLY_PROGRESS_TIMEOUT
+    acquired = False
+    with ExitStack() as stack:
+        while True:
+            if apply_claim_status(control) in {"LIVE", "UNKNOWN"}:
+                limit = started + 240
+            remaining = min(limit, deadline if deadline is not None else limit) - time.monotonic()
+            try:
+                stack.enter_context(update_lock(control, policy["operator_sid"], timeout_ms=max(0, min(5000, int(remaining * 1000)))))
+                acquired = True
+                break
+            except RuntimeError as error:
+                if str(error) != "update mutex ownership is busy or abandoned" or getattr(error, "wait_result", 0x102) != 0x102:
+                    raise
+                if time.monotonic() >= min(limit, deadline if deadline is not None else limit):
+                    break
+                time.sleep(min(0.1, max(0, min(limit, deadline if deadline is not None else limit) - time.monotonic())))
+        yield acquired
+
+
 def startup_gate(app_root: Path, arguments: list[str], *, role: str = "gui") -> int | None:
     if arguments[:1] in (["--container-audit-user-relay"], ["--container-audit-direct-sync-relay"]):
         role = "relay"
@@ -2468,7 +2537,7 @@ def startup_gate(app_root: Path, arguments: list[str], *, role: str = "gui") -> 
     policy = read_json(control / "policy.json")
     if not ordinary_user_context(policy["operator_sid"]):
         return 20
-    with update_lock(control, policy["operator_sid"]):
+    with startup_update_lock(control, policy) as acquired:
         state = optional_record(control / "transition.json")
         active = read_json(control / "active.json")
         manifest = version_manifest(app_root.parent)
@@ -2478,6 +2547,12 @@ def startup_gate(app_root: Path, arguments: list[str], *, role: str = "gui") -> 
             observe("release_identity", {"version": manifest.get("version"), "build_id": sha})
         except Exception:
             pass
+        if not acquired:
+            if sha == active["sha"] and startup_action(state, prepared_present=False) == "START_CURRENT" and (not (state or {}).get("retained_candidate") or sha == recovery_sha(state, pointer_sha=sha)) and current_generation_status(control, policy, sha) == "ALLOW":
+                emit_support_record({"reason_code": "UPDATE_LOCK_WAIT_EXPIRED", "exit_code": 0}, stage="update_apply", policy=policy)
+                return None
+            emit_progress_guidance()
+            return 20
         if sha == active["sha"] and state and state["phase"] in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"}:
             if os.environ.get("KMTECH_CA_UPDATE_TRIAL_NONCE") == state["nonce"] and ordinary_user_context():
                 claim = optional_record(Path(policy["staging_root"]) / "trial.json")
@@ -2590,6 +2665,8 @@ def start_current(control: Path, policy: Mapping[str, Any], state, active, argum
     try:
         report_path = Path(policy["staging_root"]) / "startup-support.json"
         previous = None
+        if code == "UPDATE_LOCK_WAIT_EXPIRED":
+            report["exit_code"] = 0
         if report_once:
             claim_hash = hashlib.sha256((control / "apply-claim.json").read_bytes()).hexdigest()
             report = support_record({**report, "apply_claim_sha256": claim_hash}, stage="update_apply")
@@ -2642,7 +2719,9 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
     deadline = time.monotonic() + 240
     while time.monotonic() < deadline:
         try:
-            with update_lock(control, policy["operator_sid"]):
+            with startup_update_lock(control, policy, deadline=deadline) as acquired:
+                if not acquired:
+                    break
                 state = optional_record(control / "transition.json")
                 claim_status = apply_claim_status(control)
                 apply_started = apply_started or claim_status in {"LIVE", "UNKNOWN"} or bool(state and state["phase"] in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"})
@@ -2736,11 +2815,15 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                     if not apply_started and time.monotonic() >= progress_deadline:
                         return start_current(control, policy, state, active, arguments, code="UPDATE_APPLY_NO_PROGRESS", deadline=deadline)
         except RuntimeError as error:
-            if str(error) not in {'update mutex ownership is busy or abandoned'}:
+            if str(error) != 'update mutex ownership is busy or abandoned' or getattr(error, 'wait_result', 0x102) != 0x102:
                 raise
             if apply_claim_status(control) not in {"LIVE", "UNKNOWN"}:
                 raise
         time.sleep(0.1)
+    state = optional_record(control / "transition.json")
+    active = read_json(control / "active.json")
+    if startup_action(state, prepared_present=False) == "START_CURRENT" and (not (state or {}).get("retained_candidate") or active["sha"] == recovery_sha(state, pointer_sha=active["sha"])) and current_generation_status(control, policy, active["sha"]) == "ALLOW":
+        return start_current(control, policy, state, active, arguments, code="UPDATE_LOCK_WAIT_EXPIRED", deadline=deadline)
     if apply_claim_status(control) == "UNKNOWN":
         try:
             with update_lock(control, policy["operator_sid"]):

@@ -301,7 +301,7 @@ PowerShell 관측·ACL·고정 helper·새 SYSTEM 로그온 action은 자식 인
 
 첫 실행은 자료·원장·자동 시작 준비의 writer admission을 끝낸 뒤 relay를 시작한다. 시작 결과 확인 뒤 admission을 다시 얻어 시도·소유 자료를 재확인하고 환경과 READY 보고를 적용한다. UNKNOWN·실패·canonical 연기의 판정은 유지한다.
 
-갱신 mutex는 작업자 ACL의 SYNCHRONIZE|MUTEX_MODIFY_STATE 권한으로 열며 열기 거절·busy·abandoned는 `UPDATE_IN_PROGRESS`(종료 20)로 안내한다. `startup-support.json` 쓰기의 `WriterFencedError`는 `REPORT_UNAVAILABLE`을 기록하고 기존 일반 실행 검증을 계속한다.
+갱신 mutex는 작업자 ACL의 SYNCHRONIZE|MUTEX_MODIFY_STATE 권한으로 연다. 앱 시작·bootstrap의 busy는 apply 증거가 없으면 60초, LIVE/UNKNOWN이면 기존 240초 창에서 다시 기다린다. 상한 뒤 active와 실행 판이 같고 G ALLOW·일반 시작 가능한 종점이면 현재 판을 시작하고 `UPDATE_LOCK_WAIT_EXPIRED`를 남긴다. 열기 거절·abandoned·자료/시험/복구 거절은 기존 `UPDATE_IN_PROGRESS`(종료 20) 및 해당 guard를 유지한다. `startup-support.json` 쓰기의 `WriterFencedError`는 `REPORT_UNAVAILABLE`을 기록하고 기존 일반 실행 검증을 계속한다.
 
 설치기의 `auto_update.py --print-logon-task` 자식은 script 실행에서도 앱 루트 기준
 모듈 이름으로 writer sink를 식별한다. 앱 밖 정의는 `__main__`을 유지하며,
@@ -332,6 +332,8 @@ writer 부재 뒤 원 G 결정을 한 번 재개한다. G가 그대로면 이전
 일반 실행하며 정착(false) 전에는 새 prepared를 적용하지 않는다. 재실행은 같은 정착을 유지한다.
 사용자 staging의 `startup-support.json`은 허용 코드 `transition_code`와
 `retained_candidate`를 포함한다. 예외 문장·외부 입력값을 공개 보고서에 넣지 않는다.
+
+검증 실패한 prepared 원본은 지우지 않고 보호 실패 표식으로 격리한다. 같은 후보/무효 표식의 다음 로그온은 상태를 다시 쓰지 않는다. 첫 실행 비교의 진단 시각만 바뀌면 잠금 아래 재판독으로 통과하며 실제 변경/판독 불가는 현재 코드로 계속하고 지원 코드를 남긴다. 서명·pin·자료·시험·관리자 수동 경로의 거절은 유지한다.
 
 첫 설치는 자료 판 검증 뒤 옛 relay의 작업과 실행 연결을 확인하고 보호 바탕을 준비한다.
 옛 relay 작업이 없으면 launcher를 요구하지 않는다. 작업이 있으면 공식 정체성의 정확한
@@ -587,6 +589,10 @@ writer inventory는 sink의 소스 행 번호도 포함한다. UI 등 앞선 코
 기존 pin 세 곳에 함께 반영한다. `--check`와 snapshot/consumer pin 시험을 통과한 뒤
 깨끗한 커밋에서 stock portable builder를 실행한다. builder의 파생 객체·canonical JSON byte
 일치 검사는 유지하며, 행 번호 차이를 무시하거나 설치 시 pin을 다시 계산하지 않는다.
+
+`python -B tools/refresh_container_update_declarations.py --write/--check`는 위 생성기를 호출하고
+세 consumer pin과 배포 전환 선언의 현재 소스 바이트 바인딩을 함께 갱신/검사한다.
+전환 선언의 before·설치된 release preimage·runtime/dependency 바이트 선언은 보존한다.
 
 GUI·온보딩·relay 런타임에서 콘솔 프로그램을 호출할 때는 Windows의
 `CREATE_NO_WINDOW`를 지정한다. 소스 실행의 자료 세대 확인용 Git 두 호출도

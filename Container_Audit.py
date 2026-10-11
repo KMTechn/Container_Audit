@@ -22923,6 +22923,7 @@ def _prepare_gui_startup(*, data_root=None):
                 onboarding_report = onboard_current_user(
                     application_path,
                     require_bootstrap_integrity=bool(getattr(sys, "frozen", False)),
+                    startup=True,
                 )
             except CurrentUserOnboardingError as exc:
                 _show_first_run_onboarding_error(exc)
