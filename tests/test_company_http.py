@@ -2,6 +2,7 @@
 
 import gzip
 import io
+import socket
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +23,17 @@ from transfer_common import TransferSealError
 
 
 USER_AGENT = "KMTech-ContainerAudit/1.0"
+
+
+@pytest.fixture(autouse=True)
+def _offline_network(monkeypatch):
+    def no_connection(*_args, **_kwargs):
+        raise AssertionError("offline HTTP regression attempted a socket connection")
+    monkeypatch.setattr(socket, "getaddrinfo", lambda _host, port, **_kwargs:
+        [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", port))])
+    monkeypatch.setattr(socket.socket, "connect", no_connection)
+    monkeypatch.setattr(socket.socket, "connect_ex", no_connection)
+    monkeypatch.setattr(socket, "create_connection", no_connection)
 
 
 def response(status, payload, *, compressed=False):
