@@ -155,6 +155,7 @@ OS_BOUNDARIES = r'''
 # Restore this fixture's existing Windows PowerShell module path for the
 # actual WinPS placement child; keep every child/receipt assertion intact.
 $env:PSModulePath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules'
+function Get-InstallationEvidenceControlRoot {return (Join-Path $env:CA_UNINSTALL_ROOT 'protected-removal')}
 function Get-AuthenticodeSignature { return [pscustomobject]@{ Status='NotTested' } }
 # Preserve the actual read-only binding reader and adapt only executable/entry
 # transport: this minimal packet intentionally contains non-executable PE doubles.
@@ -272,6 +273,7 @@ $script:CAUninstallTaskService | Add-Member ScriptMethod GetFolder {
 function New-Object {
     param([string]$TypeName,[object[]]$ArgumentList,[string]$ComObject)
     if ($ComObject) {
+        if ($ComObject -ceq 'WScript.Shell') { return Microsoft.PowerShell.Utility\New-Object -ComObject 'WScript.Shell' }
         if ($ComObject -cne 'Schedule.Service') { throw 'unexpected COM consumer' }
         return $script:CAUninstallTaskService
     }

@@ -204,3 +204,21 @@ if($env:CA_READBACK_PROVEN -ceq '1'){
     )
     assert result.returncode == 0, result.stderr
     assert "worker_shortcut_commit=PASS" in result.stdout
+
+
+@pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
+def test_guarded_shortcut_record_rejects_host_paths_before_io(tmp_path, engine):
+    result = run_functions(
+        tmp_path, ROOT / "tools/bootstrap_integrity.ps1",
+        ["Assert-BootstrapWorkerShortcutPath"], r'''
+$env:KMTECH_FACTORY_INSTALL_TEST_MODE='1'
+$env:KMTECH_TEST_CA_WORKER_SHORTCUT_ROOT=Join-Path $env:CA_CONTRACT_ROOT 'known-folders'
+$failed=$false
+try{Assert-BootstrapWorkerShortcutPath 'C:\KMTech\Apps\Container_Audit\update-control\worker-shortcuts\test.json'}
+catch{$failed=($_.Exception.Message -ceq 'Worker shortcut path escaped the isolated test root.')}
+if(-not $failed){throw 'guarded test mode admitted a host record path'}
+'worker_shortcut_boundary=PASS'
+''', engine=engine,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "worker_shortcut_boundary=PASS" in result.stdout

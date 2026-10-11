@@ -22,6 +22,13 @@ function Get-BootstrapWorkerShortcutRecordPath([string]$InstallRoot,[string]$Rec
 
 function Assert-BootstrapWorkerShortcutPath([string]$Path) {
     $existing=[IO.Path]::GetFullPath($Path)
+    if([string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -ceq '1'){
+        if(-not $env:KMTECH_TEST_CA_WORKER_SHORTCUT_ROOT){throw 'Isolated worker shortcut paths are required in test mode.'}
+        $isolated=Split-Path -Parent ([IO.Path]::GetFullPath($env:KMTECH_TEST_CA_WORKER_SHORTCUT_ROOT).TrimEnd('\'))
+        if(-not $existing.StartsWith($isolated+'\',[StringComparison]::OrdinalIgnoreCase)){
+            throw 'Worker shortcut path escaped the isolated test root.'
+        }
+    }
     while(-not (Test-Path -LiteralPath $existing)){
         $existing=Split-Path -Parent $existing
         if(-not $existing){throw 'Worker shortcut path has no existing ancestor.'}
