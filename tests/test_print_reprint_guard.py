@@ -1,4 +1,4 @@
-"""Same-attempt reprint liveness and screen-only rejected printer identity."""
+"""Same-label reprint liveness and screen-only rejected printer identity."""
 import json
 import threading
 from types import SimpleNamespace
@@ -63,6 +63,8 @@ def test_alive_attempt_blocks_confirmed_reprint_but_other_print_scan_and_later_r
         state = flow.journal.load()
         progress = next(value for value in state['targets'].values() if value.get('status') == 'LOCAL_PRINT_STARTING') if reconciliation else state
         key = progress['print_idempotency_key']
+        label_id = next(label_id for label_id, value in state['targets'].items() if value is progress) if reconciliation else state['target_label']['label_id']
+        submission_key = (state['exchange_id'], label_id)
         click()
         lane = app._ui_task_lane()
         pump(app, lambda: not app._phs_label_exchange_pending and not lane.is_busy())
@@ -75,10 +77,10 @@ def test_alive_attempt_blocks_confirmed_reprint_but_other_print_scan_and_later_r
         assert pending['print_idempotency_key'] == key and pending['print_result'] == 'UNKNOWN'
         # The same identity is protected across adapter instances too.
         with pytest.raises(module.PHSPrintUnknown, match='이전 인쇄가 아직'):
-            module.WindowsGDIPhysicalLabelPrinter().print_png(progress['rendered_path'], document_name='retry', print_idempotency_key=key)
+            module.WindowsGDIPhysicalLabelPrinter().print_png(progress['rendered_path'], document_name='retry', submission_key=submission_key)
         normal_calls, _ = hardware(monkeypatch)
         monkeypatch.setattr(module, 'PRINT_SUBMIT_TIMEOUT_SECONDS', 1)
-        evidence = module.WindowsGDIPhysicalLabelPrinter().print_png(progress['rendered_path'], document_name='other', print_idempotency_key='another-label')
+        evidence = module.WindowsGDIPhysicalLabelPrinter().print_png(progress['rendered_path'], document_name='other', submission_key=(state['exchange_id'], label_id + '-other'))
         assert evidence.spool_job_id == 73 and sum(call[0] == 'StartDocW' for call in normal_calls) == 1
         app.current_tray = scan_tray
         app._process_barcode_logic(ITEM + '-next')
@@ -90,6 +92,75 @@ def test_alive_attempt_blocks_confirmed_reprint_but_other_print_scan_and_later_r
         retry = execute(confirm_ambiguous_reprint=True)
         assert retry.success and retry.status == 'COMMITTED'
         assert acknowledgements and all(ack['succeeded'] for ack in acknowledgements)
+        assert sum(call[0] == 'StartDocW' for call in calls) == 1
+    finally:
+        release.set()
+        wait_for(lambda: not any(thread in module.PRINT_SUBMISSION_THREADS and thread.is_alive() for thread in threading.enumerate()))
+
+
+@pytest.mark.parametrize('reconciliation', [False, True])
+def test_new_attempt_is_blocked_for_same_label_until_previous_submission_finishes(app, tmp_path, monkeypatch, reconciliation):
+    release = threading.Event()
+    calls, entered = hardware(monkeypatch, release=release)
+    monkeypatch.setattr(module, 'PRINT_SUBMIT_TIMEOUT_SECONDS', 0.02)
+    flow, client, tray, execute, click = setup_ui(app, tmp_path, monkeypatch, reconciliation, confirmed=True)
+    requests, notices = [], []
+    request = client.request_phs_label_print
+    def record_request(*args, **kwargs):
+        requests.append(kwargs)
+        response = request(*args, **kwargs)
+        if not reconciliation:
+            response['print_attempt']['print_attempt_id'] = f'PRINT-{len(requests)}'
+        return response
+    monkeypatch.setattr(client, 'request_phs_label_print', record_request)
+    app.show_status_message = lambda message, *a, **kw: notices.append(message)
+    before = (tray.master_label_code, tuple(tray.scanned_barcodes), tray.tray_size)
+    try:
+        first = execute()
+        assert first.error_code == 'PHS_LOCAL_PRINT_UNKNOWN' and entered.is_set()
+        state = flow.journal.load()
+        label_id = next(label_id for label_id, value in state['targets'].items() if value.get('status') == 'LOCAL_PRINT_STARTING') if reconciliation else state['target_label']['label_id']
+        progress = state['targets'][label_id] if reconciliation else state
+        first_key, first_attempt = progress['print_idempotency_key'], progress['print_attempt_id']
+        assert progress['print_attempt_no'] == 1
+        # Inject a recovered failure while its driver submission is still alive.
+        client.complete_phs_label_print(first_attempt, authority_scope_id=state['authority_scope_id'], succeeded=False)
+        progress['status'] = 'PRINT_FAILED'
+        state['status'] = 'PRINT_FAILED'
+        flow.journal.save(state)
+        click()
+        lane = app._ui_task_lane()
+        pump(app, lambda: not app._phs_label_exchange_pending and not lane.is_busy())
+        pending_state = flow.journal.load()
+        pending = pending_state['targets'][label_id] if reconciliation else pending_state
+        assert pending['print_attempt_no'] == 2 and pending['print_attempt_id'] != first_attempt
+        assert pending['print_idempotency_key'] != first_key
+        assert requests[0]['idempotency_key'] == first_key
+        assert requests[1]['idempotency_key'] == pending['print_idempotency_key']
+        assert BUSY_NOTICE in notices
+        assert sum(call[0] == 'StartDocW' for call in calls) == 1
+        assert pending['status'] == 'LOCAL_PRINT_STARTING' and pending['print_result'] == 'UNKNOWN'
+        assert before == (tray.master_label_code, tuple(tray.scanned_barcodes), tray.tray_size)
+        assert not (any(ack['succeeded'] for ack in client.complete_calls) if not reconciliation else any(value['state'] == 'SUCCEEDED' for value in client._attempts.values()))
+        normal_calls, _ = hardware(monkeypatch)
+        monkeypatch.setattr(module, 'PRINT_SUBMIT_TIMEOUT_SECONDS', 1)
+        evidence = module.WindowsGDIPhysicalLabelPrinter().print_png(
+            pending['rendered_path'], document_name='other label',
+            submission_key=(state['exchange_id'], label_id + '-other'))
+        assert evidence.spool_job_id == 73 and sum(call[0] == 'StartDocW' for call in normal_calls) == 1
+        release.set()
+        wait_for(lambda: not any(thread in module.PRINT_SUBMISSION_THREADS and thread.is_alive() for thread in threading.enumerate()))
+        unchanged = flow.journal.load()
+        unchanged = unchanged['targets'][label_id] if reconciliation else unchanged
+        assert unchanged['print_idempotency_key'] == pending['print_idempotency_key'] and unchanged['print_result'] == 'UNKNOWN'
+        retry = execute(confirm_ambiguous_reprint=True)
+        assert retry.success and retry.status == 'COMMITTED'
+        assert len([request for request in requests if request['label_id'] == label_id]) == 2
+        completed = flow.journal.load()
+        completed = completed['targets'][label_id] if reconciliation else completed
+        assert completed['print_attempt_no'] == 2 and completed['print_idempotency_key'] == pending['print_idempotency_key']
+        expected_jobs = 3 if reconciliation else 2  # Other label plus remaining exchange targets.
+        assert sum(call[0] == 'StartDocW' for call in normal_calls) == expected_jobs
         assert sum(call[0] == 'StartDocW' for call in calls) == 1
     finally:
         release.set()

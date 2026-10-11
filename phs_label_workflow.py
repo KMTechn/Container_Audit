@@ -218,7 +218,7 @@ _NON_LABEL_PRINTER_MARKERS = (
 )
 PRINT_SUBMIT_TIMEOUT_SECONDS = 60.0
 PRINT_SUBMISSION_THREADS = weakref.WeakSet()
-_PRINT_THREADS_BY_KEY = weakref.WeakValueDictionary()
+_PRINT_THREADS_BY_LABEL = weakref.WeakValueDictionary()
 _PRINT_SUBMISSION_LOCK = threading.Lock()
 _NON_LABEL_PRINTER_NOTICE = "기본 프린터가 라벨 프린터가 아닙니다. 관리자에게 알리세요."
 
@@ -300,7 +300,7 @@ class WindowsGDIPhysicalLabelPrinter:
         finally:
             spool.ClosePrinter(handle)
 
-    def print_png(self, filepath, *, document_name, late_record=None, print_idempotency_key=""):
+    def print_png(self, filepath, *, document_name, late_record=None, submission_key=None):
         if int(getattr(_WRITER_LOCAL, "depth", 0)) > 0:
             raise WriterFencedError("PRINT_WRITER_ADMISSION_HELD", "print submission cannot hold writer admission")
         with writer_admission("phs_label_workflow"):
@@ -324,14 +324,14 @@ class WindowsGDIPhysicalLabelPrinter:
                     try: late_record(record)
                     except Exception as exc: print(f"지연 인쇄 기록 실패: {type(exc).__name__}")
         worker = threading.Thread(target=submit, name="phs-print-submit", daemon=True)
-        key = str(print_idempotency_key or "")
+        key = submission_key
         with _PRINT_SUBMISSION_LOCK:
-            previous = _PRINT_THREADS_BY_KEY.get(key) if key else None
+            previous = _PRINT_THREADS_BY_LABEL.get(key) if key else None
             if previous is not None and previous.is_alive():
                 raise PHSPrintUnknown("이전 인쇄가 아직 프린터 대기열에 있습니다 — 프린터 대기열을 확인한 뒤 다시 누르세요")
             PRINT_SUBMISSION_THREADS.add(worker)
             if key:
-                _PRINT_THREADS_BY_KEY[key] = worker
+                _PRINT_THREADS_BY_LABEL[key] = worker
             worker.start()
         try:
             if not ready.wait(PRINT_SUBMIT_TIMEOUT_SECONDS):
@@ -392,7 +392,8 @@ def _submit_physical_print(printer, path, document_name, journal, attempt):
         def record(result):
             PHSLabelExchangeJournal(record_path).save({"status": "LATE_PRINT_RESULT", "attempt": identity, "print_result": result})
         options["late_record"] = record
-        options["print_idempotency_key"] = str(attempt.get("print_idempotency_key") or "")
+        options["submission_key"] = (str(attempt.get("exchange_id") or ""),
+                                     str(attempt.get("label_id") or ""))
     return printer.print_png(path, document_name=document_name, **options)
 
 
@@ -1624,7 +1625,8 @@ class PHSLabelExchangeCoordinator:
                 )
                 try:
                     evidence = _submit_physical_print(self.printer, rendered.path,
-                        "PHS " + str(target_label.get("worker_code") or ""), self.journal, state)
+                        "PHS " + str(target_label.get("worker_code") or ""), self.journal,
+                        {**state, "label_id": str(target_label.get("label_id") or "")})
                     proof = self._print_proof(evidence)
                 except PHSPrintUnknown:
                     state = self._save(state, print_result="UNKNOWN")
