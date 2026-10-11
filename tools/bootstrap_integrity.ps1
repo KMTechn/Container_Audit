@@ -20,6 +20,14 @@ function Get-BootstrapWorkerShortcutRecordPath([string]$InstallRoot,[string]$Rec
     return Join-Path $RecordRoot ('worker-shortcuts-'+$identity.Substring(0,24)+'.json')
 }
 
+function Get-BootstrapWorkerShortcutCommonRecordPath([string]$InstallRoot) {
+    if([string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -ceq '1'){
+        if(-not $env:KMTECH_TEST_CA_WORKER_SHORTCUT_ROOT){throw 'Isolated worker shortcut records are required in test mode.'}
+        $records=Join-Path $env:KMTECH_TEST_CA_WORKER_SHORTCUT_ROOT 'records'
+    }else{$records=Join-Path (Get-InstallationEvidenceControlRoot) 'worker-shortcuts'}
+    return Get-BootstrapWorkerShortcutRecordPath $InstallRoot $records
+}
+
 function Assert-BootstrapWorkerShortcutPath([string]$Path) {
     $existing=[IO.Path]::GetFullPath($Path)
     if([string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -ceq '1'){
@@ -1660,7 +1668,7 @@ function Invoke-CanonicalTransactionCompensation($Configuration,$Placement,$Leas
                 }
                 'worker_shortcuts' {
                     if(-not $codeExact){throw 'Shortcut recovery requires proven code recovery.'}
-                    $shortcutRecord=Get-BootstrapWorkerShortcutRecordPath $install (Join-Path (Get-InstallationEvidenceControlRoot) 'worker-shortcuts')
+                    $shortcutRecord=Get-BootstrapWorkerShortcutCommonRecordPath $install
                     [void](Restore-BootstrapWorkerShortcuts $install $shortcutRecord 'Common')
                 }
                 'run_preimage' {
@@ -1839,7 +1847,7 @@ function Invoke-InstallationTransactionCoordinator($Configuration) {
                 if(-not $released){throw 'Installation transaction runtime release is unproven.'}
                 Assert-CanonicalTransactionCommit $Configuration
                 $shortcutRoot=[string]$Configuration.install_root
-                $shortcutRecord=Get-BootstrapWorkerShortcutRecordPath $shortcutRoot (Join-Path (Get-InstallationEvidenceControlRoot) 'worker-shortcuts')
+                $shortcutRecord=Get-BootstrapWorkerShortcutCommonRecordPath $shortcutRoot
                 $shortcutResult=Install-BootstrapWorkerShortcuts $shortcutRoot $shortcutRecord 'Common'
                 $finished=$true;$reason='COMMITTED';$exitCode=0;break
             }

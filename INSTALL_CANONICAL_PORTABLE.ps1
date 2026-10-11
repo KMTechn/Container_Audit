@@ -64,7 +64,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '176c85897e90a8d7bbd84fe8bb51142b34947fa94ebb5da86affb8286a3e87ff'
+$ExpectedBootstrapIntegritySha256 = '321af471b832bcc5a64710aa6a2b912f26358edfbb3679f0a2a99a73181933af'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -4754,7 +4754,7 @@ $enteredPlacementTry = $true
     Set-InstallationEvidenceStage 'canonical.worker_shortcuts'
     $audit['worker_shortcuts']=Install-BootstrapWorkerShortcuts $install $workerShortcutRecordPath 'User'
     if($testMode -and $null -eq $canonicalTransactionJob){
-        $commonRecord=Get-BootstrapWorkerShortcutRecordPath $install (Join-Path (Get-InstallationEvidenceControlRoot) 'worker-shortcuts')
+        $commonRecord=Get-BootstrapWorkerShortcutCommonRecordPath $install
         $audit['common_worker_shortcuts']=Install-BootstrapWorkerShortcuts $install $commonRecord 'Common'
     }
     $audit.status=$terminalStatus

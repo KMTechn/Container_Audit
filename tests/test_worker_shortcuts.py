@@ -222,3 +222,28 @@ if(-not $failed){throw 'guarded test mode admitted a host record path'}
     )
     assert result.returncode == 0, result.stderr
     assert "worker_shortcut_boundary=PASS" in result.stdout
+
+
+@pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
+def test_public_shortcut_record_stays_isolated_after_library_reload(tmp_path, engine):
+    source = str(ROOT / "tools/bootstrap_integrity.ps1").replace("'", "''")
+    result = run_functions(
+        tmp_path, ROOT / "tools/bootstrap_integrity.ps1",
+        ["Get-BootstrapWorkerShortcutCommonRecordPath"],
+        f". '{source}'\n" + r'''
+$env:KMTECH_FACTORY_INSTALL_TEST_MODE='1'
+$env:KMTECH_TEST_CA_WORKER_SHORTCUT_ROOT=Join-Path $env:CA_CONTRACT_ROOT 'known-folders'
+$current=Join-Path $env:CA_CONTRACT_ROOT 'current'
+function Get-InstallationEvidenceControlRoot {throw 'test must not use host control root'}
+$before=Get-BootstrapWorkerShortcutCommonRecordPath $current
+''' + f". '{source}'\n" + r'''
+$after=Get-BootstrapWorkerShortcutCommonRecordPath $current
+$expectedPrefix=(Join-Path $env:KMTECH_TEST_CA_WORKER_SHORTCUT_ROOT 'records')+'\'
+if($before -cne $after -or -not $after.StartsWith($expectedPrefix,[StringComparison]::OrdinalIgnoreCase)){
+    throw 'library reload changed the isolated public shortcut record root'
+}
+'worker_shortcut_reload_boundary=PASS'
+''', engine=engine,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "worker_shortcut_reload_boundary=PASS" in result.stdout
