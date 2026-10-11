@@ -316,7 +316,8 @@ function Get-CanonicalWorkerProfileRoot {param($Sid) return $env:CA_MACHINE_PROF
 
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
-def test_actual_common_shortcut_target_is_rejected_by_legacy_candidate_reader(tmp_path, engine):
+@pytest.mark.parametrize("existing", ("new", "legacy", "owned"))
+def test_actual_common_shortcut_target_is_rejected_by_legacy_candidate_reader(tmp_path, engine, existing):
     # Reader from the reviewed kit v251106 Legacy-Survey.ps1, SHA256
     # 46a96899996a27875391b65b9257837a352269f8aff7a9ac054c098139a0762e.
     # Only this exact EXE-name admission is frozen; no host discovery runs.
@@ -347,6 +348,23 @@ $root=Join-Path $env:CA_CONTRACT_ROOT 'current'
 [IO.File]::WriteAllText((Join-Path $root 'runtime\pythonw.exe'),'owned runtime double')
 $legacy=Join-Path $env:CA_CONTRACT_ROOT 'Container_Audit.exe'
 [IO.File]::WriteAllText($legacy,'owned legacy double')
+if($env:CA_EXISTING_SHORTCUT -cne 'new'){
+ $directory=Join-Path $env:CA_CONTRACT_ROOT 'common-programs'
+ [void][IO.Directory]::CreateDirectory($directory)
+ $prior=Join-Path $directory 'KMTech 이적 검사.lnk'
+ [IO.File]::WriteAllText($prior,'preserve original shortcut bytes')
+ $priorSha=(Get-FileHash -LiteralPath $prior).Hash
+ $script:link.TargetPath=if($env:CA_EXISTING_SHORTCUT -ceq 'legacy'){$legacy}else{Join-Path $root 'runtime\pythonw.exe'}
+ $script:link.Arguments=if($env:CA_EXISTING_SHORTCUT -ceq 'legacy'){'legacy command'}else{'-I -B "'+(Join-Path $root 'app\main.py')+'"'}
+ $script:link.WorkingDirectory=if($env:CA_EXISTING_SHORTCUT -ceq 'legacy'){$env:CA_CONTRACT_ROOT}else{Join-Path $root 'app'}
+ $rejected=$false
+ try{New-CanonicalMachineShortcut $root}catch{$rejected=$true}
+ if($rejected -ne ($env:CA_EXISTING_SHORTCUT -ceq 'legacy')){throw 'existing shortcut identity admission differs'}
+ if((Get-FileHash -LiteralPath $prior).Hash -cne $priorSha){throw 'existing shortcut bytes changed'}
+ if(Test-Path -LiteralPath (Join-Path $env:CA_CONTRACT_ROOT 'captured-shortcut.json')){throw 'existing shortcut was saved'}
+ 'COMMON_SHORTCUT_PRESTATE_PRESERVED_PASS'
+ return
+}
 New-CanonicalMachineShortcut $root
 if($script:link.TargetPath -cne (Join-Path $root 'runtime\pythonw.exe')){throw 'common target differs'}
 if($script:link.Arguments -cne ('-I -B "'+(Join-Path $root 'app\main.py')+'"')){throw 'common arguments differ'}
@@ -356,9 +374,11 @@ try{[void](Read-KmtechLegacySurveyCandidate $script:link.TargetPath 'shortcut')}
 if(-not $rejected){throw 'new shortcut became a legacy candidate'}
 'COMMON_SHORTCUT_LEGACY_EXCLUSION_PASS'
 '''
-    result = run_functions(tmp_path, INSTALLER, ["New-CanonicalMachineShortcut"], driver, engine=engine)
+    result = run_functions(tmp_path, INSTALLER, ["Full", "Same", "New-CanonicalMachineShortcut"], driver,
+                           engine=engine, values={"CA_EXISTING_SHORTCUT": existing})
     assert result.returncode == 0, result.stderr
-    assert "COMMON_SHORTCUT_LEGACY_EXCLUSION_PASS" in result.stdout
+    expected = "COMMON_SHORTCUT_LEGACY_EXCLUSION_PASS" if existing == "new" else "COMMON_SHORTCUT_PRESTATE_PRESERVED_PASS"
+    assert expected in result.stdout
 
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))

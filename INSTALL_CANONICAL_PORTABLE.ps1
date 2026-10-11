@@ -3449,12 +3449,22 @@ function New-CanonicalMachineShortcut([string]$Root) {
     $directory=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)
     if (-not $directory) { throw 'Machine start menu is unavailable.' }
     $path=Join-Path $directory 'KMTech 이적 검사.lnk'
+    $existing=Test-Path -LiteralPath $path
+    if ($existing -and -not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Machine shortcut prestate is unknown.' }
+    $target=Join-Path $Root 'runtime\pythonw.exe'
+    $arguments='-I -B '+(ConvertTo-ProcessArgument (Join-Path $Root 'app\main.py'))
+    $workingDirectory=Join-Path $Root 'app'
     $shell=New-Object -ComObject WScript.Shell
     try {
         $link=$shell.CreateShortcut($path)
-        $link.TargetPath=Join-Path $Root 'runtime\pythonw.exe'
-        $link.Arguments='-I -B '+(ConvertTo-ProcessArgument (Join-Path $Root 'app\main.py'))
-        $link.WorkingDirectory=Join-Path $Root 'app'
+        if ($existing) {
+            if (-not (Same ([string]$link.TargetPath) $target) -or [string]$link.Arguments -cne $arguments -or
+                -not (Same ([string]$link.WorkingDirectory) $workingDirectory)) { throw 'Machine shortcut prestate is unknown.' }
+            return
+        }
+        $link.TargetPath=$target
+        $link.Arguments=$arguments
+        $link.WorkingDirectory=$workingDirectory
         $link.Save()
     } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) }
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Machine shortcut readback failed.' }

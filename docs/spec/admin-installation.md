@@ -16,6 +16,8 @@ canonical은 상승 또는 Session 0에서만 `-WorkerAccount <SID 또는 DOMAIN
 제품은 기존 INSTALL_THIS_PC 배치·무결성·writer authority를 사용하며 내부 UAC를
 추가 요청하지 않는다. 작업자 프로필, 관리자 HKCU Run, 옛 앱과 옛 바로가기를 변경하지 않는다.
 새 공용 시작 메뉴 바로가기는 current의 runtime/pythonw.exe로 앱 main.py를 실행한다.
+같은 이름의 기존 링크는 대상·인수·작업 폴더가 이 제품과 같을 때 저장 없이 재사용한다.
+다른 링크나 알 수 없는 원본은 변경하지 않고 거절하며 복구 fence를 유지한다.
 
 PENDING 경로는 `%PROGRAMDATA%\KMTech\ContainerAudit\machine-install\pending-onboarding.json`이다.
 `container-audit-machine-pending-v1` 기록에 설치 id·판·소스 commit·대상 SID·설치 루트와
