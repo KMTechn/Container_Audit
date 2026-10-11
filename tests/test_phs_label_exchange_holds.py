@@ -3,6 +3,7 @@ from contextlib import contextmanager
 import datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import uuid
@@ -184,7 +185,7 @@ def test_unreadable_exchange_preserves_bytes_unknown_and_item_scope_across_resta
 
 
 @pytest.mark.parametrize("failure", ["copy", "fsync"])
-def test_failed_journal_preservation_keeps_current_tray_and_blocks_next_label(tmp_path, monkeypatch, failure):
+def test_failed_journal_preservation_keeps_current_tray_and_only_blocks_affected_label(tmp_path, monkeypatch, failure):
     app = _app(tmp_path)
     journal = app.phs_label_exchange_coordinator.journal
     journal.path.parent.mkdir(parents=True, exist_ok=True)
@@ -206,7 +207,12 @@ def test_failed_journal_preservation_keeps_current_tray_and_blocks_next_label(tm
     assert not app.park_current_tray(confirm=False)
     assert app.current_tray is tray and current_path.read_bytes() == original_state
     assert journal.path.read_bytes() == b"{"
-    assert not _scan(app, _other_qr())
+    assert not _scan(app, tray.master_label_code)
+    admitted = []
+    app._intercept_active_tray_phs2_scan = lambda barcode: admitted.append(barcode) or True
+    other = _other_qr()
+    list(app._process_barcode_steps(other))
+    assert admitted == [other] and app.current_tray is tray
     assert not list(Path(app.parked_trays_dir).glob("*.json"))
 
 
@@ -323,6 +329,7 @@ def test_journal_preservation_releases_read_lock_before_writer_admission(tmp_pat
 
 def test_unknown_copy_record_cannot_claim_a_terminal_result(tmp_path):
     app = _app(tmp_path)
+    master = app.current_tray.master_label_code
     journal = app.phs_label_exchange_coordinator.journal
     journal.path.parent.mkdir(parents=True, exist_ok=True)
     journal.path.write_bytes(b"{")
@@ -330,7 +337,8 @@ def test_unknown_copy_record_cannot_claim_a_terminal_result(tmp_path):
     record_path = next(journal.path.parent.glob("*.quarantine-*.json"))
     record = phs_label_workflow.PHSLabelExchangeJournal(record_path)
     record.save({**record.load(), "status": "COMMITTED"})
-    assert not _scan(app, _other_qr())
+    assert not _scan(app, master)
+    assert _scan(app, _other_qr())
     assert journal.path.read_bytes() == b"{"
 
 
@@ -350,3 +358,73 @@ def test_stale_parked_generation_cannot_be_overwritten_by_exchange_finish(tmp_pa
         updated_tray=updated_tray, force_persist=True, parked_path=path, parked_bytes=captured,
     )
     assert ParkedTrayStore.load(path) == changed
+
+
+@pytest.mark.parametrize("changed_metadata", ["mtime", "size"])
+def test_journal_cache_reuses_unchanged_record_and_reloads_terminal_change(tmp_path, monkeypatch, changed_metadata):
+    app = _app(tmp_path)
+    _pending(app)
+    journal = app.phs_label_exchange_coordinator.journal
+    load = journal.load
+    reads = []
+
+    def counted_load():
+        reads.append(True)
+        return load()
+
+    monkeypatch.setattr(journal, "load", counted_load)
+    master = app.current_tray.master_label_code
+    assert app._phs_label_exchange_pending_for_label(master)
+    assert app._phs_label_exchange_pending_for_label(master)
+    assert not app._phs_label_exchange_pending_for_label(_other_qr())
+    assert len(reads) == 1
+    original = journal.path.stat()
+    if changed_metadata == "mtime":
+        os.utime(journal.path, ns=(original.st_atime_ns, original.st_mtime_ns + 1_000_000))
+        assert app._phs_label_exchange_pending_for_label(master)
+        assert len(reads) == 2
+    _pending(app, status="COMMITTED")
+    if changed_metadata == "size":
+        assert journal.path.stat().st_size != original.st_size
+        os.utime(journal.path, ns=(original.st_atime_ns, original.st_mtime_ns))
+    assert not app._phs_label_exchange_pending_for_label(master)
+    assert len(reads) == (3 if changed_metadata == "mtime" else 2)
+
+
+@pytest.mark.parametrize("failure_scope", ["all", "current"])
+def test_journal_judgment_exception_only_rejects_current_labels(tmp_path, monkeypatch, capsys, failure_scope):
+    app = _app(tmp_path)
+    tray = app.current_tray
+    master = tray.master_label_code
+    tray.active_label_qr_payload = _qr(TARGET_LABEL, TARGET_PREFIX)
+    private_reason = uuid.uuid4().hex
+
+    def judgment(label):
+        if failure_scope == "all" or label == master:
+            raise RuntimeError(private_reason)
+        return False
+
+    monkeypatch.setattr(app, "_phs_label_exchange_pending_for_label", judgment)
+    for barcode in [master, tray.active_label_qr_payload]:
+        assert not _scan(app, barcode)
+        lines = capsys.readouterr().out.splitlines()
+        assert len(lines) == 1 and "RuntimeError" in lines[0] and private_reason not in lines[0]
+    admitted = []
+    app._intercept_active_tray_phs2_scan = lambda barcode: admitted.append(barcode) or True
+    other = _other_qr()
+    list(app._process_barcode_steps(other))
+    assert admitted == [other] and app.current_tray is tray
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 1 and "RuntimeError" in lines[0] and private_reason not in lines[0]
+
+
+def test_judgment_failure_retains_previously_read_reconciliation_targets(tmp_path, monkeypatch):
+    app = _app(tmp_path)
+    master = app.current_tray.master_label_code
+    _pending(app, workflow="RECONCILIATION")
+    assert app._phs_label_exchange_pending_for_label(master)
+    assert app.park_current_tray(confirm=False)
+    monkeypatch.setattr(app, "_phs_label_exchange_pending_for_label",
+                        lambda _label: (_ for _ in ()).throw(OSError()))
+    assert not _scan(app, master)
+    assert _scan(app, _other_qr())

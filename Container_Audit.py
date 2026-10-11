@@ -7024,14 +7024,31 @@ class ContainerAudit:
         if coordinator is None or not label:
             return False
         try:
-            recovery = coordinator.journal.load()
-        except Exception as exc:
-            tray = getattr(self, "current_tray", None)
-            recovery = coordinator.journal.quarantine_unreadable(
-                master_label=str(getattr(tray, "master_label_code", "") or ""),
-                active_label=str(getattr(tray, "active_label_qr_payload", "") or ""),
-                reason=exc.__class__.__name__,
-            )
+            stamp = coordinator.journal.path.stat()
+            cache_key = (coordinator.journal, stamp.st_mtime_ns, stamp.st_size)
+        except FileNotFoundError:
+            cache_key = (coordinator.journal, None, None)
+        except AttributeError:
+            cache_key = None
+        cached = getattr(self, "_phs_label_exchange_journal_cache", None)
+        if cache_key is not None and cached and cached[0] == cache_key and cached[2]:
+            recovery = cached[1]
+        else:
+            try:
+                recovery = coordinator.journal.load()
+                cacheable = True
+            except Exception as exc:
+                tray = getattr(self, "current_tray", None)
+                recovery = coordinator.journal.quarantine_unreadable(
+                    master_label=str(getattr(tray, "master_label_code", "") or ""),
+                    active_label=str(getattr(tray, "active_label_qr_payload", "") or ""),
+                    reason=exc.__class__.__name__,
+                )
+                cacheable = False  # Revalidate preserved bytes/receipt on unreadable originals.
+            self._phs_label_exchange_journal_cache = (cache_key, recovery, cacheable)
+        return self._phs_label_exchange_record_pending_for_label(recovery, label)
+
+    def _phs_label_exchange_record_pending_for_label(self, recovery: Mapping[str, Any], label: str) -> bool:
         if not recovery or str(recovery.get("status") or "").strip().upper() in {"COMMITTED", "CANCELLED"}:
             return False
         normalized = normalize_master_label_input(label)
@@ -14944,10 +14961,22 @@ class ContainerAudit:
             exchange_blocked = self._phs_label_exchange_pending_for_label(
                 barcode if is_label or not self.current_tray.master_label_code else self.current_tray.master_label_code
             )
-            if not exchange_blocked and is_label and self._phs_label_exchange_transition_pending():
-                exchange_blocked = True
-        except Exception:
-            exchange_blocked = True
+            if not exchange_blocked and is_label:
+                exchange_blocked = self._phs_label_exchange_busy() or self._phs_label_exchange_pending_for_label(
+                    self.current_tray.master_label_code)
+        except Exception as exc:
+            print(f"현품표 날짜 교환 판정 실패: {exc.__class__.__name__}")
+            cached = getattr(self, "_phs_label_exchange_journal_cache", None)
+            recovery = cached[1] if cached else {}
+            labels = (self.current_tray.master_label_code,
+                      getattr(self.current_tray, "active_label_qr_payload", ""))
+            label_id = str((self._parse_new_format_qr(barcode) or {}).get("LBL") or "")
+            exchange_blocked = self._phs_label_exchange_busy() or (
+                self._phs_label_exchange_record_pending_for_label(recovery, barcode)
+                or bool(self.current_tray.master_label_code) and not is_label
+                or any(normalize_master_label_input(label) == barcode or (
+                    label_id and str((self._parse_new_format_qr(label) or {}).get("LBL") or "") == label_id
+                ) for label in labels if isinstance(label, str) and label))
         if exchange_blocked:
             self.show_status_message(
                 "이 현품표는 날짜 교환 확인 대기 중입니다. 트레이 보류 후 다른 현품표를 스캔하세요.",
