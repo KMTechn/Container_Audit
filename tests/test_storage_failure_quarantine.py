@@ -1,7 +1,9 @@
 """A failed checkpoint stays UNKNOWN while independently saved work continues."""
 import datetime
 import json
+import os
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -217,6 +219,33 @@ def test_unidentified_tray_failures_use_distinct_source_slots(tmp_path):
     second = store.hold(tmp_path / "second.json", {}, "tray", "PermissionError")
     assert first["item_id"] != second["item_id"]
     assert len(store.records()) == 2
+
+
+def test_quarantine_directory_junction_cannot_write_outside_its_data_root(tmp_path):
+    if os.name != "nt":
+        pytest.skip("Windows junction capability required")
+    root = tmp_path / "data"
+    root.mkdir()
+    outside = tmp_path / "preserved"
+    outside.mkdir()
+    marker = outside / "original"
+    marker.write_bytes(b"preserved")
+    junction = root / "_storage_failures"
+    script = tmp_path / "junction.ps1"
+    script.write_text("$ErrorActionPreference='Stop'\nNew-Item -ItemType Junction -Path $args[0] -Target $args[1] | Out-Null\n", encoding="ascii")
+    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-File", str(script),
+                    str(junction), str(outside)], check=True, capture_output=True,
+                   creationflags=subprocess.CREATE_NO_WINDOW)
+    try:
+        assert junction.resolve() == outside.resolve()
+        with pytest.raises(OSError):
+            storage_utils.StorageFailureQuarantine(root).hold(
+                root / "session.json", {"session_id": root.name}, "session", "PermissionError")
+        assert list(outside.iterdir()) == [marker]
+        assert marker.read_bytes() == b"preserved"
+    finally:
+        junction.rmdir()
+    assert marker.read_bytes() == b"preserved"
 
 
 def test_session_write_failure_retains_event_and_starts_new_durable_session(flow, windows, tmp_path, monkeypatch):

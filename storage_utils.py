@@ -24,7 +24,7 @@ class StorageFailureQuarantine:
         self.directory = self.root / "_storage_failures"
 
     def records(self) -> list[dict]:
-        if self.directory.is_symlink():
+        if self.directory.is_symlink() or getattr(self.directory, "is_junction", lambda: False)():
             raise OSError("storage quarantine must not be a link")
         records = []
         try:
@@ -33,7 +33,7 @@ class StorageFailureQuarantine:
         except FileNotFoundError:
             return []
         for path in paths:
-            if path.is_symlink():
+            if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
                 raise OSError("storage quarantine record must not be a link")
             record = json.loads(path.read_text(encoding="utf-8"))
             if (not isinstance(record, dict) or record.get("schema") != "ca-storage-failure-v1"
@@ -67,7 +67,7 @@ class StorageFailureQuarantine:
     @writer_sink("storage_failure_quarantine")
     def hold(self, path: Path, snapshot: dict, slot: str, reason: str) -> dict:
         path = Path(path)
-        if path.is_symlink() or path.parent.resolve() != self.root.resolve():
+        if path.is_symlink() or getattr(path, "is_junction", lambda: False)() or path.parent.resolve() != self.root.resolve():
             raise ValueError("storage failure is outside its data root")
         records = self.records()
         item = (snapshot.get("session_id") if slot == "session" else
