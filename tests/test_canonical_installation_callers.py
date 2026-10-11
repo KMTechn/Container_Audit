@@ -12,7 +12,7 @@ import shutil
 import ctypes
 
 import pytest
-from tests.powershell_contracts import run_functions
+from tests.powershell_contracts import run_functions, run_powershell
 
 from tests.canonical_scheduler_fixture import (
     DURABLE_AUDIT_OBSERVER, PREPLACEMENT_OBSERVER, SCHEDULER_OS,
@@ -116,6 +116,59 @@ def _runtime_setup_before_data_open(env):
     }))
     raise SystemExit(0)""")
     host.write_text(body, encoding='utf-8')
+
+
+@pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
+@pytest.mark.parametrize('stage', (
+    'machine-placement-helper', 'verify-existing-code',
+    'verify-installed-code', 'supported-content-removal',
+))
+def test_canonical_powershell_children_set_process_execution_policy(tmp_path, engine, stage):
+    """Inspect actual launch arguments without invoking an installer or UAC."""
+    executable = shutil.which(engine)
+    if not executable:
+        pytest.skip(f'{engine} is required')
+    source = Path(__file__).resolve().parents[1] / 'INSTALL_CANONICAL_PORTABLE.ps1'
+    driver = tmp_path / 'execution-policy.ps1'
+    driver.write_text(r'''
+param([string]$Source, [string]$Stage)
+$ErrorActionPreference='Stop'
+$ast=[Management.Automation.Language.Parser]::ParseFile($Source,[ref]$null,[ref]$null)
+$launches=@($ast.FindAll({param($n)
+    $n -is [Management.Automation.Language.CommandAst] -and
+    $n.GetCommandName() -ceq 'Invoke-InstallationEvidenceChild' -and
+    $n.CommandElements[1].Extent.Text.Trim("'") -ceq $Stage
+},$true))
+if($launches.Count -ne 1){throw 'expected one product child launch'}
+$launch=$launches[0]
+$arguments=$launch.CommandElements[3]
+if($arguments -is [Management.Automation.Language.VariableExpressionAst]){
+    $name=$arguments.VariablePath.UserPath
+    $assignments=@($ast.FindAll({param($n)
+        $n -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $n.Operator -eq [Management.Automation.Language.TokenKind]::Equals -and
+        $n.Left -is [Management.Automation.Language.VariableExpressionAst] -and
+        $n.Left.VariablePath.UserPath -ceq $name -and
+        $n.Extent.StartOffset -lt $launch.Extent.StartOffset
+    },$true)|Sort-Object {$_.Extent.StartOffset} -Descending)
+    if(-not $assignments.Count){throw 'product argument assignment missing'}
+    $arguments=$assignments[0].Right
+}
+$values=@($arguments.FindAll({param($n)
+    $n -is [Management.Automation.Language.StringConstantExpressionAst]
+},$true)|ForEach-Object {$_.Value})
+$policy=[Array]::IndexOf($values,'-ExecutionPolicy')
+$entry=[Array]::IndexOf($values,'-File')
+if($entry -lt 0){$entry=[Array]::IndexOf($values,'-Command')}
+if($policy -lt 0 -or $values[$policy+1] -cne 'Bypass' -or $entry -le $policy){
+    throw 'product child must set process ExecutionPolicy Bypass before its entry argument'
+}
+''', encoding='utf-8-sig')
+    result = run_powershell([
+        executable, '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-File', str(driver), '-Source', str(source), '-Stage', stage,
+    ])
+    assert result.returncode == 0, result.stderr
 
 
 def test_operator_profile_mismatch_stops_before_code_and_explains_retry(tmp_path):

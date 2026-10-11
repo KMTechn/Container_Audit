@@ -4334,7 +4334,7 @@ $enteredPlacementTry = $true
             $candidate = InstalledManifest $candidateRoot $SkipSignatureValidationForTest
             $helper = (Join-Path $source 'tools\bootstrap_integrity.ps1').Replace("'","''")
             $escapedRoot = $candidateRoot.Replace("'","''")
-            $capturedChild=Invoke-InstallationEvidenceChild 'verify-existing-code' $winps @('-NoLogo','-NoProfile','-NonInteractive','-Command',". '$helper'; [void](Assert-BootstrapIntegrityRecord '$escapedRoot')")
+            $capturedChild=Invoke-InstallationEvidenceChild 'verify-existing-code' $winps @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',". '$helper'; [void](Assert-BootstrapIntegrityRecord '$escapedRoot')")
             $global:LASTEXITCODE=$capturedChild.ExitCode
             if ($LASTEXITCODE -ne 0) { throw 'integrity differs' }
             $installedInventory = Assert-WriterSinkInventory `
@@ -4530,7 +4530,7 @@ $enteredPlacementTry = $true
         $removal=Get-Content -LiteralPath $removalPath -Raw -Encoding UTF8|ConvertFrom-Json
         [void](Confirm-CanonicalRuntimeQuiescence -Removal $removal -ExpectedRelays $old -StopRequestPath $stop)
         $uninstallStopSha256=Sha $stop
-        $args=@('-NoLogo','-NoProfile','-NonInteractive','-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
+        $args=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
             '-Uninstall','-SourceRoot',$source,'-InstallRoot',$install,'-OperatorLocalAppDataRoot',$lad,'-OperatorSid',$operatorSid,
             '-QuiesceReceiptPath',$removalPath,'-ExpectedQuiesceReceiptSha256',(Sha $removalPath),
             '-RemovalControllerProcessId',[string]$PID,
@@ -4926,7 +4926,7 @@ $enteredPlacementTry = $true
     ) { throw 'Installed identity differs.' }
     $installedHelper = (Join-Path $source 'tools\bootstrap_integrity.ps1').Replace("'","''")
     $escapedInstalledRoot = $installedCodeRoot.Replace("'","''")
-    $capturedChild=Invoke-InstallationEvidenceChild 'verify-installed-code' $winps @('-NoLogo','-NoProfile','-NonInteractive','-Command',". '$installedHelper'; [void](Assert-BootstrapIntegrityRecord '$escapedInstalledRoot')")
+    $capturedChild=Invoke-InstallationEvidenceChild 'verify-installed-code' $winps @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',". '$installedHelper'; [void](Assert-BootstrapIntegrityRecord '$escapedInstalledRoot')")
     $global:LASTEXITCODE=$capturedChild.ExitCode
     if ($LASTEXITCODE -ne 0) { throw 'Installed aggregate integrity differs.' }
     $audit.code_placement=$placement
