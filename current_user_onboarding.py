@@ -708,6 +708,8 @@ def _windows_acl_identity(path: Path) -> dict[str, Any]:
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
             "-Command",
             command,
         ],
@@ -786,7 +788,7 @@ def _replacement_identities_match(expected: Mapping[str, Any], actual: Mapping[s
         "Test-BootstrapAclIdentity $pair.expected $pair.actual 'acl_sddl_sha256' 'acl_sddl'"
     )
     completed = subprocess.run(
-        [str(powershell), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        [str(powershell), "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
         input=json.dumps({"expected": dict(expected), "actual": dict(actual)}),
         capture_output=True, text=True, encoding="utf-8", errors="strict",
         timeout=15, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -1992,20 +1994,28 @@ def onboard_current_user(
                 )
             if autostart_status != "PASS":
                 raise ValueError("current-user relay autostart was not proven")
-            report["relay_start"] = dict(relay_launcher(paths.app_root, environ=environ))
-            relay_start_status = str(report["relay_start"].get("status") or "")
-            if relay_start_status in {"", "UNKNOWN"}:
-                raise CurrentUserOnboardingError(
-                    "current-user relay launch result is UNKNOWN",
-                    report_path=paths.onboarding_report_path,
-                    status="UNKNOWN",
-                )
-            deferred = (
-                report["relay_start"] == {"status": "DEFERRED_CANONICAL_RELEASE", "process_id": 0}
-                and installation_relay_start_deferred()
+        report["relay_start"] = dict(relay_launcher(paths.app_root, environ=environ))
+        relay_start_status = str(report["relay_start"].get("status") or "")
+        if relay_start_status in {"", "UNKNOWN"}:
+            raise CurrentUserOnboardingError(
+                "current-user relay launch result is UNKNOWN",
+                report_path=paths.onboarding_report_path,
+                status="UNKNOWN",
             )
-            if relay_start_status != "START_REQUESTED" and not deferred:
-                raise ValueError("current-user relay launch was not requested")
+        deferred = (
+            report["relay_start"] == {"status": "DEFERRED_CANONICAL_RELEASE", "process_id": 0}
+            and installation_relay_start_deferred()
+        )
+        if relay_start_status != "START_REQUESTED" and not deferred:
+            raise ValueError("current-user relay launch was not requested")
+        with writer_admission("current_user_onboarding"):
+            if not attempt.is_current():
+                raise ValueError("a newer onboarding attempt superseded this response")
+            if inspect_current_user_state(
+                paths, profile_loader=profile_loader, credential_loader=credential_loader,
+                prepared_credential=prepared_credential,
+            ) != state:
+                raise ValueError("current-user owner state changed before local onboarding apply")
             apply_current_user_runtime_environment(
                 paths,
                 environ=environ,

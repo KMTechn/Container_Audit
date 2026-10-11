@@ -2,8 +2,119 @@
 from pathlib import Path
 import shutil
 import subprocess
+from types import SimpleNamespace
 
 import pytest
+
+
+@pytest.mark.parametrize("launch", ["absent", "present", "helper", "acl"])
+def test_powershell_children_use_process_bypass(tmp_path, monkeypatch, launch):
+    import auto_update as update
+    from tools import install_protected_admin as admin
+
+    commands = []
+
+    def capture(command, **kwargs):
+        commands.append(command)
+        output = update.logon_task_xml(app_root=tmp_path, operator_sid="S-1-5-21-1-2-3-1001") if launch == "present" else "PASS"
+        return SimpleNamespace(returncode=0, stdout=output, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", capture)
+    if launch == "absent":
+        assert update.supported_tasks_absent(tmp_path)
+    elif launch == "present":
+        assert update.supported_task_present(tmp_path, "S-1-5-21-1-2-3-1001")
+    elif launch == "helper":
+        assert update.fixed_helper(tmp_path / "update-control", "Observe") == "PASS"
+    else:
+        assert admin._run_powershell("'PASS'", environment={}) == "PASS"
+    command, = commands
+    mode = "-File" if launch == "helper" else "-Command"
+    assert command[command.index("-ExecutionPolicy"):command.index("-ExecutionPolicy") + 2] == ["-ExecutionPolicy", "Bypass"]
+    assert command.index("-ExecutionPolicy") < command.index(mode)
+
+
+@pytest.mark.parametrize("engine", ["powershell.exe", "pwsh.exe"])
+def test_powershell_identity_probe_uses_process_bypass(tmp_path, engine):
+    executable = shutil.which(engine)
+    if not executable:
+        pytest.skip("PowerShell engine unavailable")
+    source = Path(__file__).resolve().parents[1] / "tools/resolve_windows_powershell.ps1"
+    driver = tmp_path / "identity-arguments.ps1"
+    driver.write_text(r'''param([string]$Source)
+$tokens=$null;$errors=$null
+$tree=[Management.Automation.Language.Parser]::ParseFile($Source,[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'Source parse error'}
+$calls=@($tree.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.CommandElements[0].Extent.Text -ceq '$fullPath'},$true))
+if($calls.Count -ne 1){throw 'Identity probe is not unique'}
+$arguments=@($calls[0].CommandElements | ForEach-Object {$_.Extent.Text})
+$policy=[Array]::IndexOf($arguments,'-ExecutionPolicy')
+if($policy -lt 0 -or $arguments[$policy+1] -cne 'Bypass' -or $policy -ge [Array]::IndexOf($arguments,'-Command')){throw 'Identity probe policy is missing'}
+'PASS'
+''', encoding="utf-8-sig")
+    result = subprocess.run([executable, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(driver), "-Source", str(source)], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == "PASS"
+
+
+@pytest.mark.parametrize("policy,accepted", [("previous", True), ("bypass", True), ("wrong", False), ("extra", False)])
+def test_task_observation_accepts_only_exact_previous_or_bypass_action(tmp_path, monkeypatch, policy, accepted):
+    import auto_update as update
+    import xml.etree.ElementTree as xml
+
+    sid = "S-1-5-21-1-2-3-1001"
+    task = xml.fromstring(update.logon_task_xml(app_root=tmp_path, operator_sid=sid))
+    argument = task.find("{*}Actions/{*}Exec/{*}Arguments")
+    if policy == "previous":
+        argument.text = argument.text.replace(" -ExecutionPolicy Bypass -File ", " -File ", 1)
+    elif policy == "wrong":
+        argument.text = argument.text.replace("Bypass", "Unrestricted", 1)
+    elif policy == "extra":
+        argument.text += " -Unexpected"
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=xml.tostring(task, encoding="unicode"), stderr=""))
+    assert update.supported_task_present(tmp_path, sid) is accepted
+
+
+@pytest.mark.parametrize("engine", ["powershell.exe", "pwsh.exe"])
+@pytest.mark.parametrize("consumer", ["identity", "removal"])
+@pytest.mark.parametrize("policy", ["previous", "bypass", "wrong", "extra"])
+def test_installer_task_consumers_preserve_exact_previous_action(tmp_path, engine, consumer, policy):
+    import auto_update as update
+    from tests.powershell_contracts import run_functions
+
+    root = Path(r"E:\synthetic\current")
+    sid = "S-1-5-21-1-2-3-1001"
+    source = Path(__file__).resolve().parents[1] / "INSTALL_THIS_PC.ps1"
+    expected = tmp_path / "expected.xml"
+    expected.write_text(update.logon_task_xml(app_root=root, operator_sid=sid), encoding="utf-8")
+    result = run_functions(tmp_path, source, ["Test-ContainerStartupUpdateTaskIdentity", "Get-ContainerRemovalTaskNames"], r'''
+$root='E:\synthetic\current';$sid='S-1-5-21-1-2-3-1001'
+[xml]$expected=[IO.File]::ReadAllText($env:CA_POLICY_XML)
+[xml]$actual=$expected.CloneNode($true)
+$arguments=[string]$actual.Task.Actions.Exec.Arguments
+switch($env:CA_POLICY){
+ 'previous' {$arguments=$arguments.Replace(' -ExecutionPolicy Bypass -File ',' -File ')}
+ 'wrong' {$arguments=$arguments.Replace('Bypass','Unrestricted')}
+ 'extra' {$arguments+=' -Unexpected'}
+}
+$actual.Task.Actions.Exec.Arguments=$arguments
+$before=$actual.OuterXml
+function ConvertTo-BootstrapPrincipalSid([string]$Value){return $Value}
+function Test-SamePath([string]$A,[string]$B){return $A.Equals($B,[StringComparison]::OrdinalIgnoreCase)}
+$accepted=$false
+if($env:CA_POLICY_CONSUMER -ceq 'identity'){
+ $accepted=Test-ContainerStartupUpdateTaskIdentity $actual $expected $sid
+}else{
+ $task=[pscustomobject]@{Name=$env:CA_POLICY_TASK;Xml=$actual.OuterXml}
+ $folder=[pscustomobject]@{Task=$task}
+ $folder|Add-Member ScriptMethod GetTasks {param($flags) return $this.Task}
+ try{$accepted=$env:CA_POLICY_TASK -cin @(Get-ContainerRemovalTaskNames $folder $root)}catch{if($_.Exception.Message -cne 'REMOVAL_TASK_IDENTITY_UNKNOWN'){throw}}
+}
+if($accepted -ne ($env:CA_POLICY -cin @('previous','bypass'))){throw 'Task ownership differs'}
+if($actual.OuterXml -cne $before){throw 'Original task XML changed'}
+'PASS'
+''', engine=engine, values={"CA_POLICY_XML": str(expected), "CA_POLICY": policy, "CA_POLICY_CONSUMER": consumer, "CA_POLICY_TASK": update.task_name(root, sid)})
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("relative,function", [

@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from contextlib import contextmanager
 
 import pytest
 
@@ -226,6 +227,67 @@ def _limited_execution_context():
         "token_elevated": False,
         "integrity_level": "MEDIUM",
     }
+
+
+@pytest.mark.usefixtures("existing_possession_key_contract")
+@pytest.mark.parametrize("relay_status", ["START_REQUESTED", "UNKNOWN", "FAILED"])
+def test_onboarding_starts_relay_after_releasing_admission(tmp_path, monkeypatch, relay_status):
+    app_root = _generation_packet(tmp_path, monkeypatch)
+    environment = {"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "state"),
+                   "PROGRAMDATA": str(tmp_path / "program")}
+    paths = resolve_current_user_onboarding_paths(app_root, environ=environment)
+    _ready_state(paths)
+    original_admission = onboarding_module.writer_admission
+    original_write = onboarding_module._write_json_atomic
+    held = []
+    events = []
+
+    @contextmanager
+    def admission(*args, **kwargs):
+        with original_admission(*args, **kwargs):
+            held.append(True)
+            try:
+                yield
+            finally:
+                held.pop()
+                events.append("release")
+
+    def ledger(path):
+        assert held
+        events.append("ledger")
+        _ledger_factory(path)
+
+    def autostart(*args, **kwargs):
+        assert held
+        events.append("autostart")
+        return _autostart(*args, **kwargs)
+
+    def relay(*args, **kwargs):
+        assert not held, "relay cannot probe admission while its parent owns it"
+        events.append("relay")
+        return {"status": relay_status, "process_id": 123}
+
+    def write(path, report):
+        if report.get("status") == "READY":
+            assert held
+            events.append("ready")
+        return original_write(path, report)
+
+    monkeypatch.setattr(onboarding_module, "writer_admission", admission)
+    monkeypatch.setattr(onboarding_module, "_write_json_atomic", write)
+    kwargs = dict(environ=environment, require_bootstrap_integrity=False,
+                  profile_loader=_profile_loader, credential_loader=_credential_loader,
+                  ledger_factory=ledger, autostart_installer=autostart, relay_launcher=relay)
+    if relay_status == "START_REQUESTED":
+        assert onboard_current_user(app_root, **kwargs)["status"] == "READY"
+        assert events[-2:] == ["ready", "release"]
+    else:
+        with pytest.raises(CurrentUserOnboardingError) as failure:
+            onboard_current_user(app_root, **kwargs)
+        assert failure.value.status == ("UNKNOWN" if relay_status == "UNKNOWN" else "FAILED")
+        assert "ready" not in events
+    ledger_index = events.index("ledger")
+    assert events[ledger_index:ledger_index + 4] == ["ledger", "autostart", "release", "relay"]
 
 
 def test_replacement_relay_launcher_uses_canonical_restored_runtime(

@@ -3453,7 +3453,8 @@ function Get-BootstrapSupportedLifecycleContext([string]$Root,[string]$Operation
             if($taskXml.SelectNodes('/t:Task/t:Actions/t:Exec',$names).Count -ne 1 -or
                 $taskXml.SelectNodes('/t:Task/t:Triggers/t:LogonTrigger',$names).Count -ne 1 -or
                 $taskXml.SelectNodes('/t:Task/t:Principals/t:Principal',$names).Count -ne 1){throw 'lifecycle_task_absence_or_unknown'}
-            $arguments='-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -File "'+$fixed+'\tools\apply_prepared_update.ps1" -InstallRoot "'+$fixed+'"'
+            $arguments='-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$fixed+'\tools\apply_prepared_update.ps1" -InstallRoot "'+$fixed+'"'
+            $previousArguments=$arguments -creplace '^(-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden) -ExecutionPolicy Bypass(?= -File ")','$1'
             $wanted=@{
                 '/t:Task/t:Triggers/t:LogonTrigger/t:UserId'=$sid
                 '/t:Task/t:Principals/t:Principal/t:UserId'='S-1-5-18'
@@ -3463,7 +3464,7 @@ function Get-BootstrapSupportedLifecycleContext([string]$Root,[string]$Operation
                 '/t:Task/t:Settings/t:AllowHardTerminate'='false'
                 '/t:Task/t:Settings/t:Hidden'='true'
             }
-            foreach($field in $wanted.Keys){$node=$taskXml.SelectSingleNode($field,$names);if($null -eq $node -or $node.InnerText -cne $wanted[$field]){throw 'lifecycle_task_absence_or_unknown'}}
+            foreach($field in $wanted.Keys){$node=$taskXml.SelectSingleNode($field,$names);if($null -ne $node -and $field -ceq '/t:Task/t:Actions/t:Exec/t:Arguments' -and $node.InnerText -ceq $previousArguments){continue};if($null -eq $node -or $node.InnerText -cne $wanted[$field]){throw 'lifecycle_task_absence_or_unknown'}}
             $after=@($records|ForEach-Object {Read-BootstrapLifecycleJson $_})
             for($index=0;$index -lt 3;$index++){
                 if(-not(Test-BootstrapLifecycleJsonEqual $after[$index] @($policy,$pointer,$state)[$index])){throw 'lifecycle_state_changed_during_verification'}

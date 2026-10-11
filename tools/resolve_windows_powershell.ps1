@@ -121,7 +121,7 @@ $identity = [ordered]@{
 [Console]::Out.Write((ConvertTo-Json -Compress -InputObject $identity))
 '@
     $probeOutput = @(
-        & $fullPath -NoLogo -NoProfile -NonInteractive -Command $probeCommand
+        & $fullPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $probeCommand
     )
     if ($LASTEXITCODE -ne 0) {
         throw "The canonical Windows PowerShell executable identity probe failed."

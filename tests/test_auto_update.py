@@ -26,7 +26,9 @@ def test_installer_logon_task_child_runs_as_an_isolated_script(tmp_path):
     ns = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
     assert task.find("t:Triggers/t:LogonTrigger/t:UserId", ns).text == sid
     assert task.find("t:Actions/t:Exec/t:Command", ns).text.lower().endswith("powershell.exe")
-    assert "apply_prepared_update.ps1" in task.find("t:Actions/t:Exec/t:Arguments", ns).text
+    arguments = task.find("t:Actions/t:Exec/t:Arguments", ns).text
+    assert "-ExecutionPolicy Bypass -File" in arguments
+    assert "apply_prepared_update.ps1" in arguments
     assert not install_root.exists()
 
 

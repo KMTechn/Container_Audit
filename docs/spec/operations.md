@@ -287,6 +287,10 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 <a id="ca-startup-update"></a>
 ## 로그온 자동 갱신 운영
 
+PowerShell 관측·ACL·고정 helper·새 SYSTEM 로그온 action은 자식 인수에 `-ExecutionPolicy Bypass`를 명시한다. OS·레지스트리·GPO 정책은 변경하지 않는다. 작업 관측·설치·제거는 정확한 이전 무정책 action과 새 action만 인정하며 원본 복원 XML을 보존한다. GPO 강제 및 실제 현장 실행은 별도 수용 항목이다.
+
+첫 실행은 자료·원장·자동 시작 준비의 writer admission을 끝낸 뒤 relay를 시작한다. 시작 결과 확인 뒤 admission을 다시 얻어 시도·소유 자료를 재확인하고 환경과 READY 보고를 적용한다. UNKNOWN·실패·canonical 연기의 판정은 유지한다.
+
 갱신 mutex는 작업자 ACL의 SYNCHRONIZE|MUTEX_MODIFY_STATE 권한으로 열며 열기 거절·busy·abandoned는 `UPDATE_IN_PROGRESS`(종료 20)로 안내한다. `startup-support.json` 쓰기의 `WriterFencedError`는 `REPORT_UNAVAILABLE`을 기록하고 기존 일반 실행 검증을 계속한다.
 
 설치기의 `auto_update.py --print-logon-task` 자식은 script 실행에서도 앱 루트 기준

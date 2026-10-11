@@ -1147,8 +1147,10 @@ function Invoke-ContainerStartupUpdateTaskMutation([scriptblock]$Action) {
 }
 
 function Test-ContainerStartupUpdateTaskIdentity([xml]$Actual, [xml]$Expected, [string]$Sid) {
+    $previousArguments = ([string]$Expected.Task.Actions.Exec.Arguments) -creplace '^(-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden) -ExecutionPolicy Bypass(?= -File ")','$1'
     return ($Actual.Task.Actions.Exec.Command -ceq $Expected.Task.Actions.Exec.Command -and
-        $Actual.Task.Actions.Exec.Arguments -ceq $Expected.Task.Actions.Exec.Arguments -and
+        ($Actual.Task.Actions.Exec.Arguments -ceq $Expected.Task.Actions.Exec.Arguments -or
+            $Actual.Task.Actions.Exec.Arguments -ceq $previousArguments) -and
         (ConvertTo-BootstrapPrincipalSid ([string]$Actual.Task.Principals.Principal.UserId)) -ceq 'S-1-5-18' -and
         (ConvertTo-BootstrapPrincipalSid ([string]$Actual.Task.Triggers.LogonTrigger.UserId)) -ceq
             ([Security.Principal.SecurityIdentifier]::new($Sid).Value))
@@ -1793,9 +1795,10 @@ function Get-ContainerRemovalTaskNames($Folder, [string]$CurrentRoot) {
         try { $suffix = ([BitConverter]::ToString($hash.ComputeHash($raw))).Replace('-','').ToLowerInvariant().Substring(0,24) }
         finally { $hash.Dispose() }
         if ([string]$task.Name -cne ('KMTech.ContainerAudit.StartupUpdate.' + $suffix)) { continue }
-        $expected = '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -File "' + (Join-Path $CurrentRoot 'tools\apply_prepared_update.ps1') + '" -InstallRoot "' + $CurrentRoot + '"'
+        $expected = '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + (Join-Path $CurrentRoot 'tools\apply_prepared_update.ps1') + '" -InstallRoot "' + $CurrentRoot + '"'
+        $previous = $expected -creplace '^(-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden) -ExecutionPolicy Bypass(?= -File ")','$1'
         $command = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
-        if ([string]$xml.Task.Actions.Exec.Arguments -cne $expected -or
+        if (([string]$xml.Task.Actions.Exec.Arguments -cne $expected -and [string]$xml.Task.Actions.Exec.Arguments -cne $previous) -or
             -not (Test-SamePath ([string]$xml.Task.Actions.Exec.Command) $command) -or
             [string]$xml.Task.Principals.Principal.UserId -cne 'S-1-5-18' -or
             @($xml.Task.Actions.Exec).Count -ne 1) { throw 'REMOVAL_TASK_IDENTITY_UNKNOWN' }

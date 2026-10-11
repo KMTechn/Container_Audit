@@ -89,6 +89,8 @@ def _run_powershell(script: str, *, environment: dict[str, str]) -> str:
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
             "-Command",
             script,
         ],

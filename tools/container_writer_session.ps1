@@ -2806,7 +2806,7 @@ finally { `$mutex.ReleaseMutex(); `$mutex.Dispose() }
 "@
     $holderEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($holderSource))
     $holderExecutable = (Get-Process -Id $PID -ErrorAction Stop).Path
-    $holder = Start-Process -FilePath $holderExecutable -ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand',$holderEncoded) -WindowStyle Hidden -PassThru
+    $holder = Start-Process -FilePath $holderExecutable -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',$holderEncoded) -WindowStyle Hidden -PassThru
     $sessionAuthorityActiveAccepted = $false
     try {
         $authorityReady = Wait-ContainerCondition -TimeoutSeconds 5 -PollMilliseconds 50 -Predicate {
