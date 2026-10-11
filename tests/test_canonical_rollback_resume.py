@@ -552,3 +552,83 @@ def test_actual_active_fence_stops_ordinary_relay_before_product_quiesce(tmp_pat
         observation=json.loads((tmp_path/'active-fence-observation.json').read_text(encoding='utf-8-sig'))
         assert observation=={'fence_present':True,'stop_absent':True,'original_alive':False}
         assert child.poll() is not None
+
+
+@pytest.mark.parametrize("engine", ["powershell.exe", "pwsh.exe"])
+@pytest.mark.parametrize("pending,corrupt", [(1, False), (2, False), (1, True)])
+def test_completed_history_does_not_limit_pending_rollback_selection(tmp_path, engine, pending, corrupt):
+    root = Path(__file__).resolve().parents[1]
+    install, local = tmp_path / "install", tmp_path / "local"
+    install.mkdir()
+    local.mkdir()
+    manifest = install / "portable-manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    digest = _sha(manifest)
+    store = tmp_path / "rollback-continuations"
+    original_binding = tmp_path / "installation-evidence" / ("run-" + "a" * 32) / "packet" / "replacement-receipt.json"
+    for index in range(129 + pending):
+        transaction = f"{index + 1:032x}"
+        directory = store / transaction
+        directory.mkdir(parents=True)
+        receipt_path = directory / "replacement-receipt.json"
+        receipt = {"receipt_path": str(original_binding), "transaction_id": transaction,
+                   "old": {"manifest_sha256": digest}, "new": {"manifest_sha256": digest}}
+        receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+        record = {
+            "schema": "container-audit-rollback-continuation-v1", "event": "ROLLBACK_CONTINUATION",
+            "install_root": str(install), "operator_sid": "S-1-5-21-1", "operator_local_appdata_root": str(local),
+            "owner_process_id": 1, "owner_started_at_utc": "2026-10-11T00:00:00Z",
+            "session_id": "a" * 32, "attempt_id": "b" * 32,
+            "orchestrator_sha256": _sha(root / "INSTALL_CANONICAL_PORTABLE.ps1"),
+            "writer_contract_sha256": digest, "source_manifest_sha256": digest,
+            "receipt_path": str(receipt_path), "receipt_binding_path": str(original_binding),
+            "receipt_sha256": _sha(receipt_path), "old_manifest_sha256": digest, "new_manifest_sha256": digest,
+            "transaction_id": transaction, "preimage": {"exists": False, "kind": "", "data": ""},
+            "relay_count": 0, "original_relays": [], "runtime_preimage_binding": {"status": "PASS", "relay_count": 0},
+            "original_audit_sha256": digest, "secret_values_recorded": False,
+        }
+        journal = directory / "continuation-journal.json"
+        journal.write_text(json.dumps(record), encoding="utf-8")
+        if index < 129:
+            completed = {"schema": "container-audit-rollback-completed-v1", "status": "COMPLETE",
+                         "journal_sha256": "0" * 64 if corrupt and index == 0 else _sha(journal),
+                         "receipt_sha256": record["receipt_sha256"], "old_manifest_sha256": digest,
+                         "new_manifest_sha256": digest, "audit_sha256": digest,
+                         "completed_at_utc": "2026-10-11T00:00:00Z", "secret_values_recorded": False}
+            (directory / "continuation-completed.json").write_text(json.dumps(completed), encoding="utf-8")
+    before = _tree(store)
+    result = run_functions(tmp_path, root / "INSTALL_CANONICAL_PORTABLE.ps1",
+                           ["Full", "Same", "Sha", "Test-ExactPropertySet", "Test-JsonInteger", "Test-JsonPositiveInt32",
+                            "Read-CanonicalRollbackContinuation"], r'''
+$root=$env:CA_CONTRACT_ROOT
+function Get-InstallationEvidenceControlRoot {return $root}
+function Assert-InstallationEvidenceProtectedPath {param($Path)}
+function ConvertTo-ContainerWriterFenceUtc {param($Value); return [DateTimeOffset]::Parse($Value)}
+function Read-BootstrapReplacementReceipt {
+    param($Path,$Expected)
+    if((Sha $Path) -cne $Expected){throw 'fixture receipt hash differs'}
+    return Get-Content -LiteralPath $Path -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+}
+function Assert-BootstrapRollbackOwnerExited {param($Id,$Started)}
+function ReadReplacementReceipt {param($Path); return Get-Content -LiteralPath $Path -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson}
+function Get-BootstrapVerifiedReplacementRestoreState {return [pscustomobject]@{status='PENDING'}}
+$source=Split-Path -Parent $env:CA_CONTRACT_SOURCE
+$sourceManifestSha256=Sha (Join-Path $root 'install/portable-manifest.json')
+$sourceManifest=[pscustomobject]@{}
+$sourceHelperSha256=$sourceManifestSha256
+$sourceIntegrityHelperSha256=$sourceManifestSha256
+try {
+    $selected=Read-CanonicalRollbackContinuation (Join-Path $root 'install') (Join-Path $root 'local') 'S-1-5-21-1'
+    if($env:CA_SELECTION_EXPECTED -cne 'selected' -or $null -eq $selected -or $selected.state -cne 'PENDING'){throw 'selection expectation differs'}
+    Write-Output 'SELECTION_PASS'
+} catch {
+    $expected=$env:CA_SELECTION_EXPECTED
+    if(($expected -ceq 'ambiguous' -and $_.Exception.Message -ceq 'Rollback continuation selection is ambiguous.') -or
+       ($expected -ceq 'corrupt' -and $_.Exception.Message -ceq 'Rollback completion journal differs.')) {
+        Write-Output 'SELECTION_PASS'
+    } else {throw}
+}
+''', values={"CA_SELECTION_EXPECTED": "corrupt" if corrupt else "ambiguous" if pending == 2 else "selected"}, engine=engine)
+    (tmp_path / "selection-errors.txt").write_text(result.stderr, encoding="utf-8")
+    assert result.returncode == 0 and "SELECTION_PASS" in result.stdout
+    assert _tree(store) == before

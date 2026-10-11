@@ -2241,7 +2241,6 @@ function Read-CanonicalRollbackContinuation([string]$InstallRoot,[string]$LocalA
     Assert-BootstrapNoReparsePoint $store 'rollback continuation store' -PathOnly
     Assert-InstallationEvidenceProtectedPath $store
     $directories=@(Get-ChildItem -LiteralPath $store -Directory)
-    if ($directories.Count -gt 128) {throw 'Rollback continuation evidence count is invalid.'}
     $found=@()
     foreach($directory in $directories) {
         if ($directory.Name -cnotmatch '^[0-9a-f]{32}$') {throw 'Rollback continuation directory differs.'}

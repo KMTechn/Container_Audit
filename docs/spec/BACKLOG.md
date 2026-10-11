@@ -38,7 +38,7 @@ sub-248 제거 P2: 별도 관리 SourceRoot의 실제 canonical을 oldSource 문
 sub-172 새 미완 rollback 계약은 보호 불변 journal/receipt 사본으로 일반 재진입을
 지원한다. PS5.1/7 실제 NTFS·코드/Run/task/pointer/relay 회귀와 변조 변경 0을
 PROVEN(재진입2 PASS·변조10 PASS)이며 결과는 sub-172 REPORT에서 버전과 한계를 구별한다. G 특례 수용은 없다.
-128개 보관 상한 이후의 지원 정리 정책과 독립 검토는 남아 있다.
+완료 기록은 건수 제한 없이 보존한다. 미완 복구 2건의 거절과 독립 검토·장기 보관 정책은 유지한다.
 
 sub-172 receipt 전달: canonical의 보호 self-path·journal-bound 부모 소비 및 restore evidence 소비를
 교정했다. PS5.1/7 post-child RED2→GREEN4, 기존 startup/export 합계34 PASS; 위조·덮어쓰기 거절 유지.

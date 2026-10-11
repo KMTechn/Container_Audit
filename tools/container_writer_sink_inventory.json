@@ -9035,7 +9035,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "b80fe5d369aa35aeac173916a86068570b5d3b5cb68a0f64274b6e23c894c390",
+  "inventory_sha256": "819c63227a3f961ed366d0605291ef0ca4ba31f8444720379b26494d7b6faefb",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -9459,7 +9459,7 @@
         "command": ".",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Get-CanonicalInstallationCommitPoint",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "dot_source",
@@ -9471,7 +9471,7 @@
         "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Invoke-CanonicalRollbackRuntimePreimage",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -9483,7 +9483,7 @@
         "command": "Move-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Write-CanonicalInstallReentryRecord",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -9495,7 +9495,7 @@
         "command": "New-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Save",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -9507,7 +9507,7 @@
         "command": ".NET File mutation",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Save",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -9519,7 +9519,7 @@
         "command": "Move-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Save",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -9531,7 +9531,7 @@
         "command": "New-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "New-CanonicalWriterFencePreparedReceipt",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -9543,7 +9543,7 @@
         "command": "&",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Invoke-CanonicalWriterFenceReleaseStep",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
@@ -9555,7 +9555,7 @@
         "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Remove-CanonicalSupportedRemovalAttemptStop",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -9567,7 +9567,7 @@
         "command": "&",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Get-CanonicalOnboardingInputBinding",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
@@ -9579,7 +9579,7 @@
         "command": "reflection invoke",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Initialize-CanonicalUserProcessApi",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "reflective_invocation",
@@ -9591,7 +9591,7 @@
         "command": "CreateProcessWithTokenW",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Initialize-CanonicalUserProcessApi",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "native_process_api",
@@ -9603,7 +9603,7 @@
         "command": "CreateProcessWithTokenW",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Initialize-CanonicalUserProcessApi",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "native_process_api",
@@ -9615,7 +9615,7 @@
         "command": "ContainerAuditCanonicalUserProcess.StartLimited",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Start-CanonicalLimitedRelay",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "native_process_api",
@@ -9627,7 +9627,7 @@
         "command": "Win32_Process.Create",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "StartRaw",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "com_wmi_process_create",
@@ -9639,11 +9639,11 @@
         "command": ".NET File mutation",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Save-CanonicalOfficialLegacyRelayPreimage",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2740,
+        "line": 2739,
         "target": "",
         "target_static": true
       },
@@ -9651,11 +9651,11 @@
         "command": ".NET File mutation",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Save-CanonicalOfficialLegacyRelayPreimage",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2747,
+        "line": 2746,
         "target": "",
         "target_static": true
       },
@@ -9663,7 +9663,19 @@
         "command": "Enable-ScheduledTask",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Restore-CanonicalOfficialLegacyRelay",
-        "guard_line": 3843,
+        "guard_line": 3842,
+        "guard_name": "Enter-ContainerWriterSessionAuthority",
+        "guarded": true,
+        "kind": "scheduled_task_cmdlet",
+        "line": 2791,
+        "target": "",
+        "target_static": true
+      },
+      {
+        "command": "Disable-ScheduledTask",
+        "file": "INSTALL_CANONICAL_PORTABLE.ps1",
+        "function": "Restore-CanonicalOfficialLegacyRelay",
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "scheduled_task_cmdlet",
@@ -9672,22 +9684,22 @@
         "target_static": true
       },
       {
-        "command": "Disable-ScheduledTask",
+        "command": "Move-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
-        "function": "Restore-CanonicalOfficialLegacyRelay",
-        "guard_line": 3843,
+        "function": "Save-CanonicalOfficialLegacyRelayTransitionPointer",
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
-        "kind": "scheduled_task_cmdlet",
-        "line": 2793,
+        "kind": "filesystem_mutation",
+        "line": 2848,
         "target": "",
         "target_static": true
       },
       {
-        "command": "Move-Item",
+        "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Save-CanonicalOfficialLegacyRelayTransitionPointer",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -9696,26 +9708,14 @@
         "target_static": true
       },
       {
-        "command": "Remove-Item",
-        "file": "INSTALL_CANONICAL_PORTABLE.ps1",
-        "function": "Save-CanonicalOfficialLegacyRelayTransitionPointer",
-        "guard_line": 3843,
-        "guard_name": "Enter-ContainerWriterSessionAuthority",
-        "guarded": true,
-        "kind": "filesystem_mutation",
-        "line": 2850,
-        "target": "",
-        "target_static": true
-      },
-      {
         "command": ".",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3442,
+        "guard_line": 3441,
         "guard_name": "byte_pinned_function_library",
         "guarded": true,
         "kind": "dot_source",
-        "line": 3442,
+        "line": 3441,
         "target": "$writerFenceHelperPath",
         "target_static": false
       },
@@ -9723,11 +9723,11 @@
         "command": ".",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3448,
+        "guard_line": 3447,
         "guard_name": "byte_pinned_function_library",
         "guarded": true,
         "kind": "dot_source",
-        "line": 3448,
+        "line": 3447,
         "target": "$writerFenceHelperPath",
         "target_static": false
       },
@@ -9735,11 +9735,11 @@
         "command": ".",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3509,
+        "guard_line": 3508,
         "guard_name": "byte_pinned_function_library",
         "guarded": true,
         "kind": "dot_source",
-        "line": 3509,
+        "line": 3508,
         "target": "$BootstrapIntegrityFunctions",
         "target_static": false
       },
@@ -9747,11 +9747,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 4199,
+        "line": 4198,
         "target": "",
         "target_static": true
       },
@@ -9759,11 +9759,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 4280,
+        "line": 4279,
         "target": "",
         "target_static": true
       },
@@ -9771,11 +9771,11 @@
         "command": "Copy-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 4305,
+        "line": 4304,
         "target": "",
         "target_static": true
       },
@@ -9783,11 +9783,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 4400,
+        "line": 4399,
         "target": "",
         "target_static": true
       },
@@ -9795,11 +9795,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 4902,
+        "line": 4901,
         "target": "",
         "target_static": true
       },
@@ -9807,11 +9807,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 5056,
+        "line": 5055,
         "target": "",
         "target_static": true
       },
@@ -9819,11 +9819,11 @@
         "command": ".",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "dot_source",
-        "line": 5083,
+        "line": 5082,
         "target": "$step.action",
         "target_static": false
       },
@@ -9831,11 +9831,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 5271,
+        "line": 5270,
         "target": "",
         "target_static": true
       },
@@ -11596,7 +11596,7 @@
         "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Invoke-CanonicalRollbackRuntimePreimage",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -11608,7 +11608,7 @@
         "command": "Move-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Write-CanonicalInstallReentryRecord",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -11620,7 +11620,7 @@
         "command": "New-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Save",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -11632,7 +11632,7 @@
         "command": ".NET File mutation",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Save",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -11644,7 +11644,7 @@
         "command": "Move-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Save",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -11656,7 +11656,7 @@
         "command": "New-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "New-CanonicalWriterFencePreparedReceipt",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -11668,7 +11668,7 @@
         "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Remove-CanonicalSupportedRemovalAttemptStop",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -11680,11 +11680,11 @@
         "command": ".NET File mutation",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Save-CanonicalOfficialLegacyRelayPreimage",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2740,
+        "line": 2739,
         "target": "",
         "target_static": true
       },
@@ -11692,11 +11692,11 @@
         "command": ".NET File mutation",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Save-CanonicalOfficialLegacyRelayPreimage",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2747,
+        "line": 2746,
         "target": "",
         "target_static": true
       },
@@ -11704,7 +11704,19 @@
         "command": "Enable-ScheduledTask",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Restore-CanonicalOfficialLegacyRelay",
-        "guard_line": 3843,
+        "guard_line": 3842,
+        "guard_name": "Enter-ContainerWriterSessionAuthority",
+        "guarded": true,
+        "kind": "scheduled_task_cmdlet",
+        "line": 2791,
+        "target": "",
+        "target_static": true
+      },
+      {
+        "command": "Disable-ScheduledTask",
+        "file": "INSTALL_CANONICAL_PORTABLE.ps1",
+        "function": "Restore-CanonicalOfficialLegacyRelay",
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "scheduled_task_cmdlet",
@@ -11713,22 +11725,22 @@
         "target_static": true
       },
       {
-        "command": "Disable-ScheduledTask",
+        "command": "Move-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
-        "function": "Restore-CanonicalOfficialLegacyRelay",
-        "guard_line": 3843,
+        "function": "Save-CanonicalOfficialLegacyRelayTransitionPointer",
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
-        "kind": "scheduled_task_cmdlet",
-        "line": 2793,
+        "kind": "filesystem_mutation",
+        "line": 2848,
         "target": "",
         "target_static": true
       },
       {
-        "command": "Move-Item",
+        "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Save-CanonicalOfficialLegacyRelayTransitionPointer",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
@@ -11739,12 +11751,12 @@
       {
         "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
-        "function": "Save-CanonicalOfficialLegacyRelayTransitionPointer",
-        "guard_line": 3843,
+        "function": "",
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2850,
+        "line": 4198,
         "target": "",
         "target_static": true
       },
@@ -11752,23 +11764,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 4199,
-        "target": "",
-        "target_static": true
-      },
-      {
-        "command": "Remove-Item",
-        "file": "INSTALL_CANONICAL_PORTABLE.ps1",
-        "function": "",
-        "guard_line": 3843,
-        "guard_name": "Enter-ContainerWriterSessionAuthority",
-        "guarded": true,
-        "kind": "filesystem_mutation",
-        "line": 4280,
+        "line": 4279,
         "target": "",
         "target_static": true
       },
@@ -11776,11 +11776,11 @@
         "command": "Copy-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 4305,
+        "line": 4304,
         "target": "",
         "target_static": true
       },
@@ -11788,11 +11788,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 4400,
+        "line": 4399,
         "target": "",
         "target_static": true
       },
@@ -11800,11 +11800,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 4902,
+        "line": 4901,
         "target": "",
         "target_static": true
       },
@@ -11812,11 +11812,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 5056,
+        "line": 5055,
         "target": "",
         "target_static": true
       },
@@ -11824,11 +11824,11 @@
         "command": "Remove-Item",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 5271,
+        "line": 5270,
         "target": "",
         "target_static": true
       },
@@ -12834,7 +12834,7 @@
         "command": ".",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Get-CanonicalInstallationCommitPoint",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "dot_source",
@@ -12846,7 +12846,7 @@
         "command": "&",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Invoke-CanonicalWriterFenceReleaseStep",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
@@ -12858,7 +12858,7 @@
         "command": "&",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Get-CanonicalOnboardingInputBinding",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "call_operator",
@@ -12870,7 +12870,7 @@
         "command": "reflection invoke",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Initialize-CanonicalUserProcessApi",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "reflective_invocation",
@@ -12882,7 +12882,7 @@
         "command": "CreateProcessWithTokenW",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Initialize-CanonicalUserProcessApi",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "native_process_api",
@@ -12894,7 +12894,7 @@
         "command": "CreateProcessWithTokenW",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Initialize-CanonicalUserProcessApi",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "native_process_api",
@@ -12906,7 +12906,7 @@
         "command": "ContainerAuditCanonicalUserProcess.StartLimited",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Start-CanonicalLimitedRelay",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "native_process_api",
@@ -12918,7 +12918,7 @@
         "command": "Win32_Process.Create",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "StartRaw",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "com_wmi_process_create",
@@ -12930,11 +12930,11 @@
         "command": ".",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3442,
+        "guard_line": 3441,
         "guard_name": "byte_pinned_function_library",
         "guarded": true,
         "kind": "dot_source",
-        "line": 3442,
+        "line": 3441,
         "target": "$writerFenceHelperPath",
         "target_static": false
       },
@@ -12942,11 +12942,11 @@
         "command": ".",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3448,
+        "guard_line": 3447,
         "guard_name": "byte_pinned_function_library",
         "guarded": true,
         "kind": "dot_source",
-        "line": 3448,
+        "line": 3447,
         "target": "$writerFenceHelperPath",
         "target_static": false
       },
@@ -12954,11 +12954,11 @@
         "command": ".",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3509,
+        "guard_line": 3508,
         "guard_name": "byte_pinned_function_library",
         "guarded": true,
         "kind": "dot_source",
-        "line": 3509,
+        "line": 3508,
         "target": "$BootstrapIntegrityFunctions",
         "target_static": false
       },
@@ -12966,11 +12966,11 @@
         "command": ".",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "kind": "dot_source",
-        "line": 5083,
+        "line": 5082,
         "target": "$step.action",
         "target_static": false
       },
@@ -13747,10 +13747,10 @@
       {
         "entry_guard": {
           "guard_kind": "session_authority",
-          "guard_line": 3843,
+          "guard_line": 3842,
           "guard_name": "Enter-ContainerWriterSessionAuthority",
-          "lifetime_end_line": 5615,
-          "release_line": 5615,
+          "lifetime_end_line": 5614,
+          "release_line": 5614,
           "release_name": "Exit-ContainerWriterSessionAuthority",
           "required": true,
           "valid": true,
@@ -13786,7 +13786,7 @@
             "command": ".",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Get-CanonicalInstallationCommitPoint",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "dot_source",
@@ -13798,7 +13798,7 @@
             "command": "Remove-Item",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Invoke-CanonicalRollbackRuntimePreimage",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
@@ -13810,7 +13810,7 @@
             "command": "Move-Item",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Write-CanonicalInstallReentryRecord",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
@@ -13822,7 +13822,7 @@
             "command": "New-Item",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Save",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
@@ -13834,7 +13834,7 @@
             "command": ".NET File mutation",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Save",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
@@ -13846,7 +13846,7 @@
             "command": "Move-Item",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Save",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
@@ -13858,7 +13858,7 @@
             "command": "New-Item",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "New-CanonicalWriterFencePreparedReceipt",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
@@ -13870,7 +13870,7 @@
             "command": "&",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Invoke-CanonicalWriterFenceReleaseStep",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "call_operator",
@@ -13882,7 +13882,7 @@
             "command": "Remove-Item",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Remove-CanonicalSupportedRemovalAttemptStop",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
@@ -13894,7 +13894,7 @@
             "command": "&",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Get-CanonicalOnboardingInputBinding",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "call_operator",
@@ -13906,7 +13906,7 @@
             "command": "reflection invoke",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Initialize-CanonicalUserProcessApi",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "reflective_invocation",
@@ -13918,7 +13918,7 @@
             "command": "CreateProcessWithTokenW",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Initialize-CanonicalUserProcessApi",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "native_process_api",
@@ -13930,7 +13930,7 @@
             "command": "CreateProcessWithTokenW",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Initialize-CanonicalUserProcessApi",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "native_process_api",
@@ -13942,7 +13942,7 @@
             "command": "ContainerAuditCanonicalUserProcess.StartLimited",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Start-CanonicalLimitedRelay",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "native_process_api",
@@ -13954,7 +13954,7 @@
             "command": "Win32_Process.Create",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "StartRaw",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "com_wmi_process_create",
@@ -13966,11 +13966,11 @@
             "command": ".NET File mutation",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Save-CanonicalOfficialLegacyRelayPreimage",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2740,
+            "line": 2739,
             "target": "",
             "target_static": true
           },
@@ -13978,11 +13978,11 @@
             "command": ".NET File mutation",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Save-CanonicalOfficialLegacyRelayPreimage",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2747,
+            "line": 2746,
             "target": "",
             "target_static": true
           },
@@ -13990,7 +13990,19 @@
             "command": "Enable-ScheduledTask",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Restore-CanonicalOfficialLegacyRelay",
-            "guard_line": 3843,
+            "guard_line": 3842,
+            "guard_name": "Enter-ContainerWriterSessionAuthority",
+            "guarded": true,
+            "kind": "scheduled_task_cmdlet",
+            "line": 2791,
+            "target": "",
+            "target_static": true
+          },
+          {
+            "command": "Disable-ScheduledTask",
+            "file": "INSTALL_CANONICAL_PORTABLE.ps1",
+            "function": "Restore-CanonicalOfficialLegacyRelay",
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "scheduled_task_cmdlet",
@@ -13999,22 +14011,22 @@
             "target_static": true
           },
           {
-            "command": "Disable-ScheduledTask",
+            "command": "Move-Item",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
-            "function": "Restore-CanonicalOfficialLegacyRelay",
-            "guard_line": 3843,
+            "function": "Save-CanonicalOfficialLegacyRelayTransitionPointer",
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
-            "kind": "scheduled_task_cmdlet",
-            "line": 2793,
+            "kind": "filesystem_mutation",
+            "line": 2848,
             "target": "",
             "target_static": true
           },
           {
-            "command": "Move-Item",
+            "command": "Remove-Item",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "Save-CanonicalOfficialLegacyRelayTransitionPointer",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
@@ -14023,26 +14035,14 @@
             "target_static": true
           },
           {
-            "command": "Remove-Item",
-            "file": "INSTALL_CANONICAL_PORTABLE.ps1",
-            "function": "Save-CanonicalOfficialLegacyRelayTransitionPointer",
-            "guard_line": 3843,
-            "guard_name": "Enter-ContainerWriterSessionAuthority",
-            "guarded": true,
-            "kind": "filesystem_mutation",
-            "line": 2850,
-            "target": "",
-            "target_static": true
-          },
-          {
             "command": ".",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "",
-            "guard_line": 3442,
+            "guard_line": 3441,
             "guard_name": "byte_pinned_function_library",
             "guarded": true,
             "kind": "dot_source",
-            "line": 3442,
+            "line": 3441,
             "target": "$writerFenceHelperPath",
             "target_static": false
           },
@@ -14050,11 +14050,11 @@
             "command": ".",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "",
-            "guard_line": 3448,
+            "guard_line": 3447,
             "guard_name": "byte_pinned_function_library",
             "guarded": true,
             "kind": "dot_source",
-            "line": 3448,
+            "line": 3447,
             "target": "$writerFenceHelperPath",
             "target_static": false
           },
@@ -14062,11 +14062,11 @@
             "command": ".",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "",
-            "guard_line": 3509,
+            "guard_line": 3508,
             "guard_name": "byte_pinned_function_library",
             "guarded": true,
             "kind": "dot_source",
-            "line": 3509,
+            "line": 3508,
             "target": "$BootstrapIntegrityFunctions",
             "target_static": false
           },
@@ -14074,11 +14074,11 @@
             "command": "Remove-Item",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 4199,
+            "line": 4198,
             "target": "",
             "target_static": true
           },
@@ -14086,11 +14086,11 @@
             "command": "Remove-Item",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 4280,
+            "line": 4279,
             "target": "",
             "target_static": true
           },
@@ -14098,11 +14098,11 @@
             "command": "Copy-Item",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 4305,
+            "line": 4304,
             "target": "",
             "target_static": true
           },
@@ -14110,11 +14110,11 @@
             "command": "Remove-Item",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 4400,
+            "line": 4399,
             "target": "",
             "target_static": true
           },
@@ -14122,11 +14122,11 @@
             "command": "Remove-Item",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 4902,
+            "line": 4901,
             "target": "",
             "target_static": true
           },
@@ -14134,11 +14134,11 @@
             "command": "Remove-Item",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 5056,
+            "line": 5055,
             "target": "",
             "target_static": true
           },
@@ -14146,11 +14146,11 @@
             "command": ".",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "dot_source",
-            "line": 5083,
+            "line": 5082,
             "target": "$step.action",
             "target_static": false
           },
@@ -14158,11 +14158,11 @@
             "command": "Remove-Item",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "function": "",
-            "guard_line": 3843,
+            "guard_line": 3842,
             "guard_name": "Enter-ContainerWriterSessionAuthority",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 5271,
+            "line": 5270,
             "target": "",
             "target_static": true
           }
@@ -16010,13 +16010,13 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4820,
+            "line": 4819,
             "non_production_mode": ""
           }
         ],
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Get-CanonicalInstallationCommitPoint",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "non_production_only": false,
@@ -16036,37 +16036,37 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 3854,
+            "line": 3853,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4136,
+            "line": 4135,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4217,
+            "line": 4216,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 5326,
+            "line": 5325,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 5472,
+            "line": 5471,
             "non_production_mode": ""
           }
         ],
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Get-CanonicalOnboardingInputBinding",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "non_production_only": false,
@@ -16086,7 +16086,7 @@
         ],
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Initialize-CanonicalUserProcessApi",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "non_production_only": false,
@@ -16106,7 +16106,7 @@
         ],
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Invoke-CanonicalRollbackRuntimePreimage",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "non_production_only": false,
@@ -16138,7 +16138,7 @@
         ],
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Invoke-CanonicalWriterFenceReleaseStep",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "non_production_only": false,
@@ -16152,13 +16152,13 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 3868,
+            "line": 3867,
             "non_production_mode": ""
           }
         ],
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "New-CanonicalWriterFencePreparedReceipt",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "non_production_only": false,
@@ -16172,13 +16172,13 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4952,
+            "line": 4951,
             "non_production_mode": ""
           }
         ],
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Remove-CanonicalSupportedRemovalAttemptStop",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "non_production_only": false,
@@ -16192,25 +16192,25 @@
           {
             "caller": "Invoke-CanonicalOfficialLegacyRelayTransition",
             "guarded_top_level": false,
-            "line": 2945,
+            "line": 2944,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 5297,
+            "line": 5296,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 5547,
+            "line": 5546,
             "non_production_mode": ""
           }
         ],
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Restore-CanonicalOfficialLegacyRelay",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "non_production_only": false,
@@ -16242,13 +16242,19 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
+            "line": 4034,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
             "line": 4035,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4036,
+            "line": 4096,
             "non_production_mode": ""
           },
           {
@@ -16260,7 +16266,7 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4098,
+            "line": 4149,
             "non_production_mode": ""
           },
           {
@@ -16272,13 +16278,13 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4151,
+            "line": 4207,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4208,
+            "line": 4229,
             "non_production_mode": ""
           },
           {
@@ -16290,13 +16296,13 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4231,
+            "line": 4282,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4283,
+            "line": 4289,
             "non_production_mode": ""
           },
           {
@@ -16308,7 +16314,7 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4291,
+            "line": 4329,
             "non_production_mode": ""
           },
           {
@@ -16320,13 +16326,13 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4331,
+            "line": 4404,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4405,
+            "line": 4421,
             "non_production_mode": ""
           },
           {
@@ -16338,19 +16344,19 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4423,
+            "line": 4435,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4436,
+            "line": 4442,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4443,
+            "line": 4447,
             "non_production_mode": ""
           },
           {
@@ -16362,7 +16368,7 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4449,
+            "line": 4451,
             "non_production_mode": ""
           },
           {
@@ -16374,7 +16380,7 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4453,
+            "line": 4464,
             "non_production_mode": ""
           },
           {
@@ -16386,7 +16392,7 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4466,
+            "line": 4471,
             "non_production_mode": ""
           },
           {
@@ -16398,7 +16404,7 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4473,
+            "line": 4655,
             "non_production_mode": ""
           },
           {
@@ -16410,7 +16416,7 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4657,
+            "line": 4695,
             "non_production_mode": ""
           },
           {
@@ -16422,7 +16428,7 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4697,
+            "line": 4703,
             "non_production_mode": ""
           },
           {
@@ -16434,7 +16440,7 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4705,
+            "line": 4731,
             "non_production_mode": ""
           },
           {
@@ -16446,7 +16452,7 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4733,
+            "line": 4752,
             "non_production_mode": ""
           },
           {
@@ -16456,57 +16462,51 @@
             "non_production_mode": ""
           },
           {
-            "caller": "__script__",
-            "guarded_top_level": true,
-            "line": 4754,
+            "caller": "Save-CanonicalRecoveryDiagnostics",
+            "guarded_top_level": false,
+            "line": 4793,
             "non_production_mode": ""
           },
           {
             "caller": "Save-CanonicalRecoveryDiagnostics",
             "guarded_top_level": false,
-            "line": 4794,
+            "line": 4802,
             "non_production_mode": ""
           },
           {
             "caller": "Save-CanonicalRecoveryDiagnostics",
             "guarded_top_level": false,
-            "line": 4803,
-            "non_production_mode": ""
-          },
-          {
-            "caller": "Save-CanonicalRecoveryDiagnostics",
-            "guarded_top_level": false,
-            "line": 4809,
+            "line": 4808,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4967,
+            "line": 4966,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 5552,
+            "line": 5551,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 5592,
+            "line": 5591,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 5595,
+            "line": 5594,
             "non_production_mode": ""
           }
         ],
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Save",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "non_production_only": false,
@@ -16520,19 +16520,19 @@
           {
             "caller": "Invoke-CanonicalOfficialLegacyRelayTransition",
             "guarded_top_level": false,
-            "line": 2943,
+            "line": 2942,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4029,
+            "line": 4028,
             "non_production_mode": ""
           }
         ],
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Save-CanonicalOfficialLegacyRelayPreimage",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "non_production_only": false,
@@ -16546,19 +16546,19 @@
           {
             "caller": "Invoke-CanonicalOfficialLegacyRelayTransition",
             "guarded_top_level": false,
-            "line": 2961,
+            "line": 2960,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4690,
+            "line": 4689,
             "non_production_mode": ""
           }
         ],
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Save-CanonicalOfficialLegacyRelayTransitionPointer",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "non_production_only": false,
@@ -16578,7 +16578,7 @@
         ],
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Start-CanonicalLimitedRelay",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "non_production_only": false,
@@ -16598,7 +16598,7 @@
         ],
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "StartRaw",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "non_production_only": false,
@@ -16612,31 +16612,31 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4037,
+            "line": 4036,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4470,
+            "line": 4469,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4476,
+            "line": 4475,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 4610,
+            "line": 4609,
             "non_production_mode": ""
           }
         ],
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "function": "Write-CanonicalInstallReentryRecord",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
         "non_production_only": false,
@@ -17432,67 +17432,67 @@
             "caller": "Write-CanonicalRollbackContinuation",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "installer_guarded": true,
-            "line": 2344
+            "line": 2343
           },
           {
             "caller": "Complete-CanonicalRollbackContinuation",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "installer_guarded": true,
-            "line": 2365
+            "line": 2364
           },
           {
             "caller": "Write-CanonicalRollbackContinuationAuthority",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "installer_guarded": true,
-            "line": 2387
+            "line": 2386
           },
           {
             "caller": "__script__",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "installer_guarded": true,
-            "line": 4060
+            "line": 4059
           },
           {
             "caller": "__script__",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "installer_guarded": true,
-            "line": 4175
+            "line": 4174
           },
           {
             "caller": "__script__",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "installer_guarded": true,
-            "line": 4270
+            "line": 4269
           },
           {
             "caller": "__script__",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "installer_guarded": true,
-            "line": 4381
+            "line": 4380
           },
           {
             "caller": "__script__",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "installer_guarded": true,
-            "line": 4515
+            "line": 4514
           },
           {
             "caller": "__script__",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "installer_guarded": true,
-            "line": 4649
+            "line": 4648
           },
           {
             "caller": "__script__",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "installer_guarded": true,
-            "line": 5013
+            "line": 5012
           },
           {
             "caller": "__script__",
             "file": "INSTALL_CANONICAL_PORTABLE.ps1",
             "installer_guarded": true,
-            "line": 5213
+            "line": 5212
           },
           {
             "caller": "Set-HardenedCodeAcl",
@@ -19292,10 +19292,10 @@
       {
         "command": "Enable-ScheduledTask",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
-        "line": 2792,
+        "line": 2791,
         "register_line": null,
         "registered": true,
         "wrapper_function": "Restore-CanonicalOfficialLegacyRelay"
@@ -19303,10 +19303,10 @@
       {
         "command": "Disable-ScheduledTask",
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
-        "line": 2793,
+        "line": 2792,
         "register_line": null,
         "registered": true,
         "wrapper_function": "Restore-CanonicalOfficialLegacyRelay"
@@ -19426,10 +19426,10 @@
       {
         "file": "INSTALL_CANONICAL_PORTABLE.ps1",
         "guard_kind": "session_authority",
-        "guard_line": 3843,
+        "guard_line": 3842,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
-        "release_line": 5615,
+        "release_line": 5614,
         "release_name": "Exit-ContainerWriterSessionAuthority",
         "writer_site_count": 27,
         "writer_site_kinds": [

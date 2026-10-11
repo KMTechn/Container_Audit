@@ -1308,8 +1308,7 @@ placement admission 안에서 원 receipt가 가리키는 옛 트리, 정확한 
 
 G처럼 고치기 전 installer의 기록만 있는 상태는 이 계약의 입력이 아니다. 공개
 legacy receipt self-path 규칙은 그대로이고, 새 journal로 검증된 사본만 최초 binding
-경로와 구별한다. 128개를 넘는 retained continuation은 보수적으로 거절하며 자동
-정리하지 않는다. 독립 native 랩 수용과 장기간 보관 정책은 별도 확인이 필요하다.
+경로와 구별한다. 완료 기록은 건수 제한 없이 검증해 보존하고 미완 복구가 둘 이상이면 거절한다. 기록은 자동 정리하지 않는다. 독립 native 랩 수용과 장기간 보관 정책은 별도 확인이 필요하다.
 
 2026-10-04 실제 랩 근거는 [sub-172 REPORT](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-172/REPORT.md),
 [G 수선 결과](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-172/LAB-REPAIR-RESULT-G.md),
