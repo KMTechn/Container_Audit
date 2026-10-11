@@ -16,13 +16,15 @@ import os
 import re
 import tempfile
 import threading
+import uuid
+import weakref
 from ctypes import wintypes
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from writer_session_fence import writer_sink
+from writer_session_fence import WriterFencedError, _WRITER_LOCAL, writer_admission, writer_sink
 
 from label_qr import parse_new_format_qr
 from transfer_seal import (
@@ -105,6 +107,11 @@ class PHSLabelWorkflowError(RuntimeError):
         self.code = str(code or "PHS_LABEL_WORKFLOW_ERROR")
         self.retryable = bool(retryable)
         self.details = dict(details or {})
+
+
+class PHSPrintUnknown(PHSLabelWorkflowError):
+    def __init__(self):
+        super().__init__("PHS_LOCAL_PRINT_UNKNOWN", "인쇄 제출이 끝나지 않았습니다. 인쇄 대기로 남겼습니다. 출력물을 확인한 뒤 재인쇄하세요.", retryable=True)
 
 
 class PHSPhysicalPrintError(PHSLabelWorkflowError):
@@ -203,6 +210,26 @@ class PhysicalPrintEvidence:
         }
 
 
+_NON_LABEL_PRINTER_MARKERS = (
+    "portprompt:", "file:", "xpsport", "nul:",
+    "microsoft print to pdf", "microsoft xps document writer", "onenote", "fax",
+    "adobe pdf", "pdfcreator", "pdf24", "pdf-xchange", "pdffactory", "cutepdf", "dopdf",
+)
+PRINT_SUBMIT_TIMEOUT_SECONDS = 60.0
+PRINT_SUBMISSION_THREADS = weakref.WeakSet()
+
+
+class _PrinterInfo2W(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_void_p) for name in (
+        "pServerName", "pPrinterName", "pShareName", "pPortName", "pDriverName",
+        "pComment", "pLocation", "pDevMode", "pSepFile", "pPrintProcessor",
+        "pDatatype", "pParameters", "pSecurityDescriptor",
+    )] + [(name, wintypes.DWORD) for name in (
+        "Attributes", "Priority", "DefaultPriority", "StartTime", "UntilTime",
+        "Status", "cJobs", "AveragePPM",
+    )]
+
+
 class WindowsGDIPhysicalLabelPrinter:
     """Submit a rendered PNG to the configured Windows default printer."""
 
@@ -241,20 +268,91 @@ class WindowsGDIPhysicalLabelPrinter:
             )
         return printer_name
 
-    @writer_sink("phs_label_workflow")
-    def print_png(
+    def __init__(self):
+        self.late_results = []
+
+    @staticmethod
+    def _printer_profile(printer_name):
+        spool = ctypes.WinDLL("winspool.drv", use_last_error=True)
+        for name, args, result in (
+            ("OpenPrinterW", (wintypes.LPWSTR, ctypes.POINTER(wintypes.HANDLE), ctypes.c_void_p), wintypes.BOOL),
+            ("GetPrinterW", (wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)), wintypes.BOOL),
+            ("ClosePrinter", (wintypes.HANDLE,), wintypes.BOOL),
+        ):
+            api = getattr(spool, name)
+            api.argtypes, api.restype = args, result
+        handle, size = wintypes.HANDLE(), wintypes.DWORD()
+        if not spool.OpenPrinterW(printer_name, ctypes.byref(handle), None):
+            raise PHSPhysicalPrintError("기본 프린터 설정을 확인하지 못했습니다. 관리자에게 알리세요.")
+        try:
+            spool.GetPrinterW(handle, 2, None, 0, ctypes.byref(size))
+            if not ctypes.sizeof(_PrinterInfo2W) <= size.value <= 1024 * 1024:
+                raise PHSPhysicalPrintError("기본 프린터 설정을 확인하지 못했습니다. 관리자에게 알리세요.")
+            buffer = ctypes.create_string_buffer(size.value)
+            if not spool.GetPrinterW(handle, 2, buffer, size.value, ctypes.byref(size)):
+                raise PHSPhysicalPrintError("기본 프린터 설정을 확인하지 못했습니다. 관리자에게 알리세요.")
+            info = ctypes.cast(buffer, ctypes.POINTER(_PrinterInfo2W)).contents
+            return tuple(ctypes.wstring_at(value) if value else "" for value in (info.pPortName, info.pDriverName))
+        finally:
+            spool.ClosePrinter(handle)
+
+    def print_png(self, filepath, *, document_name, late_record=None):
+        if int(getattr(_WRITER_LOCAL, "depth", 0)) > 0:
+            raise WriterFencedError("PRINT_WRITER_ADMISSION_HELD", "print submission cannot hold writer admission")
+        with writer_admission("phs_label_workflow"):
+            path = Path(str(filepath or "")).resolve()
+            if not path.is_file():
+                raise PHSPhysicalPrintError("출력할 현품표 PNG 파일이 없습니다.")
+        ready, decided, uncertain = threading.Event(), threading.Event(), threading.Event()
+        outcome = []
+        def submit():
+            try:
+                outcome.append((self._submit_print_png(path, document_name=document_name), None))
+            except Exception as exc:
+                outcome.append((None, exc))
+            ready.set()
+            decided.wait()
+            if uncertain.is_set():
+                value, error = outcome[0]
+                record = {"result": "ERROR", "error_type": type(error).__name__} if error else {"result": "SUBMITTED", "proof": value.to_server_proof()}
+                self.late_results.append(record)
+                if late_record:
+                    try: late_record(record)
+                    except Exception as exc: print(f"지연 인쇄 기록 실패: {type(exc).__name__}")
+        worker = threading.Thread(target=submit, name="phs-print-submit", daemon=True)
+        PRINT_SUBMISSION_THREADS.add(worker)
+        worker.start()
+        try:
+            if not ready.wait(PRINT_SUBMIT_TIMEOUT_SECONDS):
+                uncertain.set()
+                raise PHSPrintUnknown()
+            value, error = outcome[0]
+            if error:
+                raise error
+            return value
+        finally:
+            decided.set()
+
+    def _submit_print_png(
         self,
         filepath: str,
         *,
         document_name: str,
     ) -> PhysicalPrintEvidence:
-        path = Path(str(filepath or "")).resolve()
-        if not path.is_file():
-            raise PHSPhysicalPrintError("출력할 현품표 PNG 파일이 없습니다.")
+        path = Path(filepath)
         printer_name = self._default_printer_name()
+        notice = f"기본 프린터가 라벨 프린터가 아닙니다({printer_name}). 관리자에게 알리세요."
+        profile = " ".join((printer_name, *self._printer_profile(printer_name))).casefold()
+        if any(marker in profile for marker in _NON_LABEL_PRINTER_MARKERS):
+            raise PHSPhysicalPrintError(notice)
         try:
+            printer = GdiPrinter(printer_name)
+            try:
+                printer.validate_paper(self._PAPER)
+            except (PrinterError, OSError, ValueError) as exc:
+                raise PHSPhysicalPrintError(notice) from exc
             doc_name = str(document_name or path.stem)[:240]
-            receipt = GdiPrinter(printer_name).print_png(
+            receipt = printer.print_png(
                 path,
                 PrintSpec(
                     document_name=doc_name,
@@ -273,6 +371,17 @@ class WindowsGDIPhysicalLabelPrinter:
             document_name=doc_name,
             submitted_at=_utc_now(),
         )
+
+
+def _submit_physical_print(printer, path, document_name, journal, attempt):
+    options = {}
+    if isinstance(printer, WindowsGDIPhysicalLabelPrinter):
+        record_path = journal.path.with_name(journal.path.name + ".print-" + uuid.uuid4().hex + ".json")
+        identity = {key: attempt.get(key) for key in ("exchange_id", "label_id", "print_attempt_id", "print_idempotency_key", "rendered_artifact_hash")}
+        def record(result):
+            PHSLabelExchangeJournal(record_path).save({"status": "LATE_PRINT_RESULT", "attempt": identity, "print_result": result})
+        options["late_record"] = record
+    return printer.print_png(path, document_name=document_name, **options)
 
 
 @dataclass(frozen=True)
@@ -1499,14 +1608,12 @@ class PHSLabelExchangeCoordinator:
                     rendered_artifact_hash=rendered.sha256,
                 )
                 try:
-                    evidence = self.printer.print_png(
-                        rendered.path,
-                        document_name=(
-                            "PHS "
-                            + str(target_label.get("worker_code") or "")
-                        ),
-                    )
+                    evidence = _submit_physical_print(self.printer, rendered.path,
+                        "PHS " + str(target_label.get("worker_code") or ""), self.journal, state)
                     proof = self._print_proof(evidence)
+                except PHSPrintUnknown:
+                    state = self._save(state, print_result="UNKNOWN")
+                    raise
                 except Exception as exc:
                     error_message = str(exc) or exc.__class__.__name__
                     state = self._save(
@@ -1536,7 +1643,7 @@ class PHSLabelExchangeCoordinator:
                         failed,
                         success=False,
                         message=(
-                            "실제 출력에 실패했습니다. 기존 현품표는 ACTIVE로 "
+                            error_message + " 인쇄 대기 · 기존 현품표는 ACTIVE로 "
                             "유지됩니다."
                         ),
                         error_code="LOCAL_PRINTER_ERROR",

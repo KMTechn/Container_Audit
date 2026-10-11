@@ -843,7 +843,9 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 | 포커스·단축키 | 스캔 Entry 포커스 복귀, notice 확인의 Return/Escape, F8 정합 교체 및 Shift-F8 호환 진입 | 경고·보류 복원·modal 종료 뒤 입력이 잘못된 창에 들어가지 않는지 지원 배율/화면에서 확인한다. 실제 스캐너·200% 배율 전체 성공은 미입증이다. [메인 UI](../../Container_Audit.py), [CA-A02](BACKLOG.md#ca-a02) |
 | 인코딩 | 이벤트 CSV는 UTF-8 BOM, 중앙 품목은 검증 snapshot, legacy 품목 파일은 별도 fallback | 한글 작업자·품목과 PHS 구분자, barcode 정규화 단계별 차이를 확인한다. 파일 인코딩이 키보드 장비 인코딩을 입증하지 않는다. [CA-C08](contracts.md#ca-c08), [입력·시간 계약](contracts.md#ca-data) |
 | 사운드 | 현재 [native_audio.WavSound](../../native_audio.py)의 Windows `winsound`, one-shot/무한 loop·process-wide stop; 백그라운드 WAV 준비 | `audio_feedback_ready`는 파일 객체 준비 결과이며 실제 스피커 발성 성공이 아니다. 재생 오류·무음·중복 경고·정지와 시각 경고를 실장비에서 확인한다. [초기화/오류 사운드](../../Container_Audit.py) |
-| 현품표 출력 | [phs_reconciliation_workflow](../../phs_reconciliation_workflow.py)의 artifact hash·print proof·`spool_job_id`·journal | `PRINT_FAILED/PARTIAL`, 중앙 ACK 대기·재출력 불확실을 구분한다. spool 접수·종이 배출·올바른 라벨 부착은 각각 확인한다. 일반 스캔마다 자동 인쇄하는 기능으로 해석하지 않는다. [CA-C09](contracts.md#ca-c09) |
+| 현품표 출력 | [phs_reconciliation_workflow](../../phs_reconciliation_workflow.py)의 artifact hash·print proof·`spool_job_id`·journal | 가상·파일 출력 기본 프린터/용지 거절은 관리자 안내 후 그 건만 인쇄 대기. 60초 제출 초과는 UNKNOWN으로 보류하며 화면·다음 스캔·종료는 계속한다. `PRINT_FAILED/PARTIAL`, 중앙 ACK 대기·재출력 불확실을 구분한다. spool 접수·종이 배출·올바른 라벨 부착은 각각 확인한다. 일반 스캔마다 자동 인쇄하는 기능으로 해석하지 않는다. [CA-C09](contracts.md#ca-c09) |
+
+기본 프린터 안내가 나오면 현재 Windows 기본 프린터를 실제 라벨 프린터로 확인하고 관리자에게 알린다. Windows의 기본 프린터 관리가 켜져 있으면 PDF 사용 뒤 기본값이 바뀔 수 있다. UNKNOWN은 성공으로 바꾸지 않으며 실물 확인 후 기존 재인쇄 절차를 따른다. 실행 중 늦게 온 결과의 `.print-*.json`은 진단 자료이며 원 교체 기록의 성공이나 자동 재인쇄 승인이 아니다.
 
 [CODEX](../../CODEX.md)의 pygame/PyInstaller 중심 기술 설명은 현재 위 사운드·portable 소스와 차이가 있다. 과거 안내를 그대로 장비 검증 기준으로 사용하지 않으며 [CA-G03](BACKLOG.md#ca-g03)에 후속 정합 작업을 남긴다. 프린터 모델/드라이버·용지·스캐너 모델/firmware·지원 배율의 확정 목록은 미확인이다.
 

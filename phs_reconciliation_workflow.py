@@ -20,6 +20,8 @@ from phs_label_workflow import (
     PHSLabelExchangeResult,
     PHSLabelWorkflowError,
     PHSPhysicalPrintError,
+    PHSPrintUnknown,
+    _submit_physical_print,
 )
 from transfer_seal import TransferSealError, validate_compact_phs2_fields
 
@@ -1423,7 +1425,7 @@ class PHSReconciliationExchangeCoordinator:
             state,
             success=False,
             message=(
-                "출력 실패 target만 재시도 대기 중입니다. 기존 현품표는 "
+                message + " 인쇄 대기 · 기존 현품표는 "
                 "활성화 전까지 그대로 유지됩니다."
             ),
             error_code="LOCAL_PRINTER_ERROR",
@@ -1783,16 +1785,13 @@ class PHSReconciliationExchangeCoordinator:
                         rendered_artifact_hash=rendered.sha256,
                     )
                     progress = dict(state["targets"][label_id])
-                    evidence = self.printer.print_png(
-                        rendered.path,
-                        document_name=(
-                            "PHS "
-                            + str(
-                                target_label.get("worker_code") or ""
-                            )
-                        ),
-                    )
+                    evidence = _submit_physical_print(self.printer, rendered.path,
+                        "PHS " + str(target_label.get("worker_code") or ""), self.journal,
+                        {**progress, "exchange_id": state.get("exchange_id"), "label_id": label_id})
                     proof = self._print_proof(evidence)
+                except PHSPrintUnknown:
+                    state = self._save_target(state, label_id, progress, status="LOCAL_PRINT_STARTING", print_result="UNKNOWN")
+                    raise
                 except Exception as exc:
                     return self._record_print_failure(
                         state,

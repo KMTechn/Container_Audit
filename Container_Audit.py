@@ -141,6 +141,7 @@ from preflight_scan_hold import (
     QuarantinedPreflightHold,
 )
 from phs_label_workflow import (
+    PRINT_SUBMISSION_THREADS,
     PHSLabelExchangeCoordinator,
     PHSLabelExchangeJournal,
     PHSLabelRenderer,
@@ -7847,7 +7848,7 @@ class ContainerAudit:
                 (
                     "현품표 날짜 교환을 완료했습니다. 현재 트레이 진행은 유지됩니다."
                     if success
-                    else "현품표 날짜 교환을 완료하지 못했습니다. F8로 복구하거나 관리자에게 문의하세요."
+                    else ((result.message if getattr(result, "error_code", "") in {"LOCAL_PRINTER_ERROR", "PHS_LOCAL_PRINT_UNKNOWN"} else "") or "현품표 날짜 교환을 완료하지 못했습니다. F8로 복구하거나 관리자에게 문의하세요.")
                 ),
                 color,
                 duration=10000,
@@ -8128,7 +8129,7 @@ class ContainerAudit:
                         journal_context
                     )
                 self.show_status_message(
-                    "현품표 교체를 완료하지 못했습니다. F8로 복구하거나 관리자에게 문의하세요.",
+                    (result.message if getattr(result, "error_code", "") in {"LOCAL_PRINTER_ERROR", "PHS_LOCAL_PRINT_UNKNOWN"} else "") or "현품표 교체를 완료하지 못했습니다. F8로 복구하거나 관리자에게 문의하세요.",
                     self.COLOR_DANGER,
                     duration=10000,
                 )
@@ -21055,10 +21056,11 @@ class ContainerAudit:
                     self._application_close_complete = True
                 except BaseException as exc:
                     errors.append(exc)
-        # Keep the handle while any process worker can still mutate this root.
-        # Finite delays finish naturally; an infinite stall remains visible.
+        # Keep existing data workers. Printer submitters record only guarded
+        # late diagnostics and never keep window exit waiting for the driver.
         while any(
             thread is not threading.current_thread() and thread.is_alive()
+            and thread not in PRINT_SUBMISSION_THREADS
             for thread in threading.enumerate()
         ):
             wait_tick()

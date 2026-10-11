@@ -876,6 +876,10 @@ def test_physical_printer_uses_job_local_a4_geometry(monkeypatch, tmp_path):
         def __init__(self, printer_name):
             captured["printer_name"] = printer_name
 
+        def validate_paper(self, paper):
+            captured["validated_paper"] = paper
+            return {}
+
         def print_png(self, path, spec):
             captured["path"] = Path(path)
             captured["spec"] = spec
@@ -887,6 +891,8 @@ def test_physical_printer_uses_job_local_a4_geometry(monkeypatch, tmp_path):
         staticmethod(lambda: "Fixture Printer"),
     )
     monkeypatch.setattr("phs_label_workflow.GdiPrinter", FakePrinter)
+    monkeypatch.setattr(WindowsGDIPhysicalLabelPrinter, "_printer_profile",
+                        staticmethod(lambda name: ("USB001", "Thermal driver")))
 
     evidence = WindowsGDIPhysicalLabelPrinter().print_png(
         str(png), document_name="PHS fixture"
@@ -897,6 +903,7 @@ def test_physical_printer_uses_job_local_a4_geometry(monkeypatch, tmp_path):
     assert captured["path"] == png.resolve()
     assert spec.paper.orientation == "portrait"
     assert spec.paper.paper_size_code == 9
+    assert captured["validated_paper"] == spec.paper
     assert spec.paper.driver_scale_percent == 100
     assert spec.margins_mm.left == spec.margins_mm.top == 0.0
     assert spec.margins_mm.right == spec.margins_mm.bottom == 0.0
