@@ -4,6 +4,8 @@ param(
     [string]$InstallRoot = "C:\KMTech\Apps\Container_Audit\current",
     [string]$EvidencePath = "",
     [string]$ServerBaseUrl = "",
+    [string]$WorkerAccount = "",
+    [string]$WorkerSurveyInventory = "",
     [switch]$PlanOnly,
     [switch]$Uninstall,
     [switch]$CompleteRetiredRemoval,
@@ -3377,6 +3379,257 @@ function Confirm-CanonicalWriterRunning([string]$InstallRootValue, $EnabledBasel
 }
 
 # Public boundary covers preflight, transaction and finally failures.
+function Get-CanonicalInstallationCallerSecurity {
+    $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal=[Security.Principal.WindowsPrincipal]::new($identity)
+    return [pscustomobject]@{sid=$identity.User.Value;
+        session_id=[Diagnostics.Process]::GetCurrentProcess().SessionId;
+        elevated=$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)}
+}
+function Resolve-CanonicalWorkerSid([string]$Account) {
+    if ($Account -cmatch '^S-1-') {
+        return ([Security.Principal.SecurityIdentifier]::new($Account)).Value
+    }
+    return ([Security.Principal.NTAccount]::new($Account)).Translate([Security.Principal.SecurityIdentifier]).Value
+}
+function Get-CanonicalWorkerProfileRoot([string]$Sid) {
+    $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\'+$Sid,$false)
+    if ($null -eq $key) { throw 'PENDING_TARGET_AMBIGUOUS' }
+    try { $value=[string]$key.GetValue('ProfileImagePath') } finally { $key.Dispose() }
+    if ([string]::IsNullOrWhiteSpace($value)) { throw 'PENDING_TARGET_AMBIGUOUS' }
+    return Full ([Environment]::ExpandEnvironmentVariables($value)) 'worker profile'
+}
+function Resolve-CanonicalMachineWorker([string]$Account,[string]$InventoryPath,$Caller) {
+    $privileged=[bool]$Caller.elevated -or [int]$Caller.session_id -le 0
+    if (-not $privileged) {
+        if ($Account -or $InventoryPath) { throw 'MACHINE_WORKER_ARGUMENTS_REQUIRE_ADMINISTRATOR' }
+        return $null
+    }
+    if ([string]::IsNullOrWhiteSpace($Account) -or [string]::IsNullOrWhiteSpace($InventoryPath)) {
+        throw 'PENDING_TARGET_AMBIGUOUS'
+    }
+    $sid=Resolve-CanonicalWorkerSid $Account
+    if ($sid -ceq [string]$Caller.sid) { throw 'PENDING_TARGET_AMBIGUOUS' }
+    $profile=Get-CanonicalWorkerProfileRoot $sid
+    $path=Full $InventoryPath 'worker survey inventory'
+    Assert-BootstrapNoReparsePoint $path 'worker survey inventory' -PathOnly
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or (Get-Item -LiteralPath $path).Length -gt 16777216) {
+        throw 'PENDING_TARGET_AMBIGUOUS'
+    }
+    $bytes=[IO.File]::ReadAllBytes($path)
+    try { $inventory=[Text.UTF8Encoding]::new($false,$true).GetString($bytes).TrimStart([char]0xfeff) | ConvertFrom-Json }
+    catch { throw 'PENDING_TARGET_AMBIGUOUS' }
+    if ($null -eq $inventory -or $inventory.status -isnot [string] -or [string]$inventory.status -cne 'READY' -or
+        $inventory.target_sid -isnot [string] -or [string]$inventory.target_sid -cne $sid -or
+        $inventory.target_profile_root -isnot [string] -or -not (Same ([string]$inventory.target_profile_root) $profile)) {
+        throw 'PENDING_TARGET_AMBIGUOUS'
+    }
+    $digest=[Security.Cryptography.SHA256]::Create()
+    try { $sha=([BitConverter]::ToString($digest.ComputeHash($bytes))).Replace('-','').ToLowerInvariant() }
+    finally { $digest.Dispose() }
+    return [pscustomobject]@{sid=$sid;profile_root=$profile;survey_sha256=$sha;survey_path=$path}
+}
+function Write-CanonicalMachinePublicRecord([string]$Code,[string]$Status='FAILED') {
+    $message='작업자 계정과 살펴보기 기록을 확인하고 관리자 설치 키트로 다시 실행하세요.'
+    if ($Code -ceq 'PASS_MACHINE_WORKER_PENDING') {
+        $message='프로그램 배치가 끝났습니다. 지정 작업자 계정으로 처음 실행해야 설치가 끝납니다.'
+    } elseif ($Code -ceq 'PASS_UNINSTALLED_DATA_PRESERVED') {
+        $message='프로그램 제거가 끝났습니다. 작업자 자료는 보존했습니다.'
+    } elseif ($Code -ceq 'PASS_RESTORED_VERIFIED') {
+        $message='프로그램 코드 복원이 끝났습니다. 작업자 설정은 변경하지 않았습니다.'
+    }
+    $fields=[ordered]@{status=$Status;code=$Code;stage='machine_install';guidance=$message;report_status='REPORT_UNAVAILABLE'}
+    $public=ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes @('FAILED','PASS','machine_install',
+        'PENDING_TARGET_AMBIGUOUS','MACHINE_WORKER_ARGUMENTS_REQUIRE_ADMINISTRATOR','MACHINE_INSTALL_FAILED',
+        'PASS_MACHINE_WORKER_PENDING','PASS_UNINSTALLED_DATA_PRESERVED','PASS_RESTORED_VERIFIED','REPORT_UNAVAILABLE') -SafeMessages @($message)
+    Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+($public|ConvertTo-Json -Depth 4 -Compress))
+}
+
+function New-CanonicalMachineShortcut([string]$Root) {
+    $directory=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)
+    if (-not $directory) { throw 'Machine start menu is unavailable.' }
+    $path=Join-Path $directory 'KMTech 이적 검사.lnk'
+    $shell=New-Object -ComObject WScript.Shell
+    try {
+        $link=$shell.CreateShortcut($path)
+        $link.TargetPath=Join-Path $Root 'runtime\pythonw.exe'
+        $link.Arguments='-I -B '+(ConvertTo-ProcessArgument (Join-Path $Root 'app\main.py'))
+        $link.WorkingDirectory=Join-Path $Root 'app'
+        $link.Save()
+    } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) }
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Machine shortcut readback failed.' }
+}
+
+function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Root,$Manifest,$AuthorityLease) {
+    if (-not $testMode -and -not (Test-InstallationEvidencePrivileged)) {
+        throw 'Machine installation requires an already privileged token.'
+    }
+    if ($CompleteRetiredRemoval) { throw 'Machine installation does not accept retired removal.' }
+    $state=Get-ContainerMachineInstallStateRoot
+    $control=Join-Path $state 'control\writer-session'
+    $existingState=$state
+    while (-not (Test-Path -LiteralPath $existingState)) { $existingState=Split-Path -Parent $existingState }
+    Assert-BootstrapNoReparsePoint $existingState 'machine installation state ancestor' -PathOnly
+    $local=Join-Path ([string]$Worker.profile_root) 'AppData\Local'
+    $data=Join-Path $local 'KMTech\ContainerAudit'
+    $workerFence=Join-Path $local 'KMTech\DirectSync\container_audit\control\writer-session\active.json'
+    if (Test-Path -LiteralPath $workerFence) { throw 'Existing worker deployment requires recovery.' }
+    # Admission is read-only. The target user's directories are never created.
+    Assert-ContainerDataGenerationTarget -CandidateRoot $Source -TargetSid ([string]$Worker.sid) `
+        -LocalAppDataRoot $local -DataRoot $data -HelperRoot $Source
+    if (Test-Path -LiteralPath $Root -PathType Container) {
+        $beforeManifest=InstalledManifest $Root $SkipSignatureValidationForTest
+        [void](Assert-BootstrapIntegrityRecord $Root)
+        $beforeInventory=Assert-WriterSinkInventory (Join-Path $Root 'tools\container_writer_sink_inventory.json') `
+            ([string]$beforeManifest.writer_sink_inventory_sha256) ([string]$beforeManifest.writer_sink_inventory_contract_sha256)
+        if ((Get-WriterInventorySemantics $beforeInventory) -cne (Get-WriterInventorySemantics $sourceWriterInventory) -and
+            -not (Test-ExactApprovedInstalledWriterTransition $beforeManifest $Manifest $Source) -and
+            ($Uninstall -or $RestoreVerifiedReplacement -or
+             -not (Test-ContainerDataGenerationForwardTransition -BeforeRoot $Root -AfterRoot $Source -BeforeInventory $beforeInventory -AfterInventory $sourceWriterInventory))) {
+            throw 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER'
+        }
+    }
+    if ($PlanOnly) { Write-Output 'install_status=PLAN_ONLY'; return }
+    $Script:ContainerMachineInstallControlRoot=$control
+    $Script:ContainerWriterFenceAdmissionProductionRoot=$control
+    $Script:CanonicalWriterFenceDelegationToken=[Guid]::NewGuid().ToString('N')+[Guid]::NewGuid().ToString('N')
+    $started=[DateTime]::UtcNow.ToString('o')
+    $authority=$AuthorityLease;$active=$false;$machineStateReady=$false
+    $run=$Script:CanonicalWriterFenceTransactionId
+    $path=Join-Path $state ('install-audit\canonical-portable-'+$run+'.json')
+    $receipt=Join-Path $state ('install-audit\canonical-portable-'+$run+'-replacement.json')
+    $pending=Join-Path $state 'pending-onboarding.json'
+    $audit=[ordered]@{schema='container-audit-canonical-portable-install-v2';status='MACHINE_PREPARING';
+        operation=if($Uninstall){'UNINSTALL'}elseif($RestoreVerifiedReplacement){'RESTORE_VERIFIED_REPLACEMENT'}else{'INSTALL'};
+        run_id=$run;install_root=$Root;source_commit=[string]$Manifest.source_commit;source_manifest_sha256=Sha (Join-Path $Source 'portable-manifest.json');
+        worker_sid=[string]$Worker.sid;worker_setup='PENDING';survey_sha256=[string]$Worker.survey_sha256;
+        preimage=@{scope='MACHINE_CODE_ONLY';observation_status='NOT_OBSERVED'};
+        after=@{scope='WORKER_HKCU';observation_status='NOT_CHANGED'};
+        code_replacement=@{transaction_id=$run;receipt_path=$receipt};created_at=$started;secret_values_recorded=$false}
+    try {
+        [void](Initialize-InstallationEvidence $path ([string]$Worker.sid) @($Script:CanonicalWriterFenceDelegationToken))
+        $audit.stage_evidence_root=$Script:InstallationEvidenceRoot
+        # Intent/fence metadata contains no secrets. All users may read it;
+        # only administrators/SYSTEM can write, including after first startup.
+        $stateParent=[IO.Path]::GetFullPath($env:PROGRAMDATA)
+        foreach ($segment in @('KMTech','ContainerAudit','machine-install')) {
+            $stateParent=Join-Path $stateParent $segment
+            New-InstallationProtectedDirectory $stateParent 'S-1-5-32-545'
+        }
+        $machineStateReady=$true
+        $prepared=New-CanonicalWriterFencePreparedReceipt (Join-Path $state ('install-audit\prepared-'+$run+'.json')) `
+            $Script:CanonicalWriterFenceSessionId $Script:CanonicalWriterFenceAttemptId $run $started (Sha $PSCommandPath) `
+            ([string]$Manifest.writer_session_contract_sha256) (Sha (Join-Path $Source 'portable-manifest.json')) ([string]$Worker.sid) $local
+        [void](Start-ContainerWriterFence -ControlRoot $control -Status 'INSTALLING' -OwnerKind 'canonical_installer' `
+            -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $run -SessionStartedAtUtc $started -OrchestratorSha256 (Sha $PSCommandPath) `
+            -WriterContractSha256 ([string]$Manifest.writer_session_contract_sha256) -PreparedReceiptPath $prepared.path `
+            -PreparedReceiptSha256 $prepared.sha256 -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
+            -DelegatedSources @('canonical_code_placement') -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(15).ToString('o')) `
+            -AuthorityLease $authority)
+        $active=$true
+        if ($Uninstall) { $audit.status='PREIMAGE_SAVED' }
+        Save $path $audit
+        $arguments=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $Source 'INSTALL_THIS_PC.ps1'),
+            '-InstallRoot',$Root,'-OperatorSid',([string]$Worker.sid),'-OperatorLocalAppDataRoot',$local,'-OperatorDataRoot',$data,
+            '-MachineControlRoot',$control,'-ElevationLogPath',(Join-Path $state ('install-audit\placement-'+$run+'.jsonl')),
+            '-WriterFenceHelperPath',(Join-Path $Source 'tools\container_writer_fence.ps1'),
+            '-ExpectedWriterFenceHelperSha256',([string]$Manifest.writer_fence_helper_sha256),
+            '-WriterFencePreparedReceiptPath',$prepared.path,'-WriterFencePreparedReceiptSha256',$prepared.sha256,
+            '-WriterFenceSessionId',$Script:CanonicalWriterFenceSessionId,'-WriterFenceAttemptId',$Script:CanonicalWriterFenceAttemptId,
+            '-WriterFenceReplacementTransactionId',$run,'-WriterFenceDelegationToken',$Script:CanonicalWriterFenceDelegationToken)
+        if ($testMode) { $arguments+='-AllowNoncanonicalLayoutForTest' }
+        if ($RestoreVerifiedReplacement) {
+            $original=Read-BootstrapReplacementReceipt $RestoreReceiptPath $RestoreReceiptSha256
+            $arguments+=@('-RestoreVerifiedReplacement','-ReplacementTransactionId',([string]$original.transaction_id),
+                '-ReplacementReceiptPath',$RestoreReceiptPath,'-ReplacementReceiptSha256',$RestoreReceiptSha256,
+                '-RestoreEvidencePath',(Join-Path $state ('install-audit\restore-'+$run+'.json')))
+        } else {
+            $arguments+=@('-SourceRoot',$Source)
+            if ($Uninstall) {
+                $arguments+=@('-Uninstall','-RemovalControllerProcessId',[string]$PID,
+                    '-RemovalControllerStartedAtUtc',(Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o'),
+                    '-RemovalControllerCanonicalPath',$PSCommandPath,'-UninstallAuditPath',$path,'-UninstallAuditSha256',(Sha $path))
+            }
+            elseif (Test-Path -LiteralPath $Root -PathType Container) {
+                $arguments+=@('-ReplaceExistingVerifiedPortable','-ReplacementTransactionId',$run,'-ReplacementReceiptPath',$receipt)
+            }
+        }
+        # INSTALL_THIS_PC reuses its existing already-elevated placement path.
+        $engine=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $child=Invoke-InstallationEvidenceChild 'machine-placement-helper' $engine $arguments
+        if ($child.ExitCode -ne 0) { throw 'MACHINE_INSTALL_FAILED' }
+        if (-not $testMode) {
+            $binding=Read-InstallationHelperEvidenceBinding @($child.Stdout -split "`r?`n") `
+                (Join-Path $state ('install-audit\placement-'+$run+'.jsonl')) $child.ProcessId ([string]$Manifest.helper_sha256)
+            Register-InstallationChildEvidenceSummary $binding.child_stage_evidence_summary
+            if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and (Test-Path -LiteralPath $receipt)) {
+                throw 'Unbound caller replacement receipt was published.'
+            }
+            if ($arguments -ccontains '-ReplaceExistingVerifiedPortable') {
+                $receipt=Read-CanonicalHelperArtifact $binding 'replacement-receipt.json' 'REPLACEMENT_RECEIPT_READY'
+                $audit.code_replacement.receipt_path=$receipt
+                $audit.code_replacement.receipt_sha256=Sha $receipt
+            }
+        }
+        if ($Uninstall) {
+            $removed=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Split-Path -Parent $Root) 'removed.json') | ConvertFrom-Json
+            if ([string]$removed.lifecycle_state -cne 'REMOVED') { throw 'Machine removal readback failed.' }
+            $audit.status='PASS_UNINSTALLED_DATA_PRESERVED'
+        } elseif ($RestoreVerifiedReplacement) {
+            [void](Assert-BootstrapIntegrityRecord $Root)
+            $audit.status='PASS_RESTORED_VERIFIED'
+        } else {
+            $installed=InstalledManifest $Root $SkipSignatureValidationForTest
+            [void](Assert-BootstrapIntegrityRecord $Root)
+            if ([string]$installed.source_commit -cne [string]$Manifest.source_commit -or
+                (Sha (Join-Path $Root 'portable-manifest.json')) -cne (Sha (Join-Path $Source 'portable-manifest.json'))) {
+                throw 'Machine installed identity differs.'
+            }
+            New-CanonicalMachineShortcut $Root
+            $marker=[ordered]@{schema='container-audit-machine-pending-v1';status='PENDING';install_id=$run;
+                target_sid=[string]$Worker.sid;version=[string]$Manifest.version;source_commit=[string]$Manifest.source_commit;
+                install_root=$Root;survey_sha256=[string]$Worker.survey_sha256;installed_at_utc=$started;
+                server_base_url=$onboardingServerBaseUrl;secret_values_recorded=$false}
+            $audit.status='PASS_MACHINE_WORKER_PENDING'
+        }
+        Save $path $audit
+        $authorization=New-CanonicalWriterFenceReleaseAuthorization (Join-Path $state ('install-audit\release-'+$run+'.json')) 'PRODUCT_COMPLETE' $path
+        [void](Set-ContainerWriterFencePrepared -ControlRoot $control -SessionId $Script:CanonicalWriterFenceSessionId `
+            -AttemptId $Script:CanonicalWriterFenceAttemptId -ReplacementTransactionId $run -PreparedReceiptPath $authorization.path `
+            -PreparedReceiptSha256 $authorization.sha256 -Status 'PREPARED' -AuthorityLease $authority)
+        [void](Clear-ContainerWriterFenceDelegation -ControlRoot $control -SessionId $Script:CanonicalWriterFenceSessionId `
+            -AttemptId $Script:CanonicalWriterFenceAttemptId -ReplacementTransactionId $run `
+            -DelegationToken $Script:CanonicalWriterFenceDelegationToken -AuthorityLease $authority)
+        [void](Stop-ContainerWriterFence -ControlRoot $control -SessionId $Script:CanonicalWriterFenceSessionId `
+            -AttemptId $Script:CanonicalWriterFenceAttemptId -ReplacementTransactionId $run -ReleaseAuthorizationPath $authorization.path `
+            -ReleaseAuthorizationSha256 $authorization.sha256 -AuthorityLease $authority)
+        $active=$false
+        if (-not $Uninstall -and -not $RestoreVerifiedReplacement) {
+            Save $pending $marker
+            Set-InstallationEvidenceAcl $pending 'S-1-5-32-545'
+        }
+        if ($EvidencePath) { Save (Full $EvidencePath 'EvidencePath') $audit }
+        Write-Output ('install_status='+[string]$audit.status)
+        Write-CanonicalMachinePublicRecord ([string]$audit.status) 'PASS'
+    } catch {
+        $audit.status='MACHINE_INSTALL_FAILED';$audit.fence_retained=$active
+        if ($machineStateReady) { Save $path $audit }
+        throw
+    } finally {
+        $Script:ContainerMachineInstallControlRoot=''
+        $Script:ContainerWriterFenceAdmissionProductionRoot=''
+    }
+}
+
+# Admit the worker before any installation evidence, authority or profile writer.
+try { $machineWorker=Resolve-CanonicalMachineWorker $WorkerAccount $WorkerSurveyInventory (Get-CanonicalInstallationCallerSecurity) }
+catch {
+    $code=if($_.Exception.Message -ceq 'MACHINE_WORKER_ARGUMENTS_REQUIRE_ADMINISTRATOR'){$_.Exception.Message}else{'PENDING_TARGET_AMBIGUOUS'}
+    Write-CanonicalMachinePublicRecord $code
+    exit 4
+}
+
 try {
 if (-not $SourceRoot) { $SourceRoot = $PSScriptRoot }
 if ($CompleteRetiredRemoval) {
@@ -3451,6 +3704,7 @@ $sourceIntegrityHelperSha256 = Sha (Join-Path $source 'tools\bootstrap_integrity
 if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
     $Script:CanonicalInstallerSourceInventorySha256 = Get-InventoryAggregate @(Get-CodeInventory $source)
 }
+if ($null -eq $machineWorker) {
 $wanted = Command $install
 $lad = Full $env:LOCALAPPDATA 'LOCALAPPDATA'
 $operatorSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -3835,6 +4089,16 @@ $retirementResumeClaim = $null
 $continuationOldClaim = $null
 $original=$null
 $audit=$null
+} else {
+    $retirementResume=$null;$rollbackContinuation=$null;$original=$null;$audit=$null
+    $legacyRelayRestoreNeeded=$false;$legacyRelayRestoreAttempted=$false
+    $canonicalWriterFenceAuthority=$null
+    $Script:CanonicalWriterFenceSessionId=[Guid]::NewGuid().ToString('N')
+    $Script:CanonicalWriterFenceAttemptId=[Guid]::NewGuid().ToString('N')
+    $Script:CanonicalWriterFenceTransactionId=[Guid]::NewGuid().ToString('N')
+    $canonicalWriterFenceOrchestratorSha256=Sha $PSCommandPath
+    $canonicalWriterFenceContractSha256=[string]$sourceManifest.writer_session_contract_sha256
+}
 try {
 if ($retirementResume) { $retirementResumeClaim = Enter-RetirementResumeClaim $retirementResume }
 if ($rollbackContinuation) {
@@ -3846,6 +4110,11 @@ $canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority `
     -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
     -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
     -WriterContractSha256 $canonicalWriterFenceContractSha256
+if ($null -ne $machineWorker) {
+    try { Invoke-CanonicalMachineInstallation $machineWorker $source $install $sourceManifest $canonicalWriterFenceAuthority }
+    catch { $outputFailure=$_;Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED';exit 4 }
+    exit 0
+}
 if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
     Invoke-ContainerSourceDataAdmission $source $Script:CanonicalInstallerSourceInventorySha256 $auditPath $evidenceFull
 }
@@ -5568,6 +5837,7 @@ finally {
 
 } catch {
     $outputFailure=$_
+    if ($null -ne $machineWorker) { Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED'; exit 4 }
     if (-not $enteredPlacementTry -and -not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
         if (-not $Script:CanonicalPreparationAdmissionFailed) {
             Write-CanonicalPreparationAdmissionFailure ([string](Get-Variable auditPath -ValueOnly -ErrorAction SilentlyContinue)) `
@@ -5631,7 +5901,7 @@ finally {
     if ($null -ne $finalContinuationClaim) {Exit-CanonicalRollbackContinuationClaim $finalContinuationClaim}
     if($null -ne $finalCloseFailure){Write-CanonicalInstallationPublicRecord -Failure $finalCloseFailure -ExitCode 1;exit 1}
     $finalOutputFailure=Get-Variable -Name outputFailure -ValueOnly -ErrorAction SilentlyContinue
-    if($null -eq $finalOutputFailure -and (Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue)){
+    if($null -eq $machineWorker -and $null -eq $finalOutputFailure -and (Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue)){
         Write-CanonicalInstallationPublicRecord
     }
     }

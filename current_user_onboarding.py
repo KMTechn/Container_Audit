@@ -1798,6 +1798,104 @@ def preflight_current_user_onboarding(app_root, *, environ=None, target_release_
     return input_binding + ":" + code_binding
 
 
+_MACHINE_ONBOARDING_KEY = r"Software\KMTech\ContainerAudit\MachineOnboarding"
+
+
+def _completed_machine_install_id() -> str:
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _MACHINE_ONBOARDING_KEY) as key:
+            value, kind = winreg.QueryValueEx(key, "CompletedInstallId")
+    except FileNotFoundError:
+        return ""
+    if kind != winreg.REG_SZ:
+        raise ValueError("machine onboarding completion type is invalid")
+    return str(value)
+
+
+@writer_sink("current_user_onboarding_storage")
+def _record_completed_machine_install_id(install_id: str) -> None:
+    import winreg
+
+    with winreg.CreateKeyEx(
+        winreg.HKEY_CURRENT_USER, _MACHINE_ONBOARDING_KEY, 0,
+        winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE,
+    ) as key:
+        winreg.SetValueEx(key, "CompletedInstallId", 0, winreg.REG_SZ, install_id)
+        value, kind = winreg.QueryValueEx(key, "CompletedInstallId")
+    if kind != winreg.REG_SZ or value != install_id:
+        raise ValueError("machine onboarding completion readback failed")
+
+
+def consume_pending_machine_onboarding(
+    app_root: str | os.PathLike[str], *,
+    environ: MutableMapping[str, str] | None = None,
+    onboarder=None, sid_reader=None, completion_reader=None, completion_writer=None,
+) -> dict[str, Any] | None:
+    """Read machine intent; finish only this SID, once per installed identity."""
+    values = os.environ if environ is None else environ
+    program_data = str(values.get("PROGRAMDATA", "")).strip()
+    if not program_data:
+        return None
+    marker_path = Path(program_data) / "KMTech/ContainerAudit/machine-install/pending-onboarding.json"
+    if not marker_path.exists():
+        return None
+    try:
+        from logistics_runtime_profile import assert_path_has_no_reparse_components
+        assert_path_has_no_reparse_components(marker_path, label="machine onboarding intent")
+        if (marker_path.parent / "control/writer-session/active.json").exists():
+            raise ValueError("machine placement still requires recovery")
+        if marker_path.stat().st_size > 65536:
+            raise ValueError("machine onboarding intent is oversized")
+        marker = _read_json(marker_path, "machine onboarding intent")
+        if marker.get("schema") != "container-audit-machine-pending-v1" or marker.get("status") != "PENDING":
+            raise ValueError("machine onboarding intent is invalid")
+        if sid_reader is None:
+            from tools.register_container_audit_worker_pc import _current_user_sid
+            sid_reader = _current_user_sid
+        if marker.get("target_sid") != sid_reader():
+            raise CurrentUserOnboardingError(
+                "자료를 보존하고 관리자 지원 복구를 요청하세요.",
+                report_path=marker_path, status="PENDING_WORKER_SID_MISMATCH",
+            )
+        install_id = marker.get("install_id")
+        if not isinstance(install_id, str) or re.fullmatch(r"[0-9a-f]{32}", install_id) is None:
+            raise ValueError("machine onboarding installation id is invalid")
+        reader = completion_reader or _completed_machine_install_id
+        if reader() == install_id:
+            return {"status": "READY", "action": "MACHINE_INSTALL_ALREADY_COMPLETED"}
+        root = _resolved(app_root).parent
+        installed_root = _resolved(marker.get("install_root", ""))
+        commit = marker.get("source_commit")
+        if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+            raise ValueError("machine onboarding release identity is invalid")
+        version_root = installed_root.parent / "versions" / commit
+        if root not in (installed_root, version_root):
+            raise ValueError("machine onboarding code root differs")
+        for code_root in {installed_root, root}:
+            manifest = _read_json(code_root / "portable-manifest.json", "machine onboarding manifest")
+            if (commit != manifest.get("source_commit") or marker.get("version") != manifest.get("version")):
+                raise ValueError("machine onboarding intent belongs to another release")
+        runner = onboarder or onboard_current_user
+        options = {"environ": environ, "require_bootstrap_integrity": True}
+        if marker.get("server_base_url"):
+            options["server_base_url"] = marker["server_base_url"]
+        result = runner(app_root, **options)
+        if result.get("status") != "READY":
+            raise ValueError("machine onboarding did not reach READY")
+        # Intent is administrator-owned and remains byte-for-byte unchanged.
+        (completion_writer or _record_completed_machine_install_id)(install_id)
+        return result
+    except CurrentUserOnboardingError:
+        raise
+    except Exception as exc:
+        raise CurrentUserOnboardingError(
+            "자료를 보존하고 관리자 지원 복구를 요청하세요.",
+            report_path=marker_path, status="MACHINE_ONBOARDING_FAILED",
+        ) from exc
+
+
 @writer_sink("current_user_onboarding", probe_only=True)
 def onboard_current_user(
     app_root: str | os.PathLike[str],

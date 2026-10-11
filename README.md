@@ -1,4 +1,4 @@
-# Container Audit - 이적 검사 시스템
+﻿# Container Audit - 이적 검사 시스템
 
 문서 적용 commit: `dc7c50dd6217e2a373d57704a6b9523862a5d7b8`
 
@@ -101,7 +101,7 @@ python -B tools/run_repository_tests.py --task-root D:\KMTech\<task>\Container_A
 보존한 정확한 portable packet에서 일반 작업자 계정으로 canonical 설치를
 실행한다. 내부 helper는 관리자 쓰기 전용 경로에 코드와 무결성 기록을 배치한다.
 작업자가 표준 사용자이고 UAC에서 별도 관리자 계정으로 상승하는 경우도 지원한다.
-설치와 첫 실행은 계속 작업자 계정에서 시작하고, 관리자 승격은 코드 배치에만 사용한다.
+일반 길의 설치와 첫 실행은 작업자 계정에서 시작하고, 관리자 승격은 코드 배치에만 사용한다.
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_CANONICAL_PORTABLE.ps1
@@ -415,3 +415,5 @@ exception_handler() → _log_event('ERROR_OCCURRED')
 **📧 연락처**: [연락처 정보]
 **🌐 웹사이트**: [회사 웹사이트]
 **📌 문서 적용 commit**: `dc7c50dd6217e2a373d57704a6b9523862a5d7b8`
+
+관리자 설치 키트의 받기 v0은 [관리자 설치 계약](docs/spec/admin-installation.md)을 따른다. `-WorkerAccount`와 `-WorkerSurveyInventory`가 모두 필요하며, `PASS_MACHINE_WORKER_PENDING`은 설치 완료가 아니다. 지정 작업자의 첫 onboarding과 HKCU 완료 id가 필요하고, 옛 앱 처리와 관리자 Rollback은 키트 몫이다.

@@ -85,10 +85,17 @@ function Get-ContainerWriterFenceControlRoot {
     if (-not [string]::IsNullOrWhiteSpace($ControlRoot)) {
         return [IO.Path]::GetFullPath($ControlRoot)
     }
+    $machineRoot=Get-Variable -Name ContainerMachineInstallControlRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if ($machineRoot) { return [IO.Path]::GetFullPath([string]$machineRoot) }
     if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
         throw 'CONTAINER_WRITER_FENCE_LOCALAPPDATA_UNAVAILABLE'
     }
     return Join-Path ([IO.Path]::GetFullPath($env:LOCALAPPDATA)) 'KMTech\DirectSync\container_audit\control\writer-session'
+}
+
+function Get-ContainerMachineInstallStateRoot {
+    if ([string]::IsNullOrWhiteSpace($env:PROGRAMDATA)) { throw 'MACHINE_PROGRAMDATA_UNAVAILABLE' }
+    return Join-Path ([IO.Path]::GetFullPath($env:PROGRAMDATA)) 'KMTech\ContainerAudit\machine-install'
 }
 
 function Get-ContainerWriterFenceNormalizedRoot([string]$ControlRoot) {
@@ -132,6 +139,7 @@ function Assert-ContainerWriterFenceOperatorRoot {
         [string]$OperatorLocalAppDataRoot,
         [string]$OperatorSid,
         [string]$ProfileLocalAppDataRootForTest = '',
+        [string]$MachineControlRoot = '',
         [string]$SessionId,
         [string]$AttemptId,
         [string]$ReplacementTransactionId
@@ -175,6 +183,13 @@ function Assert-ContainerWriterFenceOperatorRoot {
         (Get-ContainerWriterFenceNormalizedRoot ([string]$receipt.operator_local_appdata_root)) -cne $expected
     ) { throw 'CONTAINER_OPERATOR_PROFILE_ROOT_MISMATCH' }
     $root = Join-Path $profileRoot 'KMTech\DirectSync\container_audit\control\writer-session'
+    if ($MachineControlRoot) {
+        $expectedMachine=Join-Path (Get-ContainerMachineInstallStateRoot) 'control\writer-session'
+        if ((Get-ContainerWriterFenceNormalizedRoot $MachineControlRoot) -cne (Get-ContainerWriterFenceNormalizedRoot $expectedMachine)) {
+            throw 'CONTAINER_OPERATOR_PROFILE_ROOT_MISMATCH'
+        }
+        $root=$expectedMachine
+    }
     Assert-ContainerWriterFenceNoReparse $root
     return [pscustomobject][ordered]@{ control_root=$root; receipt_path=$prepared; receipt_sha256=$PreparedReceiptSha256 }
 }

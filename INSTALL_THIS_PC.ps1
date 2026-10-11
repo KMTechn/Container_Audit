@@ -13,6 +13,7 @@ param(
     [string]$OperatorLocalAppDataRoot = "",
     [string]$OperatorSid = "",
     [string]$OperatorDataRoot = "",
+    [string]$MachineControlRoot = "",
     [string]$ElevationLogPath = "",
     [switch]$ReplaceExistingVerifiedPortable,
     [switch]$SupportedActiveVersionPlacement,
@@ -623,17 +624,22 @@ function Enter-ContainerPlacementWriterFence {
         throw 'Production placement writer fence helper is unavailable.'
     }
     . (Get-InstallationVerifiedScript $writerFenceHelperFull $ExpectedWriterFenceHelperSha256 'Production placement writer fence helper byte pin differs.')
+    if ($MachineControlRoot -and -not $testOverride -and -not (Test-InstallationEvidencePrivileged)) {
+        throw 'Machine placement requires an already privileged token.'
+    }
     $operatorBinding = Assert-ContainerWriterFenceOperatorRoot `
         -PreparedReceiptPath $WriterFencePreparedReceiptPath `
         -PreparedReceiptSha256 $WriterFencePreparedReceiptSha256 `
         -OperatorLocalAppDataRoot $OperatorLocalAppDataRoot `
         -OperatorSid $OperatorSid `
         -ProfileLocalAppDataRootForTest $(if ($testOverride) { $OperatorLocalAppDataRoot } else { '' }) `
+        -MachineControlRoot $MachineControlRoot `
         -SessionId $WriterFenceSessionId `
         -AttemptId $WriterFenceAttemptId `
         -ReplacementTransactionId $WriterFenceReplacementTransactionId
     $controlRoot = [string]$operatorBinding.control_root
     $Script:ContainerWriterFenceAdmissionProductionRoot = $controlRoot
+    if ($MachineControlRoot) { $Script:ContainerMachineInstallControlRoot=$controlRoot }
     $preflightLease = Enter-ContainerWriterDelegatedOperation `
         -ControlRoot $controlRoot `
         -SessionId $WriterFenceSessionId `
@@ -1483,7 +1489,7 @@ if (-not $CompleteRollbackContinuation -and -not $RecordRollbackContinuationAuth
     try {
         $placementWriterFenceLease = Enter-ContainerPlacementWriterFence
         . (Get-InstallationVerifiedScript $WriterFenceHelperPath $ExpectedWriterFenceHelperSha256)
-        $Script:ContainerWriterFenceAdmissionProductionRoot = Join-Path $OperatorLocalAppDataRoot 'KMTech\DirectSync\container_audit\control\writer-session'
+        $Script:ContainerWriterFenceAdmissionProductionRoot = if($MachineControlRoot){$MachineControlRoot}else{Join-Path $OperatorLocalAppDataRoot 'KMTech\DirectSync\container_audit\control\writer-session'}
         if(-not $testOverride -and -not $Uninstall.IsPresent) {
             Set-InstallationEvidenceStage 'placement.protect_shared_ancestors'
             [void](Protect-KmtechCodeAncestors (Split-Path -Parent $installRootFull))
@@ -1757,8 +1763,23 @@ function Get-ContainerRemovalControllerProcessId([object[]]$ProcessRows) {
         if ($parentPid -eq $RemovalControllerProcessId) { $controller = $ancestors[0]; break }
         $parentPid = [int]$ancestors[0].ParentProcessId
     }
-    if ($null -eq $controller -or
-        -not (Test-SamePath ([string]$controller.ExecutablePath) (Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe')) -or
+    $controllerEngineVerified=$null -ne $controller -and
+        (Test-SamePath ([string]$controller.ExecutablePath) (Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'))
+    if (-not $controllerEngineVerified -and $null -ne $controller -and $MachineControlRoot) {
+        $pwsh=Get-StrictFullPath ([string]$controller.ExecutablePath) 'machine removal controller engine'
+        $programFiles=(Get-StrictFullPath $env:ProgramFiles 'ProgramFiles').TrimEnd('\')+'\'
+        if ([IO.Path]::GetFileName($pwsh) -ieq 'pwsh.exe' -and
+            $pwsh.StartsWith($programFiles,[StringComparison]::OrdinalIgnoreCase)) {
+            # Store package ancestors have additional package ACL principals.
+            # Authenticate the actual Microsoft engine while retaining the
+            # canonical source, authority tuple and live ancestry bindings.
+            Assert-NoReparsePoint $pwsh 'machine removal controller engine'
+            $signature=Get-AuthenticodeSignature -LiteralPath $pwsh
+            $controllerEngineVerified=[string]$signature.Status -ceq 'Valid' -and
+                [string]$signature.SignerCertificate.Subject -match '(^|,\s*)O=Microsoft Corporation(,|$)'
+        }
+    }
+    if ($null -eq $controller -or -not $controllerEngineVerified -or
         ([string]$controller.CommandLine).IndexOf($canonical,[StringComparison]::OrdinalIgnoreCase) -lt 0) {
         throw 'REMOVAL_CONTROLLER_NOT_VERIFIED_ANCESTOR'
     }
@@ -2119,6 +2140,7 @@ if ($Uninstall.IsPresent) {
         $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop)
         $excluded = @(Get-ContainerRemovalControllerProcessId $rows)
     }
+    if (-not $MachineControlRoot) {
     $quiesceFull = Get-StrictFullPath $QuiesceReceiptPath 'current-user removal receipt'
     Assert-NoReparsePoint $quiesceFull 'current-user removal receipt'
     if ($ExpectedQuiesceReceiptSha256 -cnotmatch '^[0-9a-f]{64}$' -or
@@ -2131,6 +2153,9 @@ if ($Uninstall.IsPresent) {
         -not (Test-SamePath ([string]$quiesce.machine_code_root) (Join-Path $installRootFull 'app'))) {
         throw 'Removal current-user quiescence was not proven.'
     }
+    }
+    # A machine removal never claims to have changed or observed worker HKCU.
+    # The existing convergent removal still rejects any live installed writer.
     # Only actual ancestors running the admitted external canonical source can
     # be excluded. Installed code and unrelated processes cannot claim this.
     if(-not $RemoveUncommittedPlacement){

@@ -43,6 +43,7 @@ from current_user_onboarding import (
     CurrentUserOnboardingError,
     LOGISTICS_PROFILE_PATH_ENV,
     ONBOARDING_EXIT_CODE,
+    consume_pending_machine_onboarding,
     onboard_current_user,
     resolve_current_user_onboarding_paths,
 )
@@ -21984,6 +21985,8 @@ def _show_first_run_onboarding_error(failure: CurrentUserOnboardingError) -> Non
     operator_message = f"{FIRST_RUN_ONBOARDING_ERROR_MESSAGE}\n보고서: {report_path}"
     if isinstance(failure.__cause__, DataGenerationBlocked):
         operator_message = failure.__cause__.user_message
+    elif failure.status == "PENDING_WORKER_SID_MISMATCH":
+        operator_message = "이 프로그램은 다른 작업자 계정에 설치되었습니다. 지정된 작업자 계정으로 로그인하거나 관리자에게 알려 주세요."
     try:
         messagebox.showerror(
             FIRST_RUN_ONBOARDING_ERROR_TITLE,
@@ -22179,7 +22182,12 @@ def _prepare_gui_startup(*, data_root=None):
         except Exception as exc:
             # A diagnostic cannot prevent a launch that owns the instance lease.
             print(f"이전 종료 지연 표시 정리 오류: {exc.__class__.__name__}")
-        if _first_run_onboarding_enabled():
+        try:
+            pending_onboarding_report = consume_pending_machine_onboarding(application_path)
+        except CurrentUserOnboardingError as exc:
+            _show_first_run_onboarding_error(exc)
+            return ONBOARDING_EXIT_CODE
+        if _first_run_onboarding_enabled() and pending_onboarding_report is None:
             try:
                 onboarding_report = onboard_current_user(
                     application_path,
