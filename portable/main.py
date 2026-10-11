@@ -69,6 +69,20 @@ def main() -> int:
         return _portable_smoke()
     arguments = list(sys.argv[1:])
     try:
+        if not arguments or arguments[0] not in {
+            "--onboard-current-user", "--remove-current-user-setup",
+            "--restore-current-user-lifecycle-after-replacement",
+            "--container-audit-user-relay", "--container-audit-direct-sync-relay",
+        }:
+            from current_user_onboarding import (
+                CurrentUserOnboardingError, consume_pending_machine_onboarding,
+            )
+            try:
+                consume_pending_machine_onboarding(APP_ROOT, check_target_only=True)
+            except CurrentUserOnboardingError as failure:
+                from Container_Audit import _show_first_run_onboarding_error
+                _show_first_run_onboarding_error(failure)
+                return 1
         from auto_update import startup_gate
 
         gate_result = startup_gate(APP_ROOT, arguments)

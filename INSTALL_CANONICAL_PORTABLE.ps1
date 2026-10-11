@@ -3586,11 +3586,13 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
                 (Sha (Join-Path $Root 'portable-manifest.json')) -cne (Sha (Join-Path $Source 'portable-manifest.json'))) {
                 throw 'Machine installed identity differs.'
             }
-            New-CanonicalMachineShortcut $Root
             $marker=[ordered]@{schema='container-audit-machine-pending-v1';status='PENDING';install_id=$run;
                 target_sid=[string]$Worker.sid;version=[string]$Manifest.version;source_commit=[string]$Manifest.source_commit;
                 install_root=$Root;survey_sha256=[string]$Worker.survey_sha256;installed_at_utc=$started;
                 server_base_url=$onboardingServerBaseUrl;secret_values_recorded=$false}
+            Save $pending $marker
+            Set-InstallationEvidenceAcl $pending 'S-1-5-32-545'
+            New-CanonicalMachineShortcut $Root
             $audit.status='PASS_MACHINE_WORKER_PENDING'
         }
         Save $path $audit
@@ -3605,10 +3607,6 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
             -AttemptId $Script:CanonicalWriterFenceAttemptId -ReplacementTransactionId $run -ReleaseAuthorizationPath $authorization.path `
             -ReleaseAuthorizationSha256 $authorization.sha256 -AuthorityLease $authority)
         $active=$false
-        if (-not $Uninstall -and -not $RestoreVerifiedReplacement) {
-            Save $pending $marker
-            Set-InstallationEvidenceAcl $pending 'S-1-5-32-545'
-        }
         if ($EvidencePath) { Save (Full $EvidencePath 'EvidencePath') $audit }
         Write-Output ('install_status='+[string]$audit.status)
         Write-CanonicalMachinePublicRecord ([string]$audit.status) 'PASS'

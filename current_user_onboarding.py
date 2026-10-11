@@ -1832,6 +1832,7 @@ def consume_pending_machine_onboarding(
     app_root: str | os.PathLike[str], *,
     environ: MutableMapping[str, str] | None = None,
     onboarder=None, sid_reader=None, completion_reader=None, completion_writer=None,
+    check_target_only: bool = False,
 ) -> dict[str, Any] | None:
     """Read machine intent; finish only this SID, once per installed identity."""
     values = os.environ if environ is None else environ
@@ -1862,6 +1863,8 @@ def consume_pending_machine_onboarding(
         install_id = marker.get("install_id")
         if not isinstance(install_id, str) or re.fullmatch(r"[0-9a-f]{32}", install_id) is None:
             raise ValueError("machine onboarding installation id is invalid")
+        if check_target_only:
+            return {"status": "PENDING"}
         reader = completion_reader or _completed_machine_install_id
         if reader() == install_id:
             return {"status": "READY", "action": "MACHINE_INSTALL_ALREADY_COMPLETED"}

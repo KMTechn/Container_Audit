@@ -3,6 +3,7 @@
 from pathlib import Path
 import shutil
 import json
+import re
 
 import pytest
 
@@ -139,6 +140,48 @@ def test_other_sid_does_not_onboard_or_mark_complete(machine_intent):
     assert failure.value.status == "PENDING_WORKER_SID_MISMATCH"
     assert not calls and not completed
     assert marker.read_bytes() == before
+
+
+@pytest.mark.parametrize("other_sid", (False, True))
+def test_portable_pending_target_check_precedes_update_gate_without_worker_writes(
+    machine_intent, monkeypatch, other_sid,
+):
+    import importlib.util
+    import sys
+    import types
+    import auto_update
+    import current_user_onboarding as onboarding
+
+    marker, payload, calls, completed, consume = machine_intent
+    before = marker.read_bytes()
+    shown, gate_calls = [], []
+    sid = "S-1-5-21-111-222-333-1002" if other_sid else payload["target_sid"]
+    def reject_completion_read():
+        pytest.fail("target preflight read worker completion state")
+    def check(_root, **options):
+        return consume(sid_reader=lambda: sid, completion_reader=reject_completion_read,
+                       check_target_only=options["check_target_only"])
+    def gate(_root, arguments):
+        gate_calls.append(arguments)
+        return 20
+    monkeypatch.setattr(onboarding, "consume_pending_machine_onboarding", check)
+    monkeypatch.setattr(auto_update, "startup_gate", gate)
+    monkeypatch.setitem(sys.modules, "Container_Audit", types.SimpleNamespace(
+        _show_first_run_onboarding_error=shown.append, main=lambda: pytest.fail("GUI ran"),
+    ))
+    monkeypatch.setattr(sys, "argv", ["main.py"])
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    spec = importlib.util.spec_from_file_location(
+        "sub62_portable_entrypoint", INSTALLER.parent / "portable/main.py",
+    )
+    entrypoint = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(entrypoint)
+    assert entrypoint.main() == (1 if other_sid else 20)
+    assert len(gate_calls) == (0 if other_sid else 1)
+    assert len(shown) == (1 if other_sid else 0)
+    if other_sid:
+        assert shown[0].status == "PENDING_WORKER_SID_MISMATCH"
+    assert not calls and not completed and marker.read_bytes() == before
 
 
 def test_failed_onboarding_is_retryable_and_never_claims_completion(machine_intent):
@@ -319,7 +362,7 @@ if(-not $rejected){throw 'new shortcut became a legacy candidate'}
 
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
-@pytest.mark.parametrize("first_start", (False, True))
+@pytest.mark.parametrize("first_start", (False, True, "pending_acl_failure"))
 def test_machine_placement_existing_restore_and_removal_preserve_profiles(tmp_path, engine, first_start):
     from tests.test_canonical_portable_uninstall import _setup, _tree, _sha, OS_BOUNDARIES, HELPER_OS
     from tests.test_canonical_installation_callers import _distinct_replacement, _bind_packet
@@ -354,6 +397,14 @@ function New-CanonicalMachineShortcut {param($Root)
    (@{target=(Join-Path $Root 'runtime\pythonw.exe');arguments='-I -B app\main.py'}|ConvertTo-Json))
 }
 '''
+    if first_start == "pending_acl_failure":
+        injected += r'''
+$pendingAcl=${function:Set-InstallationEvidenceAcl}
+function Set-InstallationEvidenceAcl([string]$Path,[string]$OperatorSid) {
+ if([IO.Path]::GetFileName($Path) -ceq 'pending-onboarding.json'){throw 'Simulated pending ACL failure'}
+ & $pendingAcl $Path $OperatorSid
+}
+'''
     admission = "# Admit the worker before any installation evidence, authority or profile writer."
     assert text.count(admission) == 1
     canonical.write_text(text.replace(admission, injected + "\n" + admission), encoding="utf-8-sig")
@@ -365,7 +416,7 @@ function New-CanonicalMachineShortcut {param($Root)
     _bind_packet(source)
     profiles_before = (_tree(Path(env["LOCALAPPDATA"])), _tree(worker))
 
-    def run(label, *arguments):
+    def run(label, *arguments, expected_exit=0):
         audit = tmp_path / (label + ".json")
         result = run_powershell([
             executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(canonical),
@@ -376,11 +427,32 @@ function New-CanonicalMachineShortcut {param($Root)
         ], env=env)
         (tmp_path / (label + "-stdout.log")).write_text(result.stdout, encoding="utf-8")
         (tmp_path / (label + "-stderr.log")).write_text(result.stderr, encoding="utf-8")
-        assert result.returncode == 0, f"{label}: exit {result.returncode}; evidence in {tmp_path}"
+        assert result.returncode == expected_exit, f"{label}: exit {result.returncode}; evidence in {tmp_path}"
         assert (_tree(Path(env["LOCALAPPDATA"])), _tree(worker)) == profiles_before
         assert all(path.read_bytes() == b"protected-fixture-must-be-preserved" for path in protected)
-        return json.loads(audit.read_text(encoding="utf-8"))
+        return json.loads(audit.read_text(encoding="utf-8")) if expected_exit == 0 else result
 
+    if first_start == "pending_acl_failure":
+        from current_user_onboarding import CurrentUserOnboardingError
+        failed = run("machine-install-failed", expected_exit=4)
+        assert "PASS_MACHINE_WORKER_PENDING" not in failed.stdout
+        state = Path(env["PROGRAMDATA"]) / "KMTech/ContainerAudit/machine-install"
+        assert (state / "control/writer-session/active.json").is_file()
+        machine_audits = [path for path in (state / "install-audit").glob("canonical-portable-*.json")
+                          if re.fullmatch(r"canonical-portable-[0-9a-f]{32}\.json", path.name)]
+        assert len(machine_audits) == 1
+        intent = json.loads((state / "pending-onboarding.json").read_text(encoding="utf-8"))
+        assert machine_audits[0].stem == "canonical-portable-" + intent["install_id"]
+        failure = json.loads(machine_audits[0].read_text(encoding="utf-8"))
+        assert failure["status"] == "MACHINE_INSTALL_FAILED" and failure["fence_retained"] is True
+        with pytest.raises(CurrentUserOnboardingError):
+            consume_pending_machine_onboarding(
+                installed / "app", environ=env, sid_reader=lambda: sid,
+                onboarder=lambda *_args, **_kwargs: pytest.fail("failed placement onboarded"),
+                completion_reader=lambda: pytest.fail("failed placement read HKCU"),
+                completion_writer=lambda _id: pytest.fail("failed placement completed"),
+            )
+        return
     audit = run("machine-install")
     assert audit["status"] == "PASS_MACHINE_WORKER_PENDING"
     assert json.loads((installed / "portable-manifest.json").read_text())["source_commit"] == "c" * 40

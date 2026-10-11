@@ -20,6 +20,8 @@ canonical은 상승 또는 Session 0에서만 `-WorkerAccount <SID 또는 DOMAIN
 PENDING 경로는 `%PROGRAMDATA%\KMTech\ContainerAudit\machine-install\pending-onboarding.json`이다.
 `container-audit-machine-pending-v1` 기록에 설치 id·판·소스 commit·대상 SID·설치 루트와
 inventory SHA256을 결속한다. 관리자/SYSTEM만 쓰고 사용자는 읽는다.
+표지와 읽기 ACL을 확정한 뒤 공용 바로가기와 기계 완료 기록을 만들고 fence를 해제한다.
+표지 ACL 실패 시 복구 fence를 유지하며 첫 시작 등록을 막는다.
 `PASS_MACHINE_WORKER_PENDING`은 기계 배치 결과이며 설치 완료가 아니다.
 
 지정 작업자의 첫 앱 실행은 기존 current-user onboarding의 READY 뒤 HKCU
@@ -27,6 +29,8 @@ inventory SHA256을 결속한다. 관리자/SYSTEM만 쓰고 사용자는 읽는
 첫 실행은 current/app 또는 같은 commit의 versions/<commit>/app만 받으며 두 manifest를 함께 확인한다. 같은 id는 다시 등록하지 않고 새 id는 새 설치로 처리한다. 완료한 id의 표지는 이후 판 갱신을
 막지 않는다. 다른 SID·미완료 판 불일치·등록 실패는 완료 기록을 만들지 않으며 원본 표지를
 수정하거나 지우지 않는다. 관리자 길에 옛 앱 처리 callback은 없다.
+GUI 입구는 기존 업데이트 관문 전에 대상 SID만 읽어 확인하고 다른 계정에는 안내한다.
+이 확인은 worker HKCU를 읽거나 쓰지 않으며 onboarding·relay를 시작하지 않는다.
 첫 시작 시점에 키트 넘김이 필요하면 받을 자리 = PENDING 표지 소비 직전.
 
 `RestoreVerifiedReplacement`와 `-Uninstall`은 기존 replacement receipt·bootstrap inventory·
