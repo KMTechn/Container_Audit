@@ -17315,7 +17315,18 @@ class ContainerAudit:
             self._event_log_notice = "로그 저장 실패 · 재시도 중입니다. 저장 공간을 확인하고 이 PC를 종료하지 마세요."
             return False
         if synchronous:
-            if int(getattr(_WRITER_LOCAL, 'depth', 0)) > 0:
+            projection_pending = int(getattr(_WRITER_LOCAL, 'depth', 0)) > 0
+            if not projection_pending and log_entry['event'] != 'SCAN_OK':
+                deadline = time.monotonic() + self.LOOP_CLEANUP_TIMEOUT_SECONDS
+                while getattr(getattr(self, 'log_queue', None), 'unfinished_tasks', 0):
+                    log_thread = getattr(self, 'log_thread', None)
+                    remaining = deadline - time.monotonic()
+                    if log_thread is None or not log_thread.is_alive() or remaining <= 0:
+                        projection_pending = True
+                        self._event_log_notice = "감사 CSV 저장 재시도 중 · 저장된 작업은 계속할 수 있습니다."
+                        break
+                    time.sleep(min(.05, remaining))
+            if projection_pending:
                 self._last_log_event_projection_pending = True
                 self._last_log_event_was_replay = False
                 print('EVENT_CSV_PROJECTION_PENDING')
@@ -17333,8 +17344,6 @@ class ContainerAudit:
                     if target_path is not None:
                         store.drain(append=append_event_log_entry_idempotent, through=target_path)
                 else:
-                    if hasattr(self, "log_queue") and hasattr(self.log_queue, "join"):
-                        self.log_queue.join()
                     store.drain(append=append_event_log_entry_idempotent)
                 self._last_log_event_was_replay = not store.take_projection_result(target_log_file_path, log_entry)
                 event_type = log_entry['event']

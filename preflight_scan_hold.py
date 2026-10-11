@@ -514,6 +514,7 @@ class PreflightScanHoldWriter:
         self.results: queue.Queue[tuple[_WriteTask, Any, BaseException | None]] = queue.Queue()
         self._closing = False
         self._closed = False
+        self._stop_requested = False
         self._pump_job: Any = None
         self._drain_callbacks: list[Callable[[], None]] = []
         self._stop = object()
@@ -613,9 +614,12 @@ class PreflightScanHoldWriter:
     def _complete_close(self) -> bool:
         if self._closed:
             return True
-        self.tasks.put_nowait(self._stop)
+        if not self._stop_requested:
+            self.tasks.put_nowait(self._stop)
+            self._stop_requested = True
         self.thread.join(timeout=2.0)
         if self.thread.is_alive():
+            self._schedule_pump()
             return False
         self._closed = True
         if self._pump_job is not None:
