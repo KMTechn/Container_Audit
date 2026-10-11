@@ -374,7 +374,7 @@ try{[void](Read-KmtechLegacySurveyCandidate $script:link.TargetPath 'shortcut')}
 if(-not $rejected){throw 'new shortcut became a legacy candidate'}
 'COMMON_SHORTCUT_LEGACY_EXCLUSION_PASS'
 '''
-    result = run_functions(tmp_path, INSTALLER, ["Full", "Same", "New-CanonicalMachineShortcut"], driver,
+    result = run_functions(tmp_path, INSTALLER, ["Full", "Same", "Get-CanonicalMachineShortcutArguments", "New-CanonicalMachineShortcut"], driver,
                            engine=engine, values={"CA_EXISTING_SHORTCUT": existing})
     assert result.returncode == 0, result.stderr
     expected = "COMMON_SHORTCUT_LEGACY_EXCLUSION_PASS" if existing == "new" else "COMMON_SHORTCUT_PRESTATE_PRESERVED_PASS"
@@ -382,7 +382,7 @@ if(-not $rejected){throw 'new shortcut became a legacy candidate'}
 
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
-@pytest.mark.parametrize("first_start", (False, True, "pending_acl_failure"))
+@pytest.mark.parametrize("first_start", (False, True, "pending_acl_failure", "shortcut_failure", "audit_failure"))
 def test_machine_placement_existing_restore_and_removal_preserve_profiles(tmp_path, engine, first_start):
     from tests.test_canonical_portable_uninstall import _setup, _tree, _sha, OS_BOUNDARIES, HELPER_OS
     from tests.test_canonical_installation_callers import _distinct_replacement, _bind_packet
@@ -412,10 +412,20 @@ function Get-CanonicalInstallationCallerSecurity {
  return [pscustomobject]@{sid='S-1-5-21-111-222-333-1000';session_id=0;elevated=$true}
 }
 function Get-CanonicalWorkerProfileRoot {param($Sid) return $env:CA_MACHINE_PROFILE}
+function Get-CanonicalMachineArtifactPaths {param($State)
+ return @((Join-Path $State 'pending-onboarding.json'),(Join-Path $env:CA_UNINSTALL_ROOT 'machine-shortcut.json'))
+}
 function New-CanonicalMachineShortcut {param($Root)
  [IO.File]::WriteAllText((Join-Path $env:CA_UNINSTALL_ROOT 'machine-shortcut.json'),
-   (@{target=(Join-Path $Root 'runtime\pythonw.exe');arguments='-I -B app\main.py'}|ConvertTo-Json))
+   (@{TargetPath=(Join-Path $Root 'runtime\pythonw.exe');Arguments=(Get-CanonicalMachineShortcutArguments $Root);
+      WorkingDirectory=(Join-Path $Root 'app')}|ConvertTo-Json))
+ if($env:CA_MACHINE_FAILURE -ceq 'shortcut_failure'){throw 'Simulated post-shortcut failure'}
 }
+$script:machineShell=[pscustomobject]@{}
+$script:machineShell | Add-Member ScriptMethod CreateShortcut {param($Path);return (Get-Content -LiteralPath $Path -Raw|ConvertFrom-Json)}
+$removeBody=${function:Remove-CanonicalMachineArtifacts}.ToString().Replace('New-Object -ComObject WScript.Shell','$script:machineShell')
+$removeBody=$removeBody.Replace('[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)','')
+Set-Item Function:Remove-CanonicalMachineArtifacts ([scriptblock]::Create($removeBody))
 '''
     if first_start == "pending_acl_failure":
         injected += r'''
@@ -423,6 +433,14 @@ $pendingAcl=${function:Set-InstallationEvidenceAcl}
 function Set-InstallationEvidenceAcl([string]$Path,[string]$OperatorSid) {
  if([IO.Path]::GetFileName($Path) -ceq 'pending-onboarding.json'){throw 'Simulated pending ACL failure'}
  & $pendingAcl $Path $OperatorSid
+}
+'''
+    if first_start == "audit_failure":
+        injected += r'''
+$saveBody=${function:Save}
+function Save([string]$Path,$Value,[bool]$SanitizeDiagnostics=$false) {
+ if($Value.status -cin @('PASS_MACHINE_WORKER_PENDING','MACHINE_INSTALL_FAILED')){throw 'Simulated success and failure audit write failure'}
+ & $saveBody $Path $Value $SanitizeDiagnostics
 }
 '''
     admission = "# Admit the worker before any installation evidence, authority or profile writer."
@@ -433,6 +451,7 @@ function Set-InstallationEvidenceAcl([string]$Path,[string]$OperatorSid) {
     text = text.replace("Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED';", diagnostic + "Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED';")
     canonical.write_text(text, encoding="utf-8-sig")
     env["CA_MACHINE_PROFILE"] = str(worker)
+    env["CA_MACHINE_FAILURE"] = str(first_start)
     _bind_packet(source)
     profiles_before = (_tree(Path(env["LOCALAPPDATA"])), _tree(worker))
 
@@ -452,8 +471,7 @@ function Set-InstallationEvidenceAcl([string]$Path,[string]$OperatorSid) {
         assert all(path.read_bytes() == b"protected-fixture-must-be-preserved" for path in protected)
         return json.loads(audit.read_text(encoding="utf-8")) if expected_exit == 0 else result
 
-    if first_start == "pending_acl_failure":
-        from current_user_onboarding import CurrentUserOnboardingError
+    if first_start in ("pending_acl_failure", "shortcut_failure", "audit_failure"):
         failed = run("machine-install-failed", expected_exit=4)
         assert "PASS_MACHINE_WORKER_PENDING" not in failed.stdout
         state = Path(env["PROGRAMDATA"]) / "KMTech/ContainerAudit/machine-install"
@@ -461,17 +479,14 @@ function Set-InstallationEvidenceAcl([string]$Path,[string]$OperatorSid) {
         machine_audits = [path for path in (state / "install-audit").glob("canonical-portable-*.json")
                           if re.fullmatch(r"canonical-portable-[0-9a-f]{32}\.json", path.name)]
         assert len(machine_audits) == 1
-        intent = json.loads((state / "pending-onboarding.json").read_text(encoding="utf-8"))
-        assert machine_audits[0].stem == "canonical-portable-" + intent["install_id"]
-        failure = json.loads(machine_audits[0].read_text(encoding="utf-8"))
-        assert failure["status"] == "MACHINE_INSTALL_FAILED" and failure["fence_retained"] is True
-        with pytest.raises(CurrentUserOnboardingError):
-            consume_pending_machine_onboarding(
-                installed / "app", environ=env, sid_reader=lambda: sid,
-                onboarder=lambda *_args, **_kwargs: pytest.fail("failed placement onboarded"),
-                completion_reader=lambda: pytest.fail("failed placement read HKCU"),
-                completion_writer=lambda _id: pytest.fail("failed placement completed"),
-            )
+        assert not (state / "pending-onboarding.json").exists()
+        assert not (tmp_path / "machine-shortcut.json").exists()
+        assert json.loads((installed / "portable-manifest.json").read_text())["source_commit"] == old_commit
+        if first_start != "audit_failure":
+            failure = json.loads(machine_audits[0].read_text(encoding="utf-8"))
+            assert failure["status"] == "MACHINE_INSTALL_FAILED" and failure["fence_retained"] is True
+            assert failure["artifact_restore"] == "PASS"
+            assert failure["code_replacement"]["status"] == "RESTORED_AFTER_FAILURE"
         return
     audit = run("machine-install")
     assert audit["status"] == "PASS_MACHINE_WORKER_PENDING"
@@ -500,6 +515,13 @@ function Set-InstallationEvidenceAcl([string]$Path,[string]$OperatorSid) {
     restored = run("machine-restore", "-RestoreVerifiedReplacement", "-RestoreReceiptPath", str(receipt),
                    "-RestoreReceiptSha256", _sha(receipt))
     assert restored["status"] == "PASS_RESTORED_VERIFIED"
+    assert not marker.exists()
+    assert not (tmp_path / "machine-shortcut.json").exists()
     assert json.loads((installed / "portable-manifest.json").read_text())["source_commit"] == old_commit
+    if first_start is False:
+        run("machine-install-before-removal")
+        assert marker.is_file() and (tmp_path / "machine-shortcut.json").is_file()
     removed = run("machine-uninstall", "-Uninstall")
     assert removed["status"] == "PASS_UNINSTALLED_DATA_PRESERVED"
+    assert not marker.exists()
+    assert not (tmp_path / "machine-shortcut.json").exists()

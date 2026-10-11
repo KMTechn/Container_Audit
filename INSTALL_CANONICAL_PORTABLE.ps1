@@ -3445,14 +3445,80 @@ function Write-CanonicalMachinePublicRecord([string]$Code,[string]$Status='FAILE
     Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+($public|ConvertTo-Json -Depth 4 -Compress))
 }
 
-function New-CanonicalMachineShortcut([string]$Root) {
+function Get-CanonicalMachineArtifactPaths([string]$State) {
     $directory=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)
+    if (-not $directory) { throw 'Machine start menu is unavailable.' }
+    return @((Join-Path $State 'pending-onboarding.json'),(Join-Path $directory 'KMTech 이적 검사.lnk'))
+}
+function Get-CanonicalMachineShortcutArguments([string]$Root) {
+    $entry=Join-Path $Root 'app\main.py'
+    if ($entry.Contains('"')) { throw 'Machine shortcut path contains a quote.' }
+    return '-I -B "'+$entry+'"'
+}
+function Get-CanonicalMachineArtifactPreimage([string[]]$Paths) {
+    return @($Paths | ForEach-Object {
+        $path=Full $_ 'machine artifact'
+        $ancestor=$path
+        while (-not (Test-Path -LiteralPath $ancestor)) { $ancestor=Split-Path -Parent $ancestor }
+        Assert-BootstrapNoReparsePoint $ancestor 'machine artifact ancestor' -PathOnly
+        $exists=Test-Path -LiteralPath $path
+        if ($exists -and -not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Machine artifact prestate is unknown.' }
+        [pscustomobject]@{path=$path;exists=$exists;bytes=if($exists){[IO.File]::ReadAllBytes($path)}else{$null};
+            sha256=if($exists){Sha $path}else{''};
+            acl=if($exists){Get-Acl -LiteralPath $path}else{$null}}
+    })
+}
+function Restore-CanonicalMachineArtifacts($Before) {
+    $failed=$false
+    foreach ($item in $Before) {
+        try {
+            if (-not [bool]$item.exists -and -not (Test-Path -LiteralPath ([string]$item.path))) { continue }
+            Assert-BootstrapNoReparsePoint ([string]$item.path) 'machine artifact restore' -PathOnly
+            if ([bool]$item.exists) {
+                [IO.File]::WriteAllBytes([string]$item.path,[byte[]]$item.bytes)
+                Set-Acl -LiteralPath ([string]$item.path) -AclObject $item.acl
+                if ((Sha ([string]$item.path)) -cne [string]$item.sha256) { throw 'Machine artifact restore readback failed.' }
+            } elseif (Test-Path -LiteralPath ([string]$item.path)) {
+                if (-not (Test-Path -LiteralPath ([string]$item.path) -PathType Leaf)) { throw 'Machine artifact restore boundary differs.' }
+                Remove-Item -LiteralPath ([string]$item.path) -ErrorAction Stop
+            }
+        } catch { $failed=$true }
+    }
+    if ($failed) { throw 'Machine artifact restore failed.' }
+}
+function Remove-CanonicalMachineArtifacts([string]$Root,$Worker,[string[]]$Paths) {
+    $pending=$Paths[0];$shortcut=$Paths[1]
+    if (Test-Path -LiteralPath $pending) {
+        Assert-BootstrapNoReparsePoint $pending 'machine pending removal' -PathOnly
+        $marker=Get-Content -LiteralPath $pending -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ([string]$marker.schema -cne 'container-audit-machine-pending-v1' -or
+            [string]$marker.target_sid -cne [string]$Worker.sid -or -not (Same ([string]$marker.install_root) $Root)) {
+            throw 'Machine pending removal binding differs.'
+        }
+    }
+    if (Test-Path -LiteralPath $shortcut) {
+        Assert-BootstrapNoReparsePoint $shortcut 'machine shortcut removal' -PathOnly
+        $shell=New-Object -ComObject WScript.Shell
+        try {
+            $link=$shell.CreateShortcut($shortcut)
+            if ((Same ([string]$link.TargetPath) (Join-Path $Root 'runtime\pythonw.exe')) -and
+                [string]$link.Arguments -ceq (Get-CanonicalMachineShortcutArguments $Root) -and
+                (Same ([string]$link.WorkingDirectory) (Join-Path $Root 'app'))) {
+                Remove-Item -LiteralPath $shortcut -ErrorAction Stop
+            }
+        } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) }
+    }
+    if (Test-Path -LiteralPath $pending) { Remove-Item -LiteralPath $pending -ErrorAction Stop }
+}
+function New-CanonicalMachineShortcut([string]$Root,[string]$Directory='') {
+    if (-not $Directory) { $Directory=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms) }
+    $directory=$Directory
     if (-not $directory) { throw 'Machine start menu is unavailable.' }
     $path=Join-Path $directory 'KMTech 이적 검사.lnk'
     $existing=Test-Path -LiteralPath $path
     if ($existing -and -not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Machine shortcut prestate is unknown.' }
     $target=Join-Path $Root 'runtime\pythonw.exe'
-    $arguments='-I -B '+(ConvertTo-ProcessArgument (Join-Path $Root 'app\main.py'))
+    $arguments=Get-CanonicalMachineShortcutArguments $Root
     $workingDirectory=Join-Path $Root 'app'
     $shell=New-Object -ComObject WScript.Shell
     try {
@@ -3516,6 +3582,9 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         preimage=@{scope='MACHINE_CODE_ONLY';observation_status='NOT_OBSERVED'};
         after=@{scope='WORKER_HKCU';observation_status='NOT_CHANGED'};
         code_replacement=@{transaction_id=$run;receipt_path=$receipt};created_at=$started;secret_values_recorded=$false}
+    $artifactPaths=Get-CanonicalMachineArtifactPaths $state
+    $artifactBefore=Get-CanonicalMachineArtifactPreimage $artifactPaths
+    $complete=$false;$placementBaseArguments=$null;$replacementApplied=$false
     try {
         [void](Initialize-InstallationEvidence $path ([string]$Worker.sid) @($Script:CanonicalWriterFenceDelegationToken))
         $audit.stage_evidence_root=$Script:InstallationEvidenceRoot
@@ -3549,6 +3618,7 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
             '-WriterFenceSessionId',$Script:CanonicalWriterFenceSessionId,'-WriterFenceAttemptId',$Script:CanonicalWriterFenceAttemptId,
             '-WriterFenceReplacementTransactionId',$run,'-WriterFenceDelegationToken',$Script:CanonicalWriterFenceDelegationToken)
         if ($testMode) { $arguments+='-AllowNoncanonicalLayoutForTest' }
+        $placementBaseArguments=@($arguments)
         if ($RestoreVerifiedReplacement) {
             $original=Read-BootstrapReplacementReceipt $RestoreReceiptPath $RestoreReceiptSha256
             $arguments+=@('-RestoreVerifiedReplacement','-ReplacementTransactionId',([string]$original.transaction_id),
@@ -3582,12 +3652,15 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
                 $audit.code_replacement.receipt_sha256=Sha $receipt
             }
         }
+        $replacementApplied=($arguments -ccontains '-ReplaceExistingVerifiedPortable')
         if ($Uninstall) {
             $removed=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Split-Path -Parent $Root) 'removed.json') | ConvertFrom-Json
             if ([string]$removed.lifecycle_state -cne 'REMOVED') { throw 'Machine removal readback failed.' }
+            Remove-CanonicalMachineArtifacts $Root $Worker $artifactPaths
             $audit.status='PASS_UNINSTALLED_DATA_PRESERVED'
         } elseif ($RestoreVerifiedReplacement) {
             [void](Assert-BootstrapIntegrityRecord $Root)
+            Remove-CanonicalMachineArtifacts $Root $Worker $artifactPaths
             $audit.status='PASS_RESTORED_VERIFIED'
         } else {
             $installed=InstalledManifest $Root $SkipSignatureValidationForTest
@@ -3606,6 +3679,7 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
             $audit.status='PASS_MACHINE_WORKER_PENDING'
         }
         Save $path $audit
+        if ($EvidencePath) { Save (Full $EvidencePath 'EvidencePath') $audit }
         $authorization=New-CanonicalWriterFenceReleaseAuthorization (Join-Path $state ('install-audit\release-'+$run+'.json')) 'PRODUCT_COMPLETE' $path
         [void](Set-ContainerWriterFencePrepared -ControlRoot $control -SessionId $Script:CanonicalWriterFenceSessionId `
             -AttemptId $Script:CanonicalWriterFenceAttemptId -ReplacementTransactionId $run -PreparedReceiptPath $authorization.path `
@@ -3617,14 +3691,31 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
             -AttemptId $Script:CanonicalWriterFenceAttemptId -ReplacementTransactionId $run -ReleaseAuthorizationPath $authorization.path `
             -ReleaseAuthorizationSha256 $authorization.sha256 -AuthorityLease $authority)
         $active=$false
-        if ($EvidencePath) { Save (Full $EvidencePath 'EvidencePath') $audit }
+        $complete=$true
         Write-Output ('install_status='+[string]$audit.status)
         Write-CanonicalMachinePublicRecord ([string]$audit.status) 'PASS'
     } catch {
         $audit.status='MACHINE_INSTALL_FAILED';$audit.fence_retained=$active
-        if ($machineStateReady) { Save $path $audit }
+        if ($machineStateReady) { try { Save $path $audit } catch {} }
         throw
     } finally {
+        if (-not $complete) {
+            # Compensation must run even when publishing the failure audit fails.
+            if ($replacementApplied -and $active -and (Test-Path -LiteralPath $receipt -PathType Leaf)) {
+                try {
+                    $original=Read-BootstrapReplacementReceipt $receipt (Sha $receipt)
+                    $rollbackArguments=@($placementBaseArguments)+@('-RestoreVerifiedReplacement',
+                        '-ReplacementTransactionId',([string]$original.transaction_id),'-ReplacementReceiptPath',$receipt,
+                        '-ReplacementReceiptSha256',(Sha $receipt),'-RestoreEvidencePath',(Join-Path $state ('install-audit\failed-restore-'+$run+'.json')))
+                    $rollbackChild=Invoke-InstallationEvidenceChild 'machine-failure-code-restore' $engine $rollbackArguments
+                    if ($rollbackChild.ExitCode -ne 0) { throw 'Machine failure code restore failed.' }
+                    $audit.code_replacement.status='RESTORED_AFTER_FAILURE'
+                } catch { $audit.code_replacement.status='RESTORE_FAILED' }
+            }
+            try { Restore-CanonicalMachineArtifacts $artifactBefore; $audit.artifact_restore='PASS' }
+            catch { $audit.artifact_restore='FAILED' }
+            if ($machineStateReady) { try { Save $path $audit } catch {} }
+        }
         $Script:ContainerMachineInstallControlRoot=''
         $Script:ContainerWriterFenceAdmissionProductionRoot=''
     }

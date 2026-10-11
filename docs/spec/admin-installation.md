@@ -40,6 +40,10 @@ GUI 입구는 기존 업데이트 관문 전에 대상 SID만 읽어 확인하�
 
 `RestoreVerifiedReplacement`와 `-Uninstall`은 기존 replacement receipt·bootstrap inventory·
 supported removal journal을 쓰는 기계 코드 복원/제거다. 작업자 HKCU 복원을 주장하지 않는다.
+두 작업은 대상 SID·설치 루트가 맞는 PENDING과 제품의 직접 공용 링크도 정리한다.
+변경된 링크와 옛 앱 링크는 보존한다. 설치 전 표지·링크 원바이트와 ACL을 캡처하며,
+이후 설치가 실패하면 새 항목을 지우고 원본을 복원한다. 교체 receipt가 있으면 앞 코드 판도
+복원한다. 실패 기록 쓰기가 실패해도 보상은 실행하며, 복구 fence는 유지한다.
 격리 시험의 첫 시작은 주입한 onboarding READY와 완료 기록으로 연결을 확인한다.
 실제 등록·DPAPI·HKCU·ACL·공용 바로가기 및 옛 앱 복원·켜짐은 랩 VM 실제 설치 회차에서
 별도로 검증해야 한다. 키트 `-Rollback` 끝까지의 결과를 제품 fixture PASS로 대신하지 않는다.
