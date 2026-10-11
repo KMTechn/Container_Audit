@@ -439,6 +439,7 @@ def test_pin_format_rejection_is_audited_without_saving_secret(monkeypatch, tmp_
     server = SignedPinServer()
     app, audits, _notices = make_headless_app(monkeypatch, tmp_path, server)
     app._prompt_blocked_work_admin_pin = lambda **_request: (admin_id, secret)
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda *_args, **_kwargs: False)
     approval = app._admin_pin_approval_for(
         "CA.TRAY_HOLD", "d" * 64, lambda: {"version": 1}, (), lambda _intent: False)
     assert approval is None and server.calls == []
@@ -906,7 +907,8 @@ def test_offline_pair_hold_detaches_active_originals_and_other_item_starts(monke
     assert started == [other]
 
 
-def test_offline_precheck_hold_preserves_bytes_and_releases_busy_slot(monkeypatch, tmp_path):
+@pytest.mark.parametrize("rejection", (None, "PIN_LOCKED", "STEPUP_LOCKED", "DEVICE_LIMITED", "DEVICE_BLOCKED", "UNRECOGNIZED_REJECTION"))
+def test_offline_precheck_hold_preserves_bytes_and_releases_busy_slot(monkeypatch, tmp_path, rejection):
     from Container_Audit import ContainerAudit, messagebox
     from tests.test_container_p0_contracts import _preflight_hold_ownership_app
 
@@ -919,6 +921,8 @@ def test_offline_precheck_hold_preserves_bytes_and_releases_busy_slot(monkeypatc
     hold.mark_failed(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
     original = hold.path.read_bytes()
     def offline(_path, _body, _headers):
+        if rejection:
+            return 403, json.dumps({"ok": False, "error": {"code": rejection}}).encode()
         raise TimeoutError("offline")
     app._admin_pin_client = make_client(monkeypatch, offline)
     app._prompt_blocked_work_admin_pin = lambda **_request: ("manager-1", "194826")
@@ -936,14 +940,15 @@ def test_offline_precheck_hold_preserves_bytes_and_releases_busy_slot(monkeypatc
     assert_other_phs2_starts(app, label)
 
 
-def test_offline_tray_hold_preserves_snapshot_and_clears_active_session(monkeypatch, tmp_path):
+@pytest.mark.parametrize("rejection", (None, "PIN_LOCKED", "STEPUP_LOCKED", "DEVICE_LIMITED", "DEVICE_BLOCKED", "UNRECOGNIZED_REJECTION"))
+def test_offline_tray_hold_preserves_snapshot_and_clears_active_session(monkeypatch, tmp_path, rejection):
     from Container_Audit import TraySession
     from storage_utils import atomic_write_json
     from tests.test_container_p0_contracts import _saved_tray_state
     from label_qr import canonical_master_label_key
 
     app, audits, _notices = make_headless_app(
-        monkeypatch, tmp_path, lambda *_args: (_ for _ in ()).throw(TimeoutError("offline")))
+        monkeypatch, tmp_path, lambda *_args: (403, json.dumps({"ok": False, "error": {"code": rejection}}).encode()) if rejection else (_ for _ in ()).throw(TimeoutError("offline")))
     app.save_folder = str(tmp_path / "events")
     app.CURRENT_TRAY_STATE_FILE = "current.json"
     app.PREFLIGHT_SCAN_HOLD_FILE = "hold.json"
@@ -979,8 +984,16 @@ def test_offline_tray_hold_preserves_snapshot_and_clears_active_session(monkeypa
     assert not app._preflight_context_blocks_mutation()
     assert not app._scan_entry_admission_block_reason()
     assert app._paired_preflight_blocks_label(label)
-    assert [event for event, _ in audits] == ["ADMIN_PIN_UNVERIFIED", "ADMIN_PIN_UNVERIFIED_HOLD"]
+    assert [event for event, _ in audits] == [("ADMIN_PIN_REJECTED" if rejection else "ADMIN_PIN_UNVERIFIED"), "ADMIN_PIN_UNVERIFIED_HOLD"]
     assert_other_phs2_starts(app, label)
+    intent = app._admin_pin_store().list_pending()[0]
+    server = SignedPinServer()
+    app._admin_pin_client = make_client(monkeypatch, server)
+    app._admin_pin_effect_audited = lambda event, key: any(name == event and kwargs.get("detail", {}).get("operation_key") == key for name, kwargs in audits)
+    app._recheck_admin_pin_intents()
+    assert app._admin_pin_store().read(intent["operation_key"])["state"] == "APPLIED"
+    assert app._admin_pin_store().read(intent["operation_key"])["request_id"] == intent["request_id"]
+    assert sum(path.endswith("redemptions") for path, _request in server.calls) == 1
 
 
 def test_changed_unsettled_tray_retries_without_overwriting_active_bytes(monkeypatch, tmp_path):
@@ -1044,8 +1057,8 @@ def test_changed_unsettled_tray_retries_without_overwriting_active_bytes(monkeyp
     assert app._admin_pin_store().read(old["operation_key"])["state"] == "SUPERSEDED"
 
 
-@pytest.mark.parametrize("boundary", ("after_move", "after_audit"))
-def test_consumed_precheck_quarantine_resumes_after_restart_epoch(monkeypatch, tmp_path, boundary):
+@pytest.mark.parametrize("boundary", ("after_move", "after_audit", "unverified"))
+def test_precheck_quarantine_recovers_same_request_and_preserved_bytes(monkeypatch, tmp_path, boundary):
     from Container_Audit import ContainerAudit, messagebox
     from preflight_scan_hold import PreflightScanHoldStore
     from tests.test_container_p0_contracts import _preflight_hold_ownership_app
@@ -1092,6 +1105,11 @@ def test_consumed_precheck_quarantine_resumes_after_restart_epoch(monkeypatch, t
         with pytest.raises(KeyboardInterrupt):
             app._quarantine_preflight_hold_for_supervisor(
                 reason="supervisor_new_work_required", confirm=False)
+    elif boundary == "unverified":
+        app._admin_pin_client = make_client(monkeypatch, lambda *_args: (
+            403, json.dumps({"ok": False, "error": {"code": "PIN_LOCKED"}}).encode()))
+        assert app._quarantine_preflight_hold_for_supervisor(
+            reason="diagnostic", confirm=False) is False
     else:
         complete = app._admin_pin_complete
         app._admin_pin_complete = lambda *_args: False
@@ -1099,13 +1117,15 @@ def test_consumed_precheck_quarantine_resumes_after_restart_epoch(monkeypatch, t
             reason="supervisor_new_work_required", confirm=False) is False
         app._admin_pin_complete = complete
     intent = app._admin_pin_store().list_pending()[0]
-    assert intent["state"] == "CONSUMED" and not hold.path.exists()
+    assert intent["state"] == ("UNVERIFIED_OPERATOR_HOLD" if boundary == "unverified" else "CONSUMED") and not hold.path.exists()
     assert any(path.read_bytes() == original for path in app._preflight_hold_quarantine_directory().glob("*.json"))
-    app.worker_name = "worker-2"
-    app._admin_pin_login_epoch = uuid.uuid4().hex
+    app._admin_pin_client = make_client(monkeypatch, server)
+    if boundary != "unverified":
+        app.worker_name = "worker-2"
+        app._admin_pin_login_epoch = uuid.uuid4().hex
     app._recheck_admin_pin_intents()
     assert app._admin_pin_store().read(intent["operation_key"])["state"] == "APPLIED"
-    assert app._admin_pin_store().read(intent["operation_key"])["resuming_operator"]["local_id"] == "worker-2"
+    assert app._admin_pin_store().read(intent["operation_key"]).get("resuming_operator", intent["operator"])["local_id"] == pin.operator_local_id(app.worker_name)
     assert len([path for path, _ in server.calls if path.endswith("/redemptions")]) == 1
     assert app._preflight_hold_snapshot is None
     assert not app._preflight_context_blocks_mutation()

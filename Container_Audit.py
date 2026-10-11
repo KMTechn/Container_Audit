@@ -9169,8 +9169,8 @@ class ContainerAudit:
             if intent.get("state") == "UNVERIFIED_DETACHING":
                 if not self._admin_pin_audit("ADMIN_PIN_UNVERIFIED_HOLD", intent):
                     raise OSError("관리자 보류 완료 감사를 저장하지 못했습니다.")
-                self._admin_pin_store().transition(intent, "UNVERIFIED_OPERATOR_HOLD",
-                                                   reason=str(intent.get("reason") or ""))
+                self._admin_pin_store().transition(self._admin_pin_store().read(intent["operation_key"]),
+                                                   "UNVERIFIED_OPERATOR_HOLD", reason=str(intent.get("reason") or ""))
             return True
         except (OSError, ValueError, TypeError, KeyError, PreflightHoldError,
                 PairedHandoffError, TrayStateValidationError) as exc:
@@ -9202,7 +9202,7 @@ class ContainerAudit:
     def _admin_pin_failed(self, intent: Mapping[str, Any], code: str, *, unknown: bool) -> None:
         store = self._admin_pin_store()
         failed = dict(intent, reason=code)
-        hold = bool(unknown and self._call_admin_pin_ui(messagebox.askyesno,
+        hold = bool(self._call_admin_pin_ui(messagebox.askyesno,
             "관리자 확인 대기",
             admin_pin_message(code) + "\n\n이 건만 보류하고 다른 작업을 계속하시겠습니까? "
             "아니요를 누르면 같은 건을 다시 확인할 수 있습니다.",
@@ -9727,6 +9727,9 @@ class ContainerAudit:
         if not isinstance(source, dict):
             return True
         action = intent.get("action")
+        if (intent.get("state") == "UNVERIFIED_OPERATOR_HOLD" and intent.get("moving")
+                and (action == "CA.PRECHECK_HOLD" or action == "CA.TRAY_HOLD" and isinstance(source.get("tray"), dict))):
+            return not self._admin_pin_check_moves(intent)
         if action == "CA.PRECHECK_HOLD":
             return not self._admin_pin_preflight_hold_store(intent).path.is_file()
         if source.get("handoff_id"):
@@ -9836,12 +9839,19 @@ class ContainerAudit:
                     admin_id, secret = credentials
                     if admin_id != intent["admin_id"]:
                         raise AdminPinError("TARGET_CHANGED")
-                    verified = (yield lambda: self._admin_pin_client_for_work().verify(
+                    client = (yield lambda: self._admin_pin_client_for_work())
+                    verified = (yield lambda: client.verify(
                         request_id=intent["request_id"], admin_id=admin_id, pin=secret,
                         action=action, target=intent["target"], operator=intent["operator"]))
                     intent = (yield lambda: store.write(dict(intent, verification_id=verified["verification_id"],
                                               state="VERIFIED")))
                     verification_id = verified["verification_id"]
+                    (yield lambda: client.redeem(verification_id=verification_id, proof=verified["proof"],
+                                  operation_key=intent["operation_key"], action=action,
+                                  target=intent["target"], operator=intent["operator"]))
+                    intent = (yield lambda: store.transition(intent, "CONSUMED"))
+                    if not (yield lambda: self._admin_pin_audit("ADMIN_PIN_CONSUMED", intent)):
+                        raise AdminPinError("AUDIT_UNAVAILABLE", unknown=True)
                 status = (yield lambda: self._admin_pin_client_for_work().status(
                     verification_id, intent["operation_key"]))
                 if status == "CONSUMED":
