@@ -159,6 +159,61 @@ def test_actual_close_consumes_deferred_request(stop_app, monkeypatch):
     assert not user_relay.app_stop_path(app.direct_sync_program_data_root).exists()
 
 
+@pytest.mark.parametrize("step, field", [("scan_defective", None),
+                                          ("scan_good", "defective_barcodes"),
+                                          ("scan_good", "good_barcodes")])
+def test_exchange_without_tray_scans_defers_remote_close(stop_app, step, field):
+    app = stop_app
+    app.current_tray = module.TraySession()
+    app.current_exchange_session = module.ProductExchangeSession(current_step=step)
+    if field:
+        setattr(app.current_exchange_session, field, ["fixture exchange scan"])
+    request(app)
+    app._poll_app_stop_request()
+    settle(app)
+    assert not app.closed and len(deferred_rows(app)) == 1
+    assert user_relay.app_stop_path(app.direct_sync_program_data_root).exists()
+    app.current_exchange_session = module.ProductExchangeSession()
+    app._poll_app_stop_request()
+    assert not app.closed and len(deferred_rows(app)) == 1
+
+
+def test_close_reuses_exchange_progress_check(stop_app, monkeypatch):
+    app = stop_app
+    app.current_tray = module.TraySession()
+    app.current_exchange_session = module.ProductExchangeSession(current_step="scan_defective")
+    cancellations = []
+    app._cancel_exchange = lambda **kwargs: cancellations.append(kwargs["reason"]) or False
+    module.ContainerAudit.on_closing(app, _confirmed=True)
+    assert cancellations == ["app_close"]
+    assert not app.root.destroyed and not app._ui_close_requested
+
+
+def test_deferred_cleanup_uses_the_observed_request_root(stop_app, tmp_path, monkeypatch):
+    app = stop_app
+    scanned(app)
+    observed_root = Path(app.direct_sync_program_data_root)
+    alternate_root = tmp_path / "alternate-relay"
+    app.direct_sync_root = str(alternate_root)
+    observed = request(app)
+    unrelated = user_relay.request_app_stop(alternate_root)
+    app._poll_app_stop_request()
+    settle(app)
+    assert app._deferred_app_stop_request["request_id"] == observed["request_id"]
+    app.direct_sync_program_data_root = str(alternate_root)
+    prepare_final_close(app, monkeypatch)
+    app._finalize_application_close()
+    assert not user_relay.app_stop_path(observed_root).exists()
+    assert user_relay.read_app_stop_request(alternate_root)["request_id"] == unrelated["request_id"]
+
+
+def test_administrator_guidance_identifies_the_comparison_original(stop_app, monkeypatch):
+    notices = []
+    monkeypatch.setattr(module.messagebox, "showinfo", lambda title, message, **kwargs: notices.append(message))
+    stop_app._show_blocked_work_handoff()
+    assert "격리된 체크포인트가 비교 원본(parked 상태는 작업 제출 때 스냅숏)" in notices[0]
+
+
 def test_actual_close_preserves_a_newer_unobserved_request(stop_app, monkeypatch):
     app = stop_app
     scanned(app)

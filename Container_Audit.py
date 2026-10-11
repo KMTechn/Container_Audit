@@ -3827,8 +3827,7 @@ class ContainerAudit:
             if not self._log_master_label_replacement_cancel(reason="worker_change"):
                 messagebox.showerror("교체 취소 기록 실패", "현품표 교체 취소 기록을 남기지 못해 작업자를 변경하지 않습니다.")
                 return
-        exchange_session = getattr(self, "current_exchange_session", ProductExchangeSession())
-        if exchange_session.defective_barcodes or exchange_session.good_barcodes:
+        if self._exchange_in_progress():
             if not self._cancel_exchange(reason="worker_change"):
                 messagebox.showerror("교환 취소 기록 실패", "제품 교환 취소 기록을 남기지 못해 작업자를 변경하지 않습니다.")
                 return
@@ -10193,7 +10192,8 @@ class ContainerAudit:
             f"스캔 입력: {current_count}건\n\n"
             "관리자에게 이 PC의 보류 파일·현재 트레이 상태·원 중앙 요청/영수증을 "
             "함께 대조해 달라고 알리세요. 원본을 지우거나 새 현품표·요청 키로 "
-            "다시 처리하지 마세요.",
+            "다시 처리하지 마세요.\n"
+            "격리된 체크포인트가 비교 원본(parked 상태는 작업 제출 때 스냅숏)",
             parent=getattr(self, "root", None),
         )
 
@@ -16604,6 +16604,11 @@ class ContainerAudit:
         ):
             self.root.after(0, self._drain_preflight_hold_head)
 
+    def _exchange_in_progress(self) -> bool:
+        session = getattr(self, "current_exchange_session", ProductExchangeSession())
+        return bool(session.defective_barcodes or session.good_barcodes
+                    or session.current_step in {"scan_defective", "scan_good"})
+
     def _poll_app_stop_request(self) -> None:
         from user_relay import consume_app_stop_request, read_app_stop_request
         from writer_session_fence import WriterFenceError
@@ -16625,10 +16630,11 @@ class ContainerAudit:
                 "_preflight_hold_append_pending", "_preflight_hold_switch_pending", "_scan_callback_pending",
             ))
             deferred = getattr(self, "_deferred_app_stop_request", None)
-            if saving or getattr(getattr(self, "current_tray", None), "scanned_barcodes", ()) or deferred:
+            if saving or getattr(getattr(self, "current_tray", None), "scanned_barcodes", ()) or self._exchange_in_progress() or deferred:
                 keep_request = True
                 if not deferred or deferred["request_id"] != request["request_id"]:
                     self._deferred_app_stop_request = request
+                    self._deferred_app_stop_root = direct_sync_root
                     self._deferred_app_stop_checkpoint_pending = True
                     self.show_status_message(_APP_STOP_DEFERRED_MESSAGE, self.COLOR_PRIMARY, duration=0)
                 lane = getattr(self, "_ui_lane", None)
@@ -16769,12 +16775,7 @@ class ContainerAudit:
                 self._abort_application_close()
                 return
             self._reset_master_label_replacement_state()
-        exchange_session = getattr(
-            self,
-            "current_exchange_session",
-            ProductExchangeSession(),
-        )
-        if exchange_session.defective_barcodes or exchange_session.good_barcodes:
+        if self._exchange_in_progress():
             if not self._cancel_exchange(reason="app_close"):
                 self._abort_application_close()
                 return
@@ -16888,7 +16889,7 @@ class ContainerAudit:
         if deferred:
             from user_relay import consume_app_stop_request
             try:
-                consume_app_stop_request(self.direct_sync_program_data_root, deferred["request_id"])
+                consume_app_stop_request(getattr(self, "_deferred_app_stop_root", self.direct_sync_program_data_root), deferred["request_id"])
             except Exception as exc:
                 print(f"앱 멈춤 요청 정리 실패: {type(exc).__name__}")
 
