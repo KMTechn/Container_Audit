@@ -6,12 +6,105 @@ import os
 import sqlite3
 import uuid
 import hashlib
+import time
+import math
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from writer_session_fence import writer_admission, writer_sink
+
+
+class StorageFailureQuarantine:
+    """Retain a failed item's original slot and UNKNOWN attempt in the same root."""
+
+    def __init__(self, root):
+        self.root = Path(root)
+        self.directory = self.root / "_storage_failures"
+
+    def records(self) -> list[dict]:
+        if self.directory.is_symlink():
+            raise OSError("storage quarantine must not be a link")
+        records = []
+        try:
+            with os.scandir(self.directory) as entries:
+                paths = sorted(Path(entry.path) for entry in entries if entry.name.endswith(".json"))
+        except FileNotFoundError:
+            return []
+        for path in paths:
+            if path.is_symlink():
+                raise OSError("storage quarantine record must not be a link")
+            record = json.loads(path.read_text(encoding="utf-8"))
+            if (not isinstance(record, dict) or record.get("schema") != "ca-storage-failure-v1"
+                    or record.get("outcome") != "UNKNOWN"
+                    or type(record.get("sequence")) is not int or record["sequence"] < 1
+                    or type(record.get("timestamp")) not in (int, float)
+                    or not math.isfinite(record["timestamp"])
+                    or not isinstance(record.get("snapshot"), dict)
+                    or record.get("slot") not in {"tray", "session"}
+                    or not isinstance(record.get("item_id"), str)
+                    or path.name != record["item_id"] + ".json"):
+                raise ValueError("storage quarantine record cannot be verified")
+            for field in ("source_file", "replacement_file"):
+                name = record.get(field)
+                if (not isinstance(name, str) or not name.endswith(".json")
+                        or ":" in name or Path(name).name != name):
+                    raise ValueError("storage quarantine slot cannot be verified")
+            if record["replacement_file"] != f"{Path(record['source_file']).stem}_sf_{record['sequence']}.json":
+                raise ValueError("storage quarantine replacement differs")
+            records.append(record)
+        if len({record["sequence"] for record in records}) != len(records):
+            raise ValueError("storage quarantine sequence is ambiguous")
+        return sorted(records, key=lambda record: record["sequence"])
+
+    def next_path(self, path: Path) -> Path:
+        for record in self.records():
+            if path.name == record["source_file"]:
+                path = path.with_name(record["replacement_file"])
+        return path
+
+    @writer_sink("storage_failure_quarantine")
+    def hold(self, path: Path, snapshot: dict, slot: str, reason: str) -> dict:
+        path = Path(path)
+        if path.is_symlink() or path.parent.resolve() != self.root.resolve():
+            raise ValueError("storage failure is outside its data root")
+        records = self.records()
+        item = (snapshot.get("session_id") if slot == "session" else
+                [snapshot.get("master_label_code") or path.name, snapshot.get("start_time")])
+        item_id = hashlib.sha256(json.dumps([slot, item or path.name], sort_keys=True).encode()).hexdigest()
+        probe = self.root / (".storage-check-" + uuid.uuid4().hex + ".tmp")
+        try:
+            with probe.open("xb") as stream:
+                stream.write(b"storage-check")
+                stream.flush()
+                os.fsync(stream.fileno())
+            if probe.read_bytes() != b"storage-check":
+                raise OSError("storage check readback differs")
+        finally:
+            probe.unlink(missing_ok=True)
+        for record in records:
+            if record["item_id"] == item_id:
+                return record
+        now = time.time()
+        if sum(record["timestamp"] >= now - 600 for record in records) >= 3:
+            raise OSError("four distinct storage failures within ten minutes")
+        sequence = max((record["sequence"] for record in records), default=0) + 1
+        record = {
+            "schema": "ca-storage-failure-v1", "outcome": "UNKNOWN",
+            "item_id": item_id, "slot": slot, "sequence": sequence, "timestamp": now,
+            "source_file": path.name,
+            "replacement_file": f"{path.stem}_sf_{sequence}.json",
+            "reason": reason, "snapshot": snapshot,
+        }
+        if (self.root / record["replacement_file"]).exists():
+            raise OSError("storage quarantine replacement is already occupied")
+        target = self.directory / (item_id + ".json")
+        atomic_write_json(target, record, ensure_ascii=False)
+        readback = json.loads(target.read_text(encoding="utf-8"))
+        if readback != record:
+            raise OSError("storage quarantine readback differs")
+        return readback
 
 
 def close_sqlite_connection(conn: sqlite3.Connection) -> None:

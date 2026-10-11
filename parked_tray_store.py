@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Mapping
 
 from label_qr import canonical_master_label_key, parse_new_format_qr
 from protected_admin import persistent_operator_name
-from storage_utils import atomic_write_json
+from storage_utils import StorageFailureQuarantine, atomic_write_json
 from writer_session_fence import writer_sink
 from recovery_file_read import read_recovery_file
 from paired_preflight_handoff import PairedPreflightHandoffStore
@@ -329,6 +329,13 @@ class ParkedTrayStore:
                                         not labels and not digest and (not temporary_target or result.raw is None), problem,
                                         content_sha256=result.sha256 or ""))
         pair_store = pair_store or PairedPreflightHandoffStore(self.directory / "paired_preflight_handoff")
+        failure_root = (pair_store.current_path.parent if pair_store.current_path is not None
+                        else self.directory.parent / "events")
+        for record in StorageFailureQuarantine(failure_root).records():
+            label = record["snapshot"].get("master_label_code")
+            labels = (label,) if isinstance(label, str) and label else ()
+            rows.append(KeyEvidence(failure_root / record["source_file"], "storage_failure", labels,
+                                    problem="저장 실패 · 관리자 확인 대기 · 결과 미확정"))
         for path in pair_store.paths():
             inspection = pair_store.inspect(path)
             rows.append(KeyEvidence(path, "pair", inspection.labels,

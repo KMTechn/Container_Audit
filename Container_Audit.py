@@ -212,7 +212,7 @@ from storage_policy import (
     notify_data_root_error,
     validate_existing_data_root,
 )
-from storage_utils import atomic_write_json
+from storage_utils import StorageFailureQuarantine, atomic_write_json
 from tk_serial_ui_lane import (
     DRAIN_TO_DURABLE_HANDOFF,
     DRAIN_TO_TERMINAL,
@@ -1391,6 +1391,7 @@ class ContainerAudit:
         self.PREFLIGHT_SCAN_HOLD_FILE = (
             f"_preflight_scan_hold_{self.computer_id}.json"
         )
+        self._resume_storage_failure_slots()
         self._work_session_recovery_blocked = not self._reconcile_work_session_state()
         
         self._setup_core_ui_structure()
@@ -1957,8 +1958,9 @@ class ContainerAudit:
                 return True
             return any(row.binds(master) for row in self._parked_store().enumerate_key_evidence(
                 pair_store=self._paired_preflight_store(),
-            ) if row.kind in {"pair", "stale", "stale_marker", "stale_current", "atomic_temp", "audit", "pin_intent",
-                               "precheck_pin", "preflight_quarantine", "directory_error"}
+            ) if row.kind in {"pair", "stale", "stale_marker", "stale_current", "atomic_temp", "audit", "pin_intent", "storage_failure",
+                                "precheck_pin", "preflight_quarantine", "directory_error"}
+                and not (row.kind == "storage_failure" and row.path.resolve() in retry_intent_paths)
                 and not (row.kind in {"precheck_pin", "preflight_quarantine"}
                          and row.path.resolve() in restoring_paths)
                 and not (row.kind == "pin_intent" and row.path.resolve() in retry_intent_paths))
@@ -2505,6 +2507,8 @@ class ContainerAudit:
 
     def _preflight_context_blocks_mutation(self, master_label: str = "", *,
                                          retry_intent_paths: Sequence[Path] = ()) -> bool:
+        if getattr(self, "_storage_failure_blocked", False):
+            return True
         snapshot = getattr(self, "_preflight_hold_snapshot", None)
         memory_gate = bool(
             getattr(self, "_master_preflight_pending", False)
@@ -3653,6 +3657,7 @@ class ContainerAudit:
     def _start_remembered_worker(self, worker_name: Optional[str]) -> None:
         if (not worker_name or self.worker_name
                 or self._work_session_recovery_blocked
+                or getattr(self, "_storage_failure_manual_start", False)
                 or self.transfer_seal_coordinator.client is None):
             return
         remembered_name = worker_name
@@ -3751,6 +3756,8 @@ class ContainerAudit:
             self.show_worker_input_screen()
             message = ("작업 세션과 감사 outbox를 함께 저장하거나 투영하지 못했습니다. "
                        "상태를 보존했으니 다시 시도하고 계속되면 관리자에게 문의하세요.")
+            if getattr(self, "_storage_failure_blocked", False):
+                message = self._storage_failure_stop_message()
             if _automatic:
                 self.show_status_message(message, self.COLOR_DANGER, duration=0)
             else:
@@ -3901,42 +3908,52 @@ class ContainerAudit:
         return lambda: self._save_tray_state_snapshot(state)
 
     def _save_tray_state_snapshot(self, state: Dict[str, Any]) -> bool:
+        if getattr(self, "_storage_failure_blocked", False) or getattr(self, "_storage_failure_current", None):
+            return False
         if int(getattr(_WRITER_LOCAL, "depth", 0)) > 0:
             return self._save_tray_state_snapshot_admitted(state)
         state_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
         try:
             for _ in range(3):
+                last_io_error = None
                 try:
-                    prior_bytes = state_path.read_bytes()
-                except FileNotFoundError:
-                    prior_bytes = None
-                digest = hashlib.sha256(prior_bytes).digest() if prior_bytes is not None else None
-                prepared_state = dict(state)
-                if prior_bytes is not None:
                     try:
-                        prior = json.loads(prior_bytes.decode('utf-8'))
-                    except (UnicodeError, json.JSONDecodeError):
-                        prior = {}
-                    pending = list(state.get('pending_audit_events', []))
-                    for event in prior.get('pending_audit_events', []):
-                        if event not in pending:
-                            pending.append(event)
-                    if pending:
-                        prepared_state['pending_audit_events'] = pending
-                temporary = self._prepare_tray_state_snapshot(state_path, prepared_state)
-                try:
-                    if self._publish_tray_state_snapshot(state_path, temporary, digest, prepared_state, state):
-                        return True
-                finally:
+                        prior_bytes = state_path.read_bytes()
+                    except FileNotFoundError:
+                        prior_bytes = None
+                    digest = hashlib.sha256(prior_bytes).digest() if prior_bytes is not None else None
+                    prepared_state = dict(state)
+                    if prior_bytes is not None:
+                        try:
+                            prior = json.loads(prior_bytes.decode('utf-8'))
+                        except (UnicodeError, json.JSONDecodeError):
+                            prior = {}
+                        pending = list(state.get('pending_audit_events', []))
+                        for event in prior.get('pending_audit_events', []):
+                            if event not in pending:
+                                pending.append(event)
+                        if pending:
+                            prepared_state['pending_audit_events'] = pending
+                    temporary = self._prepare_tray_state_snapshot(state_path, prepared_state)
                     try:
-                        temporary.unlink(missing_ok=True)
-                    except OSError:
-                        pass
+                        if self._publish_tray_state_snapshot(state_path, temporary, digest, prepared_state, state):
+                            return True
+                    finally:
+                        try:
+                            temporary.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                except OSError as exc:
+                    last_io_error = exc
+            if last_io_error is not None:
+                raise last_io_error
             return self._save_tray_state_snapshot_admitted(state)
         except WriterFenceError:
             raise
         except Exception as e:
             print(f"현재 트레이 상태 저장 실패: {e}")
+            if isinstance(e, OSError):
+                self._isolate_storage_failure(state_path, state, "tray", type(e).__name__)
             return False
 
     @writer_sink("gui_tray_state_save", probe_only=True)
@@ -4004,11 +4021,19 @@ class ContainerAudit:
                             pending.append(event)
                     if pending:
                         state['pending_audit_events'] = pending
-                atomic_write_json(state_path, state, indent=4)
+                for attempt in range(3):
+                    try:
+                        atomic_write_json(state_path, state, indent=4)
+                        break
+                    except OSError:
+                        if attempt == 2:
+                            raise
                 self._stage_checkpoint_audit_events(state)
                 return True
             except Exception as e:
                 print(f"현재 트레이 상태 저장 실패: {e}")
+                if isinstance(e, OSError):
+                    self._isolate_storage_failure(Path(state_path), state, "tray", type(e).__name__)
                 return False
 
     def _checkpoint_audit_event(self, event_type: str, **kwargs) -> Dict[str, Any]:
@@ -4492,6 +4517,36 @@ class ContainerAudit:
             state.pop(PARKED_RESTORE_STATE_KEY, None)
         return True
 
+    def _storage_failures(self) -> StorageFailureQuarantine:
+        return StorageFailureQuarantine(Path(self.save_folder))
+
+    @staticmethod
+    def _storage_failure_stop_message() -> str:
+        return ("이 PC 에 저장할 수 없습니다. 지금 트레이 실물을 그대로 두고 "
+                "다른 작업대로 옮겨 계속하세요. 관리자에게 알리세요.")
+
+    def _resume_storage_failure_slots(self) -> None:
+        try:
+            store = self._storage_failures()
+            self._storage_failure_manual_start = bool(store.records())
+            self.CURRENT_TRAY_STATE_FILE = store.next_path(
+                Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE).name
+            if not getattr(getattr(self, "current_tray", None), "master_label_code", ""):
+                self._storage_failure_current = None
+        except (OSError, ValueError, TypeError):
+            self._storage_failure_blocked = True
+
+    def _isolate_storage_failure(self, path, state, slot, reason) -> bool:
+        try:
+            record = self._storage_failures().hold(Path(path), state, slot, reason)
+        except (OSError, ValueError, TypeError):
+            self._storage_failure_blocked = True
+            return False
+        self._storage_failure_manual_start = True
+        if slot == "tray":
+            self._storage_failure_current = record
+        return True
+
     def _work_session_state_path(self) -> Optional[Path]:
         save_folder = str(getattr(self, "save_folder", "") or "").strip()
         state_file = str(
@@ -4499,7 +4554,13 @@ class ContainerAudit:
         ).strip()
         if not save_folder or not state_file:
             return None
-        return Path(save_folder) / state_file
+        try:
+            path = self._storage_failures().next_path(Path(save_folder) / state_file)
+            self.WORK_SESSION_STATE_FILE = path.name
+            return path
+        except (OSError, ValueError, TypeError):
+            self._storage_failure_blocked = True
+            return Path(save_folder) / state_file
 
     def _load_work_session_state(self) -> Optional[Dict[str, Any]]:
         state_path = self._work_session_state_path()
@@ -4514,7 +4575,7 @@ class ContainerAudit:
     @writer_sink("gui_work_session_save")
     def _save_work_session_state(self, state: Mapping[str, Any]) -> bool:
         state_path = self._work_session_state_path()
-        if state_path is None:
+        if state_path is None or getattr(self, "_storage_failure_blocked", False):
             return False
         lock = getattr(self, "_work_session_persist_lock", None)
         if lock is None:
@@ -4523,29 +4584,37 @@ class ContainerAudit:
         with lock:
             try:
                 normalized = validate_work_session_state(state)
-                atomic_write_json(
-                    state_path,
-                    normalized,
-                    indent=2,
-                    ensure_ascii=False,
-                    trailing_newline=True,
-                )
+                for attempt in range(3):
+                    try:
+                        atomic_write_json(state_path, normalized, indent=2,
+                                          ensure_ascii=False, trailing_newline=True)
+                        break
+                    except OSError:
+                        if attempt == 2:
+                            raise
                 return True
             except (OSError, TypeError, ValueError) as exc:
                 self._record_log_write_error(
                     f"작업 세션 journal 저장 오류: {exc.__class__.__name__}"
                 )
+                if isinstance(exc, OSError):
+                    self._isolate_storage_failure(state_path, dict(state), "session", type(exc).__name__)
                 return False
 
     def _reconcile_work_session_state(self) -> bool:
+        if getattr(self, "_storage_failure_blocked", False):
+            return False
         if self._work_session_state_path() is None:
             return True
+        if getattr(self, "_storage_failure_blocked", False):
+            return False
         try:
             state = self._load_work_session_state()
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, WorkSessionStateError) as exc:
             self._record_log_write_error(
                 f"작업 세션 journal 검증 오류: {exc.__class__.__name__}"
             )
+            self._isolate_storage_failure(self._work_session_state_path(), {}, "session", type(exc).__name__)
             return False
         if state is None:
             self._work_session_id = ""
@@ -4556,6 +4625,7 @@ class ContainerAudit:
             WORK_SESSION_PHASE_END_PENDING,
         }:
             if not self._project_audit_event_contract(state["pending_event"]):
+                self._isolate_storage_failure(self._work_session_state_path(), state, "session", "AuditUnavailable")
                 return False
             state["pending_event"] = None
             state["phase"] = (
@@ -4844,6 +4914,9 @@ class ContainerAudit:
         return state
 
     def _load_current_tray_state(self, *, _recovery_choice="pending"):
+        self._resume_storage_failure_slots()
+        if getattr(self, "_storage_failure_blocked", False):
+            return
         if _recovery_choice != "pending":
             self._inline_scan_choices = []
         state_path = os.path.join(self.save_folder, self.CURRENT_TRAY_STATE_FILE)
@@ -4904,6 +4977,7 @@ class ContainerAudit:
                     )
                     return
             if not self._reconcile_activation_event_from_state(saved_state):
+                self._isolate_storage_failure(state_path, saved_state, "tray", "ActivationAuditUnavailable")
                 self.current_tray = TraySession()
                 self.worker_name = ""
                 self._show_field_notice(
@@ -4913,6 +4987,7 @@ class ContainerAudit:
                 )
                 return
             if not self._reconcile_parked_restore_from_state(saved_state):
+                self._isolate_storage_failure(state_path, saved_state, "tray", "ParkedRestoreUnconfirmed")
                 self.current_tray = TraySession()
                 self.worker_name = ""
                 self._show_field_notice(
@@ -5007,6 +5082,7 @@ class ContainerAudit:
                         synchronous=True,
                     ):
                         self.current_tray = TraySession()
+                        self._isolate_storage_failure(state_path, saved_state, "tray", "RestoreAuditUnavailable")
                         self._show_field_notice("작업 기록 실패", "이전 작업 복구 기록을 남기지 못해 상태 파일을 보존합니다.")
                         return
                     self._restore_tray_from_state(saved_state)
@@ -10286,6 +10362,11 @@ class ContainerAudit:
             return
         store = self._paired_preflight_store()
         evidence = self._parked_store().enumerate_key_evidence(pair_store=store)
+        storage_entries = tuple(row for row in evidence if row.kind == "storage_failure")
+        for row in storage_entries:
+            messagebox.showinfo("저장 실패 · 관리자 확인 대기",
+                                f"원본: {row.path.name}\n결과는 미확정입니다. 원본과 격리 기록을 보존했습니다. "
+                                "이 건은 다시 처리하지 말고 다른 트레이를 계속하세요.", parent=self.root)
         directory_errors = tuple(row for row in evidence if row.kind == "directory_error")
         for row in directory_errors:
             messagebox.showwarning(
@@ -10305,7 +10386,7 @@ class ContainerAudit:
         temp_entries = tuple(row for row in evidence if row.kind == "atomic_temp")
         preflight_entries = tuple(row for row in evidence if row.kind in {"preflight_quarantine", "precheck_pin"})
         active_stale = bool(getattr(self, "_paired_stale_current_blocked", False))
-        if not paths and not stale_entries and not stale_current_entries and not temp_entries and not audit_entries and not preflight_entries and not active_stale and not directory_errors:
+        if not paths and not stale_entries and not stale_current_entries and not temp_entries and not audit_entries and not preflight_entries and not active_stale and not directory_errors and not storage_entries:
             messagebox.showinfo("두 원본 보류 목록", "인계된 두 원본 묶음이 없습니다.", parent=self.root)
             return
         for row in preflight_entries:
@@ -14463,6 +14544,10 @@ class ContainerAudit:
         """
         if getattr(self, "_ui_lane_fault_blocked", False):
             return "처리 오류를 확인해야 합니다. 추가 스캔을 중지하고 관리자에게 문의하세요."
+        if getattr(self, "_storage_failure_blocked", False):
+            return self._storage_failure_stop_message()
+        if getattr(self, "_storage_failure_current", None):
+            return "이 트레이는 관리자 확인 대기입니다. 현재 작업 초기화로 따로 보관하고 다음 트레이를 계속하세요."
         if getattr(self, "_startup_update_pending", False):
             return "프로그램 준비 중입니다. 잠시 뒤 다시 스캔하세요."
         pending_exchange = getattr(self, "_local_exchange_checkpoint_pending", None)
@@ -15749,7 +15834,13 @@ class ContainerAudit:
         self._schedule_focus_return()
 
     def reset_current_work(self):
-        if self._reject_mutation_during_preflight_hold():
+        storage_record = getattr(self, "_storage_failure_current", None)
+        if storage_record:
+            source = Path(self.save_folder) / storage_record["source_file"]
+            if self._preflight_context_blocks_mutation(retry_intent_paths=(source,)):
+                self.show_status_message("다른 보류 확인이 남아 현재 트레이를 유지합니다.", self.COLOR_DANGER)
+                return
+        elif self._reject_mutation_during_preflight_hold():
             return
         if self._phs_label_exchange_blocks_tray_transition("현재 작업 초기화"):
             return
@@ -15759,7 +15850,7 @@ class ContainerAudit:
         if self._transfer_member_exchange_blocks_local_action("현재 작업 초기화"):
             return
         self._update_last_activity_time()
-        if self.current_tray.master_label_code:
+        if self.current_tray.master_label_code or storage_record:
             reset_detail = {
                 'master_label_code': self.current_tray.master_label_code,
                 'scan_count_at_reset': len(self.current_tray.scanned_barcodes),
@@ -15785,9 +15876,15 @@ class ContainerAudit:
             except Exception:
                 self.show_status_message("잠금 해제 요청 저장에 실패했습니다. 현재 작업을 유지합니다.", self.COLOR_DANGER)
                 return
+            isolated = False
             if not self._save_tray_state_snapshot(state_snapshot):
-                self.show_status_message('초기화 상태 저장에 실패했습니다. 현재 작업을 유지합니다.', self.COLOR_DANGER)
-                return
+                record = getattr(self, "_storage_failure_current", None)
+                if not record or getattr(self, "_storage_failure_blocked", False):
+                    self.show_status_message('초기화 상태 저장에 실패했습니다. 현재 작업을 유지합니다.', self.COLOR_DANGER)
+                    return
+                self.CURRENT_TRAY_STATE_FILE = record["replacement_file"]
+                self._storage_failure_current = None
+                isolated = True
             self._flush_pending_event_logs()
             self._stop_stopwatch(); self._stop_idle_checker(); self.is_idle = False
             reset_lease_id = str(getattr(self.current_tray, "operation_lease_id", "") or "")
@@ -15798,7 +15895,8 @@ class ContainerAudit:
             self._sync_last_normal_scan_from_active_tray(clear_when_inactive=True)
             self._update_all_summaries(); self.undo_button['state'] = tk.DISABLED
             self._reset_ui_to_waiting_state()
-            self.show_status_message("현재 작업이 초기화되었습니다.", self.COLOR_DANGER)
+            self.show_status_message("이 트레이를 관리자 확인 대기로 따로 보관했습니다. 다음 트레이를 계속하세요."
+                                     if isolated else "현재 작업이 초기화되었습니다.", self.COLOR_DANGER)
             self._schedule_focus_return()
             self._request_operation_lease_release(reset_lease_id)
 
@@ -19734,6 +19832,13 @@ class ContainerAudit:
         then refuse that work's completion."""
         if lease_id == active_lease_id:
             return False
+        try:
+            if getattr(self, "save_folder", "") and any(
+                    record["snapshot"].get("operation_lease_id") == lease_id
+                    for record in self._storage_failures().records()):
+                return False
+        except (OSError, ValueError, TypeError):
+            return False
         manager = coordinator.operation_lease_manager
         try:
             attempt = manager.store.issue_attempt_for_lease(lease_id)
@@ -20270,6 +20375,8 @@ class ContainerAudit:
         return logged
 
     def show_status_message(self, message: str, color: Optional[str] = None, duration: int = 4000):
+        if getattr(self, "_storage_failure_blocked", False):
+            message, color, duration = self._storage_failure_stop_message(), self.COLOR_DANGER, 0
         self._cancel_status_message_timer()
         generation = self._status_message_generation
 
