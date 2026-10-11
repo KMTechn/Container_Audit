@@ -16,6 +16,7 @@ import json
 import os
 import secrets
 import sqlite3
+from storage_utils import close_sqlite_connection
 import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -347,7 +348,7 @@ class TransferMemberExchangeStore:
         try:
             yield conn
         finally:
-            conn.close()
+            close_sqlite_connection(conn)
 
     @writer_sink("transfer_member_exchange")
     def _initialize(self) -> None:

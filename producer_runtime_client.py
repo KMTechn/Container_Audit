@@ -8,7 +8,7 @@ credential/endpoint/install tuple so a credential change cannot inherit it.
 """
 
 from __future__ import annotations
-from storage_utils import RemoteAttempt
+from storage_utils import RemoteAttempt, close_sqlite_connection
 
 import base64
 import hashlib
@@ -637,7 +637,7 @@ def ensure_runtime_authority(
                     error_message=f"runtime authority state is invalid: {exc.__class__.__name__}",
                 )
             finally:
-                conn.close()
+                close_sqlite_connection(conn)
 
         attempt = RemoteAttempt.begin(db_path, "runtime_authority", discriminator=authority_scope)
         grant, request_error = _post_lease_request(
@@ -665,7 +665,7 @@ def ensure_runtime_authority(
                             )
                             conn.commit()
                         finally:
-                            conn.close()
+                            close_sqlite_connection(conn)
                 if (
                     request_error.error_code == DEAD_RENEWAL_CODE
                     and "runtime_fence" in request_value
@@ -741,7 +741,7 @@ def ensure_runtime_authority(
                     conn.rollback()
                     time.sleep(0.01)
                 finally:
-                    conn.close()
+                    close_sqlite_connection(conn)
     return RuntimePreparation(
         retryable=True,
         retry_after_seconds=1,
@@ -983,7 +983,7 @@ def prepare_runtime_metadata(
                     error_message=f"runtime authority state is invalid: {exc.__class__.__name__}",
                 )
             finally:
-                conn.close()
+                close_sqlite_connection(conn)
 
         attempt = RemoteAttempt.begin(db_path, "runtime_authority", discriminator=authority_scope)
         grant, request_error = _post_lease_request(
@@ -1011,7 +1011,7 @@ def prepare_runtime_metadata(
                             )
                             conn.commit()
                         finally:
-                            conn.close()
+                            close_sqlite_connection(conn)
                 if (
                     request_error.error_code == DEAD_RENEWAL_CODE
                     and "runtime_fence" in request_value
@@ -1078,7 +1078,7 @@ def prepare_runtime_metadata(
                     if cursor.rowcount != 1:
                         time.sleep(0.01)
                 finally:
-                    conn.close()
+                    close_sqlite_connection(conn)
     return RuntimePreparation(
         retryable=True,
         retry_after_seconds=1,

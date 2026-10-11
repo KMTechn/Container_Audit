@@ -2,7 +2,7 @@
 """Direct HTTP source-file uploader for Container_Audit CSV logs."""
 
 from __future__ import annotations
-from storage_utils import RemoteAttempt
+from storage_utils import RemoteAttempt, close_sqlite_connection
 
 import csv
 from contextvars import ContextVar
@@ -1648,7 +1648,7 @@ def init_relay_queue_schema(db_path: str | os.PathLike[str]) -> None:
             conn.rollback()
         raise
     finally:
-        conn.close()
+        close_sqlite_connection(conn)
 
 
 @writer_sink("relay_spool_storage")
@@ -2268,7 +2268,7 @@ def enqueue_source_file_for_relay(
                 pass
         raise
     finally:
-        conn.close()
+        close_sqlite_connection(conn)
 
 
 @writer_sink("relay_stale_lease_reset")
@@ -2297,7 +2297,7 @@ def reset_stale_relay_leases(
         conn.commit()
         return int(cursor.rowcount)
     finally:
-        conn.close()
+        close_sqlite_connection(conn)
 
 
 @writer_sink("relay_batch_claim")
@@ -2363,7 +2363,7 @@ def claim_next_relay_batch(
             claim_previous_next_attempt_at=str(row["next_attempt_at"] or ""),
         )
     finally:
-        conn.close()
+        close_sqlite_connection(conn)
 
 
 @writer_sink("relay_spool_storage")
@@ -2433,7 +2433,7 @@ def claim_relay_batch_by_id(
             claim_previous_next_attempt_at=str(row["next_attempt_at"] or ""),
         )
     finally:
-        conn.close()
+        close_sqlite_connection(conn)
 
 
 @writer_sink("relay_spool_storage")
@@ -2604,7 +2604,7 @@ def _set_relay_status(
             conn.rollback()
         raise
     finally:
-        conn.close()
+        close_sqlite_connection(conn)
 
 
 def _retry_after_seconds(attempt_count: int, base_seconds: int, jitter_key: str = "") -> int:
@@ -2691,7 +2691,7 @@ def _release_claimed_relay_after_operator_pause(
         conn.commit()
         return int(cursor.rowcount) == 1
     finally:
-        conn.close()
+        close_sqlite_connection(conn)
 
 
 def _pause_requested(pause_state: Any) -> bool:
@@ -2847,7 +2847,7 @@ def _persist_legacy_exact_replay_before_source_post(
             )
         conn.commit()
     finally:
-        conn.close()
+        close_sqlite_connection(conn)
 
 
 def _relay_credentials_issue(row: RelayQueueRow, credentials: ProducerCredentials) -> tuple[str, str]:

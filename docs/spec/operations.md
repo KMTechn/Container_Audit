@@ -645,6 +645,28 @@ v2 sidecar를 그대로 읽기·쓰기·복구하는 회귀, 정본 checker·wri
 
 첫 업무 수용은 같은 사용자·정확한 후보로 정상 시작/중복 시작/부분 준비를 구분하고 current/parked/intent 복구와 실제 작업 가능 여부를 확인하는 것이다. 설치 성공이나 local profile 검사만으로 서버 capability를 입증하지 않는다. [CA-01](README.md#ca-01), [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05).
 
+### 관리자 정상 멈춤 요청
+
+설치 owner와 같은 계정의 관리자 SSH 세션에서 실제 자료 루트를 지정한다.
+
+```text
+<설치루트>/runtime/python.exe -I -B <설치루트>/app/main.py --container-audit-user-relay --request-app-stop --data-root <실제자료루트>
+```
+
+기본 자료 루트라면 `--data-root`를 생략한다. 별도 relay 루트를 사용 중이면
+`--direct-sync-root <실제relay루트>`도 지정한다. 같은 relay `control` 폴더에
+`container_audit_app.stop.json`과 기존 relay stop JSON을 원자적으로 쓴다.
+GUI는 기존 1초 시계에서 요청을 확인하고 정상 닫기를 시작한 뒤 요청을 소비한다.
+현재 트레이는 보존하며 저장 실패 시 창을 유지하는 기존 규칙을 따른다.
+relay는 진행 중인 cycle을 마치고 멈추며 stop 표식은 기존 재기동 방지 규칙대로 남는다.
+
+출력의 `REQUESTED`는 GUI 종료 요청 접수다. relay `ABSENT`는 실행 잠금 부재이며
+GUI 종료나 PID 종료 증거가 아니다. relay 부재를 확인하지 못하면 `UNKNOWN`과
+종료 코드 1을 유지한다. 되돌림 전에는 GUI·relay 종료와 자료 파일을 따로 확인한다.
+WAL을 사용하는 writable SQLite 연결은 닫기 전에 미완료 거래를 rollback하고
+대기 없는 `wal_checkpoint(TRUNCATE)`를 시도한다. BUSY·오류는 종류만 기록하고
+연결은 닫는다. 다른 연결이 남아 있으면 `-wal`·`-shm` 소실은 보장하지 않는다.
+
 <a id="ca-o02"></a>
 ## CA-O02 저장소·설정 우선순위·공급자
 

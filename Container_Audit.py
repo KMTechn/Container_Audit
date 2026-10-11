@@ -15449,6 +15449,7 @@ class ContainerAudit:
         if hasattr(self, 'date_label') and self.date_label.winfo_exists(): self.date_label['text'] = now.strftime('%Y-%m-%d')
         if hasattr(self, 'clock_label') and self.clock_label.winfo_exists(): self.clock_label['text'] = now.strftime('%H:%M:%S')
         self.clock_job = self.root.after(1000, self._update_clock)
+        self._poll_app_stop_request()
 
     def _start_stopwatch(self, resume=False):
         if self.is_idle:
@@ -16204,6 +16205,24 @@ class ContainerAudit:
             and self._preflight_hold_matches_current_tray(snapshot)
         ):
             self.root.after(0, self._drain_preflight_hold_head)
+
+    def _poll_app_stop_request(self) -> None:
+        from user_relay import consume_app_stop_request, read_app_stop_request
+        from writer_session_fence import WriterFenceError
+
+        direct_sync_root = getattr(self, "direct_sync_program_data_root", "")
+        if not direct_sync_root or getattr(self, "_ui_close_requested", False):
+            return
+        request = read_app_stop_request(direct_sync_root)
+        if request is None:
+            return
+        try:
+            self.on_closing()
+        finally:
+            try:
+                consume_app_stop_request(direct_sync_root, request["request_id"])
+            except (OSError, WriterFenceError) as exc:
+                print(f"앱 멈춤 요청 정리 실패: {type(exc).__name__}")
 
     def on_closing(self, *, _confirmed: bool = False):
         if getattr(self, "_short_confirmation_undo", None):

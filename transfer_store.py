@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import sqlite3
+from storage_utils import close_sqlite_connection
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -106,7 +107,7 @@ class TransferSealStore:
         try:
             yield conn
         finally:
-            conn.close()
+            close_sqlite_connection(conn)
 
     @staticmethod
     def _linked_event_payload(row: Mapping[str, Any]) -> dict[str, Any]:

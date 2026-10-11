@@ -121,6 +121,14 @@ relay 읽기 예외·DB open/schema 실패는 마지막 정상 읽기의 실제 
 
 기준일 2026-09-07, CA HEAD `2e7d9f70341015dacfc3495cb2c4aac027cbcb3e`와 당시 수정 작업 트리를 대상으로 한다. [정확한 소스·증거 경계](README.md#ca-evidence-scope)를 함께 적용한다. 아래는 소스에서 확인한 계약이며 대상 서버의 활성 설정·설치 provider·실행 성공은 별도 증거가 필요하다. 상대 저장소의 조사 HEAD는 [SOURCE-MAP 및 연구](E:/KMTech/spec-hub-research-20260907/Container_Audit/RESEARCH.md)에 있으며 링크 대상이 이후 바뀌면 재대조한다.
 
+관리자 앱 멈춤 요청은 기존 relay control 폴더의 작은 원자 JSON으로 전달한다.
+GUI의 기존 1초 Tk 시계가 정상 닫기를 호출하며 현재 입력 저장·진행 중 처리 배수·
+저장 실패 시 종료 거절 계약을 유지한다. 소비하는 요청 ID와 현재 파일의 ID가
+같을 때만 요청을 지운다. 요청 접수와 실제 GUI·relay 종료 증명은 구분한다.
+WAL 연결의 close는 미완료 거래를 commit하지 않고 rollback한 뒤 대기 없는
+TRUNCATE checkpoint를 시도한다. BUSY·실패는 기록만 남기고 close를 계속하며
+read-only relay 조회에는 checkpoint를 추가하지 않는다.
+
 ## 1. 정본과 버전
 
 CA는 스캔·작업 상태·전송 의도를 소유한다. 중앙 제품 소유·위치·bundle membership·version·receipt 정본은 [Web logistics ledger service](../../../WorkerAnalysisGUI-web/logistics_ledger/service.py)가 소유한다. 관측 이벤트의 수신·투영은 [producer_ingest](../../../WorkerAnalysisGUI-web/producer_ingest.py)와 [common_projection](../../../WorkerAnalysisGUI-web/common_projection.py)가 소유한다. 이벤트 업로드만으로 물류 원장을 확정하거나 역산하지 않는다.

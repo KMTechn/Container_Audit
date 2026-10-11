@@ -15,6 +15,7 @@ import os
 import re
 import secrets
 import sqlite3
+from storage_utils import close_sqlite_connection
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -896,7 +897,7 @@ class OperationLeaseStore:
         try:
             yield connection
         finally:
-            connection.close()
+            close_sqlite_connection(connection)
 
     @writer_sink("terminal_operation_lease")
     def _initialize(self) -> None:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import sqlite3
 import uuid
 import hashlib
 from contextlib import contextmanager
@@ -10,6 +12,23 @@ from pathlib import Path
 from typing import Any
 
 from writer_session_fence import writer_admission, writer_sink
+
+
+def close_sqlite_connection(conn: sqlite3.Connection) -> None:
+    """Try to truncate WAL without waiting; retain close's rollback semantics."""
+    try:
+        if conn.in_transaction:
+            conn.rollback()
+        conn.execute("PRAGMA busy_timeout=0")
+        checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if checkpoint and checkpoint[0]:
+            logging.getLogger(__name__).warning("SQLite WAL checkpoint busy during close")
+    except sqlite3.Error as exc:
+        logging.getLogger(__name__).warning(
+            "SQLite WAL checkpoint failed during close: %s", type(exc).__name__,
+        )
+    finally:
+        conn.close()
 
 
 @dataclass(frozen=True)

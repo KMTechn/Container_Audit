@@ -35,6 +35,8 @@ DEFAULT_RETRY_INTERVAL_SECONDS = 30
 MAX_RETRY_INTERVAL_SECONDS = 60
 USER_RELAY_STATUS_NAME = "container_audit_user_relay.json"
 USER_RELAY_STOP_NAME = "container_audit_user_relay.stop.json"
+APP_STOP_NAME = "container_audit_app.stop.json"
+APP_STOP_SCHEMA = "container-audit-app-stop-v1"
 
 
 class UserRelayError(RuntimeError):
@@ -78,6 +80,35 @@ def user_relay_status_path(direct_sync_root: str | os.PathLike[str]) -> Path:
 
 def user_relay_stop_path(direct_sync_root: str | os.PathLike[str]) -> Path:
     return Path(direct_sync_root).expanduser().resolve() / "control" / USER_RELAY_STOP_NAME
+
+
+def app_stop_path(direct_sync_root: str | os.PathLike[str]) -> Path:
+    return user_relay_stop_path(direct_sync_root).with_name(APP_STOP_NAME)
+
+
+def read_app_stop_request(direct_sync_root: str | os.PathLike[str]) -> dict[str, Any] | None:
+    path = app_stop_path(direct_sync_root)
+    try:
+        if path.stat().st_size > 2048:
+            return None
+    except OSError:
+        return None
+    request = _read_json(path)
+    if request is None or request.get("schema_version") != APP_STOP_SCHEMA:
+        return None
+    request_id = request.get("request_id")
+    if not isinstance(request_id, str) or len(request_id) != 32:
+        return None
+    if any(character not in "0123456789abcdef" for character in request_id):
+        return None
+    return request
+
+
+@writer_sink("persistent_relay_status")
+def consume_app_stop_request(direct_sync_root: str | os.PathLike[str], request_id: str) -> None:
+    request = read_app_stop_request(direct_sync_root)
+    if request is not None and request["request_id"] == request_id:
+        app_stop_path(direct_sync_root).unlink(missing_ok=True)
 
 
 def relay_data_root_arguments(
@@ -514,6 +545,26 @@ def request_user_relay_stop(
         wait(0.25)
 
 
+def request_app_stop(
+    direct_sync_root: str | os.PathLike[str], *, timeout_seconds: float = 10.0,
+) -> dict[str, Any]:
+    root = Path(direct_sync_root).expanduser().resolve()
+    request_id = uuid.uuid4().hex
+    path = app_stop_path(root)
+    _write_json_atomic(path, {
+        "schema_version": APP_STOP_SCHEMA,
+        "request_id": request_id,
+        "requested_at": _now(),
+    })
+    relay = request_user_relay_stop(root, timeout_seconds=timeout_seconds)
+    return {
+        "status": "REQUESTED",
+        "request_id": request_id,
+        "app_stop_request_path": str(path),
+        "relay": relay,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     from auto_update import SupportArgumentParser
     parser = SupportArgumentParser(description="Container_Audit current-user persistent relay")
@@ -527,6 +578,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_RETRY_INTERVAL_SECONDS,
     )
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--request-app-stop", action="store_true")
     return parser
 
 
@@ -562,6 +614,20 @@ def main(argv: list[str] | None = None) -> int:
     from logistics_runtime_profile import resolve_logistics_profile_path
     direct_sync_root = resolve_owner_path(args.direct_sync_root) if args.direct_sync_root else storage.direct_sync_root
     scan_source_dir = resolve_owner_path(args.scan_source_dir) if args.scan_source_dir else storage.events_dir
+    if args.request_app_stop:
+        try:
+            if custom_root:
+                validate_existing_data_root(storage.data_root)
+            assert_runtime_state_outside_code_root(
+                app_root=app_root, direct_sync_root=direct_sync_root,
+                scan_source_dir=scan_source_dir,
+            )
+            result = request_app_stop(direct_sync_root)
+        except (OSError, ValueError):
+            _notify_data_root_error()
+            return 1
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["relay"]["status"] == "ABSENT" else 1
     profile = resolve_logistics_profile_path()
     try:
         from data_generation_guard import warm_runtime_release
