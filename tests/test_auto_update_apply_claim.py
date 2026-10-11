@@ -113,7 +113,7 @@ def test_e1_absent_or_reused_apply_owner_starts_current(endpoint, monkeypatch, o
     assert updates.read_json(control/'active.json')['sha'] == OLD
 
 
-def test_e1_unknown_owner_waits_existing_window_and_reports_progress(endpoint, monkeypatch, capsys):
+def test_e1_unknown_owner_waits_existing_window_and_starts_current(endpoint, monkeypatch):
     control = prepared_start(endpoint)
     clock = [0.0]
     updates.write_json_durable(control/'apply-claim.json', own_claim())
@@ -121,11 +121,12 @@ def test_e1_unknown_owner_waits_existing_window_and_reports_progress(endpoint, m
     monkeypatch.setattr(updates, 'request_apply_task', lambda *_: None)
     monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
     monkeypatch.setattr(time, 'sleep', lambda _: clock.__setitem__(0, clock[0]+30.0))
-    assert updates.bootstrap(control.parent/'current/app', [], role='gui') == 20
-    assert clock[0] == 240.0 and not endpoint[5].exists()
-    report = json.loads(capsys.readouterr().out)
-    assert report['reason_code'] == 'UPDATE_IN_PROGRESS'
-    assert report['guidance'] == updates.STARTUP_PROGRESS_MESSAGE
+    assert updates.bootstrap(control.parent/'current/app', [], role='gui') == 0
+    assert clock[0] == 240.0 and endpoint[5].exists()
+    assert updates.read_json(control/'active.json')['sha'] == OLD
+    report = updates.read_json(endpoint[1]/'startup-support.json')
+    assert report['reason_code'] == 'UPDATE_LOCK_WAIT_EXPIRED'
+    assert report['exit_code'] == 0
 
 
 def test_e1_normal_apply_exit_durably_retires_only_its_claim(endpoint, monkeypatch):
