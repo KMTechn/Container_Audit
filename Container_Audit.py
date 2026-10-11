@@ -3929,9 +3929,7 @@ class ContainerAudit:
                         except (UnicodeError, json.JSONDecodeError):
                             prior = {}
                         pending = list(state.get('pending_audit_events', []))
-                        for event in prior.get('pending_audit_events', []):
-                            if event not in pending:
-                                pending.append(event)
+                        pending.extend(event for event in prior.get('pending_audit_events', []) if event not in pending)
                         if pending:
                             prepared_state['pending_audit_events'] = pending
                     temporary = self._prepare_tray_state_snapshot(state_path, prepared_state)
@@ -14786,6 +14784,8 @@ class ContainerAudit:
             self._set_scan_callback_pending(False)
 
     def _show_field_notice(self, title, message, **options):
+        if getattr(self, "_storage_failure_blocked", False):
+            message = self._storage_failure_stop_message()
         self.show_fullscreen_warning(str(title), str(message), getattr(self, "COLOR_DANGER", "#DC2626"))
 
     def _request_inline_choice(self, title, message, choices, *, on_scan):

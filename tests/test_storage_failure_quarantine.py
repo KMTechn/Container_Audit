@@ -310,3 +310,27 @@ def test_restore_failure_keeps_checkpoint_unknown_and_other_labels_available(flo
     assert app._preflight_label_is_held(COMPACT_QR)
     assert not app._preflight_label_is_held(OLD_QR)
     assert not app.seal_calls
+
+
+def test_restore_probe_failure_displays_station_storage_stop_guidance(flow, windows, monkeypatch):
+    app = _active(flow)
+    public_scan(app, ITEM + "T46")
+    original = Path(app.save_folder) / app.CURRENT_TRAY_STATE_FILE
+    before = original.read_bytes()
+    app.current_tray = ca.TraySession()
+    warnings = []
+    monkeypatch.setattr(app, "_reconcile_activation_event_from_state", lambda _: False)
+    monkeypatch.setattr(app, "show_fullscreen_warning", lambda title, message, color: warnings.append(message))
+    open_file = Path.open
+
+    def fail_probe(path, *args, **kwargs):
+        if path.name.startswith(".storage-check-"):
+            raise OSError("storage probe unavailable")
+        return open_file(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_probe)
+    app._load_current_tray_state(_recovery_choice=True)
+    assert warnings[-1] == app._storage_failure_stop_message()
+    assert app._storage_failure_blocked
+    assert original.read_bytes() == before
+    assert not app.seal_calls
