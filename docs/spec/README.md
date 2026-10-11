@@ -6,6 +6,7 @@
 - 지금 코드와 다른 줄은 §4 「지금 상태」 와 §7 고칠 목록에 있다.
 - 옛 명세(0f82c54 판 README, 기술 이력 포함)는 git 이력에 그대로 있다.
 - 기술 계약은 [contracts.md](contracts.md), 운영은 [operations.md](operations.md), 제품 교환은 [member-exchange-view.md](member-exchange-view.md) 가 정본이다.
+- 설치된 앱의 읽기 전용 확인 계약·실행법은 [startup-check.md](startup-check.md)를 따른다.
 - 근거:
   - 지금 상태 조사표: `D:\KMTech\program-improvement-20260912\work\program\w9archplan\sub-26\INVENTORY.md`(정적, F-01–F-72).
   - 현장 사실: 사용자 확인분. 화면 기준: `specs/UI-AUDIT-1009.md` U7. 허브 결정: `Program_Spec_Hub/DECISIONS.md`.

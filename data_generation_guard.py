@@ -18,6 +18,7 @@ from writer_session_fence import canonical_control_root, writer_sink
 
 _READONLY_ROLLBACK_TARGET = ContextVar('container_readonly_rollback_target', default=None)
 _READONLY_INSTALLER_SOURCE = ContextVar('container_readonly_installer_source', default=None)
+_READONLY_STARTUP_TARGET = ContextVar('container_readonly_startup_target', default=None)
 _PORTABLE_RELEASE_CACHE = {}
 logger = logging.getLogger(__name__)
 
@@ -116,37 +117,43 @@ def verified_private_compatibility(manifest, signature, public_key_config, *, ve
             "compatibility_verified": "data_compatible_min_version" in manifest}
 
 
-def _portable_runtime_release():
+class InstalledReleaseMismatch(ValueError):
+    """A completed installed-release comparison proved a mismatch."""
+
+
+def _portable_runtime_release(*, app_root=None, rehash_paths=None, deadline=None):
     """Read and remember only a verified installed packet; never probe source Git."""
     from tools.check_release_version import read_current_version
 
-    app_root = Path(__file__).resolve().parent
+    app_root = Path(__file__).resolve().parent if app_root is None else Path(app_root).absolute()
     packet_root = app_root.parent if (app_root.parent / "portable-manifest.json").is_file() else app_root
     manifest_path = packet_root / "portable-manifest.json"
     if not manifest_path.exists():
         return None
     expected_entrypoint = (app_root / "Container_Audit.py").relative_to(packet_root).as_posix()
     portable_identity = (packet_root.resolve(), app_root, expected_entrypoint)
-    cached = _PORTABLE_RELEASE_CACHE.get(portable_identity)
+    cached = _PORTABLE_RELEASE_CACHE.get(portable_identity) if rehash_paths is None else None
     if cached is not None:
         return dict(cached)
     version = read_current_version(app_root / "Container_Audit.py")
     from current_user_onboarding import verify_bootstrap_integrity
     from types import SimpleNamespace
 
+    verification = {} if rehash_paths is None else {'rehash_paths': rehash_paths, 'deadline': deadline}
     detail = verify_bootstrap_integrity(SimpleNamespace(
         app_root=packet_root, bootstrap_integrity_path=packet_root / "bootstrap-integrity.json"), required=True,
-        expected_entrypoint=expected_entrypoint)
+        expected_entrypoint=expected_entrypoint, **verification)
     if detail.get("status") != "PASS":
-        raise ValueError("release code integrity is not proven")
+        failure = InstalledReleaseMismatch if rehash_paths is not None else ValueError
+        raise failure("release code integrity is not proven")
     if manifest_path.stat().st_size > 65536:
         raise ValueError("release manifest is oversized")
     manifest = json.loads(manifest_path.read_bytes())
     if manifest.get("version") != version:
-        raise ValueError("release version binding differs")
+        raise InstalledReleaseMismatch("release version binding differs")
     build = manifest.get("source_commit")
     if not isinstance(build, str) or not re.fullmatch(r"[0-9a-f]{40}", build):
-        raise ValueError("release build identity is not proven")
+        raise InstalledReleaseMismatch("release build identity is not proven")
     release = {"version": version, "build_id": build,
                "data_compatible_min_version": version, "compatibility_verified": False}
     proof = manifest.get("data_generation_signed_manifest")
@@ -172,7 +179,8 @@ def _portable_runtime_release():
             # A bad or unavailable proof grants no compatibility permission.
             # The already verified code identity still uses its own version.
             logger.warning("Installed data compatibility proof unavailable; using release version")
-    _PORTABLE_RELEASE_CACHE[portable_identity] = dict(release)
+    if rehash_paths is None:
+        _PORTABLE_RELEASE_CACHE[portable_identity] = dict(release)
     return dict(release)
 
 
@@ -319,10 +327,21 @@ def record_before_data_open(data_root, *, probe_only=False):
             "message_key": "data_generation_unknown", "message": generation.UNKNOWN_MESSAGE}) from exc
 
 
+@contextmanager
+def _readonly_startup_probe(release, verify_snapshot):
+    """Observe existing guards without admitting a writer or publishing markers."""
+    verify_snapshot()
+    scope = _READONLY_STARTUP_TARGET.set((dict(release), verify_snapshot))
+    try:
+        yield
+    finally:
+        _READONLY_STARTUP_TARGET.reset(scope)
+
+
 def probe_before_data_open(data_root, *, admission_source=None):
     """Existing admission must cover this check and the following control read."""
     if admission_source is None:
-        target = _READONLY_ROLLBACK_TARGET.get() or _READONLY_INSTALLER_SOURCE.get()
+        target = _READONLY_ROLLBACK_TARGET.get() or _READONLY_INSTALLER_SOURCE.get() or _READONLY_STARTUP_TARGET.get()
         if target is not None:
             release, verify_pending = target
             verify_pending()

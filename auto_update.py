@@ -2448,6 +2448,15 @@ def publish_gui_ready(app_root: Path) -> bool:
     return True
 
 
+def startup_requires_bootstrap(state, *, prepared_present, running_sha, active_sha):
+    """The ordinary startup decision, shared with the read-only checker."""
+    return not (
+        not prepared_present and not (state and state.get("recovery_pending") is True)
+        and (not state or state["phase"] in {"CONFIRMED", "ROLLED_BACK", "DEFERRED"})
+        and running_sha == active_sha
+    )
+
+
 def startup_gate(app_root: Path, arguments: list[str], *, role: str = "gui") -> int | None:
     if arguments[:1] in (["--container-audit-user-relay"], ["--container-audit-direct-sync-relay"]):
         role = "relay"
@@ -2477,7 +2486,7 @@ def startup_gate(app_root: Path, arguments: list[str], *, role: str = "gui") -> 
             # runs before data access; this grants no pointer or trial authority.
             return None
         prepared = prepared_pending(control, policy, state)
-        if not prepared and not (state and state.get("recovery_pending") is True) and (not state or state["phase"] in {"CONFIRMED", "ROLLED_BACK", "DEFERRED"}) and sha == active["sha"]:
+        if not startup_requires_bootstrap(state, prepared_present=prepared, running_sha=sha, active_sha=active["sha"]):
             return None
     request_bootstrap(control, arguments, role=role)
     return 0

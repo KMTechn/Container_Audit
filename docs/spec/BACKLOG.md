@@ -547,6 +547,9 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g19"></a>
 ## CA-G19 로그온 자동 갱신 실기 수용
 
+[읽기 전용 시작 확인](startup-check.md)의 headless 시험은 실물 HDD 10초 상한·로그온 작업·
+실제 작업자 계정·원격 알림 수용을 대신하지 않는다. 이 수용은 설치 키트/현장 lane에서 남는다.
+
 - **sub-217 지원 제거 controller 재진입:** 보호 원 감사·source/fence/owner 결속과 같은 session의
   배타적 재획득을 추가했다. 실제 public fence/지원 제거/하위 내용 caller AST를 실행한 PS5.1/7
   회귀 14 PASS(기준 실제 `ALREADY_ACTIVE` RED 2)다. 내용 이동 뒤 즉시 controller 종료와 추가

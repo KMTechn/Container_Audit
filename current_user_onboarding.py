@@ -16,6 +16,7 @@ import re
 import stat
 import subprocess
 import sys
+import time
 from typing import Any, Callable, Mapping, MutableMapping
 import uuid
 from contextlib import nullcontext
@@ -505,11 +506,17 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+class BootstrapIntegrityMismatch(ValueError):
+    """The installed inventory comparison completed and proved a mismatch."""
+
+
 def verify_bootstrap_integrity(
     paths: CurrentUserOnboardingPaths,
     *,
     required: bool,
     expected_entrypoint: str = "Container_Audit.exe",
+    rehash_paths: frozenset[str] | None = None,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     if not required:
         return {"status": "NOT_TESTED", "reason": "source-mode onboarding"}
@@ -548,6 +555,8 @@ def verify_bootstrap_integrity(
     normalized: list[tuple[str, int, str]] = []
     declared_paths: set[str] = set()
     for item in files:
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("bootstrap inventory budget exhausted")
         if not isinstance(item, Mapping):
             raise ValueError("bootstrap integrity inventory entry is invalid")
         relative_text = str(item.get("path") or "").replace("\\", "/")
@@ -572,17 +581,20 @@ def verify_bootstrap_integrity(
             raise ValueError("bootstrap integrity inventory metadata is invalid")
         target = paths.app_root.joinpath(*parts)
         if target.is_symlink() or not target.is_file():
-            raise ValueError(
+            raise BootstrapIntegrityMismatch(
                 f"bootstrap code file is absent or redirected: {relative_text}"
             )
         if (
             target.stat().st_size != expected_size
-            or _file_sha256(target) != expected_hash
+            or ((rehash_paths is None or relative_text in rehash_paths)
+                and _file_sha256(target) != expected_hash)
         ):
-            raise ValueError(f"bootstrap code file integrity failed: {relative_text}")
+            raise BootstrapIntegrityMismatch(f"bootstrap code file integrity failed: {relative_text}")
         normalized.append((expected_hash, expected_size, relative_text))
     actual_paths = set()
     for candidate in paths.app_root.rglob("*"):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("bootstrap inventory budget exhausted")
         if not candidate.is_file():
             continue
         relative = candidate.relative_to(paths.app_root).as_posix().casefold()
@@ -590,14 +602,14 @@ def verify_bootstrap_integrity(
             continue
         actual_paths.add(relative)
     if actual_paths != declared_paths:
-        raise ValueError("bootstrap code inventory exact readback failed")
+        raise BootstrapIntegrityMismatch("bootstrap code inventory exact readback failed")
     aggregate_payload = "".join(
         f"{sha256} {size} {relative_path}\n"
         for sha256, size, relative_path in normalized
     ).encode("utf-8")
     aggregate = hashlib.sha256(aggregate_payload).hexdigest()
     if aggregate != str(record.get("aggregate_sha256") or "").strip().lower():
-        raise ValueError("bootstrap integrity aggregate is invalid")
+        raise BootstrapIntegrityMismatch("bootstrap integrity aggregate is invalid")
     if expected_entrypoint not in {"Container_Audit.exe", "app/Container_Audit.py", "Container_Audit.py"}:
         raise ValueError("bootstrap code entrypoint is not approved")
     main_entries = [
@@ -1839,6 +1851,7 @@ def consume_pending_machine_onboarding(
     environ: MutableMapping[str, str] | None = None,
     onboarder=None, sid_reader=None, completion_reader=None, completion_writer=None,
     check_target_only: bool = False,
+    read_only: bool = False,
 ) -> dict[str, Any] | None:
     """Read machine intent; finish only this SID, once per installed identity."""
     values = os.environ if environ is None else environ
@@ -1886,6 +1899,8 @@ def consume_pending_machine_onboarding(
             manifest = _read_json(code_root / "portable-manifest.json", "machine onboarding manifest")
             if (commit != manifest.get("source_commit") or marker.get("version") != manifest.get("version")):
                 raise ValueError("machine onboarding intent belongs to another release")
+        if read_only:
+            return {"status": "PENDING"}
         runner = onboarder or onboard_current_user
         options = {"environ": environ, "require_bootstrap_integrity": True}
         if marker.get("server_base_url"):
