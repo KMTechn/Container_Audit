@@ -42,6 +42,8 @@ def _review_ui(tmp_path, monkeypatch, *, role="ADMIN", confirm=True, audit_ok=Tr
     app._transfer_seal_runtime = lambda: coordinator
     app._update_action_button_states = lambda: None
     app._refresh_transfer_post_review_state = lambda: True
+    app.status_reports = []
+    app.show_status_message = lambda *args, **kwargs: app.status_reports.append((args, kwargs))
     app._log_event = lambda event, **kwargs: audit.append((event, kwargs)) or audit_ok
     monkeypatch.setattr(container_module.messagebox, "askyesno", lambda *_args, **_kwargs: confirm)
     monkeypatch.setattr(container_module.messagebox, "showwarning", lambda *args, **_kwargs: messages.append(args))
@@ -62,7 +64,18 @@ def test_normal_supervisor_action_audits_before_same_command_retry(tmp_path, mon
     assert audit[0][1]["synchronous"] is True
     assert audit[0][1]["worker_name_override"] == "review-supervisor"
     assert audit[0][1]["detail"]["transfer_intent_id"] == intent_id
-    assert messages[-1][0] == "회사 서버 반영 확인"
+    assert messages == []
+    assert app.status_reports[-1][0] == (
+        "저장된 완료 작업의 회사 서버 반영을 확인했습니다.", app.COLOR_SUCCESS)
+
+
+@pytest.mark.parametrize("status", ["UNKNOWN", "CONFLICT"])
+def test_unconfirmed_retry_keeps_warning_without_success_status(tmp_path, monkeypatch, status):
+    app, lane, _audit, _posted, _coordinator, _intent_id, messages = _review_ui(tmp_path, monkeypatch)
+    assert app._retry_transfer_post_review() is True
+    lane.tasks[0].finish(SimpleNamespace(status=status))
+    assert messages[-1][0] == "관리자 확인 계속 필요"
+    assert app.status_reports == []
 
 
 def test_review_lease_failure_keeps_internal_diagnostics_out_of_dialog(tmp_path, monkeypatch):

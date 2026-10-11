@@ -18472,8 +18472,8 @@ class ContainerAudit:
             self._refresh_transfer_post_review_state()
             self._update_action_button_states()
             if result.status == "ACKED":
-                messagebox.showinfo(
-                    "회사 서버 반영 확인", "저장된 완료 작업의 회사 서버 반영을 확인했습니다.", parent=self.root,
+                self.show_status_message(
+                    "저장된 완료 작업의 회사 서버 반영을 확인했습니다.", self.COLOR_SUCCESS,
                 )
             else:
                 messagebox.showwarning(
