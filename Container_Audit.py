@@ -16695,6 +16695,16 @@ class ContainerAudit:
         if held_notice:
             # The window closes next: the operator reads it before it goes.
             self._show_field_notice("스캔 다시 필요", held_notice, parent=self.root)
+        if not getattr(self, "_ui_close_requested", False) and hasattr(getattr(self, "root", None), "after"):
+            self._close_wait_started = time.monotonic()
+            def delayed_close_notice():
+                if (getattr(self, "_ui_close_requested", False)
+                        and not getattr(self, "_application_close_complete", False)
+                        and time.monotonic() - self._close_wait_started >= 60):
+                    self.show_status_message("종료가 끝나지 않았습니다. 창을 그대로 두고 관리자에게 알리세요.", self.COLOR_DANGER, duration=0)
+                    if not getattr(self, "_event_log_close_requested", False):
+                        self.log_queue.put({"close_delay": True})
+            self.root.after(60000, delayed_close_notice)
         self._ui_close_requested = True
         central_lane = getattr(self, "_central_transport_lane", None)
         if central_lane is not None and not getattr(self, "_central_transport_drained", False):
@@ -16941,6 +16951,11 @@ class ContainerAudit:
                 flush()
                 continue
             try:
+                if queued_item and queued_item.get("close_delay"):
+                    try:
+                        payload = self._prepare_event_log_entry("APP_CLOSE_DELAY", detail={"message": "종료 지연"}, worker_record=self._worker_record_context())
+                        if payload: append_event_log_entry_idempotent(payload["log_file_path"], payload["log_entry"], event_type="APP_CLOSE_DELAY", idempotency_key=json.loads(payload["log_entry"]["details"])["idempotency_key"])
+                    except Exception: pass
                 if queued_item and queued_item.get("direct_sync_event") == "PRODUCT_EXCHANGE_COMPLETED":
                     sync_pending = True
                 flush()
