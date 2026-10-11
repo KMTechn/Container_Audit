@@ -9,8 +9,20 @@
 `reasons`, `category`, `categories`, `checked_at`(+09:00)이다. 경로·계정 식별자·
 오류 원문·자격 정보는 담지 않는다. `category`는 첫 시작 불가 묶음이며,
 시작 가능하면 READY다. `categories`는 겹치는 묶음을 순서대로 담는다.
-ALREADY_RUNNING만 있으면 시작 가능 여부를 바꾸지 않는다.
+ALREADY_RUNNING·FIRST_RUN_PENDING은 시작 불가에 세지 않는다. 첫 실행에서 앱이 마칠 수 있는
+검증된 기계 PENDING, 사용자 ABSENT·ABSENT_RETRYABLE(기계 대기 또는 기존 첫 실행 설정 켬)는
+FIRST_RUN_PENDING이다. 이 까닭만 있으면 startable=true, status/category=READY,
+categories=[READY,FIRST_RUN_PENDING], 종료 0이다. 기계 PENDING은 실제 consumer의 신원·설치 판
+검증을 통과한 결과만 인정한다. 사용자 RECOVERY_REQUIRED·명시 FAILED는 기존 설정 실패로 막고,
+SID 불일치도 유지한다. 못 읽거나 미등록 상태면 UNKNOWN/20이다.
 까닭→묶음의 정본은 [startup_check.py](../../startup_check.py)의 `REASON_CATEGORIES`다.
+K1은 이 정본의 고정 코드와 TEST_<고정 묶음>만 허용한다. TEST_FIRST_RUN_PENDING도 시험 전용이다.
+
+|종료|결론|
+|---|---|
+|0|READY; FIRST_RUN_PENDING·ALREADY_RUNNING 알림 까닭은 허용|
+|10|확인된 기존 시작 불가|
+|20|UNKNOWN 포함·읽기 실패·판정 예외·10초 초과|
 
 기존 업데이트 인계 조건, writer fence 읽기, 설치 inventory, 자료 판 하한·build·표지,
 계정 설정 읽기, 인증된 품목 캐시·복구본, relay 자동 시작 명령을 재사용한다.
@@ -24,6 +36,9 @@ CLI는 GUI를 import하지 않고 디렉터리·보고서·표지·SQLite·pyc�
 네트워크, writer admission, named mutex, bootstrap·relay 실행도 없다.
 HTTP 라이브러리의 import 시 loopback 기능 검사까지 포함해 CLI 판정 범위에서는 소켓 생성을 막는다.
 저장·전환·등록이 필요하면 기존 설치·복구 절차에서 수행한다.
+첫 실행 준비가 담당할 빈 profile의 인증된 품목 캐시와 빈 relay 등록은 그 준비가 끝난 뒤 기존
+앱 관문이 확인한다. READY profile의 저장 목록 요구, 이미 존재하는 다른 relay 명령, 설치·담장·
+자료 보호 확인은 그대로다. 대기 중이라도 확인된 실패나 UNKNOWN이 함께 있으면 시작 가능으로 만들지 않는다.
 현장 시작과 알림·관리자 원격 조치는 설치 키트 실행기가 담당한다.
 
 ## 앱 시작 길의 관찰·기록 (G)
@@ -31,6 +46,8 @@ HTTP 라이브러리의 import 시 loopback 기능 검사까지 포함해 CLI �
 `main`은 화면 전에 관찰을 시작한다. CLI를 다시 실행하지 않고 기존 관문이 이미 읽고
 판정한 결과를 받아 같은 JSON을 만든다. 정상 시작은 GUI 생성 전, writer admission 밖에서
 기록한다. 같은 정상 결과는 다시 쓰지 않으며 생성 중 기존 거부가 발생하면 같은 파일을 고친다.
+기계 consumer와 사용자 onboarder는 이미 검증·판독한 상태를 같은 startup_onboarding_reason에
+전달하여 FIRST_RUN_PENDING을 관찰한다. 판정·판독을 추가로 재실행하지 않는다.
 설치기가 만든 `%PROGRAMDATA%\KMTech\start-check\YYYYMMDD-CA.json`에 임시 파일→
 `os.replace`로 한 줄을 원자 기록한다. 폴더를 만들지 않는다. 폴더 없음·쓰기 실패는 조용히 넘어간다.
 이 파일은 실행 허가·자료 판 표지가 아니다. ACL과 알림·SSH 원격 고침은 설치 키트 몫이다.

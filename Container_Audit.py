@@ -22590,10 +22590,8 @@ BOOTSTRAP_INTEGRITY_WARNING_MESSAGE = (
 
 
 def _first_run_onboarding_enabled() -> bool:
-    if getattr(sys, "frozen", False) and os.name == "nt":
-        return True
-    value = os.getenv("CONTAINER_AUDIT_ENABLE_FIRST_RUN_ONBOARDING", "").strip().lower()
-    return value in {"1", "true", "yes", "on", "enabled"}
+    from current_user_onboarding import first_run_onboarding_enabled
+    return first_run_onboarding_enabled()
 
 
 MACHINE_ONBOARDING_ERROR_MESSAGES = {

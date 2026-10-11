@@ -163,13 +163,14 @@ def test_g0_matches_baseline_exit_and_adds_no_refusal(
 @pytest.mark.parametrize("category", [
     "UPDATE_PENDING", "DEPLOY_FENCE", "INSTALL_MISMATCH", "DATA_GUARD",
     "ACCOUNT_MISMATCH", "CATALOG_OFFLINE", "ALREADY_RUNNING", "UNKNOWN",
+    "FIRST_RUN_PENDING",
 ])
 def test_test_only_category_forces_result_without_changing_normal_start(
         folder, flow, monkeypatch, category):
     monkeypatch.setenv("KMTECH_START_CHECK_TEST_CATEGORY", category)
     assert app.main([]) == 0
     result = read_result(folder)
-    assert result["category"] == ("READY" if category == "ALREADY_RUNNING" else category)
+    assert result["category"] == ("READY" if category in check.NONBLOCKING_CATEGORIES else category)
     assert category in result["categories"]
     assert flow.events == ["gate", "host", "prepare", "run", "release"]
     assert not flow.notices

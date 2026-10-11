@@ -23,6 +23,7 @@ REASON_CATEGORIES = {
     "ACCOUNT_MISMATCH": "ACCOUNT_MISMATCH",
     "FIRST_RUN_SETUP_REQUIRED": "ACCOUNT_MISMATCH",
     "MACHINE_ONBOARDING_PENDING": "ACCOUNT_MISMATCH",
+    "FIRST_RUN_PENDING": "FIRST_RUN_PENDING",
     "ITEM_CATALOG_UNAVAILABLE": "CATALOG_OFFLINE",
     "ITEM_CATALOG_HTTP_403": "CATALOG_OFFLINE",
     "ITEM_CATALOG_HTTP_ERROR": "CATALOG_OFFLINE",
@@ -51,14 +52,15 @@ REASON_CATEGORIES = {
 }
 REASON_CATEGORIES.update({f"TEST_{category}": category for category in (
     "UPDATE_PENDING", "DEPLOY_FENCE", "INSTALL_MISMATCH", "DATA_GUARD",
-    "ACCOUNT_MISMATCH", "CATALOG_OFFLINE", "ALREADY_RUNNING", "UNKNOWN",
+    "ACCOUNT_MISMATCH", "CATALOG_OFFLINE", "ALREADY_RUNNING", "FIRST_RUN_PENDING", "UNKNOWN",
 )})
+NONBLOCKING_CATEGORIES = frozenset({"ALREADY_RUNNING", "FIRST_RUN_PENDING"})
 
 
 def startup_result(version="", build_sha="", reasons=()):
     reasons = list(dict.fromkeys(reason if reason in REASON_CATEGORIES else "UNKNOWN_CHECK"
                                  for reason in reasons))
-    blocking = [reason for reason in reasons if REASON_CATEGORIES[reason] != "ALREADY_RUNNING"]
+    blocking = [reason for reason in reasons if REASON_CATEGORIES[reason] not in NONBLOCKING_CATEGORIES]
     categories = list(dict.fromkeys(REASON_CATEGORIES[reason] for reason in reasons))
     ready = not blocking
     return {
@@ -200,6 +202,7 @@ def _check_startup(app_root, deadline):
     app_root = Path(app_root).absolute()
     reasons, release = [], {}
     profile = None
+    first_run_pending = False
 
     def within_budget():
         if time.monotonic() >= deadline:
@@ -269,7 +272,7 @@ def _check_startup(app_root, deadline):
             paths = None
 
             def account():
-                nonlocal paths, profile
+                nonlocal paths, profile, first_run_pending
                 paths = onboarding.resolve_current_user_onboarding_paths(app_root)
                 try:
                     machine_state = onboarding.consume_pending_machine_onboarding(app_root, read_only=True)
@@ -279,8 +282,10 @@ def _check_startup(app_root, deadline):
                     if error.status == "PENDING_WORKER_SID_MISMATCH":
                         return "ACCOUNT_MISMATCH"
                     raise
-                if machine_state and machine_state["status"] != "READY":
-                    return "MACHINE_ONBOARDING_PENDING"
+                machine_reason = onboarding.startup_onboarding_reason(machine_state, machine=True)
+                if machine_reason not in (None, "FIRST_RUN_PENDING"):
+                    return machine_reason
+                can_onboard = machine_reason == "FIRST_RUN_PENDING" or onboarding.first_run_onboarding_enabled()
 
                 def loader(path):
                     nonlocal profile
@@ -289,9 +294,11 @@ def _check_startup(app_root, deadline):
 
                 state = onboarding.inspect_current_user_state(
                     paths, profile_loader=loader, credential_loader=onboarding.load_credentials_from_json)
-                if state.get("error_type") not in (None, "ValueError", "CurrentUserPossessionRecoveryRequired"):
-                    return "UNKNOWN_ACCOUNT"
-                return None if state["status"] == "READY" else "FIRST_RUN_SETUP_REQUIRED"
+                reason = onboarding.startup_onboarding_reason(state, can_onboard=can_onboard)
+                if reason not in (None, "FIRST_RUN_PENDING"):
+                    return reason
+                first_run_pending = machine_reason == "FIRST_RUN_PENDING" or reason == "FIRST_RUN_PENDING"
+                return "FIRST_RUN_PENDING" if first_run_pending else None
 
             inspect("ACCOUNT", account)
 
@@ -314,7 +321,7 @@ def _check_startup(app_root, deadline):
                 if legacy_label_transition_enabled():
                     return None
                 if profile is None:
-                    return "ITEM_CATALOG_UNAVAILABLE"
+                    return None if first_run_pending else "ITEM_CATALOG_UNAVAILABLE"
                 cache = catalog.default_cache_path()
                 unreadable = False
                 for path in (cache, catalog._cache_authority_path(cache), catalog._cache_recovery_path(cache)):
@@ -336,8 +343,12 @@ def _check_startup(app_root, deadline):
                 return "UNKNOWN_CATALOG" if unreadable else "ITEM_CATALOG_UNAVAILABLE"
 
             inspect("CATALOG", items)
-            inspect("RELAY_AUTOSTART", lambda: None if _registry_get() == user_relay_command_line(app_root)
-                    else "RELAY_AUTOSTART_MISMATCH")
+            def relay_autostart():
+                registered = _registry_get()
+                if first_run_pending and registered in (None, ""):
+                    return None  # Existing onboarding installs an absent entry before starting the GUI.
+                return None if registered == user_relay_command_line(app_root) else "RELAY_AUTOSTART_MISMATCH"
+            inspect("RELAY_AUTOSTART", relay_autostart)
     inspect("PROCESS_LIST", lambda: "ALREADY_RUNNING" if _already_running(app_root) else None)
     return startup_result(release.get("version", ""), release.get("build_id", ""), reasons)
 

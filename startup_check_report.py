@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Thread
 import uuid
 
-from startup_check import REASON_CATEGORIES, startup_result
+from startup_check import NONBLOCKING_CATEGORIES, REASON_CATEGORIES, startup_result
 from writer_session_fence import _assert_no_reparse_components, writer_sink
 
 NOTICE = "이 PC 는 지금 새 프로그램을 열 수 없습니다. 관리자에게 알렸습니다. 다른 작업대로 옮겨 주세요."
@@ -104,7 +104,7 @@ def finish(reason=None, *, refused=False, failed=False):
     try:
         state = _STATE.get()
         if failed and state is not None and not any(
-                REASON_CATEGORIES.get(item, "UNKNOWN") != "ALREADY_RUNNING" for item in state["reasons"]):
+                REASON_CATEGORIES.get(item, "UNKNOWN") not in NONBLOCKING_CATEGORIES for item in state["reasons"]):
             note("UNKNOWN_CHECK")
         return publish(reason, refused=refused)
     finally:

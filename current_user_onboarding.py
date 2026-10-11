@@ -1276,6 +1276,47 @@ def _possession_key_readback(identity: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def first_run_onboarding_enabled() -> bool:
+    if getattr(sys, "frozen", False) and os.name == "nt":
+        return True
+    value = os.getenv("CONTAINER_AUDIT_ENABLE_FIRST_RUN_ONBOARDING", "").strip().lower()
+    return value in {"1", "true", "yes", "on", "enabled"}
+
+
+def startup_onboarding_reason(state, *, machine=False, can_onboard=False):
+    """Classify an existing inspection result, without reading or changing state."""
+    if state is None and machine:
+        return None
+    if not isinstance(state, Mapping):
+        return "UNKNOWN_ACCOUNT"
+    if state.get("error_type") not in (None, "ValueError", "CurrentUserPossessionRecoveryRequired"):
+        return "UNKNOWN_ACCOUNT"
+    status = state.get("status")
+    if status == "READY":
+        return None
+    if machine:
+        if status == "PENDING":
+            return "FIRST_RUN_PENDING"
+        if status in {"FAILED", "MACHINE_ONBOARDING_FAILED"}:
+            return "MACHINE_ONBOARDING_PENDING"
+    else:
+        if status in {"ABSENT", "ABSENT_RETRYABLE"}:
+            return "FIRST_RUN_PENDING" if can_onboard else "FIRST_RUN_SETUP_REQUIRED"
+        if status in {"RECOVERY_REQUIRED", "FAILED"}:
+            return "FIRST_RUN_SETUP_REQUIRED"
+    return "UNKNOWN_ACCOUNT"
+
+
+def _observe_startup_onboarding(state, **kwargs):
+    try:
+        from startup_check_report import observe
+        reason = startup_onboarding_reason(state, **kwargs)
+        if reason:
+            observe("note", reason)
+    except Exception:
+        pass
+
+
 def inspect_current_user_state(
     paths: CurrentUserOnboardingPaths,
     *,
@@ -1909,6 +1950,7 @@ def consume_pending_machine_onboarding(
                 raise ValueError("machine onboarding intent belongs to another release")
         if read_only:
             return {"status": "PENDING"}
+        _observe_startup_onboarding({"status": "PENDING"}, machine=True)
         runner = onboarder or onboard_current_user
         options = {"environ": environ, "require_bootstrap_integrity": True}
         if marker.get("server_base_url"):
@@ -2031,6 +2073,7 @@ def onboard_current_user(
                 credential_loader=credential_loader,
                 prepared_credential=prepared_credential,
             )
+            _observe_startup_onboarding(state, can_onboard=True)
             report["initial_state"] = state
             if state["status"] == "READY" and tls_ca_source:
                 from tools.install_logistics_runtime_profile import (
