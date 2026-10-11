@@ -1092,6 +1092,9 @@ class ContainerAudit:
     EVENT_LOG_CLOSE_JOIN_TIMEOUT_SECONDS = 1.0
     EVENT_LOG_CLOSE_MAX_JOIN_ATTEMPTS = 3
     LOOP_CLEANUP_TIMEOUT_SECONDS = 5.0
+    DIRECT_SYNC_LOG_EVENTS = frozenset({
+        "TRAY_COMPLETE", "PRODUCT_EXCHANGE_COMPLETED", "PHS_REPLACEMENT_WAITING_MARKED",
+    })
     PREFLIGHT_OFFLINE_RETRY_MS = 30_000
     # One limit for all central requests a completion waits on (the local
     # completion is already durable; what is left pending goes out later).
@@ -10193,7 +10196,7 @@ class ContainerAudit:
             "관리자에게 이 PC의 보류 파일·현재 트레이 상태·원 중앙 요청/영수증을 "
             "함께 대조해 달라고 알리세요. 원본을 지우거나 새 현품표·요청 키로 "
             "다시 처리하지 마세요.\n"
-            "격리된 체크포인트가 비교 원본(parked 상태는 작업 제출 때 스냅숏)",
+            "따로 둔 원본 파일이 비교 기준입니다 — 보류한 트레이는 맡길 때 모습 그대로입니다",
             parent=getattr(self, "root", None),
         )
 
@@ -16939,12 +16942,12 @@ class ContainerAudit:
             self.root.after(200, self._poll_event_log_notice)
 
     def _event_log_writer(self):
-        sync_pending = False
+        sync_pending = set()
         def flush():
-            nonlocal sync_pending
-            if self._flush_pending_event_logs() and sync_pending:
-                self._trigger_session_direct_sync("PRODUCT_EXCHANGE_COMPLETED")
-                sync_pending = False
+            if self._flush_pending_event_logs():
+                for event_type in sorted(sync_pending):
+                    self._trigger_session_direct_sync(event_type)
+                sync_pending.clear()
         flush()
         while True:
             try:
@@ -16958,8 +16961,8 @@ class ContainerAudit:
                         payload = self._prepare_event_log_entry("APP_CLOSE_DELAY", detail={"message": "종료 지연"}, worker_record=self._worker_record_context())
                         if payload: append_event_log_entry_idempotent(payload["log_file_path"], payload["log_entry"], event_type="APP_CLOSE_DELAY", idempotency_key=json.loads(payload["log_entry"]["details"])["idempotency_key"])
                     except Exception: pass
-                if queued_item and queued_item.get("direct_sync_event") == "PRODUCT_EXCHANGE_COMPLETED":
-                    sync_pending = True
+                if queued_item and queued_item.get("direct_sync_event") in self.DIRECT_SYNC_LOG_EVENTS:
+                    sync_pending.add(queued_item["direct_sync_event"])
                 flush()
                 if queued_item is None:
                     break
@@ -17332,8 +17335,8 @@ class ContainerAudit:
                 print('EVENT_CSV_PROJECTION_PENDING')
                 if hasattr(self, 'log_queue'):
                     queued = {'log_file_path': target_log_file_path, 'log_entry': log_entry}
-                    if not payload['local_only'] and log_entry['event'] == 'PRODUCT_EXCHANGE_COMPLETED':
-                        queued['direct_sync_event'] = 'PRODUCT_EXCHANGE_COMPLETED'
+                    if not payload['local_only'] and log_entry['event'] in self.DIRECT_SYNC_LOG_EVENTS:
+                        queued['direct_sync_event'] = log_entry['event']
                     self.log_queue.put(queued)
                 return True  # Original durable acceptance, without claiming CSV completion.
             self._last_log_event_projection_pending = False
@@ -17347,11 +17350,7 @@ class ContainerAudit:
                     store.drain(append=append_event_log_entry_idempotent)
                 self._last_log_event_was_replay = not store.take_projection_result(target_log_file_path, log_entry)
                 event_type = log_entry['event']
-                if not payload['local_only'] and event_type in {
-                    "TRAY_COMPLETE",
-                    "PRODUCT_EXCHANGE_COMPLETED",
-                    "PHS_REPLACEMENT_WAITING_MARKED",
-                }:
+                if not payload['local_only'] and event_type in self.DIRECT_SYNC_LOG_EVENTS:
                     self._trigger_session_direct_sync(event_type)
                 return True
             except Exception as e:

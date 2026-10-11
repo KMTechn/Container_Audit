@@ -211,7 +211,8 @@ def test_administrator_guidance_identifies_the_comparison_original(stop_app, mon
     notices = []
     monkeypatch.setattr(module.messagebox, "showinfo", lambda title, message, **kwargs: notices.append(message))
     stop_app._show_blocked_work_handoff()
-    assert "격리된 체크포인트가 비교 원본(parked 상태는 작업 제출 때 스냅숏)" in notices[0]
+    assert "따로 둔 원본 파일이 비교 기준입니다 — 보류한 트레이는 맡길 때 모습 그대로입니다" in notices[0]
+    assert not any(word in notices[0] for word in ("체크포인트", "parked", "스냅숏"))
 
 
 def test_actual_close_preserves_a_newer_unobserved_request(stop_app, monkeypatch):

@@ -125,6 +125,69 @@ def test_healthy_projector_still_completes_synchronous_csv(log_app, clock, queue
     assert not list(app._event_log_outbox_instance.directory.glob('*.json'))
 
 
+@pytest.mark.parametrize('writer_state', ['dead', 'slow'])
+@pytest.mark.parametrize('event', ['TRAY_COMPLETE', 'PRODUCT_EXCHANGE_COMPLETED', 'PHS_REPLACEMENT_WAITING_MARKED'])
+@pytest.mark.parametrize('local_only', [False, True])
+def test_deferred_contract_event_wakes_sync_after_later_csv_without_periodic_wait(log_app, clock, monkeypatch, writer_state, event, local_only):
+    app = log_app
+    app.log_thread = SimpleNamespace(is_alive=lambda: writer_state == 'slow')
+    app.current_tray.is_test_tray = local_only
+    app.log_queue.put({})
+    payload = app._prepare_event_log_entry(event, {'message': 'fixture delayed CSV'}, worker_record=app._worker_record_context())
+    sent, flushes = [], []
+
+    def send_after_csv(reason):
+        assert int(getattr(_WRITER_LOCAL, 'depth', 0)) == 0
+        with open(payload['log_file_path'], encoding='utf-8-sig', newline='') as handle:
+            assert list(csv.DictReader(handle)) == [payload['log_entry']]
+        assert not list(app._event_log_outbox_instance.directory.glob('*.json'))
+        sent.append((reason, len(flushes)))
+
+    monkeypatch.setattr(app, '_trigger_session_direct_sync', send_after_csv)
+    assert app._write_event_log_entry(payload, synchronous=True)
+    assert app._last_log_event_projection_pending and not sent
+    assert not Path(payload['log_file_path']).exists()
+    queued = list(app.log_queue.queue)[-1]
+    assert queued.get('direct_sync_event') == (None if local_only else event)
+    drain = app._flush_pending_event_logs
+
+    def retry_projection():
+        flushes.append(True)
+        return False if len(flushes) <= 3 else drain()
+
+    monkeypatch.setattr(app, '_flush_pending_event_logs', retry_projection)
+    later_projection(app)
+    assert len(flushes) == 4
+    assert sent == ([] if local_only else [(event, 4)])
+    with open(payload['log_file_path'], encoding='utf-8-sig', newline='') as handle:
+        assert list(csv.DictReader(handle)) == [payload['log_entry']]
+
+
+def test_later_projection_retains_each_pending_sync_reason(log_app, clock, monkeypatch):
+    app = log_app
+    app.log_thread = SimpleNamespace(is_alive=lambda: False)
+    app.log_queue.put({})
+    payloads = [app._prepare_event_log_entry(event, {'message': 'fixture batch'}, worker_record=app._worker_record_context())
+                for event in ('TRAY_COMPLETE', 'PHS_REPLACEMENT_WAITING_MARKED')]
+    sent, flushes = [], []
+    for payload in payloads:
+        assert app._write_event_log_entry(payload, synchronous=True)
+    drain = app._flush_pending_event_logs
+
+    def retry_projection():
+        flushes.append(True)
+        return False if len(flushes) <= 4 else drain()
+
+    def send_after_csv(reason):
+        assert csv_rows(app) == [payload['log_entry'] for payload in payloads]
+        sent.append((reason, len(flushes)))
+
+    monkeypatch.setattr(app, '_flush_pending_event_logs', retry_projection)
+    monkeypatch.setattr(app, '_trigger_session_direct_sync', send_after_csv)
+    later_projection(app)
+    assert sorted(sent) == [('PHS_REPLACEMENT_WAITING_MARKED', 5), ('TRAY_COMPLETE', 5)]
+
+
 def test_scan_ack_does_not_wait_for_unrelated_dead_log_queue(log_app, clock):
     app = log_app
     app.log_thread = SimpleNamespace(is_alive=lambda: False)
