@@ -31,6 +31,30 @@ TRANSITION_CLASS_NAMES = {
     TRANSITION_PHS2_MALFORMED: "새 형식오류",
 }
 
+SHIPPING_SUPPLEMENT_NOTICE = "출고 전 관리자 보충 필요"
+
+
+def shipping_supplement_intent(details: Dict[str, Any]) -> str:
+    """Identify a completed new-label tray whose central seal is unconfirmed."""
+    transition_class = str(details.get("transition_class") or "")
+    status = str(details.get("transfer_seal_status") or "")
+    if (
+        details.get("is_test_tray") is True
+        or status in {"ACKED", "LEGACY_LOCAL_ONLY", "TEST_SKIPPED"}
+        or transition_class == TRANSITION_LEGACY
+    ):
+        return ""
+    master_label = str(details.get("master_label_code") or "")
+    parsed = parse_label_fields_leniently(master_label)
+    fields = parsed[0] if parsed else {}
+    if transition_class not in {
+        TRANSITION_PHS2_CENTRAL, TRANSITION_PHS2_LOCAL, TRANSITION_PHS2_MALFORMED,
+    } and str(fields.get("PHS") or "") != "2":
+        return ""
+    return str(details.get("transfer_seal_intent_id") or "") or (
+        "local:" + completed_label_round(master_label, str(details.get("start_time") or ""))
+    )
+
 
 def completed_label_round(master_label: str, start_time: str) -> str:
     """One completion round of a label: a transition duplicate is a new round, a replay is not."""
@@ -435,6 +459,11 @@ def load_session_history(
             history.work_summary[item_code]["test_count"] += 1
         else:
             history.work_summary[item_code]["count"] += 1
+            supplement_intent = shipping_supplement_intent(session)
+            if supplement_intent:
+                history.work_summary[item_code].setdefault(
+                    "shipping_supplement_intents", set()
+                ).add(supplement_intent)
             if session.get("transition_class"):
                 count_transition_completion(
                     history.work_summary[item_code],

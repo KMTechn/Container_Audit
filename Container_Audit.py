@@ -192,7 +192,10 @@ from responsive_layout import (
 from runtime_instance import (
     acquire_runtime_instance, clear_shutdown_stall, shutdown_stall_is_live, write_shutdown_stall,
 )
-from session_history import completed_label_round, load_session_history, transition_summary_text
+from session_history import (
+    SHIPPING_SUPPLEMENT_NOTICE, completed_label_round, load_session_history,
+    transition_summary_text,
+)
 from style_tokens import StyleProfile, build_style_tokens
 from storage_policy import (
     DATA_ROOT_ENV,
@@ -15346,7 +15349,13 @@ class ContainerAudit:
 
     def _update_summary_title(self):
         if hasattr(self, 'summary_title_label') and self.summary_title_label.winfo_exists():
-            self.summary_title_label.config(text=f"금일 작업 현황 (총 {self.total_tray_count} 파렛트)")
+            title = f"금일 작업 현황 (총 {self.total_tray_count} 파렛트)"
+            confirmed = getattr(self, "_shipping_confirmed_intents", set())
+            count = sum(len(data.get("shipping_supplement_intents", set()) - confirmed)
+                        for data in self.work_summary.values())
+            if count:
+                title += f"\n{SHIPPING_SUPPLEMENT_NOTICE} {count}건"
+            self.summary_title_label.config(text=title)
 
     def _update_summary_list(self):
         if not (hasattr(self, 'summary_tree') and self.summary_tree.winfo_exists()): return
@@ -15358,6 +15367,10 @@ class ContainerAudit:
                 count_display += f" ({transition_text})"
             if data.get('test_count', 0) > 0:
                 count_display += f" (T{data['test_count']})"
+            supplement_count = len(data.get("shipping_supplement_intents", set())
+                                   - getattr(self, "_shipping_confirmed_intents", set()))
+            if supplement_count:
+                count_display += f" · 보충 {supplement_count}건"
             item_name_spec = f"{data.get('name', '')}"
             tag = 'even' if row_index % 2 == 0 else 'odd'
             self._insert_tree_row(self.summary_tree, '', 'end', values=(item_name_spec, item_code, count_display), tags=(tag,))
@@ -15625,7 +15638,17 @@ class ContainerAudit:
             message = notice.message
             severity = notice.severity
             pending_seal_count = getattr(self, "_pending_seal_intent_count", None)
-            if notice.code == "completion.linked" and isinstance(pending_seal_count, int):
+            supplement_intent = getattr(self, "_last_shipping_supplement_intent", "")
+            if (
+                notice.code in {"completion.linked", "transfer.post_review_required"}
+                and supplement_intent
+                and supplement_intent not in getattr(self, "_shipping_confirmed_intents", set())
+            ):
+                title = SHIPPING_SUPPLEMENT_NOTICE
+                severity = NoticeSeverity.WARNING
+                if notice.code == "completion.linked":
+                    message = "완료는 이 PC에 저장했습니다. 출고 전에 관리자에게 알리세요."
+            elif notice.code == "completion.linked" and isinstance(pending_seal_count, int):
                 if pending_seal_count:
                     title = f"서버 전송 대기 {pending_seal_count}건(자동으로 다시 보냄)"
                 else:
@@ -17355,7 +17378,26 @@ class ContainerAudit:
             },
             "precommand": precommand_snapshot,
             "pending_seal_count": pending_seal_count,
+            "shipping_confirmed_intents": self._work_shipping_supplement_receipts(seal_coordinator),
         }
+
+    def _work_shipping_supplement_receipts(self, coordinator) -> Tuple[str, ...]:
+        """Read receipt status on the existing worker; an unread tray stays pending."""
+        if coordinator is None:
+            return ()
+        confirmed = set()
+        known = getattr(self, "_shipping_confirmed_intents", set())
+        for data in tuple(getattr(self, "work_summary", {}).values()):
+            for intent_id in tuple(data.get("shipping_supplement_intents", ())):
+                if intent_id in known:
+                    continue
+                try:
+                    if coordinator.store.load(intent_id)["status"] == "ACKED":
+                        confirmed.add(intent_id)
+                except Exception:
+                    # LOCAL-only/malformed labels may have no central intent.
+                    pass
+        return tuple(sorted(confirmed))
 
     def _apply_transfer_coordinator_ui_snapshot(
         self,
@@ -17365,6 +17407,7 @@ class ContainerAudit:
 
         if not isinstance(snapshot, Mapping):
             return
+        self._apply_shipping_supplement_receipts(snapshot.get("shipping_confirmed_intents") or ())
         exact_history = bool(snapshot.get("exact_history"))
         self._exact_transfer_exchange_history_snapshot = exact_history
         if exact_history:
@@ -17397,6 +17440,16 @@ class ContainerAudit:
                 and completion.outcome is CompletionOutcome.LINKED
             ):
                 self._render_warning_state()
+
+    def _apply_shipping_supplement_receipts(self, confirmed_intents: Sequence[str]) -> None:
+        if not confirmed_intents:
+            return
+        self._shipping_confirmed_intents = (
+            getattr(self, "_shipping_confirmed_intents", set()) | set(confirmed_intents)
+        )
+        self._update_summary_title()
+        self._update_summary_list()
+        self._render_warning_state()
 
     def _current_transfer_member_exchange_attempt(self):
         tray = getattr(self, "current_tray", None)
@@ -18175,6 +18228,7 @@ class ContainerAudit:
                             result["preflight"] = coordinator.prefetch_scan_label(lookup[0], lookup[1])
                 except Exception as exc:
                     result["lookup_error"] = str(getattr(exc, "code", "TRANSPORT_ERROR"))
+            confirmed_intents = set()
             for intent_id in coordinator.store.pending_ids():
                 row = coordinator.store.load(intent_id)
                 if not row["scan_context_json"]:
@@ -18186,11 +18240,16 @@ class ContainerAudit:
                     if dependency_keys - acknowledged:
                         continue
                 attempt = coordinator.attempt(intent_id)
+                if attempt.status == "ACKED":
+                    confirmed_intents.add(intent_id)
                 if attempt.status == "RETRY_WAIT" and attempt.error_code != "TRANSFER_HOLD_WAIT":
                     break
             result["pending"], result["reviews"] = coordinator.store.scan_transport_counts()
             result["reviews"] += sum(row["status"] == "OPERATOR_REVIEW" for row in exchanges.store.scan_exchange_rows())
             result["reviews"] += result["local_exchange_reviews"]
+            result["shipping_confirmed_intents"] = tuple(sorted(
+                confirmed_intents | set(self._work_shipping_supplement_receipts(coordinator))
+            ))
             return result
         def work():
             if not queued_guard():
@@ -18268,6 +18327,7 @@ class ContainerAudit:
                 jobs.append(lookup)
             self._pending_seal_intent_count = int(result.get("pending", 0))
             self._scanonly_review_count = int(result.get("reviews", 0))
+            self._apply_shipping_supplement_receipts(result.get("shipping_confirmed_intents", ()))
             if result.get("pending") or result.get("exchange_pending") or result.get("releases") or jobs:
                 self._scanonly_transport_retry_job = self.root.after(
                     self.BACKGROUND_SEAL_RETRY_MS, self._schedule_scanonly_transport)

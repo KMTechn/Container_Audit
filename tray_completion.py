@@ -18,7 +18,10 @@ from label_qr import (
     transition_reason_code,
 )
 from protected_admin import persistent_operator_name
-from session_history import TRANSITION_CLASS_NAMES, count_transition_completion
+from session_history import (
+    SHIPPING_SUPPLEMENT_NOTICE, TRANSITION_CLASS_NAMES, count_transition_completion,
+    shipping_supplement_intent,
+)
 from tk_serial_ui_lane import DRAIN_TO_DURABLE_HANDOFF, LaneTask
 from transfer_seal import SealAttempt, TransferSealError, validate_compact_phs2_fields
 from warning_presenter import CompletionOutcome, CompletionOutcomeSnapshot
@@ -800,9 +803,10 @@ def complete_tray_steps(
             # already durable local completion.
             self._post_review_refresh_required = True
 
+    supplement_intent = shipping_supplement_intent(log_detail)
     completion_snapshot: Optional[CompletionOutcomeSnapshot] = None
     if not is_test and (
-        transfer_attempt.status == "ACKED" or locally_linked
+        transfer_attempt.status == "ACKED" or locally_linked or supplement_intent
     ):
         if transfer_attempt.status == "ACKED":
             completion_outcome = CompletionOutcome.ACKED
@@ -811,7 +815,9 @@ def complete_tray_steps(
             )
         else:
             completion_outcome = CompletionOutcome.LINKED
-            if transfer_attempt.status == "OPERATOR_REVIEW":
+            if local_only:
+                follow_up = SHIPPING_SUPPLEMENT_NOTICE
+            elif transfer_attempt.status == "OPERATOR_REVIEW":
                 follow_up = "중앙 반영은 담당자 확인이 필요합니다."
             else:
                 follow_up = "서버 전송 대기(자동으로 다시 보냄)"
@@ -865,6 +871,10 @@ def complete_tray_steps(
         self.show_status_message(f"테스트 트레이 완료!", self.COLOR_SUCCESS)
     else:
         self.work_summary[item_code]['count'] += 1
+        if supplement_intent:
+            self.work_summary[item_code].setdefault(
+                "shipping_supplement_intents", set()
+            ).add(supplement_intent)
         if not is_partial: self.total_tray_count += 1
         if transition_class:
             count_transition_completion(
@@ -897,6 +907,7 @@ def complete_tray_steps(
         self, state_delete_failed=state_delete_failed,
         completion_snapshot=completion_snapshot,
         post_review_required=post_review_required, post_review_case=post_review_case,
+        supplement_intent=supplement_intent,
     )
     if not is_test and transfer_attempt.local_completion_id:
         yield lambda: self._transfer_seal_runtime().store.mark_scan_completion_projected(transfer_attempt.intent_id)
@@ -906,9 +917,15 @@ def complete_tray_steps(
             "intent_id": transfer_attempt.intent_id if transfer_attempt.local_completion_id else "",
             "completion_id": completion_event_contract["idempotency_key"]}
         self.undo_button['state'] = tk.NORMAL
-        self.show_status_message(f"부족 {shortage}개로 확정", self.COLOR_DANGER, duration=0)
+        supplement_notice = (
+            f" · {SHIPPING_SUPPLEMENT_NOTICE}"
+            if supplement_intent and supplement_intent not in getattr(self, "_shipping_confirmed_intents", set())
+            else ""
+        )
+        self.show_status_message(f"부족 {shortage}개로 확정{supplement_notice}", self.COLOR_DANGER, duration=0)
         self.show_fullscreen_warning(f"부족 {shortage}개로 확정",
-            "다음 현품표 전 취소 카드로 되돌릴 수 있습니다. 계속하려면 다음 현품표를 스캔하세요.",
+            "다음 현품표 전 취소 카드로 되돌릴 수 있습니다. 계속하려면 다음 현품표를 스캔하세요."
+            + supplement_notice,
             self.COLOR_DANGER)
         if getattr(self, "error_sound", None):
             play_sound(self.error_sound)
@@ -949,8 +966,10 @@ def present_completed_tray(
     completion_snapshot: Optional[CompletionOutcomeSnapshot],
     post_review_required: bool,
     post_review_case: Optional[Dict[str, Any]],
+    supplement_intent: str = "",
 ) -> None:
     """Present the already applied completion using the owner's existing UI."""
+    self._last_shipping_supplement_intent = supplement_intent
     sound = getattr(self, "completion_sound", None)
     if sound is not None:
         try:
