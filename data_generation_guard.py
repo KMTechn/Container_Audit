@@ -307,6 +307,11 @@ def record_before_data_open(data_root, *, probe_only=False):
 
         sid = _current_user_sid()
         release = _runtime_release()
+        try:
+            from startup_check_report import observe
+            observe("release_identity", release)
+        except Exception:
+            pass
         # Bind to the same ambient current-user control root as writer_sink's
         # admission. An onboarding data-root override does not relocate admission.
         paths = marker_paths(data_root, sid)

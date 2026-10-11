@@ -329,10 +329,14 @@ def verify_factory_contract_startup(lock_path=None):
     resolved_lock_path = (
         Path(lock_path) if lock_path is not None else _factory_contract_lock_path()
     )
-    return load_and_verify_contract_lock(
-        resolved_lock_path,
-        expected_app_id=FACTORY_CONTRACT_APP_ID,
-    )
+    try:
+        return load_and_verify_contract_lock(
+            resolved_lock_path,
+            expected_app_id=FACTORY_CONTRACT_APP_ID,
+        )
+    except Exception as failure:
+        _startup_check_observe("note", "UNKNOWN_INSTALLATION" if isinstance(failure, OSError) else "INSTALL_MISMATCH")
+        raise
 
 
 _TK_GEOMETRY_RE = re.compile(
@@ -22598,7 +22602,61 @@ MACHINE_ONBOARDING_ERROR_MESSAGES = {
 }
 
 
+def _startup_check_observe(action, *args, **kwargs):
+    try:
+        from startup_check_report import observe
+        return observe(action, *args, **kwargs)
+    except Exception:
+        return False
+
+
+def _show_startup_unavailable():
+    root = None
+    try:
+        from startup_check_report import NOTICE
+        root = tk.Tk()
+        root.title("프로그램 시작 확인")
+        root.resizable(False, False)
+        tk.Label(root, text=NOTICE, padx=20, pady=20).pack()
+        tk.Button(root, text="닫기", command=root.destroy).pack(pady=(0, 12))
+        root.protocol("WM_DELETE_WINDOW", root.destroy)
+        root.mainloop()
+    except Exception:
+        pass
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+
+def _startup_refusal(reason, *, failed=False):
+    if _startup_check_observe("finish", reason, refused=True, failed=failed):
+        _show_startup_unavailable()
+        return True
+    return False
+
+
+def _startup_data_reason(blocked):
+    from current_user_onboarding import BootstrapIntegrityMismatch
+    from data_generation_guard import InstalledReleaseMismatch
+    if isinstance(blocked.__cause__, (BootstrapIntegrityMismatch, InstalledReleaseMismatch)):
+        return "INSTALL_MISMATCH"
+    return "DATA_GUARD_REFUSED" if blocked.decision.get("status") == "REFUSE" else "UNKNOWN_DATA_GUARD"
+
+
 def _show_first_run_onboarding_error(failure: CurrentUserOnboardingError) -> None:
+    reason = "FIRST_RUN_SETUP_REQUIRED"
+    from current_user_onboarding import MachineDeploymentFenced
+    if isinstance(failure.__cause__, MachineDeploymentFenced):
+        reason = "MACHINE_DEPLOY_FENCE"
+    elif isinstance(failure.__cause__, DataGenerationBlocked):
+        reason = _startup_data_reason(failure.__cause__)
+    elif failure.status == "PENDING_WORKER_SID_MISMATCH":
+        reason = "ACCOUNT_MISMATCH"
+    if _startup_refusal(reason):
+        return
     report_path = str(failure.report_path)
     operator_message = f"{FIRST_RUN_ONBOARDING_ERROR_MESSAGE}\n보고서: {report_path}"
     if isinstance(failure.__cause__, DataGenerationBlocked):
@@ -22628,6 +22686,8 @@ def _show_bootstrap_integrity_warning(report_path: object) -> None:
 
 
 def _show_item_catalog_startup_error(cause_code: str, *, http_status_code: int | None = None) -> None:
+    if _startup_refusal("ITEM_CATALOG_UNAVAILABLE"):
+        return
     reason = ""
     if http_status_code == 403:
         reason = "\n회사 서버가 요청을 거절했습니다(코드 403)."
@@ -22657,11 +22717,39 @@ def _item_catalog_cache_time_for_display(value: object) -> str:
 
 def main(argv: list[str] | None = None):
     arguments = list(sys.argv[1:] if argv is None else argv)
+    from container_audit_product_host import PRODUCT_MODES
+    from writer_session_fence import WriterFenceError
+    enabled = not any(argument in PRODUCT_MODES or argument in {"--help", "-h"} for argument in arguments)
+    _startup_check_observe("begin", CURRENT_VERSION, enabled=enabled)
+    try:
+        return _run_application_main(arguments)
+    except WriterFenceError as failure:
+        reason = "DEPLOY_FENCE" if failure.code in {"ACTIVE_WRITER_FENCE", "WRITER_GATE_TIMEOUT"} else "UNKNOWN_DEPLOY_FENCE"
+        if enabled:
+            _startup_refusal(reason)
+        raise
+    except Exception:
+        _startup_refusal(None, failed=True)
+        raise  # Preserve the existing exception and its process exit code.
+    except BaseException:
+        _startup_check_observe("note", "UNKNOWN_CHECK")
+        raise
+    finally:
+        _startup_check_observe("finish")
+
+
+def _run_application_main(arguments):
     from auto_update import startup_gate, trial_context, publish_gui_ready, trial_stop_requested
 
     application_code_root = Path(__file__).resolve().parent
     gate_result = startup_gate(application_code_root, arguments)
     if gate_result is not None:
+        if gate_result == 0:
+            _startup_check_observe("note", "UPDATE_PENDING")
+        elif gate_result == 20:
+            _startup_refusal("ACCOUNT_MISMATCH")
+        else:
+            _startup_check_observe("note", "UNKNOWN_UPDATE")
         return gate_result
     hosted_result = dispatch_product_mode(arguments)
     if hosted_result is not None:
@@ -22673,16 +22761,18 @@ def main(argv: list[str] | None = None):
     try:
         startup = _prepare_gui_startup(data_root=options.data_root)
     except DataGenerationBlocked as blocked:
-        notice = blocked.user_message
-        messagebox.showerror("자료 판 확인", notice)
+        if not _startup_refusal(_startup_data_reason(blocked)):
+            messagebox.showerror("자료 판 확인", blocked.user_message)
         return 1
     except DataRootUnavailableError:
         # Display the recovery action after releasing writer admission.
-        notify_data_root_error()
+        if not _startup_refusal("UNKNOWN_DATA_GUARD"):
+            notify_data_root_error()
         return 1
     if not isinstance(startup, tuple):
         return startup
     app, instance_lease = startup
+    _startup_check_observe("finish")
     if trial_context(application_code_root) is not None:
         app.root.withdraw()
         def await_update_readiness():
@@ -22730,6 +22820,7 @@ def _prepare_gui_startup(*, data_root=None):
     try:
         instance_lease = acquire_runtime_instance(storage_paths.data_root)
     except OSError:
+        _startup_check_observe("note", "UNKNOWN_PROCESS_LIST")
         startup_notice = (
             messagebox.showerror,
             "프로그램 실행 잠금 실패",
@@ -22738,6 +22829,7 @@ def _prepare_gui_startup(*, data_root=None):
         )
     else:
         if instance_lease is None:
+            _startup_check_observe("note", "ALREADY_RUNNING")
             stalled = shutdown_stall_is_live(storage_paths.data_root)
             startup_notice = (
                 messagebox.showwarning,
@@ -22850,6 +22942,7 @@ def _prepare_gui_startup(*, data_root=None):
                     )
                 except Exception:
                     pass
+            _startup_check_observe("publish")
             with writer_admission("gui_startup"):
                 app = ContainerAudit()
             app._runtime_data_root = storage_paths.data_root

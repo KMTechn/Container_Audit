@@ -2471,7 +2471,13 @@ def startup_gate(app_root: Path, arguments: list[str], *, role: str = "gui") -> 
     with update_lock(control, policy["operator_sid"]):
         state = optional_record(control / "transition.json")
         active = read_json(control / "active.json")
-        sha = version_manifest(app_root.parent)["source_commit"]
+        manifest = version_manifest(app_root.parent)
+        sha = manifest["source_commit"]
+        try:
+            from startup_check_report import observe
+            observe("release_identity", {"version": manifest.get("version"), "build_id": sha})
+        except Exception:
+            pass
         if sha == active["sha"] and state and state["phase"] in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"}:
             if os.environ.get("KMTECH_CA_UPDATE_TRIAL_NONCE") == state["nonce"] and ordinary_user_context():
                 claim = optional_record(Path(policy["staging_root"]) / "trial.json")

@@ -58,13 +58,15 @@ def test_marker_write_failure_prevents_gui_constructor(tmp_path, monkeypatch):
     constructors, messages = [], []
     monkeypatch.setattr(app, "verify_factory_contract_startup", lambda: None)
     monkeypatch.setattr(app, "ContainerAudit", lambda: constructors.append(True))
-    monkeypatch.setattr(app.messagebox, "showerror", lambda *args: messages.append(args))
+    from startup_check_report import NOTICE
+    monkeypatch.setattr(app, "_show_startup_unavailable", lambda: messages.append(NOTICE))
+    monkeypatch.setattr(app.messagebox, "showerror", lambda *args: pytest.fail("legacy refusal notice"))
     def denied(*args, **kwargs):
         raise PermissionError("synthetic marker refusal")
     monkeypatch.setattr(generation, "record_generation", denied)
     assert app.main(["--data-root", str(data)]) == 1
     assert not constructors
-    assert "자료 판을 확인할 수 없어" in messages[0][1]
+    assert messages == [NOTICE]
 
 
 def test_onboarding_refusal_prevents_state_or_ledger_open(tmp_path, monkeypatch):

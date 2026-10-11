@@ -229,7 +229,8 @@ def _check_startup(app_root, deadline):
             (machine / "control/writer-session/active.json").stat()
         except FileNotFoundError:
             return None
-        return "MACHINE_DEPLOY_FENCE"
+        return "MACHINE_DEPLOY_FENCE" if onboarding.machine_deployment_fence_present(
+            machine / "pending-onboarding.json") else None
 
     inspect("DEPLOY_FENCE", machine_fence)
 
@@ -243,6 +244,8 @@ def _check_startup(app_root, deadline):
                 try:
                     machine_state = onboarding.consume_pending_machine_onboarding(app_root, read_only=True)
                 except onboarding.CurrentUserOnboardingError as error:
+                    if isinstance(error.__cause__, onboarding.MachineDeploymentFenced):
+                        return "MACHINE_DEPLOY_FENCE"
                     if error.status == "PENDING_WORKER_SID_MISMATCH":
                         return "ACCOUNT_MISMATCH"
                     raise

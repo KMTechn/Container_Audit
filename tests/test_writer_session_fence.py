@@ -770,11 +770,14 @@ def test_product_entrypoint_denies_active_fence_before_gui_or_relay_mutation(
     entered: list[str] = []
     monkeypatch.setattr(app, "verify_factory_contract_startup", lambda: entered.append("gui"))
     monkeypatch.setattr(user_relay, "run_persistent_relay_loop", lambda **_: entered.append("relay"))
+    notices: list[bool] = []
+    monkeypatch.setattr(app, "_show_startup_unavailable", lambda: notices.append(True))
     # A fenced relay's diagnostic writer must also be denied; neither mode
     # may turn an admission failure into a successful startup.
     with pytest.raises(fence.WriterFencedError, match="active deployment fence"):
         app.main(arguments)
     assert entered == []
+    assert notices == ([True] if not arguments else [])
     assert not (tmp_path / "state").exists()
     assert active.read_bytes() == before
 

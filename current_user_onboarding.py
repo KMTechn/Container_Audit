@@ -1846,6 +1846,14 @@ def _record_completed_machine_install_id(install_id: str) -> None:
         raise ValueError("machine onboarding completion readback failed")
 
 
+class MachineDeploymentFenced(ValueError):
+    """The existing machine-placement fence already refuses onboarding."""
+
+
+def machine_deployment_fence_present(marker_path):
+    return (Path(marker_path).parent / "control/writer-session/active.json").exists()
+
+
 def consume_pending_machine_onboarding(
     app_root: str | os.PathLike[str], *,
     environ: MutableMapping[str, str] | None = None,
@@ -1864,8 +1872,8 @@ def consume_pending_machine_onboarding(
     try:
         from logistics_runtime_profile import assert_path_has_no_reparse_components
         assert_path_has_no_reparse_components(marker_path, label="machine onboarding intent")
-        if (marker_path.parent / "control/writer-session/active.json").exists():
-            raise ValueError("machine placement still requires recovery")
+        if machine_deployment_fence_present(marker_path):
+            raise MachineDeploymentFenced("machine placement still requires recovery")
         if marker_path.stat().st_size > 65536:
             raise ValueError("machine onboarding intent is oversized")
         marker = _read_json(marker_path, "machine onboarding intent")

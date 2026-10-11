@@ -53,6 +53,7 @@ APP_ROOT_FILES = (
     "worker_roster.py",
     "auto_update.py",
     "startup_check.py",
+    "startup_check_report.py",
     "best_time_records.py",
     "Container_Audit.py",
     "container_admin_pin.py",

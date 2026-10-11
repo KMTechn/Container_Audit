@@ -632,6 +632,7 @@ def writer_sink(
     source: str,
     *,
     probe_only: bool = False,
+    report_only: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Mark and guard a concrete writer sink for code-derived inventory."""
 
@@ -659,6 +660,14 @@ def writer_sink(
             else:
                 module_name = ".".join(app_path.with_suffix("").parts)
         sink_id = f"{module_name}.{function.__qualname__}"
+        if report_only and (
+            probe_only or (selected_source, sink_id) !=
+            ("startup_check_report", "startup_check_report._write_result")
+        ):
+            raise WriterFencedError(
+                "REPORT_ONLY_SINK_NOT_ALLOWED",
+                "only the fixed non-authoritative startup report bypasses admission",
+            )
         if probe_only and (selected_source, sink_id) not in PROBE_ONLY_WRITER_SINKS:
             raise WriterFencedError(
                 "WRITER_PROBE_ONLY_SINK_NOT_ALLOWED",
@@ -667,6 +676,12 @@ def writer_sink(
 
         @wraps(function)
         def guarded(*args: P.args, **kwargs: P.kwargs) -> R:
+            if report_only:
+                if int(getattr(_WRITER_LOCAL, "depth", 0)) > 0:
+                    raise WriterFencedError(
+                        "STARTUP_REPORT_ADMISSION_HELD", "startup reports run outside admission",
+                    )
+                return function(*args, **kwargs)
             if probe_only:
                 if (selected_source, sink_id) in STAGING_PROBE_ONLY_WRITER_SINKS and int(
                     getattr(_WRITER_LOCAL, "depth", 0)
