@@ -110,13 +110,14 @@ class PHSLabelWorkflowError(RuntimeError):
 
 
 class PHSPrintUnknown(PHSLabelWorkflowError):
-    def __init__(self):
-        super().__init__("PHS_LOCAL_PRINT_UNKNOWN", "인쇄 제출이 끝나지 않았습니다. 인쇄 대기로 남겼습니다. 출력물을 확인한 뒤 재인쇄하세요.", retryable=True)
+    def __init__(self, message="인쇄 제출이 끝나지 않았습니다. 인쇄 대기로 남겼습니다. 출력물을 확인한 뒤 재인쇄하세요."):
+        super().__init__("PHS_LOCAL_PRINT_UNKNOWN", message, retryable=True)
 
 
 class PHSPhysicalPrintError(PHSLabelWorkflowError):
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, *, screen_message: str = "") -> None:
         super().__init__("LOCAL_PRINTER_ERROR", message, retryable=True)
+        self.screen_message = screen_message
 
 
 class PHSLabelExchangeJournal:
@@ -217,6 +218,9 @@ _NON_LABEL_PRINTER_MARKERS = (
 )
 PRINT_SUBMIT_TIMEOUT_SECONDS = 60.0
 PRINT_SUBMISSION_THREADS = weakref.WeakSet()
+_PRINT_THREADS_BY_KEY = weakref.WeakValueDictionary()
+_PRINT_SUBMISSION_LOCK = threading.Lock()
+_NON_LABEL_PRINTER_NOTICE = "기본 프린터가 라벨 프린터가 아닙니다. 관리자에게 알리세요."
 
 
 class _PrinterInfo2W(ctypes.Structure):
@@ -296,7 +300,7 @@ class WindowsGDIPhysicalLabelPrinter:
         finally:
             spool.ClosePrinter(handle)
 
-    def print_png(self, filepath, *, document_name, late_record=None):
+    def print_png(self, filepath, *, document_name, late_record=None, print_idempotency_key=""):
         if int(getattr(_WRITER_LOCAL, "depth", 0)) > 0:
             raise WriterFencedError("PRINT_WRITER_ADMISSION_HELD", "print submission cannot hold writer admission")
         with writer_admission("phs_label_workflow"):
@@ -320,8 +324,15 @@ class WindowsGDIPhysicalLabelPrinter:
                     try: late_record(record)
                     except Exception as exc: print(f"지연 인쇄 기록 실패: {type(exc).__name__}")
         worker = threading.Thread(target=submit, name="phs-print-submit", daemon=True)
-        PRINT_SUBMISSION_THREADS.add(worker)
-        worker.start()
+        key = str(print_idempotency_key or "")
+        with _PRINT_SUBMISSION_LOCK:
+            previous = _PRINT_THREADS_BY_KEY.get(key) if key else None
+            if previous is not None and previous.is_alive():
+                raise PHSPrintUnknown("이전 인쇄가 아직 프린터 대기열에 있습니다 — 프린터 대기열을 확인한 뒤 다시 누르세요")
+            PRINT_SUBMISSION_THREADS.add(worker)
+            if key:
+                _PRINT_THREADS_BY_KEY[key] = worker
+            worker.start()
         try:
             if not ready.wait(PRINT_SUBMIT_TIMEOUT_SECONDS):
                 uncertain.set()
@@ -344,13 +355,13 @@ class WindowsGDIPhysicalLabelPrinter:
         notice = f"기본 프린터가 라벨 프린터가 아닙니다({printer_name}). 관리자에게 알리세요."
         profile = " ".join((printer_name, *self._printer_profile(printer_name))).casefold()
         if any(marker in profile for marker in _NON_LABEL_PRINTER_MARKERS):
-            raise PHSPhysicalPrintError(notice)
+            raise PHSPhysicalPrintError(_NON_LABEL_PRINTER_NOTICE, screen_message=notice)
         try:
             printer = GdiPrinter(printer_name)
             try:
                 printer.validate_paper(self._PAPER)
             except (PrinterError, OSError, ValueError) as exc:
-                raise PHSPhysicalPrintError(notice) from exc
+                raise PHSPhysicalPrintError(_NON_LABEL_PRINTER_NOTICE, screen_message=notice) from exc
             doc_name = str(document_name or path.stem)[:240]
             receipt = printer.print_png(
                 path,
@@ -381,6 +392,7 @@ def _submit_physical_print(printer, path, document_name, journal, attempt):
         def record(result):
             PHSLabelExchangeJournal(record_path).save({"status": "LATE_PRINT_RESULT", "attempt": identity, "print_result": result})
         options["late_record"] = record
+        options["print_idempotency_key"] = str(attempt.get("print_idempotency_key") or "")
     return printer.print_png(path, document_name=document_name, **options)
 
 
@@ -509,6 +521,7 @@ class PHSLabelExchangeResult:
     retryable: bool = False
     exchange_id: str = ""
     journal_state: dict[str, Any] = field(default_factory=dict)
+    screen_message: str = field(default="", repr=False, compare=False)
 
 
 class PHSLabelExchangeCoordinator:
@@ -1084,6 +1097,7 @@ class PHSLabelExchangeCoordinator:
         message: str,
         error_code: str = "",
         retryable: bool = False,
+        screen_message: str = "",
     ) -> PHSLabelExchangeResult:
         return PHSLabelExchangeResult(
             status=str(state.get("status") or "FAILED"),
@@ -1093,6 +1107,7 @@ class PHSLabelExchangeCoordinator:
             retryable=retryable,
             exchange_id=str(state.get("exchange_id") or ""),
             journal_state=dict(state),
+            screen_message=screen_message,
         )
 
     def execute_single(
@@ -1648,6 +1663,7 @@ class PHSLabelExchangeCoordinator:
                         ),
                         error_code="LOCAL_PRINTER_ERROR",
                         retryable=True,
+                        screen_message=(getattr(exc, "screen_message", "") + " 인쇄 대기") if getattr(exc, "screen_message", "") else "",
                     )
                 try:
                     state = self._save(

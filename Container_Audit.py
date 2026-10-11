@@ -7847,7 +7847,7 @@ class ContainerAudit:
                 (
                     "현품표 날짜 교환을 완료했습니다. 현재 트레이 진행은 유지됩니다."
                     if success
-                    else ((result.message if getattr(result, "error_code", "") in {"LOCAL_PRINTER_ERROR", "PHS_LOCAL_PRINT_UNKNOWN"} else "") or "현품표 날짜 교환을 완료하지 못했습니다. F8로 복구하거나 관리자에게 문의하세요.")
+                    else (((getattr(result, "screen_message", "") or result.message) if getattr(result, "error_code", "") in {"LOCAL_PRINTER_ERROR", "PHS_LOCAL_PRINT_UNKNOWN"} else "") or "현품표 날짜 교환을 완료하지 못했습니다. F8로 복구하거나 관리자에게 문의하세요.")
                 ),
                 color,
                 duration=10000,
@@ -8128,7 +8128,7 @@ class ContainerAudit:
                         journal_context
                     )
                 self.show_status_message(
-                    (result.message if getattr(result, "error_code", "") in {"LOCAL_PRINTER_ERROR", "PHS_LOCAL_PRINT_UNKNOWN"} else "") or "현품표 교체를 완료하지 못했습니다. F8로 복구하거나 관리자에게 문의하세요.",
+                    ((getattr(result, "screen_message", "") or result.message) if getattr(result, "error_code", "") in {"LOCAL_PRINTER_ERROR", "PHS_LOCAL_PRINT_UNKNOWN"} else "") or "현품표 교체를 완료하지 못했습니다. F8로 복구하거나 관리자에게 문의하세요.",
                     self.COLOR_DANGER,
                     duration=10000,
                 )

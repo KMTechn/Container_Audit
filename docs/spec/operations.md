@@ -846,7 +846,7 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 | 사운드 | 현재 [native_audio.WavSound](../../native_audio.py)의 Windows `winsound`, one-shot/무한 loop·process-wide stop; 백그라운드 WAV 준비 | `audio_feedback_ready`는 파일 객체 준비 결과이며 실제 스피커 발성 성공이 아니다. 재생 오류·무음·중복 경고·정지와 시각 경고를 실장비에서 확인한다. [초기화/오류 사운드](../../Container_Audit.py) |
 | 현품표 출력 | [phs_reconciliation_workflow](../../phs_reconciliation_workflow.py)의 artifact hash·print proof·`spool_job_id`·journal | 가상·파일 출력 기본 프린터/용지 거절은 관리자 안내 후 그 건만 인쇄 대기. 60초 제출 초과는 UNKNOWN으로 보류하며 화면·다음 스캔·종료는 계속한다. `PRINT_FAILED/PARTIAL`, 중앙 ACK 대기·재출력 불확실을 구분한다. spool 접수·종이 배출·올바른 라벨 부착은 각각 확인한다. 일반 스캔마다 자동 인쇄하는 기능으로 해석하지 않는다. [CA-C09](contracts.md#ca-c09) |
 
-기본 프린터 안내가 나오면 현재 Windows 기본 프린터를 실제 라벨 프린터로 확인하고 관리자에게 알린다. Windows의 기본 프린터 관리가 켜져 있으면 PDF 사용 뒤 기본값이 바뀔 수 있다. UNKNOWN은 성공으로 바꾸지 않으며 실물 확인 후 기존 재인쇄 절차를 따른다. 실행 중 늦게 온 결과의 `.print-*.json`은 진단 자료이며 원 교체 기록의 성공이나 자동 재인쇄 승인이 아니다.
+기본 프린터 안내가 나오면 현재 Windows 기본 프린터를 실제 라벨 프린터로 확인하고 관리자에게 알린다. Windows의 기본 프린터 관리가 켜져 있으면 PDF 사용 뒤 기본값이 바뀔 수 있다. UNKNOWN은 성공으로 바꾸지 않으며 실물 확인 후 기존 재인쇄 절차를 따른다. 이전 인쇄가 아직 프린터 대기열에 있다는 안내가 나오면 대기열을 확인하고 이전 제출이 끝난 뒤 다시 누른다. 그동안 다른 현품표와 스캔은 계속할 수 있다. 비라벨 안내의 현재 프린터 이름은 화면에만 보이고 기록은 고정 문구다. 실행 중 늦게 온 결과의 `.print-*.json`은 진단 자료이며 원 교체 기록의 성공이나 자동 재인쇄 승인이 아니다.
 
 [CODEX](../../CODEX.md)의 pygame/PyInstaller 중심 기술 설명은 현재 위 사운드·portable 소스와 차이가 있다. 과거 안내를 그대로 장비 검증 기준으로 사용하지 않으며 [CA-G03](BACKLOG.md#ca-g03)에 후속 정합 작업을 남긴다. 프린터 모델/드라이버·용지·스캐너 모델/firmware·지원 배율의 확정 목록은 미확인이다.
 

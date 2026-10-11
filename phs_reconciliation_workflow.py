@@ -1181,6 +1181,7 @@ class PHSReconciliationExchangeCoordinator:
         message: str,
         error_code: str = "",
         retryable: bool = False,
+        screen_message: str = "",
     ) -> PHSLabelExchangeResult:
         return PHSLabelExchangeResult(
             status=str(state.get("status") or "FAILED"),
@@ -1190,6 +1191,7 @@ class PHSReconciliationExchangeCoordinator:
             retryable=retryable,
             exchange_id=str(state.get("exchange_id") or ""),
             journal_state=dict(state),
+            screen_message=screen_message,
         )
 
     def execute(
@@ -1430,6 +1432,7 @@ class PHSReconciliationExchangeCoordinator:
             ),
             error_code="LOCAL_PRINTER_ERROR",
             retryable=True,
+            screen_message=(getattr(error, "screen_message", "") + " 인쇄 대기") if getattr(error, "screen_message", "") else "",
         )
 
     def _execute(

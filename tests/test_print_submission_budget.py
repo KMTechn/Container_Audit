@@ -87,7 +87,8 @@ def test_virtual_printer_is_pending_before_startdoc_and_preserves_work(tmp_path,
     flow = coordinator(tmp_path, client, module.WindowsGDIPhysicalLabelPrinter())
     result = flow.execute_single(tray, _target_candidate())
     assert not result.success and result.status == 'PRINT_FAILED'
-    assert f'기본 프린터가 라벨 프린터가 아닙니다({name}). 관리자에게 알리세요.' in result.message
+    assert f'기본 프린터가 라벨 프린터가 아닙니다({name}). 관리자에게 알리세요.' in result.screen_message
+    assert '기본 프린터가 라벨 프린터가 아닙니다. 관리자에게 알리세요.' in result.message
     assert '인쇄 대기' in result.message
     assert calls == [] and client.complete_calls[-1]['succeeded'] is False
     assert client.activate_calls == []
@@ -102,7 +103,7 @@ def test_paper_rejection_is_pending_before_startdoc(tmp_path, monkeypatch, custo
     client, tray = FakeCentral(), _tray()
     result = coordinator(tmp_path, client, module.WindowsGDIPhysicalLabelPrinter()).execute_single(tray, _target_candidate())
     assert not result.success and result.status == 'PRINT_FAILED'
-    assert '기본 프린터가 라벨 프린터가 아닙니다(Thermal label).' in result.message
+    assert '기본 프린터가 라벨 프린터가 아닙니다(Thermal label).' in result.screen_message
     assert not any(c[0] == 'StartDocW' for c in calls)
     assert client.complete_calls[-1]['succeeded'] is False and client.activate_calls == []
 
