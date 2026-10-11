@@ -65,6 +65,7 @@ class LaneTask:
     cancel_safe: bool = False
     shutdown_policy: str = DRAIN_TO_TERMINAL
     on_stale: Optional[Callable[[], None]] = None
+    barcode: str = ""
 
     def __post_init__(self) -> None:
         if not str(self.name or "").strip():
@@ -142,6 +143,7 @@ class TkSerialUiLane:
         max_results_per_tick: int = 16,
         generation_provider: Callable[[], int] | None = None,
         on_runner_fault: Callable[[BaseException], None] | None = None,
+        fault_context_provider: Callable[[], Any] | None = None,
     ) -> None:
         self._root = root
         self._owner_thread_id = threading.get_ident()
@@ -149,10 +151,13 @@ class TkSerialUiLane:
         self._max_results_per_tick = max(1, int(max_results_per_tick))
         self._generation_provider = generation_provider
         self._on_runner_fault = on_runner_fault
+        self._fault_context_provider = fault_context_provider
         self._state_lock = threading.RLock()
         self._sequence_lock = threading.Lock()
         self._state = LANE_IDLE
         self._active: _QueuedTask | None = None
+        self.last_task: LaneTask | None = None
+        self.last_task_context: Any = None
         self._idle_barrier = False
         self._next_op_id = 0
         self._next_sequence = 0
@@ -218,6 +223,11 @@ class TkSerialUiLane:
             handle = TaskHandle()
             queued = _QueuedTask(self._next_op_id, task, handle)
             self._active = queued
+            self.last_task = task
+            try:
+                self.last_task_context = self._fault_context_provider() if self._fault_context_provider else None
+            except Exception:
+                self.last_task_context = None
             self._state = LANE_BUSY
         try:
             self._task_queue.put_nowait(queued)
@@ -239,18 +249,18 @@ class TkSerialUiLane:
         with self._state_lock:
             active = self._active
             state = self._state
-        if active is None or state in {LANE_BROKEN, LANE_CLOSED}:
-            raise RuntimeError("Tk UI call has no active lane task")
-        ui_call = _UiCall(callback, tuple(args), dict(kwargs), threading.Event())
-        self._result_queue.put(
-            _Envelope(
-                self._next_result_sequence(),
-                active.op_id,
-                active.task.generation,
-                "ui_call",
-                value=ui_call,
+            if active is None or state in {LANE_BROKEN, LANE_CLOSED}:
+                raise RuntimeError("Tk UI call has no active lane task")
+            ui_call = _UiCall(callback, tuple(args), dict(kwargs), threading.Event())
+            self._result_queue.put(
+                _Envelope(
+                    self._next_result_sequence(),
+                    active.op_id,
+                    active.task.generation,
+                    "ui_call",
+                    value=ui_call,
+                )
             )
-        )
         ui_call.event.wait()
         if ui_call.error is not None:
             raise ui_call.error
@@ -381,6 +391,8 @@ class TkSerialUiLane:
 
     def _apply_terminal_result(self, envelope: _Envelope) -> None:
         with self._state_lock:
+            if self._state in {LANE_BROKEN, LANE_CLOSED}:
+                return
             active = self._active
         if active is None or active.op_id != envelope.op_id or envelope.task is not active.task:
             self._break_lane(RuntimeError("stale or mismatched lane result"))
@@ -441,6 +453,16 @@ class TkSerialUiLane:
             self._active = None
             self._idle_barrier = False
             self._state = LANE_BROKEN
+            # Enqueue and break share the lock: no waiter can appear after this drain.
+            while True:
+                try:
+                    envelope = self._result_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if envelope.kind == "ui_call" and isinstance(envelope.value, _UiCall):
+                    envelope.value.error = StaleUiCheckpointError(envelope.generation)
+                    envelope.value.event.set()
+                self._result_queue.task_done()
         self._present_fault(exc)
 
     def _complete_close(self) -> None:

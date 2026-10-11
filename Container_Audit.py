@@ -1698,6 +1698,13 @@ class ContainerAudit:
         print(f"UI lane failure: {exc.__class__.__name__}")
         # A broken lane never settles its save; nothing may wait behind it.
         self._live_scan_save_pending = False
+        self._ui_lane_fault_blocked = True
+        try:
+            if self._recover_ui_lane_fault(exc):
+                return
+        except Exception as recovery_error:
+            self._ui_lane_fault_blocked = True
+            print(f"처리 오류 보존·재개 실패: {type(recovery_error).__name__}")
         try:
             notice = self._refuse_scans_behind_save(
                 "처리 실행기를 안전하게 중지했습니다. 현재 작업을 보존하고 관리자에게 문의하세요. "
@@ -1712,6 +1719,75 @@ class ContainerAudit:
             self._update_action_button_states()
         except (AttributeError, tk.TclError):
             pass
+
+    def _recover_ui_lane_fault(self, exc: BaseException) -> bool:
+        lane = getattr(self, "_ui_lane", None)
+        if lane is None:
+            return False
+        task = lane.last_task
+        original_state = lane.last_task_context
+        label = str((original_state or {}).get("master_label_code")
+                    or getattr(self.current_tray, "master_label_code", "")
+                    or getattr(getattr(self, "_preflight_hold_snapshot", None), "master_raw", ""))
+        fault = {
+            "occurred_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "task": task.name if task else "unknown", "master_label_code": label,
+            "generation": task.generation if task else getattr(self, "_scan_callback_epoch", 0),
+            "barcode": (task.barcode if task else "") or getattr(self, "_last_scan_input", ("",))[0],
+            "result": "UNKNOWN", "error_type": type(exc).__name__,
+            "held_scans": list(getattr(self, "_scans_behind_save", ()) or ()),
+        }
+        if not self._log_event("UI_LANE_FAULT", detail=fault, synchronous=True):
+            raise OSError("fault record is not durable")
+        if getattr(self, "_ui_close_requested", False):
+            return False
+        now = time.monotonic()
+        recent = [stamp for stamp in getattr(self, "_ui_lane_fault_times", ()) if now - stamp < 600]
+        self._ui_lane_fault_times = [*recent, now]
+        key = canonical_master_label_key(label) if label else ""
+        repeated = bool(key and key in getattr(self, "_ui_lane_faulted_trays", set()))
+        self._ui_lane_faulted_trays = getattr(self, "_ui_lane_faulted_trays", set()) | {key}
+        lane.close_idle()
+        if lane.worker_thread.is_alive() or lane.state != LANE_CLOSED:
+            return False
+        hold_writer = getattr(self, "_preflight_hold_writer_instance", None)
+        if hold_writer is not None and (hold_writer.tasks.unfinished_tasks or not hold_writer.results.empty()):
+            return False
+        hold = self._preflight_hold_store()
+        held = hold.load() if hold.exists() else None
+        if held is not None and not self._owns_worker_record(held.to_payload()):
+            return False
+        state = dict(original_state) if original_state is not None else self._current_tray_state_snapshot()
+        if held is not None:
+            fault["preflight_hold"] = held.to_payload()
+            state["master_label_code"] = label or held.master_raw
+        if label or held is not None:
+            state["ui_lane_fault"] = fault
+            self._parked_store().defer_recovery_state(
+                state, worker_name=self._record_worker_name(), computer_id=self.computer_id,
+            )
+        if held is not None:
+            hold.quarantine(self._preflight_hold_quarantine_directory(), reason="ui_lane_fault")
+        source = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
+        if source.exists() and not self._quarantine_current_tray_state("ui_lane_fault"):
+            raise OSError("original checkpoint quarantine failed")
+        if repeated or len(recent) >= 2:
+            return False
+        self.current_tray = TraySession()
+        self.current_exchange_session = ProductExchangeSession()
+        self._completion_lane_busy = self._preflight_hold_draining = False
+        self._preflight_hold_snapshot = None
+        for flag in ("_phs_label_candidate_pending", "_phs_label_refresh_pending",
+                     "_phs_reconciliation_resolve_pending"):
+            setattr(self, flag, False)
+        self._ui_lane_fault_blocked = False
+        self._finish_blocked_current_tray_handoff()
+        self._ui_task_lane()
+        self.show_status_message(
+            "처리 중 오류로 이 트레이를 따로 보관했습니다. 관리자 확인 대기 — 다음 트레이를 계속하세요.",
+            self.COLOR_DANGER, duration=0,
+        )
+        return True
 
     def _transfer_coordinator_owner_thread_id(self) -> Optional[int]:
         lane = getattr(self, "_ui_lane", None)
@@ -1734,11 +1810,14 @@ class ContainerAudit:
 
     def _ui_task_lane(self) -> TkSerialUiLane:
         lane = getattr(self, "_ui_lane", None)
+        if lane is not None and getattr(self, "_ui_lane_fault_blocked", False):
+            return lane
         if lane is None or getattr(lane, "state", "") == "CLOSED":
             lane = TkSerialUiLane(
                 self.root,
                 poll_ms=15, generation_provider=lambda: getattr(self, "_scan_callback_epoch", 0),
                 on_runner_fault=self._handle_ui_lane_fault,
+                fault_context_provider=self._current_tray_state_snapshot,
             )
             self._ui_lane = lane
         return lane
@@ -1864,6 +1943,9 @@ class ContainerAudit:
     def _paired_preflight_blocks_label(self, master: str, *, restoring_paths: Sequence[Path] = (),
                                       retry_intent_paths: Sequence[Path] = ()) -> bool:
         try:
+            parked = self._parked_store().existing_label_path_any_worker(master_label=master)
+            if parked and self._parked_store().load(parked).get("ui_lane_fault"):
+                return True
             return any(row.binds(master) for row in self._parked_store().enumerate_key_evidence(
                 pair_store=self._paired_preflight_store(),
             ) if row.kind in {"pair", "stale", "stale_marker", "stale_current", "atomic_temp", "audit", "pin_intent",
@@ -14292,6 +14374,8 @@ class ContainerAudit:
         ``behind_live_save`` asks whether only a running product save stands in
         the way, so the scan can wait for it in order.
         """
+        if getattr(self, "_ui_lane_fault_blocked", False):
+            return "처리 오류를 확인해야 합니다. 추가 스캔을 중지하고 관리자에게 문의하세요."
         if getattr(self, "_startup_update_pending", False):
             return "프로그램 준비 중입니다. 잠시 뒤 다시 스캔하세요."
         pending_exchange = getattr(self, "_local_exchange_checkpoint_pending", None)
@@ -14697,7 +14781,7 @@ class ContainerAudit:
                     )
                 elif getattr(self, "_scans_behind_save", None):
                     self.root.after(0, self._process_next_scan_behind_save)
-            admitted = self._submit_scan_steps(steps, finish=outcome.append, on_idle=on_idle)
+            admitted = self._submit_scan_steps(steps, finish=outcome.append, on_idle=on_idle, barcode=raw_barcode)
             self._live_scan_save_pending = bool(admitted)
             return admitted
         return self._run_durable_ui_steps(steps)
@@ -15169,7 +15253,7 @@ class ContainerAudit:
             except Exception as exc:
                 value, error = None, exc
 
-    def _submit_scan_steps(self, steps, *, finish=None, on_idle=None):
+    def _submit_scan_steps(self, steps, *, finish=None, on_idle=None, barcode=""):
         lane = self._ui_task_lane()
         def idle():
             self._live_scan_save_pending = False
@@ -15190,6 +15274,7 @@ class ContainerAudit:
             finish=finish or (lambda result: None), fail=fail,
             on_idle=idle,
             shutdown_policy=DRAIN_TO_TERMINAL,
+            barcode=barcode,
         ))
         if not admission.accepted:
             steps.close()
@@ -15898,7 +15983,7 @@ class ContainerAudit:
         fallback keeps older restored/test instances safe while they migrate.
         """
 
-        return self._active_blocking_completion_snapshot() is not None
+        return bool(getattr(self, "_ui_lane_fault_blocked", False)) or self._active_blocking_completion_snapshot() is not None
 
     def _notice_severity_for_color(self, color: Optional[str]) -> NoticeSeverity:
         normalized = str(color or "").strip().lower()
@@ -20415,6 +20500,9 @@ class ContainerAudit:
             paired_candidate = read_recovery_file(Path(filepath), "json").value
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             paired_candidate = None
+        if isinstance(paired_candidate, dict) and "ui_lane_fault" in paired_candidate:
+            self.show_status_message("관리자 확인 대기인 트레이입니다. 원본을 보존합니다.", self.COLOR_DANGER)
+            return
         paired_master_label = (
             str(paired_candidate.get("master_label_code") or "")
             if isinstance(paired_candidate, dict) else ""

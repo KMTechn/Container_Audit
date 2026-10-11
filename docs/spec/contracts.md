@@ -146,6 +146,16 @@ WAL 연결의 close는 미완료 거래를 commit하지 않고 rollback한 뒤 �
 TRUNCATE checkpoint를 시도한다. BUSY·실패는 기록만 남기고 close를 계속하며
 read-only relay 조회에는 checkpoint를 추가하지 않는다.
 
+GUI 처리 줄 고장은 `UI_LANE_FAULT` 사건에 시각·작업 종류·현품표·세대·입력과
+`UNKNOWN`을 먼저 내구 저장한다. 제출 시점의 트레이 상태를 보존하여 완료 콜백이
+화면 상태를 비운 뒤 고장 나도 원 요청의 식별자를 잃지 않는다. 기존 STOP과 최대
+2초 join으로 옛 처리기 종료를
+확인한 뒤 현재 snapshot을 관리자 확인 대기 보류로 복사하고, 활성 checkpoint와
+사전조회 보류 원본을 기존 격리 형태로 보존한다. UNKNOWN 보류는 복원·재처리하지
+않으며 수량·완료·원장을 바꾸지 않는다. 세대를 올린 새 줄만 다음 트레이를 받는다.
+기록·격리 실패, 옛 처리기 미종료, 같은 현품표의 두 번째 고장, 10분 안 세 번째
+고장에서는 재개하지 않는다. 옛 UI checkpoint·terminal 결과는 적용하지 않는다.
+
 ## 1. 정본과 버전
 
 CA는 스캔·작업 상태·전송 의도를 소유한다. 중앙 제품 소유·위치·bundle membership·version·receipt 정본은 [Web logistics ledger service](../../../WorkerAnalysisGUI-web/logistics_ledger/service.py)가 소유한다. 관측 이벤트의 수신·투영은 [producer_ingest](../../../WorkerAnalysisGUI-web/producer_ingest.py)와 [common_projection](../../../WorkerAnalysisGUI-web/common_projection.py)가 소유한다. 이벤트 업로드만으로 물류 원장을 확정하거나 역산하지 않는다.

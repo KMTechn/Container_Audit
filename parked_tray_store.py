@@ -742,7 +742,8 @@ class ParkedTrayStore:
                         _safe_worker_filename(requested_worker), _worker_name_part(requested_worker))):
                     continue
                 summaries.append(ParkedTraySummary(
-                    path=path, item_name=str(data.get("item_name") or "알 수 없음"),
+                    path=path, item_name=("관리자 확인 대기 · " if "ui_lane_fault" in data else "")
+                        + str(data.get("item_name") or "알 수 없음"),
                     scan_count=len(data.get("scanned_barcodes") or []),
                 ))
             except Exception as exc:
