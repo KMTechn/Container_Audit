@@ -26,6 +26,7 @@ from typing import Any, BinaryIO, Callable, Dict, Iterable, Mapping
 from urllib.parse import parse_qsl, urlencode, urlparse
 
 from producer_runtime_client import (
+    DEFAULT_PRODUCER_USER_AGENT,
     CONTRACT_VERSION as RUNTIME_CONTRACT_VERSION,
     METADATA_FIELDS as RUNTIME_METADATA_FIELDS,
     OPERATOR_REVIEW_CODES as RUNTIME_OPERATOR_REVIEW_CODES,
@@ -466,6 +467,7 @@ def signed_headers(
         content_type="multipart/form-data",
     )
     return {
+        "User-Agent": DEFAULT_PRODUCER_USER_AGENT,
         "X-Producer-Id": credentials.producer_id,
         "X-Producer-Key-Id": credentials.key_id,
         "X-Producer-Timestamp": timestamp,
@@ -692,6 +694,7 @@ def restore_signed_headers(
         content_type="",
     )
     return {
+        "User-Agent": DEFAULT_PRODUCER_USER_AGENT,
         "X-Producer-Id": credentials.producer_id,
         "X-Producer-Key-Id": credentials.key_id,
         "X-Producer-Timestamp": timestamp,
@@ -1401,7 +1404,7 @@ def _upload_response_result(
             receipt={},
             retry_after_seconds=retry_after_seconds if is_retryable_status else None,
             error_code="producer_response_invalid_json",
-            error_message="producer ingest error response is not valid JSON",
+            error_message=f"회사 서버 응답 오류(코드 {status_code}).",
         )
     if 200 <= status_code < 300 and (not payload_is_valid_json or committed_value is not True):
         return UploadResult(

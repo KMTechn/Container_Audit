@@ -10,6 +10,12 @@ Portable `_runtime_release()`는 전체 무결성 PASS와 version/build 결속 �
 
 # 데이터·상태·통합 계약
 
+회사 서버 HTTP 요청은 `producer_runtime_client.DEFAULT_PRODUCER_USER_AGENT`
+(`KMTech-ContainerAudit/1.0`)를 명단/PIN·물류·품목 CSV·relay 업로드/원본 복구·runtime lease·등록·업데이트에 공통 사용한다.
+requests의 `.content`/`iter_content`/JSON 압축 해제와 TLS·시간 초과·서명 입력은 유지한다.
+JSON 계약 응답은 기존 코드로 처리한다. 비JSON 403·5xx는 HTTP 코드가 있는 서버 거절/오류로 표시하되,
+PIN `unknown=True`와 물류 `committed=None`은 유지하고 영수증 확인 전 성공으로 바꾸지 않는다.
+
 감사 CSV의 키 색인은 완결 줄만 인정한다. append와 색인 재생성 전에 같은 파일 잠금 안에서 줄바꿈 없는/NUL 꼬리를 잘라 fsync하고 색인을 무효화한다. 헤더 손상은 원본을 보존하며 거절한다. CSV fsync 뒤 같은 inode이고 크기가 투영 서명 이상이면 outbox 원본을 ACK한다. 뒤에 정상 행이 추가되어 크기·수정 시각이 바뀌어도 ACK하며, 파일 부재·교체·크기 감소는 원본을 보존하고 다음 drain에서 다시 확인한다. 꼬리 복구는 이미 완결된 내 행을 자르지 않는다.
 
 CSV 잠금 owner는 PID와 생성 시각으로 결속한다. 경합 때 프로세스 부재 또는 생성 시각 불일치면 즉시 제거·재시도하고, 생성 시각이 일치하는 살아 있는 owner는 잠금 나이와 무관하게 기다린다. 조회 불가 owner·살아 있는 PID-only 옛 형식·읽을 수 없는 기록은 mtime이 300초를 넘으면 회수한다. 시작 때 별도 잠금 청소는 하지 않는다.

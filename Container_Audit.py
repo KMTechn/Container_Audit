@@ -717,7 +717,10 @@ def _load_packaged_update_manifest_public_key() -> str:
 def _private_update_request_kwargs(url: str) -> Dict[str, Any]:
     """Bind same-origin private update discovery to the enrolled CA explicitly."""
 
-    request_kwargs: Dict[str, Any] = {"allow_redirects": False}
+    from producer_runtime_client import DEFAULT_PRODUCER_USER_AGENT
+    request_kwargs: Dict[str, Any] = {
+        "allow_redirects": False, "headers": {"User-Agent": DEFAULT_PRODUCER_USER_AGENT},
+    }
     try:
         app_root = (
             Path(sys.executable).resolve().parent
@@ -22003,11 +22006,16 @@ def _show_bootstrap_integrity_warning(report_path: object) -> None:
         pass
 
 
-def _show_item_catalog_startup_error(cause_code: str) -> None:
+def _show_item_catalog_startup_error(cause_code: str, *, http_status_code: int | None = None) -> None:
+    reason = ""
+    if http_status_code == 403:
+        reason = "\n회사 서버가 요청을 거절했습니다(코드 403)."
+    elif type(http_status_code) is int and 500 <= http_status_code <= 599:
+        reason = f"\n회사 서버 오류(코드 {http_status_code})."
     try:
         messagebox.showerror(
             ITEM_CATALOG_STARTUP_ERROR_TITLE,
-            f"{ITEM_CATALOG_STARTUP_ERROR_MESSAGE}\n오류 코드: {cause_code}",
+            f"{ITEM_CATALOG_STARTUP_ERROR_MESSAGE}{reason}\n오류 코드: {cause_code}",
         )
     except Exception:  # The fail-closed exit must survive Tk initialization failures.
         pass
@@ -22241,7 +22249,9 @@ def _prepare_gui_startup(*, data_root=None):
                 )
             except Exception:  # Diagnostic persistence must not bypass fail-closed exit.
                 pass
-            _show_item_catalog_startup_error(exc.cause_code)
+            _show_item_catalog_startup_error(
+                exc.cause_code, http_status_code=exc.diagnostic_context.get("http_status_code"),
+            )
             return ITEM_CATALOG_STARTUP_EXIT_CODE
         startup_complete = True
         return app, instance_lease

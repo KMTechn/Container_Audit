@@ -26,6 +26,7 @@ if SITE_PACKAGES.is_dir() and str(SITE_PACKAGES) not in sys.path:
     sys.path.insert(1, str(SITE_PACKAGES))
 
 from storage_utils import RemoteAttempt  # noqa: E402
+from producer_runtime_client import DEFAULT_PRODUCER_USER_AGENT  # noqa: E402
 
 from writer_session_fence import writer_admission, writer_sink  # noqa: E402
 
@@ -1347,7 +1348,7 @@ def _post_enrollment_request(
         response = session.post(
             enrollment_url,
             json=json,
-            headers=headers,
+            headers={**headers, "User-Agent": DEFAULT_PRODUCER_USER_AGENT},
             timeout=timeout,
             allow_redirects=allow_redirects,
             verify=verify,
@@ -1889,7 +1890,7 @@ def _possession_reattach(
         try:
             result = response.json()
         except ValueError as exc:
-            raise DirectSyncPushError("possession reattach response is not JSON") from exc
+            raise DirectSyncPushError(f"회사 서버 응답 오류(코드 {response.status_code}).") from exc
         if not isinstance(result, dict) or response.status_code != 200:
             error = result.get("error") if isinstance(result, dict) else None
             code = str(error.get("code")) if isinstance(error, dict) else str(response.status_code)

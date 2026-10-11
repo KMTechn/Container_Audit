@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 import requests
 
 from direct_sync_runtime import load_credentials_from_json
-from producer_runtime_client import SIGNATURE_VERSION, _utc_now_text, canonical_json
+from producer_runtime_client import DEFAULT_PRODUCER_USER_AGENT, SIGNATURE_VERSION, _utc_now_text, canonical_json
 from storage_utils import atomic_write_json
 from writer_session_fence import writer_sink
 
@@ -40,6 +40,10 @@ class AdminPinError(RuntimeError):
 
 
 def operator_message(code: str) -> str:
+    if re.fullmatch(r"HTTP_(403|5[0-9]{2})", code):
+        status = code.removeprefix("HTTP_")
+        reason = "회사 서버가 요청을 거절했습니다" if status == "403" else "회사 서버 오류"
+        return f"{reason}(코드 {status}). 이 건만 보류하고 다른 작업을 계속하세요."
     if code in {"PIN_INVALID", "PIN_FORMAT_INVALID", "PIN_NOT_LINKED", "PROOF_REVOKED"}:
         return FAILURE_MESSAGE
     if code == "TARGET_CHANGED":
@@ -145,6 +149,7 @@ class AdminPinClient:
         secret = identity.secret
         key = secret.encode("utf-8") if isinstance(secret, str) else secret
         headers = {
+            "User-Agent": DEFAULT_PRODUCER_USER_AGENT,
             "Content-Type": "application/json", "Accept": "application/json",
             "X-Producer-Id": str(identity.producer_id),
             "X-Producer-Key-Id": str(identity.key_id),
@@ -177,12 +182,15 @@ class AdminPinClient:
             raise AdminPinError("VERIFY_UNAVAILABLE", unknown=True)
         if path == "/api/worker-roster/v2/query" and status in {404, 405}:
             raise AdminPinError("ROSTER_V2_UNAVAILABLE", status=status)
+        unavailable_code = (
+            f"HTTP_{status}" if status == 403 or 500 <= status <= 599 else "VERIFY_UNAVAILABLE"
+        )
         try:
             answer = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
         except (UnicodeError, ValueError, TypeError):
-            raise AdminPinError("VERIFY_UNAVAILABLE", unknown=True) from None
+            raise AdminPinError(unavailable_code, unknown=True) from None
         if not isinstance(answer, dict):
-            raise AdminPinError("VERIFY_UNAVAILABLE", unknown=True)
+            raise AdminPinError(unavailable_code, unknown=True)
         error = answer.get("error")
         code = error.get("code") if isinstance(error, dict) and type(error.get("code")) is str else ""
         if path.startswith("/api/worker-roster/v2/") and (status != expected_status or answer.get("ok") is not True):

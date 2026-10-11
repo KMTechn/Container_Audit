@@ -1016,7 +1016,7 @@ def test_upload_non_2xx_invalid_json_has_retryable_diagnostic(tmp_path):
     assert result.retryable is True
     assert result.status_code == 500
     assert result.error_code == "producer_response_invalid_json"
-    assert "not valid JSON" in result.error_message
+    assert result.error_message == "회사 서버 응답 오류(코드 500)."
     assert Path(result.status_path).is_file()
 
 

@@ -274,6 +274,7 @@ def test_refresh_uses_provisioned_logistics_profile_headers(
             catalog_url,
             2.0,
             {
+                "User-Agent": "KMTech-ContainerAudit/1.0",
                 "Authorization": f"Bearer {SECRET_MARKER}",
                 "X-Logistics-Source-Host-Id": SOURCE_HOST_ID,
                 "X-Logistics-Device-Id": DEVICE_ID,
@@ -364,6 +365,7 @@ def test_runtime_profile_origin_drives_default_catalog_route(monkeypatch, tmp_pa
             2.0,
             False,
             {
+                "User-Agent": "KMTech-ContainerAudit/1.0",
                 "Authorization": f"Bearer {SECRET_MARKER}",
                 "X-Logistics-Source-Host-Id": SOURCE_HOST_ID,
                 "X-Logistics-Device-Id": DEVICE_ID,
@@ -426,6 +428,7 @@ def test_runtime_profile_preserves_production_catalog_route(monkeypatch, tmp_pat
             2.0,
             False,
             {
+                "User-Agent": "KMTech-ContainerAudit/1.0",
                 "Authorization": f"Bearer {SECRET_MARKER}",
                 "X-Logistics-Source-Host-Id": SOURCE_HOST_ID,
                 "X-Logistics-Device-Id": DEVICE_ID,
@@ -626,6 +629,7 @@ def test_authenticated_request_failure_does_not_log_exception_message(
             PRODUCTION_CATALOG_URL,
             2.0,
             {
+                "User-Agent": "KMTech-ContainerAudit/1.0",
                 "Authorization": f"Bearer {SECRET_MARKER}",
                 "X-Logistics-Source-Host-Id": SOURCE_HOST_ID,
                 "X-Logistics-Device-Id": DEVICE_ID,

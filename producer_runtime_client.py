@@ -41,6 +41,7 @@ CONTRACT_VERSION = "producer-runtime-lease.v1"
 ENDPOINT_PATH = "/api/producer-ingest/v1/runtime-lease"
 CONTENT_TYPE = "application/json"
 SIGNATURE_VERSION = "PRODUCER-HMAC-SHA256-V1"
+DEFAULT_PRODUCER_USER_AGENT = "KMTech-ContainerAudit/1.0"
 METADATA_FIELDS = (
     "runtime_instance_id",
     "runtime_public_jwk",
@@ -258,6 +259,7 @@ def _post_lease_request(
     secret_bytes = secret.encode("utf-8") if isinstance(secret, str) else secret
     signature = hmac.new(secret_bytes, canonical.encode("utf-8"), hashlib.sha256).hexdigest()
     headers = {
+        "User-Agent": DEFAULT_PRODUCER_USER_AGENT,
         "Content-Type": CONTENT_TYPE,
         "X-Producer-Id": str(credentials.producer_id),
         "X-Producer-Key-Id": str(credentials.key_id),

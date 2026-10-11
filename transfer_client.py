@@ -18,6 +18,7 @@ from logistics_runtime_profile import (
     logistics_runtime_required,
 )
 from terminal_operation_lease import TRANSFER_OPERATION
+from producer_runtime_client import DEFAULT_PRODUCER_USER_AGENT
 from transfer_common import TransferSealError, _normalize_identifier, normalize_barcode
 from writer_session_fence import writer_sink
 
@@ -165,6 +166,7 @@ class LogisticsTransferClient:
 
     def _headers(self, idempotency_key: str = "") -> dict[str, str]:
         headers = {
+            "User-Agent": DEFAULT_PRODUCER_USER_AGENT,
             "Authorization": f"Bearer {self.token}",
             "X-Logistics-API-Token": self.token,
             "X-Logistics-Source-Host-Id": self.source_host_id,
@@ -261,9 +263,14 @@ class LogisticsTransferClient:
             body = response.json()
         except Exception as exc:
             self._observe_connection(request_sequence, "disconnected")
+            code, message = "INVALID_SERVER_RESPONSE", "물류 서버가 JSON 응답을 반환하지 않았습니다."
+            if status_code == 403:
+                code, message = "LOGISTICS_SERVER_REJECTED", "회사 서버가 요청을 거절했습니다(코드 403)."
+            elif 500 <= status_code <= 599:
+                code, message = "LOGISTICS_SERVER_ERROR", f"회사 서버 오류(코드 {status_code})."
             raise TransferSealError(
-                "INVALID_SERVER_RESPONSE",
-                "물류 서버가 JSON 응답을 반환하지 않았습니다.",
+                code,
+                message,
                 status_code=status_code,
                 retryable=True,
                 committed=None,

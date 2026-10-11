@@ -24,6 +24,7 @@ if __name__ == "__main__":
     sys.path.insert(1, str(Path(__file__).resolve().parent / "site-packages"))
 
 from writer_session_fence import WriterFencedError, writer_sink, _assert_no_reparse_components
+from producer_runtime_client import DEFAULT_PRODUCER_USER_AGENT
 
 
 SCHEMA = "container-audit-startup-update-v1"
@@ -2196,10 +2197,11 @@ def prepare_feed_packet(app_root: Path) -> dict[str, Any]:
             raise ValueError("daily update download cannot use hosted update aliases")
         session.cookies.clear()
         headers = {"Authorization": "Bearer " + profile.bearer_token} if profile is not None and origin(urlsplit(url)) == origin(feed) else {}
+        headers["User-Agent"] = DEFAULT_PRODUCER_USER_AGENT
         response = session.get(url, headers=headers, timeout=10, stream=True, allow_redirects=False, verify=(profile.tls_ca_bundle_path or True) if profile is not None else True)
         if response.status_code != 200 or response.url != url:
             response.close()
-            raise ValueError("update download HTTP status differs")
+            raise ValueError(f"update download HTTP status differs (코드 {response.status_code})")
         return response
     def bounded(response, maximum):
         with response:

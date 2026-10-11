@@ -20,6 +20,7 @@ import requests
 
 from kmtech_shared import catalog as _catalog_core
 from writer_session_fence import writer_admission, writer_sink
+from producer_runtime_client import DEFAULT_PRODUCER_USER_AGENT
 
 
 logger = logging.getLogger(__name__)
@@ -959,11 +960,13 @@ def refresh_item_catalog(
         )
     try:
         request_kwargs: dict[str, object] = {
+            "headers": {"User-Agent": DEFAULT_PRODUCER_USER_AGENT},
             "timeout": timeout_seconds,
             "allow_redirects": False,
         }
         if profile is not None:
             request_kwargs["headers"] = {
+                "User-Agent": DEFAULT_PRODUCER_USER_AGENT,
                 "Authorization": f"Bearer {profile.bearer_token}",
                 "X-Logistics-Source-Host-Id": profile.source_host_id,
                 "X-Logistics-Device-Id": profile.device_id,

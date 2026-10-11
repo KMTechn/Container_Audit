@@ -139,6 +139,20 @@ def test_invalid_offline_cache_still_blocks_startup(startup, monkeypatch, tmp_pa
     assert windows == ["showerror"]
 
 
+@pytest.mark.parametrize("status", [403, 502, 503])
+def test_http_catalog_failure_blocks_start_and_shows_code(startup, monkeypatch, status):
+    _app, released = startup
+    messages = []
+    def fail():
+        raise sync.ItemCatalogSyncError("catalog request rejected",
+            cause_code=sync.REQUEST_FAILED_NO_CACHE, diagnostic_context={"http_status_code": status})
+    monkeypatch.setattr(ca, "prepare_startup_item_catalog", fail)
+    monkeypatch.setattr(ca.messagebox, "showerror", lambda title, body: messages.append(body))
+    assert ca._prepare_gui_startup() == ca.ITEM_CATALOG_STARTUP_EXIT_CODE
+    assert released == [True]
+    assert len(messages) == 1 and f"코드 {status}" in messages[0]
+
+
 @pytest.mark.parametrize("reason", ["profile_absent", "transition"])
 def test_other_nonblocking_catalog_startup_notices_use_notice_labels(
     startup, monkeypatch, tmp_path, windows, reason,
