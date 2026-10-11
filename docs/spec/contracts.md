@@ -554,6 +554,8 @@ CA의 Windows 출력 어댑터는 현재 기본 프린터의 이름·`GetPrinter
 
 실물 확인 재인쇄를 승인해도 같은 `(exchange_id, label_id)`의 이전 제출 스레드가 살아 있으면 새 제출을 막고 기존 `PHS_LOCAL_PRINT_UNKNOWN`으로 그 건만 보류한다. 시도 번호가 증가해도 판정하며 서버·journal의 `print_idempotency_key`는 유지한다. 어댑터 인스턴스가 달라도 판정하며 다른 현품표의 인쇄·스캔은 계속한다. 이전 스레드가 끝난 뒤에는 기존 승인 절차로 재인쇄한다. 비라벨 판정 안내의 현재 프린터 이름은 `screen_message`로 화면에만 전달한다. journal·중앙 실패 ACK·결과 `message` 및 결과 객체의 문자열 표현은 이름 없는 고정 안내를 사용한다.
 
+미확정 교환은 해당 source/target 현품표만 차단한다. 현재 대상 트레이는 기존 보류 파일에 원 수량·구성원·시각과 `TRAY_PARKED` 사유 `phs_label_exchange_pending`을 내구 저장한 뒤 다음 트레이로 전환한다. journal 읽기 실패는 원 파일을 변경하지 않고 바이트 사본·SHA256·시각·원인·당시 현품표를 기존 journal 형식의 `UNKNOWN` 기록으로 보존한다. 사본/기록 또는 트레이 보류 저장 실패는 전환을 거절한다. 다른 현품표는 계속 받으며 해당 현품표의 재스캔·보류 복원은 `COMMITTED`/`CANCELLED` 전까지 거절한다. 날짜 변경·재시작은 보류를 만료시키지 않는다. 단독 교환 복구는 기존 coordinator/lane으로 보류 트레이의 표시 필드만 갱신하며 writer admission 안에서 보류 원 바이트를 다시 대조한다.
+
 <a id="ca-c10"></a>
 ## CA-C10 현재 사용자 등록·설치 식별자·소유 증명
 

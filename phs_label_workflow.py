@@ -155,6 +155,45 @@ class PHSLabelExchangeJournal:
             )
         return dict(loaded["state"])
 
+    def quarantine_unreadable(
+        self, *, master_label: str, active_label: str, reason: str,
+    ) -> dict[str, Any]:
+        """Preserve an unreadable generation without replacing the live journal."""
+        with self._lock:
+            stamp = self.path.stat().st_mtime_ns
+            raw = self.path.read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        preserved = self.path.with_name(
+            f"{self.path.name}.quarantine-{digest[:16]}-{stamp}.bin"
+        )
+        receipt = PHSLabelExchangeJournal(preserved.with_suffix(".json"))
+        with writer_admission("phs_label_workflow"), self._lock:
+            if self.path.stat().st_mtime_ns != stamp or self.path.read_bytes() != raw:
+                raise OSError("exchange journal changed during preservation")
+            if not preserved.exists():
+                with preserved.open("xb") as handle:
+                    handle.write(raw)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            if preserved.read_bytes() != raw:
+                raise OSError("exchange journal copy differs from its original")
+            if receipt.path.exists():
+                state = receipt.load()
+            else:
+                with preserved.open("ab") as handle:
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                state = receipt.save({
+                    "status": "UNKNOWN", "reason": reason,
+                    "canonical_input_tag_qr": master_label,
+                    "active_label_qr_payload": active_label,
+                    "source_sha256": digest, "preserved_path": str(preserved),
+                })
+            if (state.get("status") != "UNKNOWN" or state.get("source_sha256") != digest
+                    or state.get("preserved_path") != str(preserved) or receipt.load() != state):
+                raise OSError("exchange journal preservation record differs")
+            return state
+
     @writer_sink("phs_label_workflow")
     def save(self, state: Mapping[str, Any]) -> dict[str, Any]:
         bounded = dict(state or {})

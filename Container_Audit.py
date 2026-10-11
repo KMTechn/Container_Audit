@@ -6309,7 +6309,9 @@ class ContainerAudit:
         self._configure_widget_options(
             getattr(self, "park_button", None),
             text=labels["park"],
-            state=mutation_state if active_tray else tk.DISABLED,
+            state=(tk.NORMAL if active_tray and not operator_review
+                   and not preflight_context_locked and not self._phs_label_exchange_busy()
+                   else tk.DISABLED),
         )
         self._configure_widget_options(
             getattr(self, "undo_button", None),
@@ -6341,7 +6343,7 @@ class ContainerAudit:
             state=(
                 tk.DISABLED
                 if not self._admin_pin_has_pending()
-                and (phs_transition_blocked or transfer_lane_busy
+                and (self._phs_label_exchange_busy() or transfer_lane_busy
                      or (operator_review and not active_tray and not preflight_context_locked))
                 else tk.NORMAL
             ),
@@ -6350,7 +6352,7 @@ class ContainerAudit:
             getattr(self, "change_worker_button", None),
             state=(
                 tk.DISABLED
-                if operator_review or phs_transition_blocked or preflight_context_locked
+                if operator_review or self._phs_label_exchange_busy() or preflight_context_locked
                 else tk.NORMAL
             ),
         )
@@ -6932,9 +6934,11 @@ class ContainerAudit:
         captured_master_label: str,
         updated_tray: TraySession,
         force_persist: bool,
+        parked_path: Optional[Path] = None,
+        parked_bytes: Optional[bytes] = None,
     ) -> bool:
         current = getattr(self, "current_tray", None)
-        if (
+        if parked_path is None and (
             current is not captured_tray
             or str(getattr(current, "master_label_code", "") or "")
             != captured_master_label
@@ -6948,13 +6952,24 @@ class ContainerAudit:
             "active_label_worker_code",
         )
         before = {
-            field_name: getattr(current, field_name, "")
+            field_name: getattr(captured_tray, field_name, "")
             for field_name in field_names
         }
         after = {
             field_name: getattr(updated_tray, field_name, "")
             for field_name in field_names
         }
+        if parked_path is not None:
+            try:
+                with writer_admission("phs_label_workflow"):
+                    if parked_path.read_bytes() != parked_bytes:
+                        return False
+                    state = json.loads(parked_bytes)
+                    state.update(after)
+                    atomic_write_json(parked_path, state, ensure_ascii=False)
+                    return ParkedTrayStore.load(parked_path) == state
+            except (OSError, TypeError, ValueError, WriterFenceError):
+                return False
         changed = before != after
         if changed:
             for field_name, value in after.items():
@@ -6996,46 +7011,66 @@ class ContainerAudit:
             and coordinator.available
         )
 
-    def _phs_label_exchange_transition_pending(self) -> bool:
-        if (
+    def _phs_label_exchange_busy(self) -> bool:
+        return bool(
             getattr(self, "_phs_label_exchange_pending", False)
             or getattr(self, "_phs_label_candidate_pending", False)
             or getattr(self, "_phs_reconciliation_resolve_pending", False)
             or getattr(self, "_phs_label_refresh_pending", False)
-        ):
-            return True
+        )
+
+    def _phs_label_exchange_pending_for_label(self, label: str) -> bool:
         coordinator = getattr(self, "phs_label_exchange_coordinator", None)
-        if coordinator is None:
+        if coordinator is None or not label:
             return False
         try:
             recovery = coordinator.journal.load()
-        except Exception:
-            return True
-        if (
-            recovery
-            and str(recovery.get("status") or "").strip().upper()
-            not in {"COMMITTED", "CANCELLED"}
-            and str(recovery.get("workflow_kind") or "")
-            == "RECONCILIATION"
-        ):
+        except Exception as exc:
+            tray = getattr(self, "current_tray", None)
+            recovery = coordinator.journal.quarantine_unreadable(
+                master_label=str(getattr(tray, "master_label_code", "") or ""),
+                active_label=str(getattr(tray, "active_label_qr_payload", "") or ""),
+                reason=exc.__class__.__name__,
+            )
+        if not recovery or str(recovery.get("status") or "").strip().upper() in {"COMMITTED", "CANCELLED"}:
+            return False
+        normalized = normalize_master_label_input(label)
+        label_id = str((self._parse_new_format_qr(normalized) or {}).get("LBL") or "")
+        pending = [recovery]
+        while pending:
+            part = pending.pop()
+            if isinstance(part, Mapping):
+                pending.extend(part.values())
+                pending.extend(part.keys())
+            elif isinstance(part, list):
+                pending.extend(part)
+            elif isinstance(part, str):
+                if part.strip() == normalized or (label_id and part.strip() == label_id):
+                    return True
+                fields = self._parse_new_format_qr(part) or {}
+                if label_id and str(fields.get("LBL") or "") == label_id:
+                    return True
+        return False
+
+    def _phs_label_exchange_transition_pending(self) -> bool:
+        if self._phs_label_exchange_busy():
             return True
         tray = getattr(self, "current_tray", None)
-        if tray is None or not getattr(tray, "master_label_code", ""):
-            return False
-        return bool(
-            recovery
-            and str(recovery.get("status") or "").strip().upper()
-            not in {"COMMITTED", "CANCELLED"}
-            and str(recovery.get("canonical_input_tag_qr") or "").strip()
-            == str(tray.master_label_code or "").strip()
-        )
+        try:
+            return self._phs_label_exchange_pending_for_label(
+                str(getattr(tray, "master_label_code", "") or "")
+            )
+        except Exception:
+            return True
 
     def _phs_label_exchange_blocks_tray_transition(self, action: str) -> bool:
         if not self._phs_label_exchange_transition_pending():
             return False
+        if not self._phs_label_exchange_busy():
+            if action == "현재 트레이 보류" or self.park_current_tray(confirm=False):
+                return False
         self.show_status_message(
-            "현품표 날짜 교환의 중앙 ACK/출력/활성화 복구가 끝날 때까지 "
-            f"{action} 작업을 진행할 수 없습니다.",
+            f"현품표 날짜 교환 확인 대기 · {action} 전에 트레이 보관을 확인하세요.",
             self.COLOR_DANGER,
             duration=8000,
         )
@@ -7106,7 +7141,8 @@ class ContainerAudit:
             self._schedule_focus_return()
         elif getattr(self, "_phs_reconciliation_context", None):
             self._execute_selected_phs_label_exchange()
-        elif self._phs_label_exchange_transition_pending():
+        elif (self._phs_label_exchange_transition_pending()
+              or getattr(self, "_phs_label_exchange_recovery_visible", False)):
             self._execute_selected_phs_label_exchange()
         elif (
             self._phs_label_exchange_available_for_tray()
@@ -7715,6 +7751,10 @@ class ContainerAudit:
                 )
             )
             return
+        if (recovery and str(recovery.get("status") or "").upper() not in {"COMMITTED", "CANCELLED"}
+                and recovery.get("canonical_input_tag_qr") != self.current_tray.master_label_code):
+            self._schedule_phs_label_exchange_recovery()
+            return
         if (
             not self._phs_label_exchange_available_for_tray()
             or getattr(self, "_phs_label_exchange_pending", False)
@@ -8217,7 +8257,24 @@ class ContainerAudit:
                 recovery_only=True
             )
             return
-        if not self._phs_label_exchange_available_for_tray():
+        tray = self.current_tray
+        parked_path = None
+        parked_bytes = None
+        if (recovery and str(recovery.get("status") or "").upper() not in {"COMMITTED", "CANCELLED"}
+                and recovery.get("canonical_input_tag_qr") != tray.master_label_code):
+            try:
+                parked_path = self._parked_store().existing_label_path_any_worker(
+                    master_label=str(recovery.get("canonical_input_tag_qr") or ""))
+                if parked_path is None:
+                    return
+                parked_bytes = parked_path.read_bytes()
+                state = ParkedTrayStore.load(parked_path)
+                if json.loads(parked_bytes) != state or not self._owns_worker_record(state):
+                    return
+                tray = tray_session_from_state(state, session_factory=TraySession, default_tray_size=self.TRAY_SIZE)
+            except (OSError, ValueError, TypeError):
+                return
+        if parked_path is None and not self._phs_label_exchange_available_for_tray():
             self._phs_label_recovery_deferred = False
             return
         if (
@@ -8225,7 +8282,7 @@ class ContainerAudit:
             or str(recovery.get("status") or "").strip().upper()
             in {"COMMITTED", "CANCELLED"}
             or str(recovery.get("canonical_input_tag_qr") or "").strip()
-            != str(self.current_tray.master_label_code or "").strip()
+            != str(tray.master_label_code or "").strip()
         ):
             self._phs_label_recovery_deferred = False
             return
@@ -8239,7 +8296,6 @@ class ContainerAudit:
                 pass
             return
         self._phs_label_recovery_deferred = False
-        tray = self.current_tray
         captured_master_label = str(tray.master_label_code or "")
         tray_snapshot = copy.deepcopy(tray)
         finish_identity = self._capture_mutation_finish_identity()
@@ -8280,6 +8336,8 @@ class ContainerAudit:
                     captured_master_label=captured_master_label,
                     updated_tray=updated_tray,
                     force_persist=bool(result.success),
+                    parked_path=parked_path,
+                    parked_bytes=parked_bytes,
                 )
                 if result.success and local_ready:
                     try:
@@ -14880,6 +14938,23 @@ class ContainerAudit:
         if self._intercept_phs_reconciliation_scan(raw_barcode):
             return
 
+        barcode = normalize_master_label_input(raw_barcode)
+        is_label = bool(self._parse_new_format_qr(barcode))
+        try:
+            exchange_blocked = self._phs_label_exchange_pending_for_label(
+                barcode if is_label or not self.current_tray.master_label_code else self.current_tray.master_label_code
+            )
+            if not exchange_blocked and is_label and self._phs_label_exchange_transition_pending():
+                exchange_blocked = True
+        except Exception:
+            exchange_blocked = True
+        if exchange_blocked:
+            self.show_status_message(
+                "이 현품표는 날짜 교환 확인 대기 중입니다. 트레이 보류 후 다른 현품표를 스캔하세요.",
+                self.COLOR_DANGER, duration=8000)
+            self._schedule_focus_return()
+            return
+
         if self._intercept_active_tray_phs2_scan(raw_barcode):
             return
 
@@ -20297,13 +20372,15 @@ class ContainerAudit:
         master_label = self.current_tray.master_label_code
 
         try:
+            exchange_waiting = self._phs_label_exchange_pending_for_label(master_label)
             state_snapshot = self._current_tray_state_snapshot()
             state_snapshot.setdefault('pending_audit_events', []).append(
                 self._checkpoint_audit_event('TRAY_PARKED', detail={
                     'master_label_code': master_label, 'item_code': self.current_tray.item_code,
                     'item_name': self.current_tray.item_name,
                     'scan_count': len(self.current_tray.scanned_barcodes),
-                    'tray_capacity': self.current_tray.tray_size}))
+                    'tray_capacity': self.current_tray.tray_size,
+                    **({'reason': 'phs_label_exchange_pending'} if exchange_waiting else {})}))
             parked_path = self._parked_store().save_state(
                 state_snapshot,
                 worker_name=self._record_worker_name(),
@@ -20333,7 +20410,11 @@ class ContainerAudit:
             self._show_left_sidebar_view("parked")
             if getattr(self, "undo_button", None) is not None:
                 self._update_action_button_states()
-            self.show_status_message("작업을 보류 처리했습니다. 새 현품표를 스캔하세요.", self.COLOR_PRIMARY)
+            self.show_status_message(
+                "현품표 날짜 교환 확인이 남아 이 트레이를 따로 보관했습니다. 다음 트레이를 계속하세요."
+                if exchange_waiting else "작업을 보류 처리했습니다. 새 현품표를 스캔하세요.", self.COLOR_PRIMARY)
+            if exchange_waiting:
+                self.root.after(100, self._schedule_phs_label_exchange_recovery)
             if getattr(self, "success_sound", None):
                 play_sound(self.success_sound)
             return True
@@ -20608,6 +20689,14 @@ class ContainerAudit:
             self._update_parked_trays_list()
             return
         parked_master_label = str(saved_state.get("master_label_code") or "")
+        try:
+            exchange_waiting = self._phs_label_exchange_pending_for_label(parked_master_label)
+        except Exception:
+            exchange_waiting = True
+        if exchange_waiting:
+            self.show_status_message("이 트레이는 현품표 날짜 교환 확인 대기 중입니다. 다른 트레이를 계속하세요.",
+                                     self.COLOR_DANGER, duration=8000)
+            return
         if parked_master_label and self._paired_preflight_blocks_label(parked_master_label):
             self._show_field_notice(
                 "보류 작업 복원 차단",
