@@ -1701,7 +1701,7 @@ def test_offline_queue_validates_next_label_before_moving(tmp_path, monkeypatch,
     assert app.warnings
 
 
-def test_offline_queue_limit_and_same_qr_reprint_do_not_create_another_hold(tmp_path, monkeypatch):
+def test_offline_queue_accepts_twenty_first_hold_and_preserves_same_qr_original(tmp_path, monkeypatch):
     app, client = _offline_queue_app(tmp_path, monkeypatch)
     original = app._preflight_hold_store().path.read_bytes()
     app._process_barcode_logic(COMPACT_QR)
@@ -1714,12 +1714,16 @@ def test_offline_queue_limit_and_same_qr_reprint_do_not_create_another_hold(tmp_
         seed.mark_offline(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
         seed.quarantine(app._preflight_hold_quarantine_directory(), reason="fixture_waiting")
 
+    before = {row.path: row.path.read_bytes() for row in app._quarantined_preflight_holds()}
     app._process_barcode_logic(OTHER_LABEL)
+    _pump_until(app.root, lambda: len(app._quarantined_preflight_holds()) == 21)
+    _pump_until(app.root, lambda: _offline_retry_job(app.root) is not None)
 
-    assert app._preflight_hold_store().path.read_bytes() == original
-    assert len(app._quarantined_preflight_holds()) == 20
-    assert len(client.identities) == 1
-    assert "20개" in app.statuses[-1][0] and "미접수" in app.statuses[-1][0]
+    assert app._preflight_hold_store().load().master_raw == OTHER_LABEL
+    assert len(client.identities) == 2
+    assert all(path.read_bytes() == raw for path, raw in before.items())
+    added, = [row for row in app._quarantined_preflight_holds() if row.path not in before]
+    assert added.path.read_bytes() == original
 
 
 def test_offline_queue_waiting_list_retains_count_and_short_label_suffixes(tmp_path, monkeypatch):

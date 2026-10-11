@@ -1078,7 +1078,6 @@ class ContainerAudit:
     EVENT_LOG_CLOSE_MAX_JOIN_ATTEMPTS = 3
     LOOP_CLEANUP_TIMEOUT_SECONDS = 5.0
     PREFLIGHT_OFFLINE_RETRY_MS = 30_000
-    PREFLIGHT_OFFLINE_WAITING_LIMIT = 20
     # One limit for all central requests a completion waits on (the local
     # completion is already durable; what is left pending goes out later).
     COMPLETION_SERVER_WAIT_SECONDS = 3.0
@@ -13280,12 +13279,6 @@ class ContainerAudit:
                     and canonical_master_label_key(raw) != canonical_master_label_key(snapshot.master_raw)):
                 if clear_entry_after_ack:
                     self._clear_consumed_scan_entry(raw)
-                if len(self._offline_waiting_preflight_holds()) >= self.PREFLIGHT_OFFLINE_WAITING_LIMIT:
-                    self.show_status_message(
-                        "대기 현품표 한도 20개 — 이번 현품표는 미접수입니다. 연결 후 대기 현품표를 다시 스캔하세요.",
-                        self.COLOR_DANGER, duration=0,
-                    )
-                    return False
                 self._process_barcode_logic(raw, _offline_hold_switch=snapshot)
                 return bool(getattr(self, "_preflight_hold_switch_pending", False))
             # The pending label is already held; a label is never a product.
