@@ -178,10 +178,33 @@ def test_temporarily_selects_existing_local_names_and_registers_only_explicitly(
     assert windows == []
 
 
-def test_actual_selector_is_readonly_with_separate_name_registration(flow, tmp_path, monkeypatch):
+@pytest.mark.parametrize('quarantine_error', [None, 'permission', 'fence'])
+def test_actual_selector_is_readonly_with_separate_name_registration(flow, tmp_path, monkeypatch, caplog, quarantine_error):
     app = flow(transition=False)
     registry = _registry(tmp_path / "workers.json")
     _login(app, registry, tmp_path)
+    if quarantine_error:
+        from writer_session_fence import WriterFencedError
+
+        cached = store(tmp_path, row())
+        damaged = b'{broken registration envelope'
+        local_path = cached.local_path
+        local_path.write_bytes(damaged)
+        original_replace = Path.replace
+        def denied_replace(source, target):
+            if source == local_path:
+                if quarantine_error == 'permission':
+                    raise PermissionError('quarantine denied')
+                raise WriterFencedError('WRITER_FENCED', 'quarantine denied')
+            return original_replace(source, target)
+        monkeypatch.setattr(Path, 'replace', denied_replace)
+        app.worker_roster = WorkerRoster(cached.path, cached.authority_scope_id)
+        assert app.worker_roster.local_blocked
+        assert not app.worker_roster.local['workers']
+        assert app.worker_roster.active_workers() == cached.active_workers()
+        assert local_path.read_bytes() == damaged
+        assert not list(local_path.parent.glob(local_path.name + '.bad-*'))
+        assert 'WORKER_REGISTRATION_QUARANTINE_UNAVAILABLE' in caplog.text
     widgets = []
     class Widget:
         def __init__(self, *args, **kwargs):
@@ -210,6 +233,11 @@ def test_actual_selector_is_readonly_with_separate_name_registration(flow, tmp_p
     assert app.worker_entry.options["values"] == ["tester"]
     registration, = [widget for widget in widgets if widget.options.get("text") == "새 이름 등록"]
     assert registration.options["command"] == app.register_worker_from_login
+    if quarantine_error:
+        assert '기존 이름으로 작업' in app._worker_roster_notice.options['text']
+        with pytest.raises(ValueError):
+            app.worker_roster.register_local('new name')
+        assert local_path.read_bytes() == damaged
 
 
 @pytest.mark.parametrize("name,eligible", [("홍길", True), ("홍길동", True), ("Alex", True),

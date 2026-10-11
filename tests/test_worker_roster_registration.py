@@ -245,6 +245,35 @@ def test_roster_client_preserves_unknown_error_code_status_and_outbox(tmp_path, 
     assert WorkerRoster(store.path, 'site-1').pending_requests() == [body]
 
 
+@pytest.mark.parametrize('mode', ['create', 'return'])
+@pytest.mark.parametrize('response_kind', ['empty_json', 'html', 'unrecognized_code', 'conflict_code', 'disabled_code'])
+def test_unverified_400_retries_original_registration_after_restart(tmp_path, monkeypatch, response_kind, mode):
+    original = worker('new')
+    store = roster(tmp_path, *([original] if mode == 'return' else []))
+    store.register_local('new', existing_worker_id=original['worker_id'] if mode == 'return' else '')
+    body, = store.pending_requests()
+    raw = {'empty_json': b'{}', 'html': b'<html>Bad request</html>',
+           'unrecognized_code': b'{"ok":false,"error":{"code":"UNRECOGNIZED_ERROR"}}',
+           'conflict_code': b'{"ok":false,"error":{"code":"REQUEST_CONFLICT"}}',
+           'disabled_code': b'{"ok":false,"error":{"code":"WORKER_NOT_FOUND"}}'}[response_kind]
+    sent = []
+    def transport(path, raw_body, headers):
+        sent.append(json.loads(raw_body))
+        success_status = 201 if mode == 'create' else 200
+        return (400, raw) if len(sent) == 1 else (success_status, json.dumps(acknowledgement(body)).encode())
+    client = make_client(monkeypatch, transport)
+    with pytest.raises(AdminPinError) as caught:
+        client.register_roster(body)
+    store.apply_registration(body, error=caught.value)
+    assert store.local['requests'][0]['state'] == 'PENDING'
+    restarted = WorkerRoster(store.path, 'site-1')
+    assert restarted.pending_requests() == [body]
+    restarted.apply_registration(body, answer=client.register_roster(restarted.pending_requests()[0]))
+    assert sent == [body, body]
+    assert restarted.local['requests'][0]['state'] == 'ACKED'
+    assert not restarted.pending_requests()
+
+
 def test_ack_save_failure_and_lost_ack_recover_mapping_without_regenerating_request(tmp_path, monkeypatch):
     store = roster(tmp_path)
     local = store.register_local('tester')
@@ -340,6 +369,32 @@ def test_rejected_return_is_terminal_and_not_selectable(tmp_path, code, status):
     assert store.local['requests'][0]['state'] == 'TERMINAL' and not store.pending_requests()
 
 
+@pytest.mark.parametrize('final_name', ['new', 'new_2'])
+def test_terminal_return_never_falls_back_to_recent_legacy_name(flow, windows, tmp_path, final_name):
+    app = application(flow, tmp_path)
+    store = app.worker_roster
+    local = store.register_local('new')
+    created, = store.pending_requests()
+    reply = acknowledgement(created, name=final_name)
+    store.apply_registration(created, answer=reply)
+    store.register_local(final_name, existing_worker_id=local['worker_id'])
+    returned, = store.pending_requests()
+    for name in dict.fromkeys(['new', final_name]):
+        app.worker_registry.register(name)
+        app.worker_registry.mark_recent(name)
+    store.apply_registration(returned, error=AdminPinError('WORKER_NOT_FOUND', status=404))
+    store.apply(snapshot(version=3), requested_version=store.known_version)
+    for current in (store, WorkerRoster(store.path, 'site-1')):
+        app.worker_roster = current
+        assert app._worker_selection_names() == ['tester']
+        assert not current.active_workers() and not current.pending_requests()
+        assert current.local['requests'][1]['state'] == 'TERMINAL'
+        assert current.local['requests'][1]['body'] == returned
+        assert current.local['temp_links'][local['worker_id']] == {
+            'worker_id': reply['worker']['worker_id'], 'worker_number': 1}
+    assert windows == []
+
+
 def test_unsafe_central_name_never_resurrects_through_temporary_alias(tmp_path):
     store = roster(tmp_path)
     local = store.register_local('tester')
@@ -367,7 +422,8 @@ def test_older_query_keeps_new_status_but_saves_immutable_temp_mapping(tmp_path)
 
 
 @pytest.mark.parametrize('future', [False, True])
-def test_invalid_request_is_item_review_except_future_action_at(tmp_path, future):
+@pytest.mark.parametrize('unknown', [False, True])
+def test_invalid_request_is_item_review_except_future_action_at(tmp_path, future, unknown):
     store = roster(tmp_path)
     if future:
         import datetime
@@ -381,8 +437,8 @@ def test_invalid_request_is_item_review_except_future_action_at(tmp_path, future
     else:
         store.register_local('tester')
     request, = store.pending_requests()
-    store.apply_registration(request, error=AdminPinError('INVALID_REQUEST', status=400))
-    assert bool(store.pending_requests()) is future
+    store.apply_registration(request, error=AdminPinError('INVALID_REQUEST', status=400, unknown=unknown))
+    assert bool(store.pending_requests()) is (future or unknown)
     assert store.local['requests'][0]['body'] == request
 
 

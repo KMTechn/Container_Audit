@@ -6,6 +6,7 @@ import datetime
 import copy
 import hashlib
 import json
+import logging
 import unicodedata
 import uuid
 from pathlib import Path
@@ -13,7 +14,7 @@ from typing import Any, Mapping
 
 from storage_utils import atomic_write_json
 from worker_registry import WorkerRegistry
-from writer_session_fence import writer_admission, writer_sink
+from writer_session_fence import WriterFenceError, writer_admission, writer_sink
 
 CONTRACT_VERSION = "worker-roster.v1"
 CONTRACT_VERSION_V2 = "worker-roster.v2"
@@ -300,8 +301,12 @@ class WorkerRoster:
             # Preserved damage must never be mistaken for a fresh empty queue.
             self.local_blocked = any(self.local_path.parent.glob(self.local_path.name + ".bad-*"))
         except (ValueError, TypeError, KeyError, UnicodeError, AttributeError):
-            self._preserve_bad(self.local_path)
             self.local_blocked = True
+            try:
+                self._preserve_bad(self.local_path)
+            except (OSError, WriterFenceError):
+                # Keep damaged bytes in place; cached/web names remain usable.
+                logging.getLogger(__name__).warning("WORKER_REGISTRATION_QUARANTINE_UNAVAILABLE")
         except OSError:
             self.local_blocked = True
 
@@ -433,15 +438,16 @@ class WorkerRoster:
         if error is not None:
             code, status = getattr(error, "code", "VERIFY_UNAVAILABLE"), getattr(error, "status", None)
             item["error"] = code
-            if status == 409 or code in {"REQUEST_CONFLICT", "TEMP_ID_CONFLICT"}:
+            if status == 400:
+                if code == "INVALID_REQUEST" and not getattr(error, "unknown", False):
+                    future = self._action_time(request["action_at"]) > (
+                        datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5))
+                    if not future:
+                        item["state"] = "REVIEW"
+            elif status == 409 or code in {"REQUEST_CONFLICT", "TEMP_ID_CONFLICT"}:
                 item["state"] = "REVIEW"
             elif request["mode"] == "return" and code in {"WORKER_DISABLED", "WORKER_NOT_FOUND"}:
                 item.update(state="TERMINAL", error_version=self.known_version)
-            elif status == 400:
-                future = self._action_time(request["action_at"]) > (
-                    datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5))
-                if code != "INVALID_REQUEST" or not future:
-                    item["state"] = "REVIEW"
         else:
             if (not isinstance(answer, dict) or answer.get("ok") is not True
                     or answer.get("contract_version") != CONTRACT_VERSION_V2

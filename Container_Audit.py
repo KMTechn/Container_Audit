@@ -3140,7 +3140,9 @@ class ContainerAudit:
         labels = [worker_choice_label(row) for row in rows
                   if row["display_name"] not in {PROTECTED_ADMIN_OPERATOR_ID, PROTECTED_ADMIN_DISPLAY_NAME}]
         if not roster.has_rows:
-            represented = {row["display_name"] for row in rows}
+            represented = {row["display_name"] for row in rows + roster.local["workers"]}
+            represented.update(item["body"]["display_name"] for item in roster.local["requests"]
+                               if item["body"] and item["state"] == "TERMINAL")
             labels += [name for name in self.worker_registry.list_workers() if name not in represented and name not in labels]
         return labels
 
