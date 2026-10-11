@@ -508,6 +508,8 @@ CA 세션 변환의 `pcs_completed`는 완료 barcode 수에서 계산되고 해
 
 읽기 전용 시작 확인은 같은 인증된 cache·복구본 판정을 사용한다. 인증된 저장 목록이 없고
 과도기 스위치도 꺼진 경우만 CATALOG_OFFLINE이다. [확인 계약](startup-check.md)을 따른다.
+평상시 화면 준비의 `app_gui_ready.v1` 표지는 시작 가능 판정과 별개인 관측이며,
+기존 관문 결론·업데이트 시험 staging 표지·자료 writer admission을 바꾸지 않는다.
 
 **API:** `GET /inbound/api/item-catalog.csv`. CA [item_catalog_sync.refresh_item_catalog](../../item_catalog_sync.py)와 `ContainerAudit.load_items`가 요청·검증·사용하며, Web [api_item_catalog_csv / _require_item_catalog_csv_reader](../../../WorkerAnalysisGUI-web/blueprints/inbound/__init__.py)가 route와 읽기 권한을 소유한다.
 

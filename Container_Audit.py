@@ -22772,7 +22772,15 @@ def _run_application_main(arguments):
     if not isinstance(startup, tuple):
         return startup
     app, instance_lease = startup
+    gui_identity = _startup_check_observe("gui_identity", CURRENT_VERSION) or (CURRENT_VERSION, "")
     _startup_check_observe("finish")
+
+    def report_gui_ready():
+        try:
+            _startup_check_observe("gui_ready", *gui_identity)
+        except Exception:
+            pass
+
     if trial_context(application_code_root) is not None:
         app.root.withdraw()
         def await_update_readiness():
@@ -22785,13 +22793,20 @@ def _run_application_main(arguments):
             if context is None:
                 app._startup_update_pending = False
                 app.root.deiconify()
+                report_gui_ready()
                 return
             try:
-                publish_gui_ready(application_code_root)
+                if publish_gui_ready(application_code_root):
+                    report_gui_ready()
             except (OSError, ValueError):
                 pass  # A readback failure remains unconfirmed; data is preserved.
             app.root.after(250, await_update_readiness)
         app.root.after(0, await_update_readiness)
+    else:
+        try:
+            app.root.after(0, report_gui_ready)
+        except Exception:
+            pass  # The optional marker cannot prevent the resident UI from starting.
     try:
         # The resident UI must let the relay and background writers acquire
         # admission between their own guarded mutations.

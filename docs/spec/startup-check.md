@@ -39,7 +39,7 @@ G0: 기존 거부의 종료 코드만 유지하며 그 거부 화면을 닫기 �
 「이 PC 는 지금 새 프로그램을 열 수 없습니다. 관리자에게 알렸습니다. 다른 작업대로 옮겨 주세요.」
 경고 후 계속, bootstrap 복구 인계, 이미 실행 중인 경우의 기존 흐름을 따른다.
 새 관찰이 실패해 UNKNOWN이면 기존 시작 흐름을 계속하고 기존 관문이 최종 판정한다.
-보고 sink는 `startup_check_report._write_result` 하나만 admission 예외로 등록한다.
+G 결과와 H 화면 준비 표지의 두 고정 report sink만 admission 예외로 등록한다.
 다른 sink의 `report_only` 사용과 기존 admission 안의 결과 쓰기는 거부한다.
 관찰 추가로 네트워크·writer 허가·mutex를 획득하지 않는다.
 
@@ -48,3 +48,14 @@ G0: 기존 거부의 종료 코드만 유지하며 그 거부 화면을 닫기 �
 기존 거부 상태를 함께 준비해야 안내 창을 시험할 수 있다. UNKNOWN 주입은 평소 시작을 계속한다.
 기존 커밋의 main과 종료·준비 순서를 대조하는 headless G0 시험, 가짜 Tk 안내, 원자 쓰기·
 쓰기 실패·UNKNOWN·주입 시험은 소스 증거다. 실물 TEST1/REWORK1과 HDD 시간은 현장 lane에서 남는다.
+
+## 평상시 화면 준비 표지 (H)
+
+첫 화면 이벤트에서 `%PROGRAMDATA%\KMTech\start-check\YYYYMMDD-CA.gui.json`을 예약한다.
+프로세스마다 한 번, daemon thread에서 `startup_check_report._write_gui_ready`가 임시 파일→
+`os.replace`로 JSON 한 줄을 쓴다. 화면 스레드는 native 조회·디스크 쓰기를 기다리지 않는다.
+필드는 `schema`(app_gui_ready.v1), `app`(CA), `version`, `build_sha`, `pid`,
+`process_start_utc`(Windows GetProcessTimes의 실제 생성 시각, UTC), `ready_at`(+09:00)뿐이다.
+판·SHA는 기존 시작 판정의 값을 전달한다. 폴더 없음·쓰기·thread 시작 실패는 조용히 넘어간다.
+폴더·ACL 생성은 설치 키트 몫이다. 업데이트 시험은 기존 staging `ready.json`을 그대로 쓰고,
+성공한 준비 표지만 H에 예약한다. 오래 걸리는 report worker를 join하거나 writer admission을 잡지 않는다.

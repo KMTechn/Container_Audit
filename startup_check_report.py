@@ -1,8 +1,10 @@
 """Best-effort non-authoritative startup result; never add a launch refusal."""
 from contextvars import ContextVar
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
+from threading import Thread
 import uuid
 
 from startup_check import REASON_CATEGORIES, startup_result
@@ -10,6 +12,7 @@ from writer_session_fence import _assert_no_reparse_components, writer_sink
 
 NOTICE = "이 PC 는 지금 새 프로그램을 열 수 없습니다. 관리자에게 알렸습니다. 다른 작업대로 옮겨 주세요."
 _STATE = ContextVar("container_start_check_report", default=None)
+_GUI_READY_STARTED = False
 
 
 def begin(version, *, enabled=True):
@@ -36,6 +39,49 @@ def release_identity(release):
         if identity != (state["version"], state["build_sha"]):
             state["version"], state["build_sha"] = identity
             state["revision"] += 1
+
+
+def gui_identity(version):
+    state = _STATE.get() or {}
+    return state.get("version") or version, state.get("build_sha", "")
+
+
+def gui_ready(version, build_sha):
+    """Queue one best-effort marker; never wait for native queries or disk I/O."""
+    global _GUI_READY_STARTED
+    if _GUI_READY_STARTED:
+        return
+    try:
+        ready_at = startup_result()["checked_at"]
+        _GUI_READY_STARTED = True
+        Thread(target=_publish_gui_ready, args=(version, build_sha, ready_at),
+               name="startup-gui-ready-report", daemon=True).start()
+    except Exception:
+        _GUI_READY_STARTED = False
+
+
+def _publish_gui_ready(version, build_sha, ready_at):
+    try:
+        _write_gui_ready(version, build_sha, ready_at)
+    except Exception:
+        pass
+
+
+def _process_start_utc():
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetCurrentProcess.argtypes = []
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+    kernel.GetProcessTimes.restype = wintypes.BOOL
+    created, exited, kernel_time, user_time = (wintypes.FILETIME() for _ in range(4))
+    if not kernel.GetProcessTimes(kernel.GetCurrentProcess(), ctypes.byref(created),
+                                  ctypes.byref(exited), ctypes.byref(kernel_time), ctypes.byref(user_time)):
+        raise OSError("process creation time unavailable")
+    ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+    return (datetime(1601, 1, 1, tzinfo=timezone.utc) +
+            timedelta(microseconds=ticks // 10)).isoformat(timespec="microseconds")
 
 
 def publish(reason=None, *, refused=False):
@@ -74,6 +120,10 @@ def observe(action, *args, **kwargs):
             return note(*args, **kwargs)
         if action == "release_identity":
             return release_identity(*args, **kwargs)
+        if action == "gui_identity":
+            return gui_identity(*args, **kwargs)
+        if action == "gui_ready":
+            return gui_ready(*args, **kwargs)
         if action == "publish":
             return publish(*args, **kwargs)
         if action == "finish":
@@ -106,6 +156,41 @@ def _write_result(result):
         temporary = folder / ("." + destination.name + "." + uuid.uuid4().hex + ".tmp")
         with temporary.open("x", encoding="utf-8", newline="\n") as stream:
             stream.write(json.dumps(result, ensure_ascii=True, separators=(",", ":")) + "\n")
+        os.replace(temporary, destination)
+    except Exception:
+        pass
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+@writer_sink("startup_gui_ready", report_only=True)
+def _write_gui_ready(version, build_sha, ready_at):
+    temporary = None
+    try:
+        program_data = Path(os.environ["PROGRAMDATA"])
+        if not program_data.is_absolute():
+            return
+        folder = program_data / "KMTech/start-check"
+        if not folder.is_dir():
+            return
+        _assert_no_reparse_components(folder)
+        timestamp = datetime.fromisoformat(ready_at)
+        if timestamp.utcoffset() != timedelta(hours=9):
+            return
+        ready_at = timestamp.isoformat(timespec="seconds")
+        identity = startup_result(version, build_sha)
+        payload = {"schema": "app_gui_ready.v1", "app": "CA",
+                   "version": identity["version"], "build_sha": identity["build_sha"],
+                   "pid": os.getpid(), "process_start_utc": _process_start_utc(), "ready_at": ready_at}
+        destination = folder / (ready_at[:10].replace("-", "") + "-CA.gui.json")
+        _assert_no_reparse_components(destination)
+        temporary = folder / ("." + destination.name + "." + uuid.uuid4().hex + ".tmp")
+        with temporary.open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(json.dumps(payload, ensure_ascii=True, separators=(",", ":")) + "\n")
         os.replace(temporary, destination)
     except Exception:
         pass

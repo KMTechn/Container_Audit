@@ -549,6 +549,8 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 
 [읽기 전용 시작 확인](startup-check.md)의 headless 시험은 실물 HDD 10초 상한·로그온 작업·
 실제 작업자 계정·원격 알림 수용을 대신하지 않는다. 이 수용은 설치 키트/현장 lane에서 남는다.
+평상시 `app_gui_ready.v1` 표지의 필드·원자 교체·실패 시 화면 진행과 기존 trial 표지
+바이트 보존은 headless로 검증한다. 실제 로그온 후 표지 수집·건강 판정은 현장 수용으로 남는다.
 
 - **sub-217 지원 제거 controller 재진입:** 보호 원 감사·source/fence/owner 결속과 같은 session의
   배타적 재획득을 추가했다. 실제 public fence/지원 제거/하위 내용 caller AST를 실행한 PS5.1/7

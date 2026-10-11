@@ -661,12 +661,14 @@ def writer_sink(
                 module_name = ".".join(app_path.with_suffix("").parts)
         sink_id = f"{module_name}.{function.__qualname__}"
         if report_only and (
-            probe_only or (selected_source, sink_id) !=
-            ("startup_check_report", "startup_check_report._write_result")
+            probe_only or (selected_source, sink_id) not in {
+                ("startup_check_report", "startup_check_report._write_result"),
+                ("startup_gui_ready", "startup_check_report._write_gui_ready"),
+            }
         ):
             raise WriterFencedError(
                 "REPORT_ONLY_SINK_NOT_ALLOWED",
-                "only the fixed non-authoritative startup report bypasses admission",
+                "only fixed non-authoritative startup reports bypass admission",
             )
         if probe_only and (selected_source, sink_id) not in PROBE_ONLY_WRITER_SINKS:
             raise WriterFencedError(
