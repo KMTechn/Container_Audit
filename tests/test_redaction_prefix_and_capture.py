@@ -87,7 +87,7 @@ def test_native_capture_redacts_long_assignment_before_bounding(tmp_path, engine
 $ErrorActionPreference='Stop'
 . (Join-Path $Root 'tools/bootstrap_integrity.ps1')
 Initialize-InstallationChildCapture
-$result=[KMTechInstallationChildCapture]::Run($Python,@('-B',$Child,$InputFile),(Split-Path $InputFile))
+$result=[KMTechInstallationChildCapture]::Run($Python,@('-B',$Child,$InputFile),(Split-Path $InputFile),$null)
 $stdout=ConvertTo-SafeInstallationOutput $result.stdout
 $stderr=ConvertTo-SafeInstallationOutput $result.stderr
 $original=[IO.File]::ReadAllText($InputFile)

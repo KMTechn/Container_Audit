@@ -24,7 +24,7 @@ $ErrorActionPreference='Stop'
 $inputVector=Get-Content -LiteralPath $Vector -Raw -Encoding UTF8|ConvertFrom-Json
 foreach($p in $inputVector.environment.PSObject.Properties){[Environment]::SetEnvironmentVariable($p.Name,[string]$p.Value,'Process')}
 Initialize-InstallationChildCapture
-$result=[KMTechInstallationChildCapture]::Run($Python,@('-B',$Child,$Vector),$OutputRoot)
+$result=[KMTechInstallationChildCapture]::Run($Python,@('-B',$Child,$Vector),$OutputRoot,$null)
 foreach($name in @('stdout','stderr')){
  $safe=ConvertTo-SafeInstallationOutput $result.$name
  [IO.File]::WriteAllBytes((Join-Path $OutputRoot ($name+'.safe')),$safe.bytes)
