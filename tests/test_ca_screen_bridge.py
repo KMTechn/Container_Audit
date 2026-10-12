@@ -285,6 +285,34 @@ def test_f8_reprint_confirms_the_existing_variable_and_invokes_only_an_enabled_b
     assert calls == ([[True]] if enabled else [])
 
 
+def test_preserve_check_facts_identify_only_the_existing_source_and_copy(flow, tmp_path):
+    app = _app(flow)
+    app._paired_stale_current_blocked = True
+    app._paired_stale_current_path = tmp_path / "current.json"
+    app._paired_stale_current_preserved_path = str(tmp_path / "preserved.json")
+    assert screen.admin_facts(app, "preserve_check") == [
+        ["현재 작업 원본", app._paired_stale_current_path.name],
+        ["보존 사본 이름", Path(app._paired_stale_current_preserved_path).name],
+    ]
+    app._paired_stale_current_blocked = False
+    assert screen.admin_facts(app, "preserve_check") == []
+
+
+def test_resend_completion_facts_use_the_same_first_bound_case_as_the_action(flow):
+    app = _app(flow)
+    selected = {"command_bound": True, "item_id": "대상 품목", "scan_count": 27}
+    app._transfer_post_review_cases = [
+        {"command_bound": False, "item_id": "다른 품목", "scan_count": 99}, selected,
+        {"command_bound": True, "item_id": "나중 품목", "scan_count": 41},
+    ]
+    state = CaProcessor(app).state()
+    facts = next(item["facts"] for item in state["admin_menu"] if item["name"] == "resend_completion")
+    assert facts == [["품목", selected["item_id"]], ["수량", f"{selected['scan_count']}개"]]
+    assert _schema_errors(state, CONTRACT["state"]) == []
+    app._transfer_post_review_cases = []
+    assert screen.admin_facts(app, "resend_completion") == []
+
+
 # ── 셸 host(v3.7 bridge, owner='external')와 한 바퀴 ─────────────────
 class _Pedal:
     def snapshot(self):

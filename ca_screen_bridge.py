@@ -357,7 +357,7 @@ def _view(app: Any, override: Optional[str]) -> str:
 
 
 def admin_facts(app: Any, name: str) -> List[List[str]]:
-    """관리자 판 사실 줄 — 대상이 처리 층 값으로 분명한 것만(현품표 확인 중 보관 · 지금 트레이). 나머지는 동작이 직접 보여 줌."""
+    """관리자 판 사실 줄 — 대상이 처리 층 값으로 분명한 것만. 나머지는 동작이 직접 보여 줌."""
     if name == "quarantine_hold":
         snapshot = _attr(app, "_preflight_hold_snapshot")
         if snapshot is None:
@@ -373,6 +373,25 @@ def admin_facts(app: Any, name: str) -> List[List[str]]:
         count = len(_attr(tray, "scanned_barcodes") or [])
         return [["현재 묶음", f"현품표 {tag} · {item} · 스캔 {count}".replace(" ·  · ", " · ")],
                 ["보류 뒤", "같은 현품표는 관리자 확인 전까지 잠김"]]
+    if name == "preserve_check" and _attr(app, "_paired_stale_current_blocked"):
+        facts = []
+        for label, attribute in (("현재 작업 원본", "_paired_stale_current_path"),
+                                 ("보존 사본 이름", "_paired_stale_current_preserved_path")):
+            path = str(_attr(app, attribute, "") or "")
+            if path:
+                facts.append([label, Path(path).name])
+        return facts
+    if name == "resend_completion":
+        cases = _attr(app, "_transfer_post_review_cases", ()) or ()
+        case = next((row for row in cases if row.get("command_bound")), None)
+        if case is None:
+            return []
+        facts = []
+        if case.get("item_id") is not None:
+            facts.append(["품목", str(case["item_id"])])
+        if case.get("scan_count") is not None:
+            facts.append(["수량", f"{case['scan_count']}개"])
+        return facts
     return []
 
 
