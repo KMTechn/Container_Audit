@@ -756,9 +756,10 @@ def test_product_entrypoint_releases_admission_before_resident_loop(
         assert events == ["initialize", "resident", "instance-release"]
 
 
+@pytest.mark.parametrize("confirmed", [True, False])
 @pytest.mark.parametrize("arguments", [[], ["--container-audit-user-relay"]])
 def test_product_entrypoint_denies_active_fence_before_gui_or_relay_mutation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: list[str],
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: list[str], confirmed: bool,
 ) -> None:
     import Container_Audit as app
     import user_relay
@@ -772,12 +773,25 @@ def test_product_entrypoint_denies_active_fence_before_gui_or_relay_mutation(
     monkeypatch.setattr(user_relay, "run_persistent_relay_loop", lambda **_: entered.append("relay"))
     notices: list[bool] = []
     monkeypatch.setattr(app, "_show_startup_unavailable", lambda: notices.append(True))
+    # 3721632: the notice follows only a confirmed startup-check refusal record.
+    real_observe = app._startup_check_observe
+    refusals: list[tuple] = []
+
+    def observe(action, *args, **kwargs):
+        result = real_observe(action, *args, **kwargs)
+        if action == "finish" and kwargs.get("refused"):
+            refusals.append(args)
+            return confirmed
+        return result
+
+    monkeypatch.setattr(app, "_startup_check_observe", observe)
     # A fenced relay's diagnostic writer must also be denied; neither mode
     # may turn an admission failure into a successful startup.
     with pytest.raises(fence.WriterFencedError, match="active deployment fence"):
         app.main(arguments)
     assert entered == []
-    assert notices == ([True] if not arguments else [])
+    assert refusals == ([("DEPLOY_FENCE",)] if not arguments else [])
+    assert notices == ([True] if not arguments and confirmed else [])
     assert not (tmp_path / "state").exists()
     assert active.read_bytes() == before
 
