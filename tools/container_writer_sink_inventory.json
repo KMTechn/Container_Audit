@@ -1562,7 +1562,7 @@
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2269,
+          "line": 2272,
           "operation": "status_dir.mkdir",
           "writer_admission_sources": [
             "current_user_setup_removal"
@@ -1619,19 +1619,19 @@
       ],
       "file": "data_generation_guard.py",
       "kind": "function",
-      "line": 197,
+      "line": 272,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 216,
+          "line": 294,
           "operation": "subprocess.check_output",
           "writer_admission_sources": []
         },
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 219,
+          "line": 297,
           "operation": "subprocess.check_output",
           "writer_admission_sources": []
         }
@@ -9575,7 +9575,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "83c83b8ab26ccf0cea2bd5a2f6a817626a341c005106a9f4c40ded3408b07942",
+  "inventory_sha256": "75b6495377f993a81fbeb7f76be09ef377160a130cdf500cecb0d484d048cf18",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -22243,7 +22243,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.restore_current_user_lifecycle_after_replacement",
-      "line": 2330,
+      "line": 2333,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -22307,7 +22307,7 @@
       "direct_mutation_site_count": 0,
       "file": "data_generation_guard.py",
       "function": "data_generation_guard.record_before_data_open",
-      "line": 303,
+      "line": 381,
       "marker_kind": "decorator",
       "source": "data_generation_marker"
     },
