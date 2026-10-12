@@ -95,3 +95,5 @@ Win32_Process 조회와 각 PID 생성 시각 읽기는 각각 5초 상한이며
 성공 상태 `PASS_MACHINE_RECOVERED`를 확인한 다음 설치 또는 `-Uninstall`을 다시
 호출한다. 새 설치 보상은 제품 helper의 검증된 제거로 배치 코드를 없애며 자료는 보존한다.
 `PlanOnly`도 같은 SID의 LOCALAPPDATA·개인 바로가기·reparse 읽기 검사를 먼저 실행한다.
+
+제품 기계 입구를 pwsh.exe로 직접 부를 때 제거·보상은 Program Files 아래 실제 Microsoft 서명 엔진과 정본 소스·권한 tuple·살아 있는 부모 사슬·시작 시각을 함께 확인한다. 격리 시험의 최소 환경은 ProgramFiles와 ProgramW6432가 없어도 OS의 Program Files 경로를 읽어 설치기 사본의 자식 환경에 공급하며, 실제 서명·부모 사슬 검증과 기존 상태 보존 단언을 유지한다.

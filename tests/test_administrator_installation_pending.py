@@ -410,6 +410,11 @@ def test_machine_placement_existing_restore_and_removal_preserve_profiles(tmp_pa
     if not executable:
         pytest.skip(f"{engine} is required")
     env, source, installed, protected = _setup(tmp_path, stock_version_identity=True)
+    # Exercise the audit runner's minimal Windows environment, including Core's
+    # ProgramW6432 fallback, without bypassing signed controller verification.
+    for name in ("ProgramFiles", "ProgramW6432"):
+        env.pop(name, None)
+        env.pop(name.upper(), None)  # os.environ copies use upper-case Windows keys.
     _mark_hidden_fixture_directory(Path(env["PROGRAMDATA"]))
     old_commit = json.loads((installed / "portable-manifest.json").read_text())["source_commit"]
     if first_start == "placement_child_failure_new":
@@ -431,7 +436,10 @@ def test_machine_placement_existing_restore_and_removal_preserve_profiles(tmp_pa
     protection = HELPER_OS[HELPER_OS.index("# Only OS protection is simulated;"):]
     # Synthetic caller/ProfileList and owned scheduler/ACL boundaries only;
     # the actual entrypoint, admission, placement, inventory and receipts run.
-    injected = OS_BOUNDARIES + "\n$UninstallAuditPath=Join-Path $env:CA_UNINSTALL_ROOT 'machine-audit.json'\n" + protection + r'''
+    # Supply the actual read-only OS root omitted by the parent audit harness.
+    injected = OS_BOUNDARIES + "\n"
+    injected += ("if (-not $env:ProgramFiles) { $env:ProgramFiles=[Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles) }\n"
+                 "$UninstallAuditPath=Join-Path $env:CA_UNINSTALL_ROOT 'machine-audit.json'\n") + protection + r'''
 function Get-CanonicalInstallationCallerSecurity {
  return [pscustomobject]@{sid='S-1-5-21-111-222-333-1000';session_id=0;elevated=$true}
 }
