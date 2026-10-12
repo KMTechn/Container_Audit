@@ -1,0 +1,442 @@
+{
+ "schema": "ui-parts/1",
+ "source": "WorkerAnalysisGUI-web",
+ "commit": "9e2231619942d19ebcf6ad83f0f4cdf7329e5b1b",
+ "dirty": false,
+ "app": "ca",
+ "parts_fingerprint": "065f21acdd52ffbf",
+ "files": [
+  {
+   "path": "app/ca/ca.css",
+   "sha256": "49d6cdeb640d2070053bf8761fe2001eaee030fced1d68424ec706276d1db543",
+   "bytes": 12611,
+   "gzip": 3410
+  },
+  {
+   "path": "app/ca/ca.js",
+   "sha256": "74d80ebbcf4ec50bd7ca0fab2a5aead39c9343b761b9ead4910a3e8f20ae9cef",
+   "bytes": 16801,
+   "gzip": 6241
+  },
+  {
+   "path": "app/ca/contract.json",
+   "sha256": "2276a60ce6e26f81849c327806adb9c91220c89a1fafc0c20eda192341f60496",
+   "bytes": 26967,
+   "gzip": 5672
+  },
+  {
+   "path": "app/ca/fixtures/admin-defer.json",
+   "sha256": "c8dd898ae5fecf75af5339805b741454c9c566fac14c85efaaa5a8e5cd887f9f",
+   "bytes": 9257,
+   "gzip": 1975
+  },
+  {
+   "path": "app/ca/fixtures/admin-handoff.json",
+   "sha256": "a5cc0d3898bd362cfbd2a67f2957f82c538f479fff976b3f83b1fd241450ad43",
+   "bytes": 8990,
+   "gzip": 1893
+  },
+  {
+   "path": "app/ca/fixtures/admin-pair.json",
+   "sha256": "69193580313b97985594a0e0dae720b208444a8e55357a5759f028de08b9ae68",
+   "bytes": 9253,
+   "gzip": 1986
+  },
+  {
+   "path": "app/ca/fixtures/admin-paired.json",
+   "sha256": "044ea868cc1ca8bcb0899dc91fb25fd4842060fc2cc74a1cd9bf243c92ced8e6",
+   "bytes": 10241,
+   "gzip": 2202
+  },
+  {
+   "path": "app/ca/fixtures/admin-preserve.json",
+   "sha256": "905ef77e1b1ec10a50511fe4c4dfa90ad367d9f8c255340b3741811d77bb4dc6",
+   "bytes": 9286,
+   "gzip": 1993
+  },
+  {
+   "path": "app/ca/fixtures/admin-quarantine.json",
+   "sha256": "1b4d7e0b6981eba3d834c34b99f7241d84ebfb0425261dd969674abdb48be6de",
+   "bytes": 9259,
+   "gzip": 1988
+  },
+  {
+   "path": "app/ca/fixtures/admin-recheck.json",
+   "sha256": "57b212f3000325ed2561ada6b0e1ca898cc992a23a55c4affd3f2d800010c224",
+   "bytes": 9826,
+   "gzip": 2039
+  },
+  {
+   "path": "app/ca/fixtures/admin-retry.json",
+   "sha256": "f6c35eaa3a56fced97ad38741763876c135df4a5a38c8dcfdf6a8a1203aff08f",
+   "bytes": 9275,
+   "gzip": 1982
+  },
+  {
+   "path": "app/ca/fixtures/admin-sync.json",
+   "sha256": "a109c9a06c558f7ee5b93a348b08dffb30989156536899fd6f62376186f5091a",
+   "bytes": 8987,
+   "gzip": 1899
+  },
+  {
+   "path": "app/ca/fixtures/admin-unsettled.json",
+   "sha256": "bef55ed49562de65583dd57b66a6a65df00eb931d339b4f9a664867e4273732c",
+   "bytes": 9007,
+   "gzip": 1900
+  },
+  {
+   "path": "app/ca/fixtures/admin.json",
+   "sha256": "d5c403211f3db69be803be0819e5e83343381f6c4588ea5177a9cc90a34404a5",
+   "bytes": 8965,
+   "gzip": 1897
+  },
+  {
+   "path": "app/ca/fixtures/blocked.json",
+   "sha256": "c083f0808d0ee5f2fa8208ea0877e57c883e59f9308a78f5b6f6de786890685e",
+   "bytes": 5771,
+   "gzip": 1590
+  },
+  {
+   "path": "app/ca/fixtures/change-fail.json",
+   "sha256": "34a0fa7fd55bbb1c2724b1d7e43f68f847c53e83293830fedf284033a590ac59",
+   "bytes": 9161,
+   "gzip": 1971
+  },
+  {
+   "path": "app/ca/fixtures/checking.json",
+   "sha256": "01663ded0e4a7757cafd851443c3f131a047462f5a2ffd32bdb9a968533d0c8b",
+   "bytes": 6171,
+   "gzip": 1629
+  },
+  {
+   "path": "app/ca/fixtures/choice.json",
+   "sha256": "4ecf2f7ca7029832c5ccd34810c5223b3c9d91ecff81324ad2b79746d07e5342",
+   "bytes": 9461,
+   "gzip": 2023
+  },
+  {
+   "path": "app/ca/fixtures/cofill-checking.json",
+   "sha256": "a869659e2f9750be3956740ef0b10c90681d66f9d2fcc2c14acc3d0f18ff360c",
+   "bytes": 7488,
+   "gzip": 1916
+  },
+  {
+   "path": "app/ca/fixtures/cofill-closed-other.json",
+   "sha256": "3ea53b7f851f349fbcc96c65148c4859d859c732e5857331ba9bda2b2d649efd",
+   "bytes": 7643,
+   "gzip": 1935
+  },
+  {
+   "path": "app/ca/fixtures/cofill-full.json",
+   "sha256": "42dbab2db78879cc452d658c6ca3412c59124a25a0a92b4de04844d219287e75",
+   "bytes": 7919,
+   "gzip": 1976
+  },
+  {
+   "path": "app/ca/fixtures/cofill-limit.json",
+   "sha256": "9000fdef6b9d2603f58c94c1ab473725cbc7296a82eb3f388b89287e77c38b12",
+   "bytes": 5674,
+   "gzip": 1586
+  },
+  {
+   "path": "app/ca/fixtures/cofill-offline.json",
+   "sha256": "df25831e01364d77a91b1dc0a9fcbfe3e30273d6eae290a7609250f3c039baa5",
+   "bytes": 7485,
+   "gzip": 1935
+  },
+  {
+   "path": "app/ca/fixtures/cofill-overflow.json",
+   "sha256": "77267a5cdc1c9bfc3b08829497970de5ed5fb102fec0586fa60b257b66d4d4e6",
+   "bytes": 8342,
+   "gzip": 2110
+  },
+  {
+   "path": "app/ca/fixtures/cofill-quota-spent.json",
+   "sha256": "b254ff6fde3225ba3356b63606a5a1d9fb404092246577b98999b224845246ab",
+   "bytes": 8253,
+   "gzip": 2038
+  },
+  {
+   "path": "app/ca/fixtures/cofill.json",
+   "sha256": "88fbe47668c0fcecefa31fc8ba6c4ae5818f1fbf74d7df839f0a255fd3d7a50f",
+   "bytes": 7462,
+   "gzip": 1910
+  },
+  {
+   "path": "app/ca/fixtures/corrupt.json",
+   "sha256": "101f952c7b424572a3d419ab196e326c4e409a46dc834c430623f99341e9deb7",
+   "bytes": 5805,
+   "gzip": 1587
+  },
+  {
+   "path": "app/ca/fixtures/done.json",
+   "sha256": "c2cb64ac2a7bbee461c8af711e41dfba3e31d693356dbeee1daf7674cd2f36ef",
+   "bytes": 10482,
+   "gzip": 2009
+  },
+  {
+   "path": "app/ca/fixtures/empty.json",
+   "sha256": "dc4880519beb3fcf553eb6001cdbb4e86e414516aaa928e6d508a80bcd14f13b",
+   "bytes": 5611,
+   "gzip": 1556
+  },
+  {
+   "path": "app/ca/fixtures/error.json",
+   "sha256": "fcf57ec974ee9d4fc81eb86d2398830a0cd971bba3cb3aa6a08981b362165268",
+   "bytes": 9153,
+   "gzip": 1972
+  },
+  {
+   "path": "app/ca/fixtures/exchange.json",
+   "sha256": "1575888bc6efe9932cacb8facc6fcc594e13d1ddc8f8990e4cb352838058d89f",
+   "bytes": 9233,
+   "gzip": 1946
+  },
+  {
+   "path": "app/ca/fixtures/exchange2.json",
+   "sha256": "eeddd387ef670f6b80e3788797ecfe885f0e088cc5c796ff34187fa28cc4c6df",
+   "bytes": 9259,
+   "gzip": 1965
+  },
+  {
+   "path": "app/ca/fixtures/exchanged.json",
+   "sha256": "792e9bab5a97d9cc908ff27697e97af8349206a1ea4b210d11919fa661443c22",
+   "bytes": 9026,
+   "gzip": 1923
+  },
+  {
+   "path": "app/ca/fixtures/f8-2.json",
+   "sha256": "22279fd83042a0aa68bf01e0d50256ed4170fb098d288b6e4c04433565b50ae2",
+   "bytes": 9427,
+   "gzip": 2063
+  },
+  {
+   "path": "app/ca/fixtures/f8-print.json",
+   "sha256": "14fa86bd78ca619d1f3c234fc17e5563a950f1582b1b759a6a02d6ba8d9d1193",
+   "bytes": 9530,
+   "gzip": 2112
+  },
+  {
+   "path": "app/ca/fixtures/f8-reprint.json",
+   "sha256": "33f05c75a731ea43b24e8301f4759126313aa97534edcbd98949b3ef18fdbc3a",
+   "bytes": 10015,
+   "gzip": 2240
+  },
+  {
+   "path": "app/ca/fixtures/f8.json",
+   "sha256": "a075a0efe04d6a8ad65d82ca801fa81a610d0dfaeaec1fb2a3267063f0c9e859",
+   "bytes": 9188,
+   "gzip": 1979
+  },
+  {
+   "path": "app/ca/fixtures/focus.json",
+   "sha256": "4347b142e208e99f7a9ac2610635af7afa45b6e96d8dcd1ac2b56aa02746c9d1",
+   "bytes": 8960,
+   "gzip": 1897
+  },
+  {
+   "path": "app/ca/fixtures/held.json",
+   "sha256": "3841cdca4b7eb402254296074e896068ed69c0cbf058d5577bea5b0ffc326c43",
+   "bytes": 9986,
+   "gzip": 2158
+  },
+  {
+   "path": "app/ca/fixtures/idle.json",
+   "sha256": "5d38f80892a450c7e9d50b1e40297a6b4a00d0691f1bf680748cbdc45a75489e",
+   "bytes": 9158,
+   "gzip": 1947
+  },
+  {
+   "path": "app/ca/fixtures/late.json",
+   "sha256": "58b902c1d1590cdf5055ac0b4b9d7a2ed1782bf7ef02d7099d2d68e89940d214",
+   "bytes": 8973,
+   "gzip": 1900
+  },
+  {
+   "path": "app/ca/fixtures/legacy.json",
+   "sha256": "a9dc5bd28fa88243e019ad6c848e110d6f7a7bfaa8b602e2d6862df0e451bcfd",
+   "bytes": 8970,
+   "gzip": 1888
+  },
+  {
+   "path": "app/ca/fixtures/normal.json",
+   "sha256": "03f28f4d7bcf74778c52ce60cf2762fb9872c82bc2b59bb7263ddcb8cb21b46a",
+   "bytes": 8970,
+   "gzip": 1893
+  },
+  {
+   "path": "app/ca/fixtures/offline.json",
+   "sha256": "b0d22de4a5386eff3d7ed7583c8774ce719ac6888436ca71ea640bbe42428d53",
+   "bytes": 9158,
+   "gzip": 1937
+  },
+  {
+   "path": "app/ca/fixtures/progress-off.json",
+   "sha256": "e0223e238ed2d6e8164719b3bb92956a183763b2f0b476d9ff3ada513cc7e8a5",
+   "bytes": 10110,
+   "gzip": 2142
+  },
+  {
+   "path": "app/ca/fixtures/progress.json",
+   "sha256": "43fbbac2d94fdab341137925a0874a117ca01347a753aa3faca6f826a4b6d65b",
+   "bytes": 10093,
+   "gzip": 2129
+  },
+  {
+   "path": "app/ca/fixtures/recovery-delete.json",
+   "sha256": "cdd2e17e1b67a93a490f6ef1cc330ebd7040a3c08779bc320b7fb2f3b60daeac",
+   "bytes": 6173,
+   "gzip": 1750
+  },
+  {
+   "path": "app/ca/fixtures/recovery.json",
+   "sha256": "7bac353e5535dfc3a52ab6b1805b36723c1ca3327d4a638d10b01b914f499d96",
+   "bytes": 6303,
+   "gzip": 1674
+  },
+  {
+   "path": "app/ca/fixtures/refresh-fail.json",
+   "sha256": "33dd8d9642a9a1ce59e037ff80a067f17e33a3c6cd97e65216e852c27fa6b998",
+   "bytes": 9187,
+   "gzip": 1991
+  },
+  {
+   "path": "app/ca/fixtures/refresh-ok.json",
+   "sha256": "1657c9bda1bbcae14a48c49ec0d0afa4b0aa9f226c69ff71f5730d4ca46e7d72",
+   "bytes": 8964,
+   "gzip": 1893
+  },
+  {
+   "path": "app/ca/fixtures/refresh-wait.json",
+   "sha256": "7d49a8159a4ba2ea14c16bff87fbe03881c23341183c073e10fe5bc6723f7ce7",
+   "bytes": 9159,
+   "gzip": 1961
+  },
+  {
+   "path": "app/ca/fixtures/reset.json",
+   "sha256": "502bde895fcc49fd33282004eb7176c37417defc46ef60c8e47b9753d6adde15",
+   "bytes": 8984,
+   "gzip": 1906
+  },
+  {
+   "path": "app/ca/fixtures/retry-fail.json",
+   "sha256": "0010c93ac68cfd9b01d0ea9c02894ed1f4f040330a32e14515521de7b883e11c",
+   "bytes": 9201,
+   "gzip": 1981
+  },
+  {
+   "path": "app/ca/fixtures/review.json",
+   "sha256": "433c6cb9273814026b7ce2461761a91b31772fc0fc028ccb51cf597e2987f6b7",
+   "bytes": 8977,
+   "gzip": 1895
+  },
+  {
+   "path": "app/ca/fixtures/short.json",
+   "sha256": "618245468ee3c4da6a5f278191dd9a7cbf277f9eeb1f4ea1cf2e0046215aebc0",
+   "bytes": 9228,
+   "gzip": 1994
+  },
+  {
+   "path": "app/ca/fixtures/start-error.json",
+   "sha256": "bb14e4e54543842b2e5d75e07b2146eddf1ec3ca1a6375cba640a2a0ab258321",
+   "bytes": 6766,
+   "gzip": 1760
+  },
+  {
+   "path": "app/ca/fixtures/start-new.json",
+   "sha256": "a7ed80a5592b9051dd3eece3aa3376e4344181f11c7dcac962e3969cd95b0055",
+   "bytes": 6752,
+   "gzip": 1712
+  },
+  {
+   "path": "app/ca/fixtures/start.json",
+   "sha256": "8a11ea76dce83ea283946bd5cc61a954bb541e8c5c6b4d2a40f6c1df2966a402",
+   "bytes": 6590,
+   "gzip": 1674
+  },
+  {
+   "path": "app/ca/fixtures/supply.json",
+   "sha256": "d0db859e9649390429fde1a0897eb2f65f2fa183f205b2569df2c78fdd7fb869",
+   "bytes": 10580,
+   "gzip": 2059
+  },
+  {
+   "path": "app/ca/fixtures/update.json",
+   "sha256": "cfce258122ff7a6d58e7a60f489bb7558fd728fa2a61286360674958e9e1236f",
+   "bytes": 9013,
+   "gzip": 1902
+  },
+  {
+   "path": "app/ca/fixtures/warn.json",
+   "sha256": "558f6830e6991a5bd9ab70191d8945e08af3ad1304894eb908159df2033b11d4",
+   "bytes": 9194,
+   "gzip": 1963
+  },
+  {
+   "path": "app/ca/index.html",
+   "sha256": "3632d8e0028029a079c03c7c61ba12011a6ed8a18fe2623dce87633ceffd8c26",
+   "bytes": 10242,
+   "gzip": 3205
+  },
+  {
+   "path": "app/frame.css",
+   "sha256": "06db7c57dd55d29f1c376a7d2f06deb6a3e82f1b8c24c6ea7cfb1bdc556c274e",
+   "bytes": 18509,
+   "gzip": 5392
+  },
+  {
+   "path": "app/frame.js",
+   "sha256": "263180ad8b64cb4f5fecde00b04c991235b4c5fe28f9fd8c758e3c166867a08a",
+   "bytes": 19759,
+   "gzip": 7483
+  },
+  {
+   "path": "app/scan.js",
+   "sha256": "dda2dc250ecf77ecabbaab9b20f9f0d9ffd430b3a78ef6b5746da932475bda30",
+   "bytes": 12327,
+   "gzip": 4410
+  },
+  {
+   "path": "app/sheet.js",
+   "sha256": "96d6e5c49a8b251b38006da818a8816a85a14f9de498682a3d836ab5b9333ee6",
+   "bytes": 6898,
+   "gzip": 2628
+  },
+  {
+   "path": "app/transport.js",
+   "sha256": "13b835aac2c903e3126393311be3922cc156e81ddbe7d67bc94926b78e3af0aa",
+   "bytes": 3537,
+   "gzip": 1529
+  },
+  {
+   "path": "core/fonts/Pretendard-Bold.subset.woff2",
+   "sha256": "78eb71c33101ee7d4f8d1b777d193a12d00f8a296e712a8c417cf27abe946397",
+   "bytes": 270784,
+   "gzip": 269926
+  },
+  {
+   "path": "core/fonts/Pretendard-OFL.txt",
+   "sha256": "b04538c9abec39a3db75108cf0af0fd9c77032fe8aa2cf38345b4d250e98e38e",
+   "bytes": 4419,
+   "gzip": 1973
+  },
+  {
+   "path": "core/fonts/Pretendard-Regular.subset.woff2",
+   "sha256": "01dd73155fdfab7ce9b25224523e85a96927e21aef97f21957d41f1bfa7e3878",
+   "bytes": 267096,
+   "gzip": 266650
+  },
+  {
+   "path": "core/fonts/Pretendard-SemiBold.subset.woff2",
+   "sha256": "4247dc5e260b92640c2cbd0e75091154647b71e1d5884116655e2903468c54cc",
+   "bytes": 268752,
+   "gzip": 268076
+  },
+  {
+   "path": "core/tokens.css",
+   "sha256": "bd8520ff68ea5e5616ab1b4916e11faf5895bc7a6bdd0498b5978b3ef70476c4",
+   "bytes": 7542,
+   "gzip": 3242
+  }
+ ]
+}
