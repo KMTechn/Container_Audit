@@ -1,4 +1,4 @@
-"""이적 새 화면으로 띄우기 — 셸 host(v3.7) owner_main 꼴. 지금 Tk 창 대신 pywebview 창 하나에 ui/app/ca/index.html.
+"""이적 새 화면으로 띄우기 — 셸 host(v3.8) owner_main 꼴. 지금 Tk 창 대신 pywebview 창 하나에 ui/app/ca/index.html.
 
 w9uiflow1014, APP-SCREENS-1013 ③. 처리 층 · 지금 진입(Container_Audit.py main())은 그대로 두는 새 진입이다.
 설치 판에서 어느 진입을 바로 가기로 둘지는 주인 레인(w9firstupd)이 정한다.
