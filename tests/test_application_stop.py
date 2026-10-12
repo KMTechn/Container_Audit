@@ -178,3 +178,72 @@ def test_clock_stop_ignores_requests_before_process_start(tmp_path, monkeypatch,
     assert not user_relay.app_stop_path(tmp_path).exists()
     if not after_start:
         assert "앱 시작 전 멈춤 요청을 무시했습니다." in capsys.readouterr().out
+
+
+def _stop_roots(tmp_path):
+    active = tmp_path / "active"
+    active.mkdir()
+    return active
+
+
+def test_remote_stop_is_accepted_before_the_update_gate(tmp_path, monkeypatch, capsys):
+    import auto_update
+    active = _stop_roots(tmp_path)
+    monkeypatch.setattr(auto_update, "startup_gate", lambda *args, **kwargs: pytest.fail("stop must not enter the update gate"))
+    monkeypatch.setattr(user_relay, "request_user_relay_stop", lambda root, **kwargs: {"status": "ABSENT"})
+
+    assert user_relay.main(["--data-root", str(active), "--direct-sync-root", str(active / "direct_sync"), "--request-app-stop"]) == 0
+
+    assert user_relay.app_stop_path(active / "direct_sync").is_file()
+    assert "REQUESTED" in capsys.readouterr().out
+
+
+def test_other_relay_modes_still_pass_the_update_gate(tmp_path, monkeypatch):
+    import auto_update
+    seen = []
+    monkeypatch.setattr(auto_update, "startup_gate", lambda root, arguments, **kwargs: seen.append(list(arguments)) or 20)
+    monkeypatch.setattr(user_relay, "_runtime_cycle", lambda **kwargs: pytest.fail("a refused relay must not run"))
+
+    assert user_relay.main(["--once"]) == 20
+    assert seen == [[user_relay.USER_RELAY_MODE, "--once"]]
+
+
+def _installed_operator(tmp_path, monkeypatch, caller_sid):
+    import auto_update
+    control = tmp_path / "update-control"
+    control.mkdir()
+    (control / "policy.json").write_text(json.dumps({"operator_sid": "S-1-5-21-0-0-0-1001"}), encoding="utf-8")
+    monkeypatch.setattr(auto_update, "control_root", lambda app_root: control)
+    monkeypatch.setattr(auto_update, "current_process_sid", lambda: caller_sid)
+
+
+def test_another_account_must_name_the_operator_roots(tmp_path, monkeypatch, capsys):
+    _installed_operator(tmp_path, monkeypatch, "S-1-5-21-0-0-0-1002")
+    monkeypatch.setattr(user_relay, "request_app_stop", lambda root, **kwargs: pytest.fail("no request from a foreign profile"))
+    monkeypatch.setattr(user_relay, "_notify_data_root_error", lambda: pytest.fail("no dialog in a remote session"))
+
+    assert user_relay.main(["--request-app-stop"]) == 1
+
+    assert json.loads(capsys.readouterr().out) == {"reason_code": "OPERATOR_ROOTS_REQUIRED", "status": "FAILED"}
+
+
+def test_elevated_operator_uses_its_own_roots_without_arguments(tmp_path, monkeypatch, capsys):
+    active = _stop_roots(tmp_path)
+    _installed_operator(tmp_path, monkeypatch, "S-1-5-21-0-0-0-1001")
+    monkeypatch.setenv("CONTAINER_AUDIT_DATA_ROOT", str(active))
+    monkeypatch.setattr(user_relay, "request_user_relay_stop", lambda root, **kwargs: {"status": "ABSENT"})
+
+    assert user_relay.main(["--request-app-stop"]) == 0
+
+    assert user_relay.app_stop_path(active / "direct_sync").is_file()
+    assert "REQUESTED" in capsys.readouterr().out
+
+
+def test_remote_stop_reports_an_unavailable_root_without_a_dialog(tmp_path, monkeypatch, capsys):
+    missing = tmp_path / "missing"
+    monkeypatch.setattr(user_relay, "_notify_data_root_error", lambda: pytest.fail("no dialog in a remote session"))
+    monkeypatch.setattr(user_relay, "request_app_stop", lambda root, **kwargs: pytest.fail("no request without a dataset"))
+
+    assert user_relay.main(["--data-root", str(missing), "--direct-sync-root", str(missing / "direct_sync"), "--request-app-stop"]) == 1
+
+    assert json.loads(capsys.readouterr().out) == {"reason_code": "DATA_ROOT_UNAVAILABLE", "status": "FAILED"}

@@ -588,14 +588,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _data_root_unavailable(remote_stop: bool) -> int:
+    # A remote stop runs in an SSH session nobody can see; a modal dialog there
+    # would hang the command, so it reports one JSON line instead.
+    if remote_stop:
+        print("CONTAINER_AUDIT_DATA_ROOT_UNAVAILABLE", file=sys.stderr)
+        print(json.dumps({"status": "FAILED", "reason_code": "DATA_ROOT_UNAVAILABLE"}, sort_keys=True))
+    else:
+        _notify_data_root_error()
+    return 1
+
+
 @writer_sink("persistent_relay_status", probe_only=True)
 def main(argv: list[str] | None = None) -> int:
     from auto_update import startup_gate, trial_stop_requested
 
     selected_arguments = list(sys.argv[1:] if argv is None else argv)
-    gate_result = startup_gate(Path(__file__).resolve().parent, [USER_RELAY_MODE, *selected_arguments], role="relay")
-    if gate_result is not None:
-        return gate_result
+    # A remote stop request comes from an administrator SSH session (elevated, or
+    # another account). It writes only the stop markers, so it is accepted before
+    # the update gate like Label_Match; every other mode stays gated.
+    if "--request-app-stop" not in selected_arguments:
+        gate_result = startup_gate(Path(__file__).resolve().parent, [USER_RELAY_MODE, *selected_arguments], role="relay")
+        if gate_result is not None:
+            return gate_result
     args = build_parser().parse_args(argv)
     app_root = Path(
         args.app_root
@@ -605,17 +620,28 @@ def main(argv: list[str] | None = None) -> int:
             else Path(__file__).resolve().parent
         )
     ).expanduser().resolve()
+    if args.request_app_stop and not (args.data_root and args.direct_sync_root):
+        # Implicit roots are the caller's own profile; another account must name
+        # the installed operator's roots instead of reporting a false ABSENT relay.
+        from auto_update import control_root, current_process_sid, read_json
+        try:
+            control = control_root(app_root)
+            operator_sid = read_json(control / "policy.json").get("operator_sid") if control is not None else None
+            foreign_caller = operator_sid is not None and operator_sid != current_process_sid()
+        except (OSError, ValueError, AttributeError):
+            foreign_caller = True
+        if foreign_caller:
+            print(json.dumps({"status": "FAILED", "reason_code": "OPERATOR_ROOTS_REQUIRED"}, sort_keys=True))
+            return 1
     try:
         storage = build_container_audit_storage_paths(
             application_path=str(app_root), data_root=args.data_root or None,
         )
     except (OSError, ValueError):
-        _notify_data_root_error()
-        return 1
+        return _data_root_unavailable(args.request_app_stop)
     custom_root = storage.custom_data_root
     if custom_root and not storage.data_root.is_dir():
-        _notify_data_root_error()
-        return 1
+        return _data_root_unavailable(args.request_app_stop)
     from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, resolve_owner_path
     from logistics_runtime_profile import resolve_logistics_profile_path
     direct_sync_root = resolve_owner_path(args.direct_sync_root) if args.direct_sync_root else storage.direct_sync_root
@@ -630,8 +656,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             result = request_app_stop(direct_sync_root)
         except (OSError, ValueError):
-            _notify_data_root_error()
-            return 1
+            return _data_root_unavailable(True)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["relay"]["status"] == "ABSENT" else 1
     profile = resolve_logistics_profile_path()
