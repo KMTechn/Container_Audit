@@ -1136,10 +1136,7 @@ def test_close_waits_for_inflight_startup_transfer_recovery_on_shared_lane(tmp_p
         app._ui_close_lane_drained = False
         app._preflight_hold_writer_instance = None
         app.master_label_replace_state = None
-        app.current_exchange_session = SimpleNamespace(
-            defective_barcodes=[],
-            good_barcodes=[],
-        )
+        app.current_exchange_session = container_module.ProductExchangeSession()
         app.worker_name = ""
         app.paned_window = SimpleNamespace(winfo_exists=lambda: False)
         app._preserve_preflight_hold_for_close = lambda: close_calls.append(
@@ -1201,6 +1198,19 @@ def test_live_event_writer_retries_close_without_destroy(monkeypatch, tmp_path):
 
     def close_app(writer, outbox=None):
         root = FakeTkRoot()
+        # 61e3d6e: an operator close also arms a 60 s delayed-close notice.
+        # FakeTkRoot ignores delays, so keep that timer out of the zero-delay
+        # pump this test counts writer joins with.
+        delayed_close_notices = []
+        immediate_after = root.after
+
+        def after(delay_ms, callback, *args):
+            if delay_ms == 60000:
+                delayed_close_notices.append(callback)
+                return f"delayed-close-notice-{len(delayed_close_notices)}"
+            return immediate_after(delay_ms, callback, *args)
+
+        root.after = after
         lane = TkSerialUiLane(root, poll_ms=1)
         queued = []
         statuses = []
@@ -1215,10 +1225,7 @@ def test_live_event_writer_retries_close_without_destroy(monkeypatch, tmp_path):
         app._ui_close_lane_drained = True
         app._preflight_hold_writer_instance = None
         app.master_label_replace_state = None
-        app.current_exchange_session = SimpleNamespace(
-            defective_barcodes=[],
-            good_barcodes=[],
-        )
+        app.current_exchange_session = container_module.ProductExchangeSession()
         app.worker_name = ""
         app.paned_window = SimpleNamespace(winfo_exists=lambda: False)
         app._preserve_preflight_hold_for_close = lambda: (True, False)
@@ -1965,10 +1972,7 @@ def test_close_waits_for_inflight_phs_execute_on_shared_lane(reconciliation):
     app._ui_close_lane_drained = False
     app._preflight_hold_writer_instance = None
     app.master_label_replace_state = None
-    app.current_exchange_session = SimpleNamespace(
-        defective_barcodes=[],
-        good_barcodes=[],
-    )
+    app.current_exchange_session = container_module.ProductExchangeSession()
     app.worker_name = ""
     app._preserve_preflight_hold_for_close = lambda: calls.append(
         ("preserve",)
@@ -2187,10 +2191,7 @@ def test_close_waits_for_inflight_automatic_phs_recovery_on_shared_lane():
     app._ui_close_lane_drained = False
     app._preflight_hold_writer_instance = None
     app.master_label_replace_state = None
-    app.current_exchange_session = SimpleNamespace(
-        defective_barcodes=[],
-        good_barcodes=[],
-    )
+    app.current_exchange_session = container_module.ProductExchangeSession()
     app.worker_name = ""
     app._preserve_preflight_hold_for_close = lambda: calls.append(
         ("preserve",)
@@ -2608,10 +2609,7 @@ def test_close_hands_draining_hold_and_current_tray_to_restart_without_delete(
     app._preflight_hold_draining = False
     app._master_preflight_pending = False
     app.master_label_replace_state = None
-    app.current_exchange_session = SimpleNamespace(
-        defective_barcodes=[],
-        good_barcodes=[],
-    )
+    app.current_exchange_session = container_module.ProductExchangeSession()
     calls = []
     app._save_current_tray_state = lambda: calls.append("save-current") or True
     app._delete_current_tray_state = lambda: (_ for _ in ()).throw(

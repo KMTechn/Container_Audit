@@ -10,6 +10,7 @@ import pytest
 import requests
 
 import container_admin_pin as pin
+from product_exchange import ProductExchangeSession
 from tests.test_admin_pin_move_timing import _business_case
 from tests.test_admin_pin_ui_lane import PinRoot, recovery, settle
 from tk_serial_ui_lane import Admission
@@ -31,7 +32,8 @@ def prepare_close(app, root):
     app._preflight_hold_writer_instance = None
     app._central_transport_lane = None
     app.master_label_replace_state = None
-    app.current_exchange_session = SimpleNamespace(defective_barcodes=[], good_barcodes=[])
+    # 48c5f9f: the close path reads the whole idle exchange session (current_step).
+    app.current_exchange_session = ProductExchangeSession()
     app._refuse_scans_behind_save = lambda message: ""
     app._preserve_preflight_hold_for_close = lambda: (True, False)
     app._operator_review_blocks_mutation = lambda: False
