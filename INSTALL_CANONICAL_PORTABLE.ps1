@@ -5275,7 +5275,7 @@ $enteredPlacementTry = $true
         if ($replaceExisting) {
             Sync-CanonicalWriterFenceInventory $installedInventorySha256
             $mutated = $true
-            if($supportedPlacement){Product $source '--remove-current-user-setup' (Join-Path $install 'app')}else{Product $install '--remove-current-user-setup'}
+            if($supportedPlacement){Product ([string]$supportedContext.active_code_root) '--remove-current-user-setup' (Join-Path $install 'app')}else{Product $install '--remove-current-user-setup'}
             $removal = Get-Content $removalPath -Raw -Encoding UTF8 | ConvertFrom-Json
             # Rollback invokes removal again; preserve this first result before
             # that supported recovery overwrites the product's status file.

@@ -1619,19 +1619,19 @@
       ],
       "file": "data_generation_guard.py",
       "kind": "function",
-      "line": 272,
+      "line": 312,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 294,
+          "line": 334,
           "operation": "subprocess.check_output",
           "writer_admission_sources": []
         },
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 297,
+          "line": 337,
           "operation": "subprocess.check_output",
           "writer_admission_sources": []
         }
@@ -9576,7 +9576,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "f6b225690572fd233e2f10500e66b42ec832a29edb113f8012e93b315432d090",
+  "inventory_sha256": "102c420a50a676c0e22b4b629b1e1c67297502bca5cbb6326bbf8a7b5951edbc",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -22310,7 +22310,7 @@
       "direct_mutation_site_count": 0,
       "file": "data_generation_guard.py",
       "function": "data_generation_guard.record_before_data_open",
-      "line": 381,
+      "line": 421,
       "marker_kind": "decorator",
       "source": "data_generation_marker"
     },

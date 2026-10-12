@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "f6b225690572fd233e2f10500e66b42ec832a29edb113f8012e93b315432d090",
+  "after_inventory_sha256": "102c420a50a676c0e22b4b629b1e1c67297502bca5cbb6326bbf8a7b5951edbc",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -178,7 +178,7 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "4de07d61fe6d56e8a50d945609c28f95c1cefc6663019c76b305fe804dca761c"
+      "after": "c7d740a8b575c92e7b115e9ccd427f6cde6ce36b13cb8a807dcfbfc3e86ccb6c"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -218,7 +218,7 @@
     {
       "path": "app/data_generation_guard.py",
       "before": "e16d1f3c75c5897d9fa3a9c51ee00a1d6bc94b7d47b49c4ca994f81d6778da27",
-      "after": "5011626eb0fa980905a74ad81cf67284bd43c72987b1255aed86a509f601d8d4"
+      "after": "28858e327bb8f360b00e58e1e3217a4549789505ad85843760929364ce7661c2"
     },
     {
       "path": "app/direct_sync_auto_bootstrap.py",
@@ -1463,7 +1463,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "fd449c0496e820cd86fc93815ed4fae5ab7e051ccbc7d35f32d6d2c4c934cd9a"
+      "after": "934f7974b8b9f921bfae39fef2700a889fddc793ba301e4ea416097f8f146571"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4513,7 +4513,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "3cd86405d08f6c632ad32bd996ec5ea6f98db94b1688b161f8938c17b135d83b"
+      "after": "0433c5980aac34991df1616a8333b18f91cd0707633110891479dffb3155d782"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4523,12 +4523,12 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "758138d45aa3e9a85a9a078606f6bb8dec6162753722be9cf370e741b74e61b0"
+      "after": "9bd40758fccd254cebd1ec27b6372b508e4a784f34327d408649a2f3caa274f6"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "9c2d884e20d1d9a93e208dfb59f05041bd3bfe51a1b1a1cc73520ff7fc0bcd75"
+      "after": "6a0c7e05babf7c93211a98978836c7146eaeccea5de0ab7d56c9ea53a0cc2d2e"
     }
   ],
   "source_replacements": [
@@ -4540,7 +4540,7 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "4de07d61fe6d56e8a50d945609c28f95c1cefc6663019c76b305fe804dca761c"
+      "after": "c7d740a8b575c92e7b115e9ccd427f6cde6ce36b13cb8a807dcfbfc3e86ccb6c"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -4565,7 +4565,7 @@
     {
       "path": "data_generation_guard.py",
       "before": "e16d1f3c75c5897d9fa3a9c51ee00a1d6bc94b7d47b49c4ca994f81d6778da27",
-      "after": "5011626eb0fa980905a74ad81cf67284bd43c72987b1255aed86a509f601d8d4"
+      "after": "28858e327bb8f360b00e58e1e3217a4549789505ad85843760929364ce7661c2"
     },
     {
       "path": "direct_sync_auto_bootstrap.py",
@@ -4645,7 +4645,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "3cd86405d08f6c632ad32bd996ec5ea6f98db94b1688b161f8938c17b135d83b"
+      "after": "0433c5980aac34991df1616a8333b18f91cd0707633110891479dffb3155d782"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4695,7 +4695,7 @@
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "fd449c0496e820cd86fc93815ed4fae5ab7e051ccbc7d35f32d6d2c4c934cd9a"
+      "after": "934f7974b8b9f921bfae39fef2700a889fddc793ba301e4ea416097f8f146571"
     }
   ],
   "hash_provenance": {
