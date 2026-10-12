@@ -247,3 +247,22 @@ def test_remote_stop_reports_an_unavailable_root_without_a_dialog(tmp_path, monk
     assert user_relay.main(["--data-root", str(missing), "--direct-sync-root", str(missing / "direct_sync"), "--request-app-stop"]) == 1
 
     assert json.loads(capsys.readouterr().out) == {"reason_code": "DATA_ROOT_UNAVAILABLE", "status": "FAILED"}
+
+
+def test_unmanaged_stop_without_a_data_root_is_refused(tmp_path, monkeypatch, capsys):
+    import auto_update
+    monkeypatch.setattr(auto_update, "control_root", lambda app_root: None)
+    monkeypatch.setattr(user_relay, "request_app_stop", lambda root, **kwargs: pytest.fail("no request from an unknown owner profile"))
+
+    assert user_relay.main(["--request-app-stop"]) == 1
+
+    assert json.loads(capsys.readouterr().out) == {"reason_code": "OPERATOR_ROOTS_REQUIRED", "status": "FAILED"}
+
+
+def test_stop_token_as_an_option_value_still_passes_the_gate(tmp_path, monkeypatch):
+    import auto_update
+    seen = []
+    monkeypatch.setattr(auto_update, "startup_gate", lambda root, arguments, **kwargs: seen.append(list(arguments)) or 20)
+
+    assert user_relay.main(["--app-root=--request-app-stop", "--once"]) == 20
+    assert seen

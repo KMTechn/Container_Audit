@@ -607,11 +607,17 @@ def main(argv: list[str] | None = None) -> int:
     # A remote stop request comes from an administrator SSH session (elevated, or
     # another account). It writes only the stop markers, so it is accepted before
     # the update gate like Label_Match; every other mode stays gated.
-    if "--request-app-stop" not in selected_arguments:
+    gated = "--request-app-stop" not in selected_arguments
+    if gated:
         gate_result = startup_gate(Path(__file__).resolve().parent, [USER_RELAY_MODE, *selected_arguments], role="relay")
         if gate_result is not None:
             return gate_result
     args = build_parser().parse_args(argv)
+    if not gated and not args.request_app_stop:
+        # The token appeared without selecting the stop mode; gate it after all.
+        gate_result = startup_gate(Path(__file__).resolve().parent, [USER_RELAY_MODE, *selected_arguments], role="relay")
+        if gate_result is not None:
+            return gate_result
     app_root = Path(
         args.app_root
         or (
@@ -627,7 +633,9 @@ def main(argv: list[str] | None = None) -> int:
         try:
             control = control_root(app_root)
             operator_sid = read_json(control / "policy.json").get("operator_sid") if control is not None else None
-            foreign_caller = operator_sid is not None and operator_sid != current_process_sid()
+            # Without an installed policy the account owning the app is unknown,
+            # so at least the data root must be named explicitly.
+            foreign_caller = (not args.data_root) if control is None else (operator_sid is None or operator_sid != current_process_sid())
         except (OSError, ValueError, AttributeError):
             foreign_caller = True
         if foreign_caller:
