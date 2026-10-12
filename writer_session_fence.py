@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import sys
 import threading
 from typing import Any, Callable, Iterator, Mapping, ParamSpec, TypeVar
 import unicodedata
@@ -371,6 +372,12 @@ def active_fence(
     return _validate_active_fence(_bounded_json(path))
 
 
+def _emit_machine_recovery_guidance(active: Mapping[str, Any], root) -> None:
+    if root is not None and Path(root).parent.parent.name.casefold() == "machine-install" and active["owner_kind"] == "canonical_installer":
+        audit = rf"install-audit\canonical-portable-{active['replacement_transaction_id']}.json"
+        print("CONTAINER_AUDIT_MACHINE_RECOVERY=" + json.dumps({"guidance": f"Recovery: -RecoverMachineInstallation; audit: {audit}"}, separators=(",", ":")), file=sys.stderr)
+
+
 class _NamedMutexLease:
     def __init__(self, handle: int, *, abandoned: bool = False) -> None:
         self.handle = handle
@@ -508,6 +515,7 @@ def writer_admission(
             source=selected_source,
             environ=nested_environ if nested_environ is not None else os.environ,
         ):
+            _emit_machine_recovery_guidance(nested_active, getattr(_WRITER_LOCAL, "root", None))
             raise WriterFencedError(
                 "ACTIVE_WRITER_FENCE",
                 "nested writer source denied by the active deployment fence",
@@ -545,6 +553,7 @@ def writer_admission(
             source=selected_source,
             environ=values,
         ):
+            _emit_machine_recovery_guidance(active, root)
             raise WriterFencedError(
                 "ACTIVE_WRITER_FENCE",
                 "writer denied by the active deployment fence",
@@ -555,12 +564,14 @@ def writer_admission(
         raise
     _WRITER_LOCAL.depth = 1
     _WRITER_LOCAL.active = active
+    _WRITER_LOCAL.root = root
     _WRITER_LOCAL.environ = values
     try:
         yield
     finally:
         _WRITER_LOCAL.depth = 0
         _WRITER_LOCAL.active = None
+        _WRITER_LOCAL.root = None
         _WRITER_LOCAL.environ = None
         lease.release()
 

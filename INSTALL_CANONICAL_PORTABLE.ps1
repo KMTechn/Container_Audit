@@ -3473,6 +3473,8 @@ function Write-CanonicalMachinePublicRecord([string]$Code,[string]$Status='FAILE
         $message='프로그램 제거가 끝났습니다. 작업자 자료는 보존했습니다.'
     } elseif ($Code -ceq 'PASS_RESTORED_VERIFIED') {
         $message='프로그램 코드 복원이 끝났습니다. 작업자 설정은 변경하지 않았습니다.'
+    } elseif ($Code -ceq 'MACHINE_RECOVERY_CHILD_ACTIVE') {
+        $message='설치가 아직 진행 중입니다 — 끝난 뒤 같은 명령을 다시 실행하세요'
     } elseif ($Code -clike 'MACHINE_RECOVERY_CHILD_*') {
         $message='설치 자식의 종료를 확인하지 못했습니다. 자료와 설치 기록을 보존하고 관리자 지원 복구를 요청하세요.'
     }

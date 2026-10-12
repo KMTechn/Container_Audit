@@ -623,6 +623,14 @@ function New-ContainerWriterFencePayload {
     }
 }
 
+function Write-ContainerMachineRecoveryGuidance($Fence,[string]$ControlRoot) {
+    $state=Split-Path -Parent (Split-Path -Parent (Get-ContainerWriterFenceControlRoot $ControlRoot))
+    if ($Fence.owner_kind -ceq 'canonical_installer' -and (Split-Path -Leaf $state) -ieq 'machine-install') {
+        $path='install-audit\canonical-portable-'+[string]$Fence.replacement_transaction_id+'.json'
+        [Console]::Error.WriteLine('CONTAINER_AUDIT_MACHINE_RECOVERY='+(@{guidance=('Recovery: -RecoverMachineInstallation; audit: '+$path)}|ConvertTo-Json -Compress))
+    }
+}
+
 function Start-ContainerWriterFence {
     param(
         [string]$ControlRoot = '',
@@ -643,7 +651,9 @@ function Start-ContainerWriterFence {
     )
     $lease = Enter-ContainerWriterAdmission $ControlRoot
     try {
-        if ($null -ne (Read-ContainerWriterFence $ControlRoot -AllowAbsent)) {
+        $existing=Read-ContainerWriterFence $ControlRoot -AllowAbsent
+        if ($null -ne $existing) {
+            Write-ContainerMachineRecoveryGuidance $existing $ControlRoot
             throw 'CONTAINER_WRITER_FENCE_ALREADY_ACTIVE'
         }
         $payload = New-ContainerWriterFencePayload `
