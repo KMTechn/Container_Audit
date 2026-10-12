@@ -60,6 +60,13 @@ Run·새 폴더 복원이 모두 확인되면 실패 승인 receipt로 fence를 
 
 기계 배치 실패 시 검증된 앞 코드와 startup control 원본을 함께 복원한 뒤에만 옛 PENDING을 복원한다. 코드·control 원본을 확인하지 못하면 옛 PENDING을 게시하지 않고 기계 복구 fence를 유지한다. 이 fence는 관리자 복구가 끝나기 전 작업자 첫 시작을 막는다.
 
+기계 설치 실패는 기존 `MACHINE_INSTALL_FAILED`·종료 코드 4·공개 JSON 한 줄을 유지하며 `reason_code`와
+`summary_message`(`MACHINE_INSTALL_FAILED reason=<고정 코드>`)를 덧붙인다(IA-01). 고정 코드는 남은 기계 fence
+`PRIOR_INSTALL_UNFINISHED`, 남은 작업자 fence `WORKER_INSTALL_UNFINISHED`, 비관리자 토큰 `ADMINISTRATOR_REQUIRED`,
+기록 방식 차이 `INSTALLED_WRITER_SEMANTICS_DIFFER`, 배치 helper의 허용 목록 `reason_code`(`lifecycle_*`·writer gate·
+`STARTUP_UPDATE_*`)와 그 밖의 helper 실패 `PLACEMENT_HELPER_FAILED`, 나머지 `UNCLASSIFIED`뿐이다. 예외 원문·경로·
+계정·자식 출력은 싣지 않으며 목록 밖 값은 가린다.
+
 ### 기계 배치 실패의 지원 재개
 
 키트 설치/되돌림은 남은 fence를 직접 지우지 않는다. 원래 관리 패킷의 설치기를 이미

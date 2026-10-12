@@ -68,7 +68,7 @@ def test_active_writer_fence_notice_is_public_and_read_only(tmp_path, monkeypatc
 def test_already_active_notice_survives_canonical_or_kit_denial(tmp_path, engine, operation):
     root, payload, active, private = _machine_fence(tmp_path)
     before = active.read_bytes(), active.stat().st_mtime_ns
-    result = run_functions(tmp_path, ROOT / "INSTALL_CANONICAL_PORTABLE.ps1", ["Write-CanonicalMachinePublicRecord"], r'''
+    result = run_functions(tmp_path, ROOT / "INSTALL_CANONICAL_PORTABLE.ps1", ["Write-CanonicalMachinePublicRecord", "Get-CanonicalMachineFailureReason", "Get-CanonicalMachineHelperReason"], r'''
 . (Join-Path (Split-Path -Parent $env:CA_CONTRACT_SOURCE) 'tools/container_writer_fence.ps1')
 try {
     [void](Start-ContainerWriterFence -ControlRoot $env:CA_GUIDANCE_CONTROL -Status 'INSTALLING' -OwnerKind 'canonical_installer')
@@ -78,7 +78,7 @@ try {
     Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED'
 }
 ''', engine=engine, values={"CA_GUIDANCE_CONTROL": str(root)}) if operation == "install" else run_functions(
-        tmp_path, ROOT / "INSTALL_CANONICAL_PORTABLE.ps1", ["Write-CanonicalMachinePublicRecord"], r'''
+        tmp_path, ROOT / "INSTALL_CANONICAL_PORTABLE.ps1", ["Write-CanonicalMachinePublicRecord", "Get-CanonicalMachineFailureReason", "Get-CanonicalMachineHelperReason"], r'''
 . (Join-Path (Split-Path -Parent $env:CA_CONTRACT_SOURCE) 'tools/container_writer_fence.ps1')
 try {
     [void](Start-ContainerWriterFence -ControlRoot $env:CA_GUIDANCE_CONTROL -Status 'INSTALLING' -OwnerKind 'canonical_installer')

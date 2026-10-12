@@ -110,6 +110,20 @@ function Get-InstallationHelperPublicFailure($Failure, [int]$ExitCode) {
             }
         }
     }
+    $startupCodes=@('STARTUP_UPDATE_INITIAL_VERSION_INVALID','STARTUP_UPDATE_INITIAL_VERSION_READBACK_FAILED',
+        'STARTUP_UPDATE_VERSION_ALREADY_HAS_DIFFERENT_BYTES','STARTUP_UPDATE_DURING_WORK_FORBIDDEN',
+        'STARTUP_UPDATE_OPERATOR_BINDING_DIFFERS','STARTUP_UPDATE_OPERATOR_DIFFERS','STARTUP_UPDATE_DURABLE_RECORD_FAILED',
+        'STARTUP_UPDATE_PREIMAGE_PATH_INVALID','STARTUP_UPDATE_PREIMAGE_READBACK_FAILED','STARTUP_UPDATE_WRITER_HELPER_PIN_DIFFERS',
+        'STARTUP_UPDATE_TASK_SPEC_FAILED','STARTUP_UPDATE_TASK_SPEC_INVALID','STARTUP_UPDATE_OWNED_TASK_DIFFERS',
+        'STARTUP_UPDATE_TASK_IS_RUNNING','STARTUP_UPDATE_TASK_READBACK_FAILED')
+    if($fields.reason_code -ceq 'INSTALLER_HELPER_FAILURE'){
+        # Exact startup-update throw codes only; other exception text stays private.
+        $cause=$exception
+        for($depth=0;$null -ne $cause -and $depth -lt 8;$depth++){
+            if([string]$cause.Message -cin $startupCodes){$fields.reason_code=[string]$cause.Message;break}
+            $cause=$cause.InnerException
+        }
+    }
     if($Failure -is [Management.Automation.ErrorRecord]){$fields.location_line=[int]$Failure.InvocationInfo.ScriptLineNumber}
     # The original is retained by the existing installation evidence writer.
     # A reference is published only by its verified atomic publication contract.
@@ -127,7 +141,7 @@ function Get-InstallationHelperPublicFailure($Failure, [int]$ExitCode) {
             $fields.Remove('report_status');$fields.report_path=$path;$fields.report_sha256=$digest
         } catch { }
     }
-    return ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes (@('FAILED','installer_helper','INSTALLER_HELPER_FAILURE','REPORT_UNAVAILABLE')+$contextCodes) -SafeMessages @('자료를 보존하고 관리자 지원 복구를 요청하세요.','기존 설치 상태와 예약 작업을 확인하고 관리자 지원 복구를 요청하세요.')
+    return ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes (@('FAILED','installer_helper','INSTALLER_HELPER_FAILURE','REPORT_UNAVAILABLE')+$contextCodes+$startupCodes) -SafeMessages @('자료를 보존하고 관리자 지원 복구를 요청하세요.','기존 설치 상태와 예약 작업을 확인하고 관리자 지원 복구를 요청하세요.')
 }
 $ExpectedInstallRoot = "C:\KMTech\Apps\Container_Audit\current"
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot "tools\bootstrap_integrity.ps1"
