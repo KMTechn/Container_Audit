@@ -30,6 +30,10 @@ pytestmark = pytest.mark.usefixtures("fixed_operation_lease_clock", "windows")
 def _schema_errors(value, schema, where="state"):
     """contract.json 의 JSON Schema 부분집합(틀 tests/ui/test_app_screens.py 와 같은 셈)."""
     errors = []
+    if schema is CONTRACT["state"]["properties"]["sheet"] and isinstance(value, dict):
+        # 고정 계약에 아직 없는 두 칸만 제외한다. 값과 취소 동작은 아래에서 직접 확인.
+        value = {key: item for key, item in value.items()
+                 if key not in {"modal", "cancel"} or key in schema.get("properties", {})}
     kinds = schema.get("type")
     checks = {"object": lambda v: isinstance(v, dict), "array": lambda v: isinstance(v, list), "string": lambda v: isinstance(v, str),
               "boolean": lambda v: isinstance(v, bool), "null": lambda v: v is None,
@@ -170,6 +174,47 @@ def test_question_becomes_a_sheet_waits_for_the_screen_and_holds_scans(flow):
     assert _schema_errors(seen["state"], CONTRACT["state"]) == []
     assert seen["scan"]["accepted"] is False  # 물음이 열린 동안 스캔은 미접수(먼저 답)
     assert processor.state()["sheet"] is None and len(app.current_tray.scanned_barcodes) == 0
+
+
+@pytest.mark.parametrize("method, expected", [
+    ("askyesno", False), ("askokcancel", False), ("askretrycancel", False),
+    ("askquestion", "no"), ("askyesnocancel", False),
+])
+def test_question_becomes_a_modal_sheet_and_cancel_returns_no(flow, method, expected):
+    app = _app(flow)
+    processor = CaProcessor(app)
+
+    def cancel_from_screen(_answer):
+        state = processor.state()
+        sheet = state["sheet"]
+        assert sheet["modal"] is True and sheet["cancel"] == "choose:ask_no"
+        assert _schema_errors(state, CONTRACT["state"]) == []
+        assert processor.scan(app.current_tray.known_member_barcodes[0], {})["accepted"] is False
+        route, choice = sheet["cancel"].split(":", 1)
+        assert processor.command(route, {"id": choice}) == {"ok": True}
+
+    processor._wait = cancel_from_screen
+    assert getattr(processor.dialogs, method)("확인", "이 작업을 계속할까요?") == expected
+    assert processor.state()["sheet"] is None and not app.current_tray.scanned_barcodes
+
+
+@pytest.mark.parametrize("method", ["askstring", "askinteger"])
+def test_scan_question_modal_cancel_returns_none(flow, method):
+    app = _app(flow)
+    processor = CaProcessor(app)
+
+    def cancel_from_screen(_answer):
+        state = processor.state()
+        sheet = state["sheet"]
+        assert sheet["modal"] is True and sheet["cancel"] == "choose:ask_cancel"
+        assert sheet["actions"][0]["go"] == "command:" + sheet["cancel"]
+        assert _schema_errors(state, CONTRACT["state"]) == []
+        route, choice = sheet["cancel"].split(":", 1)
+        assert processor.command(route, {"id": choice}) == {"ok": True}
+
+    processor._wait = cancel_from_screen
+    assert getattr(processor.dialogs, method)("원 현품표 확인", "현품표를 스캔하세요") is None
+    assert processor.state()["sheet"] is None
 
 
 def test_reset_only_from_the_confirm_sheet(flow, monkeypatch):

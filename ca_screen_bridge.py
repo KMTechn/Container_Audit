@@ -765,6 +765,7 @@ class CaProcessor:
             return False  # 물음 안의 물음 — 그만두기
         lead = message.strip().replace("\n\n", "\n")
         self.sheet = {"kind": "info", "tag": "확인", "title": title, "lead": lead,
+                      "modal": True, "cancel": "choose:ask_no",
                       "actions": [{"text": no, "go": "command:choose:ask_no", "quiet": True},
                                   {"text": yes, "go": "command:choose:ask_yes"}]}
         self._answer = self._new_answer()
@@ -780,7 +781,8 @@ class CaProcessor:
 
     def ask_scan(self, title: str, prompt: str) -> Optional[str]:
         self.sheet = {"kind": "info", "tag": "스캔", "title": title, "lead": f"{_first_line(prompt)} — 스캐너로 찍으세요",
-                      "actions": [{"text": "그만두기", "go": "command:choose:ask_no", "quiet": True}]}
+                      "modal": True, "cancel": "choose:ask_cancel",
+                      "actions": [{"text": "그만두기", "go": "command:choose:ask_cancel", "quiet": True}]}
         self._scan_answer = self._new_answer()
         self._answer = self._scan_answer
         self._push()
@@ -880,8 +882,8 @@ class CaProcessor:
 
     def _cmd_choose(self, choice_id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
         choice_id = str(choice_id or "")
-        if self._answer is not None and choice_id in {"ask_yes", "ask_no"}:
-            self._answer.set("yes" if choice_id == "ask_yes" else "no")
+        if self._answer is not None and choice_id in {"ask_yes", "ask_no", "ask_cancel"}:
+            self._answer.set("yes" if choice_id == "ask_yes" else "no" if choice_id == "ask_no" else "cancel")
             return {"ok": True}
         if choice_id == "note_ok":
             self.notes = []

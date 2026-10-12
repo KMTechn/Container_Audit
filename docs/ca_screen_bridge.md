@@ -13,7 +13,7 @@
 |---|---|---|---|
 | 스캔 입력(입력 칸 위젯 읽기) | `process_barcode()` 가 `scan_entry.get()` | 다리가 같은 `scan_entry` 에 넣고 `process_barcode()` — 지금 시험 `public_scan` 과 같은 문이라 빈 Enter · 띠 선택 중 · 경고 중 · 현품표 확인 중 판정이 그대로. 빈 Enter(막는 알림 확인)는 `command('ack')` = 같은 문에 빈 글 | `test_scan_goes_through_the_existing_door…` · `test_ack_is_the_empty_enter_door…` |
 | Tk 모달 PIN | `_prompt_blocked_work_admin_pin` = Toplevel + wait_window | 인스턴스 메서드를 `admin(이름, {admin_id, pin})` 인수로 대신 — 그 동작에 한 번만, state · 답 · 기록에 값 0 | `test_admin_pin_replaces_the_modal_once…` · `test_shell_bridge…`(events.jsonl 에 admin 인수 없음) |
-| messagebox · simpledialog · filedialog | 창 | 모듈 이름 자리 = `ScreenDialogs`: show* → 띠(관리자 일 중엔 PIN 판 결과), ask* → `state.sheet`(예/아니오 단추 = `command:choose:ask_yes/no`) + Tk 변수 기다림(지금 대화상자와 같은 중첩 기다림, 그동안 스캔은 미접수), askstring(원 현품표 확인) → 스캔으로 답, 파일 고르기 → 새 화면에 없음(그만두기 + 띠) | `test_question_becomes_a_sheet…` |
+| messagebox · simpledialog · filedialog | 창 | 모듈 이름 자리 = `ScreenDialogs`: show* → 띠(관리자 일 중엔 PIN 판 결과), ask* → `state.sheet`(`modal=true`, `cancel=choose:ask_no`, 예/아니오 단추) + Tk 변수 기다림(그동안 스캔은 미접수). askstring(원 현품표 확인)은 스캔으로 답 · `choose:ask_cancel` 은 `None`. 파일 고르기는 새 화면에 없음(그만두기 + 띠) | `test_question_becomes_a_sheet…` · `test_question_becomes_a_modal_sheet…` · `test_scan_question_modal_cancel…` |
 | Tk 뿌리 창 | `ContainerAudit()` 가 root 를 띄우고 최대화 | `owner_main` 이 `_HiddenTk`(띄우기 · 앞으로 가져오기 막음)로 지금 시작 점검 `_prepare_gui_startup()` 을 그대로 거침 | 창 시험은 시험 PC(호스트 창 0) |
 | 단추 · 운영 메뉴 | Tk 단추 · `_show_operations_menu` 팝업 | 숨긴 Tk 단추 `invoke()`(허용 규칙 · 제출 ↔ 다시 하기 바뀜 그대로), 단추 아닌 것(교환 · 리셋 · 품목 새로 고침 · 관리자 ▾)은 운영 메뉴를 **띄우지 않는 기록 메뉴**로 한 번 돌려 그 항목의 켜짐 · 명령 — 조건을 베끼지 않음 | `test_state_is_the_contract_shape…` · `test_reset_only_from_the_confirm_sheet` |
 | 띠 선택 | `_request_inline_choice` 안 Tk 단추 → 지역 `choose` | `command('choose', {id})` → 같은 차례(선택 지움 · 줄 없앰 · 확인 · 콜백 · 초점) | `test_band_choice_runs_the_same_callback…` |
@@ -35,3 +35,4 @@
 - 시작 판 고침 문(`_run_application_main` 의 startup_gate · GUI ready 알림)과 새 진입을 어느 쪽으로 둘지: 주인 레인.
 - 「끝낸 트레이 회사 서버에 다시 보내기」: 지금 코드는 PIN 이 아니라 관리자 로그인을 봄 — 새 화면 PIN 판으로 대신할지 w9firstupd 답 기다림.
 - 창 실물(pywebview · WebView2): 시험 PC 에서(셸 레인 키트 · 호스트 창 0).
+- 고정 `ui/app/ca/contract.json` 의 sheet 에 `modal` · `cancel` 칸 없음. 웹 원천에는 있음. 이 판의 계약 파일은 고치지 않았으며 시험은 그 두 키만 계약에 없을 때 제외하고 실제 값 · 취소 답을 따로 확인함. 틀의 물음 우선 표시 · PIN/기능 키/빈 Enter 차단 실물 확인은 주인 레인.
