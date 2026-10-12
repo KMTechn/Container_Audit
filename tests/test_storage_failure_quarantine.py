@@ -363,3 +363,81 @@ def test_restore_probe_failure_displays_station_storage_stop_guidance(flow, wind
     assert app._storage_failure_blocked
     assert original.read_bytes() == before
     assert not app.seal_calls
+
+def _next_tray_with_storage_quarantine(flow, monkeypatch):
+    app = _active(flow)
+    held = list(app.current_tray.known_member_barcodes[:2])
+    other = app.current_tray.known_member_barcodes[2]
+    public_scan(app, held[0])
+    assert app.current_tray.scanned_barcodes == [held[0]]
+    original = _fail_current(app, monkeypatch)
+    before = original.read_bytes()
+    public_scan(app, held[1])
+    store = app._storage_failures()
+    record, = store.records()
+    assert record["snapshot"]["scanned_barcodes"] == held
+    app.reset_current_work()
+    app.legacy_label_transition = True
+    public_scan(app, OLD_QR)
+    assert app.current_tray.master_label_code == OLD_QR
+    assert app.current_tray.scanned_barcodes == []
+    assert original.read_bytes() == before
+    return app, store, record, held, other
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_storage_quarantine_rejects_rescan_in_next_tray(flow, windows, monkeypatch, index):
+    app, store, record, held, _ = _next_tray_with_storage_quarantine(flow, monkeypatch)
+    checkpoint = Path(app.save_folder) / app.CURRENT_TRAY_STATE_FILE
+    before = checkpoint.read_bytes()
+    messages = []
+    monkeypatch.setattr(app, "show_status_message", lambda message, *a, **kw: messages.append(message))
+    public_scan(app, held[index])
+    assert app.current_tray.scanned_barcodes == []
+    assert checkpoint.read_bytes() == before
+    assert messages[-1] == "이 제품은 저장 실패로 보류된 트레이에 있음 — 관리자 확인 뒤"
+    assert store.records() == [record]
+    assert not app.seal_calls
+    assert windows == []
+
+
+def test_storage_quarantine_allows_another_barcode(flow, windows, monkeypatch):
+    app, store, record, _, other = _next_tray_with_storage_quarantine(flow, monkeypatch)
+    public_scan(app, other)
+    assert app.current_tray.scanned_barcodes == [other]
+    assert store.records() == [record]
+    assert not app.seal_calls
+    assert windows == []
+
+
+def test_storage_quarantine_releases_barcode_after_admin_reconciliation(flow, windows, monkeypatch):
+    app, store, record, held, _ = _next_tray_with_storage_quarantine(flow, monkeypatch)
+    public_scan(app, held[1])
+    assert app.current_tray.scanned_barcodes == []
+    evidence = store.directory / (record["item_id"] + ".json")
+    original = evidence.read_bytes()
+    reconciled = store.directory / "admin_reconciled"
+    reconciled.mkdir()
+    evidence.rename(reconciled / evidence.name)
+    assert (reconciled / evidence.name).read_bytes() == original
+    assert store.records() == []
+    public_scan(app, held[1])
+    assert app.current_tray.scanned_barcodes == [held[1]]
+    assert not app.seal_calls
+    assert windows == []
+
+
+def test_storage_quarantine_invalid_barcode_evidence_stops_with_e3(flow, windows, monkeypatch):
+    app, store, record, _, other = _next_tray_with_storage_quarantine(flow, monkeypatch)
+    record["snapshot"]["scanned_barcodes"] = None
+    evidence = store.directory / (record["item_id"] + ".json")
+    evidence.write_text(json.dumps(record), encoding="utf-8")
+    messages = []
+    monkeypatch.setattr(app, "show_status_message", lambda message, *a, **kw: messages.append(message))
+    public_scan(app, other)
+    assert app.current_tray.scanned_barcodes == []
+    assert app._storage_failure_blocked
+    assert messages[-1] == app._storage_failure_stop_message()
+    assert app._scan_entry_admission_block_reason() == app._storage_failure_stop_message()
+    assert not app.seal_calls
+    assert windows == []

@@ -4518,6 +4518,18 @@ class ContainerAudit:
     def _storage_failures(self) -> StorageFailureQuarantine:
         return StorageFailureQuarantine(Path(self.save_folder))
 
+    def _storage_held_duplicate_keys(self) -> set[str]:
+        keys = set()
+        for record in self._storage_failures().records():
+            if record["slot"] != "tray":
+                continue
+            barcodes = record["snapshot"].get("scanned_barcodes")
+            if not isinstance(barcodes, list) or any(
+                    not isinstance(value, str) or not normalize_barcode(value) for value in barcodes):
+                raise ValueError("storage quarantine product evidence cannot be verified")
+            keys.update(normalize_barcode(value) for value in barcodes)
+        return keys
+
     @staticmethod
     def _storage_failure_stop_message() -> str:
         return ("이 PC 에 저장할 수 없습니다. 지금 트레이 실물을 그대로 두고 "
@@ -15304,6 +15316,18 @@ class ContainerAudit:
             if scan_decision.event_name:
                 yield lambda: self._log_event(scan_decision.event_name, detail=scan_decision.event_detail)
             self.show_fullscreen_warning("바코드 형식 오류", scan_decision.format_error_message, self.COLOR_DANGER); return
+        try:
+            held_keys = yield self._storage_held_duplicate_keys
+        except (OSError, ValueError, TypeError):
+            self._storage_failure_blocked = True
+            self.show_status_message(self._storage_failure_stop_message(), self.COLOR_DANGER)
+            return
+        if normalize_barcode(raw_barcode) in held_keys:
+            self.show_status_message(
+                "이 제품은 저장 실패로 보류된 트레이에 있음 — 관리자 확인 뒤",
+                self.COLOR_DANGER,
+            )
+            return
         if scan_decision.status == SCAN_MISMATCH:
             self.current_tray.mismatch_error_count += 1; self.current_tray.has_error_or_reset = True
             self.show_fullscreen_warning("품목 코드 불일치!", f"제품의 품목 코드가 일치하지 않습니다.\n[기준: {self.current_tray.item_code}]", self.COLOR_DANGER)
