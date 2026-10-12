@@ -58,7 +58,7 @@ def test_stop_cli_uses_explicit_root_and_only_writes_controls(tmp_path, monkeypa
         lambda root, **kwargs: {"status": "ABSENT"},
     )
 
-    assert user_relay.main(["--data-root", str(active), "--request-app-stop"]) == 0
+    assert user_relay.main(["--data-root", str(active), "--direct-sync-root", str(active / "direct_sync"), "--request-app-stop"]) == 0
 
     assert user_relay.app_stop_path(active / "direct_sync").is_file()
     assert not (active / "events").exists()
@@ -266,3 +266,14 @@ def test_stop_token_as_an_option_value_still_passes_the_gate(tmp_path, monkeypat
 
     assert user_relay.main(["--app-root=--request-app-stop", "--once"]) == 20
     assert seen
+
+
+def test_unmanaged_stop_with_only_a_data_root_is_refused(tmp_path, monkeypatch, capsys):
+    import auto_update
+    active = _stop_roots(tmp_path)
+    monkeypatch.setattr(auto_update, "control_root", lambda app_root: None)
+    monkeypatch.setattr(user_relay, "request_app_stop", lambda root, **kwargs: pytest.fail("no request toward a guessed relay root"))
+
+    assert user_relay.main(["--data-root", str(active), "--request-app-stop"]) == 1
+
+    assert json.loads(capsys.readouterr().out) == {"reason_code": "OPERATOR_ROOTS_REQUIRED", "status": "FAILED"}

@@ -634,8 +634,8 @@ def main(argv: list[str] | None = None) -> int:
             control = control_root(app_root)
             operator_sid = read_json(control / "policy.json").get("operator_sid") if control is not None else None
             # Without an installed policy the account owning the app is unknown,
-            # so at least the data root must be named explicitly.
-            foreign_caller = (not args.data_root) if control is None else (operator_sid is None or operator_sid != current_process_sid())
+            # so both roots must be named like any other foreign caller.
+            foreign_caller = control is None or operator_sid is None or operator_sid != current_process_sid()
         except (OSError, ValueError, AttributeError):
             foreign_caller = True
         if foreign_caller:
