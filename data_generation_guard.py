@@ -142,10 +142,11 @@ def _authenticated_support_removal_source(installed_app_root):
                 snapshot = [read_json(path) for path in records]
                 policy, pointer, state = snapshot
                 phase, active_sha = state.get("phase"), pointer.get("sha")
+                # Installation/placement DEFERRED records carry no transition ID.
+                # Match lifecycle resolution's phase-specific SHA relationships.
                 if (policy.get("schema") != "container-audit-startup-update-policy-v1"
                         or pointer.get("schema") != SCHEMA or state.get("schema") != SCHEMA
                         or phase not in {"CONFIRMED", "DEFERRED", "ROLLED_BACK"}
-                        or pointer.get("transition_id") != state.get("transition_id")
                         or (phase == "CONFIRMED" and state.get("candidate_sha") != active_sha)
                         or (phase == "ROLLED_BACK" and state.get("previous_sha") != active_sha)):
                     raise ValueError("removal active release selection differs")

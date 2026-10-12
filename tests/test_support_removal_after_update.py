@@ -63,7 +63,12 @@ def updated_packets(tmp_path, monkeypatch, support_removal_packets):
         "staging_root": str(stage), "channel": "stable",
         "feed_url": "/".join(("https:", "", "example.invalid", "feed")),
     })
-    update.write_json_durable(control / "active.json", {"schema": update.SCHEMA, "sha": OLD})
+    update.write_json_durable(control / 'active.json', {'schema': update.SCHEMA, 'sha': OLD, 'transition_id': 'CANONICAL_INSTALL'})
+    update.write_json_durable(control / 'transition.json', {
+        'schema': update.SCHEMA, 'phase': 'DEFERRED',
+        'deferred_at': '2026-10-12T00:00:00Z', 'reason': 'canonical installation',
+        'failed_shas': [],
+    })
     update.write_json_durable(stage / "prepared.json", {"source_commit": NEW})
     for name in ("manifest.json", "manifest.sig", "packet.zip"):
         (stage / name).write_bytes(b"isolated archive adapter input")
@@ -84,7 +89,7 @@ def updated_packets(tmp_path, monkeypatch, support_removal_packets):
 
     def processes(_control):
         state = update.optional_record(control / "transition.json")
-        if not state or state["phase"] == "PREPARED":
+        if (not state or state["phase"] == "PREPARED") or (state.get("phase") == "DEFERRED" and not state.get("candidate_sha")):
             return []
         assert state["phase"] == "APPLIED_PENDING_READY"
         update.write_json_durable(stage / "trial.json", {
@@ -230,10 +235,7 @@ Invoke-Expression $remove[0].Extent.Text
     assert host == packets.active
 
 
-@pytest.mark.parametrize("case", [
-    "pointer", "partial_control", "state", "active_record", "active_code", "source_code",
-    "source_manifest", "wrong_build", "trust_key", "control_changed", "transition_id",
-])
+@pytest.mark.parametrize('case', ['pointer', 'partial_control', 'state', 'active_record', 'active_code', 'source_code', 'source_manifest', 'wrong_build', 'trust_key', 'control_changed', 'rolled_back_sha'])
 def test_updated_removal_rejects_forged_or_partial_proof(updated_packets, monkeypatch, case):
     import auto_update as update
     import current_user_onboarding as onboarding
@@ -243,10 +245,13 @@ def test_updated_removal_rejects_forged_or_partial_proof(updated_packets, monkey
         update.write_json_durable(packets.control / "active.json", {"schema": update.SCHEMA, "sha": "c" * 40})
     elif case == "partial_control":
         (packets.control / "policy.json").unlink()
-    elif case in {"state", "transition_id"}:
-        state = update.read_json(packets.control / "transition.json")
-        field, value = ("candidate_sha", "c" * 40) if case == "state" else ("transition_id", "d" * 32)
-        update.write_json_durable(packets.control / "transition.json", {**state, field: value})
+    elif case in {'state', 'rolled_back_sha'}:
+        state = update.read_json(packets.control / 'transition.json')
+        if case == 'state':
+            state['phase'] = 'SWITCHING'
+        else:
+            state.update(phase='ROLLED_BACK', previous_sha='a' * 40)
+        update.write_json_durable(packets.control / 'transition.json', state)
     elif case in {"active_record", "active_code", "source_code", "trust_key"}:
         target = (packets.active / "bootstrap-integrity.json" if case == "active_record" else
                   packets.support / "app/data_generation_guard.py" if case == "source_code" else
