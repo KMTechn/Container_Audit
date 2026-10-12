@@ -147,7 +147,7 @@
 | 작업자 명단 받기 (`POST /api/worker-roster/v1/query`) | 시작·주기 | 마지막 정상 명단 |
 | 기능 켜짐 확인 (`GET /logistics/api/v1/capabilities`) | 시작·배경 | 실패해도 「꺼짐」 으로 처리(CA-6) |
 | 품목 목록 (`GET /inbound/api/item-catalog.csv`) | 시작·새로 받기 | 저장해 둔 목록. 확인 안 된 목록이면 시작하지 않음 |
-| 현품표 목표·구성 조회 (`GET …/bundles/resolve`) | 현품표를 찍을 때 뒤에서 | 찍은 제품을 보존하고 30초마다 다시 조회. 다른 현품표 먼저 가능(최대 20) |
+| 현품표 목표·구성 조회 (`GET …/bundles/resolve`) | 현품표를 찍을 때 뒤에서 | 통신 실패는 찍은 제품을 보존하고 30초마다 다시 조회. 다른 PC가 작업 중이면 그 트레이만 안내·스캔 보류하며, 같은 현품표를 다시 찍어 확인한다. 다른 현품표 먼저 가능(최대 20) |
 | **이적 기록(봉인)** (`POST /logistics/api/v1/transfers/seal`) | 이 PC 완료 뒤 | 이 PC 에 두고 같은 키로 다시 보냄. 회사 서버가 거절하면 그 트레이만 보류 |
 | 제품 교환 (`POST …/bundles/{id}/replace-members`) | 교환 뒤 | 같은 요청으로 다시 보냄 |
 | 대체품 확인 (`GET …/replacements/good-source/resolve`) | 대체품을 찍을 때 | 이 PC 교환 기록으로 진행 |

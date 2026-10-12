@@ -31,6 +31,7 @@ LEGACY_LABEL_COMPLETION_BLOCKED = (
     "이 현품표는 새 시스템 이전 방식이라 과도기 모드가 꺼진 이 PC에서는 완료할 수 없습니다. "
     "현재 작업은 보존합니다. 관리자에게 알려 주세요."
 )
+LEASE_REFUSAL_GUIDANCE = "이 현품표는 다른 이적 PC 가 작업 중입니다 — 한 현품표는 한 PC 에서"
 # Completion refusals whose generic notice would hide the cause.
 COMPLETION_BLOCK_CAUSES = {
     "PHS2_ACTIVE_LABEL_INVALID": LEGACY_LABEL_COMPLETION_BLOCKED,
@@ -123,6 +124,9 @@ def request_complete_tray(
 ) -> bool:
     """Submit the GUI completion transport to the shared foreground lane."""
 
+    if self._operation_lease_hold_blocks_scan():
+        self._show_operation_lease_hold_notice()
+        return False
     if self._reject_mutation_during_preflight_hold():
         return False
     if getattr(self.current_tray, "is_test_tray", False):
@@ -389,6 +393,9 @@ def complete_tray_steps(
     _prepared_transfer_attempt: Optional[SealAttempt] = None,
     _lane_prechecked: bool = False,
 ):
+    if self._operation_lease_hold_blocks_scan():
+        self._show_operation_lease_hold_notice()
+        return False
     if self._reject_mutation_during_preflight_hold():
         return False
     blocking_completion = self._active_blocking_completion_snapshot()
