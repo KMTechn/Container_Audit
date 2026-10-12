@@ -33,6 +33,13 @@ def test_native_operator_bootstrap_contends_without_access_denial(tmp_path, role
     policy = control / "policy.json"
     policy.write_text(json.dumps({"operator_sid": sid}), encoding="utf-8")
     original = policy.read_bytes()
+    # 9ac3d0a: a contended bootstrap now waits out the update lock (60 s) and
+    # then reads the active pointer. Without a confirmed data generation for
+    # this version (no operator profile slot here) it must still stop with 20.
+    # The holder below therefore keeps the lock past that wait (until release).
+    active = control / "active.json"
+    active.write_text(json.dumps({"sha": "0" * 40}), encoding="utf-8")
+    original_active = active.read_bytes()
     ready, release = tmp_path / "ready", tmp_path / "release"
     source = '''import sys, time
 from pathlib import Path
@@ -41,7 +48,7 @@ import auto_update as u
 assert u.ordinary_user_context(sys.argv[3])
 with u.update_lock(Path(sys.argv[2]), sys.argv[3]):
     Path(sys.argv[4]).write_text("held")
-    deadline = time.monotonic() + 60
+    deadline = time.monotonic() + 180
     while not Path(sys.argv[5]).exists() and time.monotonic() < deadline:
         time.sleep(0.01)
 '''
@@ -79,7 +86,8 @@ with u.update_lock(Path(sys.argv[2]), sys.argv[3]):
     # The same real lock must be available after its owner releases it.
     with updates.update_lock(control, sid):
         assert policy.read_bytes() == original
-    assert list(control.iterdir()) == [policy]
+        assert active.read_bytes() == original_active
+    assert sorted(control.iterdir()) == sorted([active, policy])
 
 
 def test_bootstrap_reports_update_mutex_open_denial(monkeypatch, capsys, tmp_path):
