@@ -1,10 +1,10 @@
 {
  "schema": "ui-parts/1",
  "source": "WorkerAnalysisGUI-web",
- "commit": "9e2231619942d19ebcf6ad83f0f4cdf7329e5b1b",
+ "commit": "68f186f385d26a2860d222c40c376cb251568c95",
  "dirty": false,
  "app": "ca",
- "parts_fingerprint": "065f21acdd52ffbf",
+ "parts_fingerprint": "3e840e4e04a98186",
  "files": [
   {
    "path": "app/ca/ca.css",
@@ -20,9 +20,9 @@
   },
   {
    "path": "app/ca/contract.json",
-   "sha256": "2276a60ce6e26f81849c327806adb9c91220c89a1fafc0c20eda192341f60496",
-   "bytes": 26967,
-   "gzip": 5672
+   "sha256": "40fe93e2c1a7cc27c8babad5ff6bfa5372183d05593d83e70b9a6d305003d7f3",
+   "bytes": 27063,
+   "gzip": 5683
   },
   {
    "path": "app/ca/fixtures/admin-defer.json",
@@ -284,9 +284,9 @@
   },
   {
    "path": "app/ca/fixtures/recovery-delete.json",
-   "sha256": "cdd2e17e1b67a93a490f6ef1cc330ebd7040a3c08779bc320b7fb2f3b60daeac",
-   "bytes": 6173,
-   "gzip": 1750
+   "sha256": "ac6380c08d61b6cafdd437ed72a8041d5d7d957e8f423053b0f0f9cdd10fee07",
+   "bytes": 6148,
+   "gzip": 1730
   },
   {
    "path": "app/ca/fixtures/recovery.json",
@@ -386,9 +386,9 @@
   },
   {
    "path": "app/frame.js",
-   "sha256": "263180ad8b64cb4f5fecde00b04c991235b4c5fe28f9fd8c758e3c166867a08a",
-   "bytes": 19759,
-   "gzip": 7483
+   "sha256": "f6af866996e3dc88db860d57978f88989c50c67ae4d8b13d42578d9865a99a2a",
+   "bytes": 21248,
+   "gzip": 7921
   },
   {
    "path": "app/scan.js",
@@ -398,9 +398,9 @@
   },
   {
    "path": "app/sheet.js",
-   "sha256": "96d6e5c49a8b251b38006da818a8816a85a14f9de498682a3d836ab5b9333ee6",
-   "bytes": 6898,
-   "gzip": 2628
+   "sha256": "8bad2c3a2a1d90c848769502ef004530f056b048d94494c675d63494eaedd491",
+   "bytes": 7148,
+   "gzip": 2738
   },
   {
    "path": "app/transport.js",

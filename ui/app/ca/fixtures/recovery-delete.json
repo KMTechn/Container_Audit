@@ -246,21 +246,23 @@
       "tag": "확인",
       "title": "이전 작업 삭제",
       "lead": [
-        "이전 작업(현품표 0412 · 17 / 40)을 영구적으로 삭제할까요? 삭제는 마우스로만 합니다 — 빈 Enter 나 스캔은 그만두기입니다. ",
+        "이전 작업(현품표 0412 · 17 / 40)을 영구적으로 삭제할까요? 삭제는 마우스로만 합니다.",
         "이 작업은 되돌릴 수 없습니다."
       ],
       "actions": [
         {
           "text": "그만두기",
-          "go": "command:choose:recovery_delete_cancel",
+          "go": "command:choose:ask_no",
           "quiet": true
         },
         {
           "text": "삭제",
-          "go": "command:choose:recovery_delete_yes",
+          "go": "command:choose:ask_yes",
           "danger": true
         }
-      ]
+      ],
+      "modal": true,
+      "cancel": "choose:ask_no"
     }
   },
   "screen": {

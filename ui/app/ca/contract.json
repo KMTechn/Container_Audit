@@ -747,6 +747,12 @@
        "additionalProperties": false
       },
       "maxItems": 3
+     },
+     "modal": {
+      "type": "boolean"
+     },
+     "cancel": {
+      "type": "string"
      }
     },
     "additionalProperties": false
