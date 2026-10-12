@@ -17,7 +17,9 @@ def test_pending_reason_reaches_field_guidance(status, expected):
     messages = []
     namespace = {"CurrentUserOnboardingError": Exception, "DataGenerationBlocked": RuntimeError,
         "FIRST_RUN_ONBOARDING_ERROR_MESSAGE": "default", "FIRST_RUN_ONBOARDING_ERROR_TITLE": "title",
-        "messagebox": SimpleNamespace(showerror=lambda title, message: messages.append(message))}
+        "messagebox": SimpleNamespace(showerror=lambda title, message: messages.append(message)),
+        # Startup refusal not recorded/acknowledged: the field guidance dialog is the operator path.
+        "_startup_refusal": lambda reason, **kwargs: False}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "owned-guidance", "exec"), namespace)
     failure = SimpleNamespace(status=status, report_path=Path("owned-report.json"), __cause__=None)
     namespace["_show_first_run_onboarding_error"](failure)
