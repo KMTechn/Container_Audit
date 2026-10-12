@@ -33,6 +33,6 @@
 - 관리자 판 사실 줄(facts): `quarantine_hold` · `defer_unsettled` · `preserve_check` · `resend_completion` 은 연결됨. `pair_hold` 는 저장된 짝 원본을 다시 읽어 대상을 정하고, `recheck_review` 는 저장된 PIN 요청 목록, `list_paired` 는 인증 뒤 보류 원본 목록을 새로 읽으므로 동작 전 사실 줄은 `[]` 그대로. 동작이 직접 보여 주는 대상 · 결과는 유지.
 - 같이 채우기: 서버 계약(목 10/15 초안 · 수 10/14 고정 코드) 뒤 — 그 전엔 `work.cofill = null`.
 - 시작 판 고침 문(`_run_application_main` 의 startup_gate · GUI ready 알림)과 새 진입을 어느 쪽으로 둘지: 주인 레인.
-- 「끝낸 트레이 회사 서버에 다시 보내기」: 지금 코드는 PIN 이 아니라 관리자 로그인을 봄 — 새 화면 PIN 판으로 대신할지 w9firstupd 답 기다림.
+- 「끝낸 트레이 회사 서버에 다시 보내기」: 로그인 조건 그대로 · PIN 판 아님 · PIN 으로 바꿈은 처리 층 고침이라 기준일 뒤(주인 레인 10/13 05:41). `_is_preflight_hold_supervisor()` 와 기록 메뉴가 켜진 때만 확인 판의 `command('resend_completion')` 으로 기존 `_retry_transfer_post_review` 를 부른다. `admin('resend_completion', …)` 은 거절한다.
 - 창 실물(pywebview · WebView2): 시험 PC 에서(셸 레인 키트 · 호스트 창 0).
-- 고정 `ui/app/ca/contract.json` 의 sheet 에 `modal` · `cancel` 칸 없음. 웹 원천에는 있음. 이 판의 계약 파일은 고치지 않았으며 시험은 그 두 키만 계약에 없을 때 제외하고 실제 값 · 취소 답을 따로 확인함. 틀의 물음 우선 표시 · PIN/기능 키/빈 Enter 차단 실물 확인은 주인 레인.
+- 다시 내보낸 `ui/app/ca/contract.json` 의 sheet 에 `modal` · `cancel` 칸이 포함됨. 이음 시험은 현재 계약의 상태 꼴과 실제 값 · 취소 답을 함께 확인함. 틀의 물음 우선 표시 · PIN/기능 키/빈 Enter 차단 실물 확인은 주인 레인.

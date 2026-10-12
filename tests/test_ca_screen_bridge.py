@@ -156,6 +156,73 @@ def test_admin_pin_replaces_the_modal_once_and_keeps_no_value(flow, monkeypatch)
     assert ca.messagebox is not processor.dialogs  # 닫으면 모듈 이름이 돌아옴
 
 
+def test_resend_completion_requires_the_existing_supervisor_login(flow, monkeypatch):
+    app = _app(flow)
+    app.worker_role = "WORKER"
+    app._authenticated_protected_admin = False
+    processor = CaProcessor(app)
+    called = []
+    monkeypatch.setattr(screen, "operations_menu", lambda _app: {"resend_completion": (True, lambda: called.append(True))})
+
+    item = next(item for item in processor.state()["admin_menu"] if item["name"] == "resend_completion")
+    assert item["enabled"] is False
+    assert processor.command("resend_completion") == {
+        "ok": False, "result": {"kind": "warn", "text": "관리자로 로그인해야 다시 보낼 수 있습니다"},
+    }
+    assert called == []
+
+
+@pytest.mark.parametrize("role, protected", [("ADMIN", False), ("WORKER", True)])
+def test_resend_completion_calls_the_recorded_menu_once_and_returns_its_note(flow, monkeypatch, role, protected):
+    app = _app(flow)
+    app.worker_role = role
+    app._authenticated_protected_admin = protected
+    processor = CaProcessor(app)
+    called = []
+
+    def action():
+        called.append(True)
+        ca.messagebox.showinfo("완료 작업 확인", "저장된 완료 요청을 다시 보냈습니다")
+
+    monkeypatch.setattr(screen, "operations_menu", lambda _app: {"resend_completion": (True, action)})
+    processor.install()
+    try:
+        item = next(item for item in processor.state()["admin_menu"] if item["name"] == "resend_completion")
+        assert item["enabled"] is True
+        reply = processor.command("resend_completion")
+        assert called == [True]
+        assert reply == {"ok": True, "result": {"kind": "ok", "text": "완료 작업 확인 — 저장된 완료 요청을 다시 보냈습니다"}}
+        assert processor._credentials is None and processor._admin_notes is None
+        assert processor.notes == []
+    finally:
+        processor.shutdown()
+
+
+def test_resend_completion_obeys_menu_disable_even_when_logged_in(flow, monkeypatch):
+    app = _app(flow)
+    app.worker_role = "ADMIN"
+    processor = CaProcessor(app)
+    called = []
+    monkeypatch.setattr(screen, "operations_menu", lambda _app: {"resend_completion": (False, lambda: called.append(True))})
+    item = next(item for item in processor.state()["admin_menu"] if item["name"] == "resend_completion")
+    assert item["enabled"] is False
+    assert processor.command("resend_completion")["ok"] is False
+    assert called == []
+
+
+def test_resend_completion_rejects_the_pin_api_without_running_the_menu(flow, monkeypatch):
+    app = _app(flow)
+    app.worker_role = "ADMIN"
+    processor = CaProcessor(app)
+    called = []
+    monkeypatch.setattr(screen, "operations_menu", lambda _app: {"resend_completion": (True, lambda: called.append(True))})
+    pin = "".join(random.choice("0123456789") for _ in range(6))
+    reply = processor.admin("resend_completion", {"admin_id": "SYNTHETIC-ADMIN", "pin": pin})
+    assert reply["ok"] is False
+    assert called == []
+    assert processor._credentials is None
+
+
 def test_question_becomes_a_sheet_waits_for_the_screen_and_holds_scans(flow):
     app = _app(flow)
     processor = CaProcessor(app)

@@ -46,7 +46,7 @@ BAND_KIND = {NoticeSeverity.SUCCESS: "quiet", NoticeSeverity.INFO: "quiet", Noti
 SOUND_TEXT = {"success": "성공음", "completion": "완료음", "error": "오류음"}
 ADMIN_MENU = ("quarantine_hold", "pair_hold", "preserve_check", "defer_unsettled", "resend_completion",
               "recheck_review", "list_paired", "check_unsettled", "view_handoff", "view_sync")
-ADMIN_PIN = frozenset(ADMIN_MENU[:7])
+ADMIN_PIN = frozenset(ADMIN_MENU[:7]) - {"resend_completion"}
 # 지금 운영 메뉴 글(앞부분) → 다리 이름. 같은 이름 여럿이면 켜진 첫 항목(보존 다시 확인 · 다시 시도 · 계속 셋 중 지금 맞는 것)
 MENU_LABELS = (
     ("보류 묶음 격리 후 다른 작업 계속", "quarantine_hold"), ("두 원본 함께 보류 후 계속", "pair_hold"),
@@ -500,7 +500,9 @@ def present_ca(app: Any, *, view: Optional[str] = None, menu: Optional[Dict[str,
         "legacy": bool(_attr(app, "legacy_label_transition")), "held_count": _held_count(app),
         "conn": conn, "queue": queue, "update": None,
         "alerts": _alerts(app, presenter_state, notes or [], now), "work": work, "allow": _allow(app, menu, work),
-        "admin_menu": [{"name": name, "enabled": bool(menu.get(name, (False, None))[0]), "facts": admin_facts(app, name)} for name in ADMIN_MENU],
+        "admin_menu": [{"name": name, "enabled": bool(menu.get(name, (False, None))[0])
+                        and (name != "resend_completion" or app._is_preflight_hold_supervisor()),
+                        "facts": admin_facts(app, name)} for name in ADMIN_MENU],
         "sheet": sheet,
     }
     state.update(extra or {})
@@ -517,6 +519,7 @@ def fingerprint(app: Any, view: Optional[str], notes: List[Dict[str, Any]], shee
         repr(presenter_state), _attr(app, "_inline_exchange_mode"), bool(_attr(app, "_short_confirmation_undo")),
         bool(_attr(app, "_master_preflight_pending")), bool(_attr(app, "is_idle")), bool(_attr(app, "_warning_beep_active")),
         [c[0] for c in (_attr(app, "_inline_scan_choices") or [])], _attr(app, "worker_name"), _view(app, view),
+        app._is_preflight_hold_supervisor(),
         conn, queue, _held_count(app), len(notes), json.dumps(sheet, ensure_ascii=False, sort_keys=True, default=str),
         {name: _widget_enabled(app, name) for name in ("undo_button", "submit_tray_button", "park_button")},
         f8_values(app) if _view(app, view) == "f8" else None,
@@ -731,11 +734,17 @@ class CaProcessor:
         if not enabled or command is None:
             return {"ok": False, "result": {"kind": "warn", "text": "지금은 할 수 없는 관리자 일입니다", "sub": "화면의 상태를 확인하세요"}}
         self._credentials = (admin_id, pin)
+        try:
+            return self._run_menu_action(command)
+        finally:
+            self._credentials = None
+
+    def _run_menu_action(self, command: Callable[[], Any]) -> Dict[str, Any]:
+        """관리자 메뉴 명령이 내는 안내를 판 결과로 모은다."""
         self._admin_notes = []
         try:
             command()
         finally:
-            self._credentials = None
             notes, self._admin_notes = self._admin_notes or [], None
         last = notes[-1] if notes else None
         if last is None:
@@ -936,6 +945,15 @@ class CaProcessor:
 
     def _cmd_refresh_items(self, _id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
         return self._menu("refresh")
+
+    def _cmd_resend_completion(self, _id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
+        if not self.app._is_preflight_hold_supervisor():
+            return {"ok": False, "result": {"kind": "warn", "text": "관리자로 로그인해야 다시 보낼 수 있습니다"}}
+        enabled, command = operations_menu(self.app).get("resend_completion", (False, None))
+        if not enabled or command is None:
+            return {"ok": False, "result": {"kind": "warn", "text": "지금은 할 수 없는 관리자 일입니다", "sub": "화면의 상태를 확인하세요"}}
+        reply = self._run_menu_action(command)
+        return {**reply, "ok": True}
 
     def _cmd_change_worker(self, _id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
         return self._invoke("change_worker_button")

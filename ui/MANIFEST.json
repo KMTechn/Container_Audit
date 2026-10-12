@@ -1,10 +1,10 @@
 {
  "schema": "ui-parts/1",
  "source": "WorkerAnalysisGUI-web",
- "commit": "a2e3af06b418572b0bf5c442e340c9d5cacc3044",
+ "commit": "199fa1058b19e89e09e0f7e8232c9f31b9f094e6",
  "dirty": false,
  "app": "ca",
- "parts_fingerprint": "599cb13b0c29bfc2",
+ "parts_fingerprint": "e6a2bc9a07744938",
  "files": [
   {
    "path": "app/ca/ca.css",
@@ -14,15 +14,15 @@
   },
   {
    "path": "app/ca/ca.js",
-   "sha256": "74d80ebbcf4ec50bd7ca0fab2a5aead39c9343b761b9ead4910a3e8f20ae9cef",
-   "bytes": 16801,
-   "gzip": 6241
+   "sha256": "1d0ce4c1e744e4b67ec26f4da9a2b46f05f401db580631d7f9295faa9cfc6a16",
+   "bytes": 16867,
+   "gzip": 6247
   },
   {
    "path": "app/ca/contract.json",
-   "sha256": "40fe93e2c1a7cc27c8babad5ff6bfa5372183d05593d83e70b9a6d305003d7f3",
-   "bytes": 27063,
-   "gzip": 5683
+   "sha256": "92bb279c19c5d3ac0a70557bd2465b184b27be6322cbfe33c517c5bdec7972ae",
+   "bytes": 26925,
+   "gzip": 5679
   },
   {
    "path": "app/ca/fixtures/admin-defer.json",
@@ -68,9 +68,9 @@
   },
   {
    "path": "app/ca/fixtures/admin-retry.json",
-   "sha256": "f6c35eaa3a56fced97ad38741763876c135df4a5a38c8dcfdf6a8a1203aff08f",
-   "bytes": 9275,
-   "gzip": 1982
+   "sha256": "3f624bbf33947483dadb7a968dc4f22072c30f7900d2041bae0373c275f5ca02",
+   "bytes": 9317,
+   "gzip": 2012
   },
   {
    "path": "app/ca/fixtures/admin-sync.json",
@@ -374,9 +374,9 @@
   },
   {
    "path": "app/ca/index.html",
-   "sha256": "3632d8e0028029a079c03c7c61ba12011a6ed8a18fe2623dce87633ceffd8c26",
-   "bytes": 10242,
-   "gzip": 3205
+   "sha256": "436f9156c1d9490b373acc1b95336bee0deba6f7c4606e453e86895358fb9b99",
+   "bytes": 10206,
+   "gzip": 3204
   },
   {
    "path": "app/frame.css",
@@ -392,9 +392,9 @@
   },
   {
    "path": "app/scan.js",
-   "sha256": "4a6be9cbd7f547c06f695db80a19d2eea0d3ebf4b535118bae076fd4002044d2",
-   "bytes": 12682,
-   "gzip": 4606
+   "sha256": "e661ef5b71fe390ca55a55a76656d89d776bf8166af9bbe42b208f5a6ec861b5",
+   "bytes": 12544,
+   "gzip": 4514
   },
   {
    "path": "app/sheet.js",

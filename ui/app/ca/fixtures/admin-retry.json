@@ -1,5 +1,5 @@
 {
-  "about": "관리자 — 끝낸 트레이 다시 보내기(PIN)",
+  "about": "관리자로 로그인한 상태 · 끝낸 트레이 다시 보내기 확인 판(PIN 없음)",
   "state": {
     "app": "ca",
     "version": "2.0.103",
@@ -422,7 +422,7 @@
     "open": "resend_completion"
   },
   "replies": {
-    "admin resend_completion": {
+    "command resend_completion": {
       "ok": true,
       "result": {
         "kind": "ok",

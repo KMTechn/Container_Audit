@@ -1200,6 +1200,10 @@
     "args": {},
     "does": "보낸 요청 결과 다시 확인 — _recheck_unsettled_current_work(PIN 없음)"
    },
+   "resend_completion": {
+    "args": {},
+    "does": "끝낸 트레이 회사 서버에 다시 보내기 — _is_preflight_hold_supervisor 로그인 조건 그대로 · _retry_transfer_post_review 운영 메뉴 명령 · PIN 판 아님(w9firstupd 10/13 05:41)"
+   },
    "confirm_master_label": {
     "args": {},
     "does": "원래 현품표 확인 — 함께 보류한 기록 줄 안 단추(CA:20690–20800)"
@@ -1257,14 +1261,6 @@
     },
     "reply": "{ok, result, sheet?, state?}",
     "does": "관리자 확인 다시 조회 — _recheck_admin_pin_intents → _recheck_admin_pin_intent_steps(_authorize_blocked_work_supervisor). 답 sheet = 결과"
-   },
-   "resend_completion": {
-    "args": {
-     "admin_id": "string",
-     "pin": "6자리 — 화면 · 처리 층 저장 0"
-    },
-    "reply": "{ok, result, sheet?, state?}",
-    "does": "끝낸 트레이 회사 서버에 다시 보내기 — _retry_transfer_post_review(지금 코드는 PIN 이 아니라 관리자 로그인을 확인 — 새 화면 PIN 판으로 대신할지는 주인과 맞춤)"
    }
   }
  },
