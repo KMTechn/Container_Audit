@@ -231,6 +231,60 @@ def test_start_pane_lists_the_roster_and_starts_through_the_entry(flow):
     assert processor.command("start_work", {"id": "작업자 05"}) == {"ok": True} and started == ["작업자 05"]
 
 
+@pytest.mark.parametrize("flags, step, stopped", [
+    ({}, 0, False),
+    ({"_phs_reconciliation_resolve_pending": True}, 1, False),
+    ({"_phs_label_exchange_pending": True}, 2, False),
+    ({"_phs_label_exchange_recovery_visible": True}, 2, True),
+])
+def test_f8_pane_uses_the_existing_panel_state_and_omits_missing_plan(flow, flags, step, stopped):
+    app = _app(flow)
+    app._phs_label_exchange_panel_open = True
+    for name, value in flags.items():
+        setattr(app, name, value)
+    app.phs_active_label_info_label = {"text": f"회사 서버 지시 · {app.current_tray.tray_size}개"}
+    state = CaProcessor(app).state()
+    assert state["view"] == "f8" and _schema_errors(state, CONTRACT["state"]) == []
+    pane = state["f8"]
+    assert pane["sub"] == app.phs_active_label_info_label["text"]
+    assert (pane["step"], pane["stop"]) == (step, stopped)
+    assert "plan" not in pane and "target" not in pane and "print_error" not in pane
+
+
+def test_f8_candidate_text_and_changes_use_the_existing_panel_sources(flow):
+    from types import SimpleNamespace
+    app = _app(flow)
+    app._phs_label_exchange_panel_open = True
+    app.phs_active_label_info_label = None
+    candidate = {"target_qty_pcs": 47}
+    app._phs_label_candidates = [candidate]
+    selected = f"교체할 수량 {candidate['target_qty_pcs']}개"
+    app.phs_label_candidate_var = SimpleNamespace(get=lambda: selected)
+    processor = CaProcessor(app)
+    assert processor.state()["f8"]["sub"] == app.phs_label_candidate_var.get()
+    assert processor.state()["f8"]["step"] == 2
+    before = screen.fingerprint(app, None, [], None)
+    app._phs_label_exchange_pending = True
+    assert screen.fingerprint(app, None, [], None) != before
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_f8_reprint_confirms_the_existing_variable_and_invokes_only_an_enabled_button(flow, enabled):
+    from types import SimpleNamespace
+    app = _app(flow)
+    confirmed, calls = [], []
+    app.phs_label_reprint_confirm_var = SimpleNamespace(set=confirmed.append)
+
+    class Button(dict):
+        def invoke(self):
+            calls.append(list(confirmed))
+
+    app.phs_label_exchange_execute_button = Button(state=ca.tk.NORMAL if enabled else ca.tk.DISABLED)
+    reply = CaProcessor(app).command("f8_reprint")
+    assert confirmed == [True] and reply["ok"] is enabled
+    assert calls == ([[True]] if enabled else [])
+
+
 # ── 셸 host(v3.7 bridge, owner='external')와 한 바퀴 ─────────────────
 class _Pedal:
     def snapshot(self):

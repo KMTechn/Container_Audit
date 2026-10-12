@@ -376,6 +376,42 @@ def admin_facts(app: Any, name: str) -> List[List[str]]:
     return []
 
 
+def f8_values(app: Any) -> Dict[str, Any]:
+    """지금 현품표 교체 판의 단계·안내만 읽는다. 없는 수량·받은 시각은 만들지 않는다."""
+    loading = bool(_attr(app, "_phs_reconciliation_resolve_pending") or _attr(app, "_phs_label_candidate_pending"))
+    executing = bool(_attr(app, "_phs_label_exchange_pending") or _attr(app, "_phs_label_refresh_pending"))
+    recovery = bool(_attr(app, "_phs_label_exchange_recovery_visible"))
+    ready = bool(_attr(app, "_phs_reconciliation_context") or _attr(app, "_phs_label_candidates"))
+    if executing:
+        next_step = "현품표 교체 처리 중입니다 — 잠시 기다리세요"
+    elif loading:
+        next_step = "회사 서버에서 교체 지시를 확인 중입니다"
+    elif recovery:
+        next_step = "실물과 프린터를 확인한 뒤 F8로 교체를 계속하세요"
+    elif ready:
+        next_step = "교체 지시를 확인한 뒤 F8을 누르세요"
+    else:
+        next_step = "바꿀 현재 또는 완료된 이적 현품표를 스캔하세요"
+    sub = ""
+    label = _attr(app, "phs_active_label_info_label")
+    try:
+        if label is not None:
+            sub = str(label["text"] or "")
+        if not sub:
+            variable = _attr(app, "phs_label_candidate_var")
+            if variable is not None:
+                sub = str(variable.get() or "")
+    except (tk.TclError, AttributeError, KeyError, TypeError):
+        pass
+    sub = sub.replace("서버 교체 지시", "회사 서버 교체 지시").replace(" Pcs", "개")
+    if "API" in sub:
+        sub = "현품표 교체를 사용할 수 없습니다 — 관리자에게 알리세요"
+    # target가 있으면 화면은 완전한 plan도 요구한다. 처리 층에는 지시 받은 시각과
+    # 한 덩어리의 전/후 수량·장수가 없어 둘 다 생략하고 기존 판 안내를 그대로 싣는다.
+    return {"step": 2 if executing else 1 if loading else 2 if recovery or ready else 0,
+            "stop": recovery and not (loading or executing), "next": next_step, "sub": sub, "card": "how"}
+
+
 def roster_values(app: Any) -> Dict[str, Any]:
     """작업자 고르기 — 지금 명단 고르기(_worker_selection_names CA:3254) · 안내 글(CA:3268) · 최근 작업자(worker_registry.recent_worker)."""
     labels = [str(label) for label in app._worker_selection_names()][:500]
@@ -464,6 +500,7 @@ def fingerprint(app: Any, view: Optional[str], notes: List[Dict[str, Any]], shee
         [c[0] for c in (_attr(app, "_inline_scan_choices") or [])], _attr(app, "worker_name"), _view(app, view),
         conn, queue, _held_count(app), len(notes), json.dumps(sheet, ensure_ascii=False, sort_keys=True, default=str),
         {name: _widget_enabled(app, name) for name in ("undo_button", "submit_tray_button", "park_button")},
+        f8_values(app) if _view(app, view) == "f8" else None,
         int(_attr(app, "_short_confirmation_undo") and 1 or 0) and datetime.datetime.now().second,
     )
     return hashlib.sha256(repr(parts).encode("utf-8", "replace")).hexdigest()
@@ -796,6 +833,8 @@ class CaProcessor:
             return self._held_values()
         if view == "progress":
             return {"progress": progress_values(self.app)}
+        if view == "f8":
+            return {"f8": f8_values(self.app)}
         return {}
 
     def _held_values(self) -> Dict[str, Any]:
