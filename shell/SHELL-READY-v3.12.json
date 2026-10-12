@@ -1,10 +1,10 @@
 {
-  "created_utc": "2026-10-12T16:05:47.951171+00:00",
+  "created_utc": "2026-10-12T23:00:58.159342+00:00",
   "files": [
     {
       "path": "shell/bridge.py",
-      "bytes": 22386,
-      "sha256": "5cc6147fa878887579df2d99fc934693f54fea5cea21623e56ce37cb6fb54426"
+      "bytes": 24852,
+      "sha256": "7a0ca075d3a8f1e4c74da61dc98abb3cd41290d97d06f78b7021584f6bcecf3d"
     },
     {
       "path": "shell/event_order.py",
@@ -13,8 +13,8 @@
     },
     {
       "path": "shell/host.py",
-      "bytes": 27887,
-      "sha256": "626ddfc37e9459aae96ad31f3cef38c07bd068479310c94923dc3629e5a24315"
+      "bytes": 30431,
+      "sha256": "3d7d2a34cfbb8fbff3afa559467f86baedbf8b0718292b0f989e72bf9635edc0"
     },
     {
       "path": "shell/journal.py",
@@ -88,8 +88,8 @@
     },
     {
       "path": "shell/web/sink.js",
-      "bytes": 11812,
-      "sha256": "8f01b70d5f41e225547b63cfd5d72f7a58203914663878fc168784c595b6d9f4"
+      "bytes": 12034,
+      "sha256": "bc5722340e3dcb55ef039496c6a7808f8cfd86f41fb7a7432e22843dce13c401"
     },
     {
       "path": "shell/web/transport.js",
@@ -97,7 +97,7 @@
       "sha256": "fdb207a3b596271368fe67a4781d0cbb81c28619bd98057f12487f605b64c07a"
     }
   ],
-  "version": "v3.8",
+  "version": "v3.12",
   "status": "source ready; native window behavior NOT TESTED on host",
   "run_commands": [
     "<python> -I -B app/shell/host.py --profile rw --data <isolated-data> --udf <isolated-udf> --test-control <control-dir>",
@@ -150,5 +150,6 @@
   ],
   "exit": "bridge.request_exit() any thread -> window.destroy on its own thread, X question skipped; window X -> processor.closing() on owner (False cancels, 3 s no answer or error -> close)",
   "reply_shape": "command/admin -> {ok: True, result: <processor value>, state}; exception -> {ok: False, error, state}; frame.js unwraps a result dict carrying ok (57f87c1a)",
-  "bundle_root": "run_app(root=<bundle>, page=<bundle>/app/<app>/index.html): pywebview global server started on root before webview.start so ../ shared files load; page outside root -> ValueError before anything starts"
+  "bundle_root": "run_app(root=<bundle>, page=<bundle>/app/<app>/index.html): pywebview global server started on root before webview.start so ../ shared files load; page outside root -> ValueError before anything starts",
+  "owner_wait": "run_app owner_timeout default None: wait (no window) until attach_owner/fail_owner; OwnerExited if the owner thread ends first; explicit timeout still raises (daemon owner then dies with the process)"
 }
