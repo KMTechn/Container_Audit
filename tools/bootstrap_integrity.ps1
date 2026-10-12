@@ -3669,7 +3669,10 @@ function Get-BootstrapSupportedLifecycleContext([string]$Root,[string]$Operation
             $sid=$policy['operator_sid']
             if($sid -cnotmatch '^S-1-(?:[0-9]+-)+[0-9]+$' -or $fixed.IndexOfAny([char[]]@('"',"`r","`n")) -ge 0){throw 'lifecycle_task_absence_or_unknown'}
             $taskName='KMTech.ContainerAudit.StartupUpdate.'+(Get-BootstrapStringSha256 ($fixed.ToLowerInvariant()+"`n"+$sid)).Substring(0,24)
-            [xml]$taskXml=Export-ScheduledTask -TaskName $taskName -TaskPath '\' -ErrorAction Stop
+            # Absent or unreadable is not proof of ownership; keep refusing with
+            # the same bounded reason as auto_update.resolve_lifecycle_context.
+            try{[xml]$taskXml=Export-ScheduledTask -TaskName $taskName -TaskPath '\' -ErrorAction Stop}
+            catch{throw [InvalidOperationException]::new('lifecycle_task_absence_or_unknown',$_.Exception)}
             $names=[Xml.XmlNamespaceManager]::new($taskXml.NameTable);$names.AddNamespace('t','http://schemas.microsoft.com/windows/2004/02/mit/task')
             if($taskXml.SelectNodes('/t:Task/t:Actions/t:Exec',$names).Count -ne 1 -or
                 $taskXml.SelectNodes('/t:Task/t:Triggers/t:LogonTrigger',$names).Count -ne 1 -or

@@ -174,6 +174,9 @@ PowerShell reader를 같은 스레드에서 호출한다. Python 자식의 같�
 `installation_failure_summary.lifecycle_context_failure`에 남긴다. 외부 JSON은 UTF-8 64KiB
 이내에서 읽고 알려진 status/type/reason만 기록한다. 경로·원 예외 문구·자식 stream은
 추가하지 않으며 손상/초과 출력은 `CONTEXT_OUTPUT_UNKNOWN`으로 남기고 기존 안내로 거절한다.
+제어 기록(policy·active·transition)은 있고 StartupUpdate 작업을 내보내지 못하면(없음·조회 실패) PowerShell reader도
+Python reader와 같은 `lifecycle_task_absence_or_unknown` 원인으로 거절한다. 공개 안내·거절은 그대로이며
+끊긴 설치를 이 원인만으로 버려진 설치 복구나 새 설치로 바꾸지 않는다(IA-02).
 
 옛 v2.0.33 위 첫 현장 설치는 업무 종료 뒤에 진행한다. 옛 GUI·relay·writer의 정상
 정지/ABSENT를 확인한 뒤 exact 옛 코드, 전체 실제 data/DirectSync root와 외부 신원 상태,

@@ -9576,7 +9576,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "f6b225690572fd233e2f10500e66b42ec832a29edb113f8012e93b315432d090",
+  "inventory_sha256": "203e8932df14e21e93fc19ba064a52ab94bc90a0d4a616576ad9432a977d15fe",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -12030,7 +12030,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3837,
+        "line": 3840,
         "target": "",
         "target_static": true
       },
@@ -12042,7 +12042,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3857,
+        "line": 3860,
         "target": "",
         "target_static": true
       },
@@ -12054,7 +12054,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3859,
+        "line": 3862,
         "target": "",
         "target_static": true
       },
@@ -12066,7 +12066,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3883,
+        "line": 3886,
         "target": "",
         "target_static": true
       },
@@ -12078,7 +12078,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3889,
+        "line": 3892,
         "target": "",
         "target_static": true
       },
@@ -13592,7 +13592,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3837,
+        "line": 3840,
         "target": "",
         "target_static": true
       },
@@ -13604,7 +13604,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3857,
+        "line": 3860,
         "target": "",
         "target_static": true
       },
@@ -13616,7 +13616,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3859,
+        "line": 3862,
         "target": "",
         "target_static": true
       },
@@ -13628,7 +13628,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3883,
+        "line": 3886,
         "target": "",
         "target_static": true
       },
@@ -13640,7 +13640,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3889,
+        "line": 3892,
         "target": "",
         "target_static": true
       },
@@ -17206,7 +17206,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 3837,
+            "line": 3840,
             "target": "",
             "target_static": true
           },
@@ -17218,7 +17218,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 3857,
+            "line": 3860,
             "target": "",
             "target_static": true
           },
@@ -17230,7 +17230,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 3859,
+            "line": 3862,
             "target": "",
             "target_static": true
           },
@@ -17242,7 +17242,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 3883,
+            "line": 3886,
             "target": "",
             "target_static": true
           },
@@ -17254,7 +17254,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 3889,
+            "line": 3892,
             "target": "",
             "target_static": true
           }
