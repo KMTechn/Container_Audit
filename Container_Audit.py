@@ -18928,11 +18928,20 @@ class ContainerAudit:
                     continue
                 exchanges.store.mark_scan_exchange_projected(row["intent_id"])
             result["releases"] = self._work_operation_lease_releases((), active_lease_id=active_lease_id)
+            reviewed_exchange_trays = set()
             for exchange_id in exchanges.store.pending_ids():
                 if exchanges.store.scan_exchange_context(exchange_id) is None:
                     continue
+                master_label = exchanges.store.load(exchange_id)["master_label"]
+                if master_label in reviewed_exchange_trays:
+                    continue
                 exchange = exchanges.attempt(exchange_id)
                 if exchange.status != "ACKED":
+                    if exchange.status == "OPERATOR_REVIEW":
+                        # Preserve this tray's exchange order without delaying
+                        # independent trays behind a reviewed replacement.
+                        reviewed_exchange_trays.add(master_label)
+                        continue
                     if exchange.error_code == "TRANSFER_HOLD_WAIT":
                         continue
                     break
@@ -21751,7 +21760,7 @@ class ContainerAudit:
                 self.show_status_message("교환은 저장되었습니다. 기록 전송을 다시 확인합니다.", self.COLOR_PRIMARY)
                 return False
             yield lambda: coordinator.store.mark_scan_exchange_projected(row["intent_id"])
-            self.show_status_message("제품을 교환했습니다. 계속 스캔하세요.", self.COLOR_SUCCESS)
+            self.show_status_message("제품 교환 저장됨·회사 서버 확인 중. 계속 스캔하세요.", self.COLOR_PRIMARY)
             return True
         return self._submit_scan_steps(steps(), on_idle=settled)
 

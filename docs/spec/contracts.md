@@ -1,5 +1,7 @@
 ﻿> 2026-10-01 w9scanonly 현재 계약: 7칸 QT=1–9999 즉시 시작, snapshot 구성원 수 우선, 로컬 intent/checkpoint/TRAY_COMPLETE → 표시 → 독립 배경 교환 ACK/lease/seal. 공통 payload는 scan_payload/local_completion_id/local_completed_at/deferred_reflection/short_confirmed/exchange_idempotency_keys다. short는 전체 topology 증거와 스캔 subset을 보내고 exact 잔량을 검증한다. UPSTREAM_COMPLETION_PENDING 409는 retry, COMPLETION_REVIEW_REQUIRED는 해당 intent review다. 유효 PHS2_LOCAL_ONLY도 같은 대기열로 보내며 옛 13자리 현품표는 기존 과도기 기록만 유지한다.
 
+제품 교환 전송의 OPERATOR_REVIEW는 같은 현품표의 뒤 교환만 대기시킨다. 다른 현품표의 교환·봉인은 같은 전송 주기에 계속하며, 봉인은 해당 트레이의 모든 교환 ACK를 요구한다. 검토 행·원 명령·키·관리자 처리 계약과 통신 재시도 순서는 유지한다. 로컬 교환 저장 안내는 「제품 교환 저장됨·회사 서버 확인 중」으로 표시한다.
+
 설치 진단의 알려진 환경 비밀 값은 구조 가림과 최종 JSON 직렬화 뒤에도 치환한다. 원문·대소문자 Unicode escape·일부 escape·중첩 JSON 문자열 표기는 같은 가림을 적용하며, 최종 값이 남으면 `REPORT_UNAVAILABLE`로 게시를 거절한다. JSON 구조·타입 메타데이터·UTF-8 64 KiB 상한은 유지한다.
 
 원격 전송은 fence probe 뒤 mutex 밖에서 수행한다. 결과의 로컬 저장은 admission을 다시 받고 기존 identity/version/CAS를 재확인한다. 스캔의 로컬 durable → 표시 → 같은 key의 배경 전송 순서는 유지한다. runtime lease는 HTTP 전 DB transaction을 닫고 적용 transaction에서 pending request와 row 소유를 다시 확인한다.
