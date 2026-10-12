@@ -19,6 +19,7 @@ from writer_session_fence import canonical_control_root, writer_sink
 _READONLY_ROLLBACK_TARGET = ContextVar('container_readonly_rollback_target', default=None)
 _READONLY_INSTALLER_SOURCE = ContextVar('container_readonly_installer_source', default=None)
 _READONLY_STARTUP_TARGET = ContextVar('container_readonly_startup_target', default=None)
+_SUPPORT_REMOVAL_RELEASE = ContextVar('container_support_removal_release', default=None)
 _PORTABLE_RELEASE_CACHE = {}
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,80 @@ def _readonly_installer_source(app_root, expected_inventory_sha256):
         verify_source()
     finally:
         _READONLY_INSTALLER_SOURCE.reset(scope)
+
+
+@contextmanager
+def _authenticated_support_removal_source(installed_app_root):
+    """Borrow installed proof only for an identical, record-free removal packet."""
+    source_app = Path(__file__).resolve().parent
+    source_root = source_app.parent
+    if (getattr(sys, "frozen", False) or source_app.name != "app"
+            or Path(installed_app_root).resolve() == source_app
+            or not (source_root / "portable-manifest.json").is_file()
+            or (source_root / "bootstrap-integrity.json").exists()):
+        yield
+        return
+
+    from current_user_onboarding import (
+        _assert_tree_has_no_reparse_points, _read_json, verify_bootstrap_integrity,
+    )
+    from logistics_runtime_profile import assert_path_has_no_reparse_components
+    from types import SimpleNamespace
+
+    probe_failed = False
+    try:
+        installed_app = assert_path_has_no_reparse_components(
+            Path(installed_app_root).absolute(), label="installed removal app",
+        ).resolve()
+        if installed_app.name != "app":
+            raise ValueError("support removal target is not a stock packet")
+        installed_root = installed_app.parent
+        _assert_tree_has_no_reparse_points(installed_root, "installed removal packet")
+        detail = verify_bootstrap_integrity(SimpleNamespace(
+            app_root=installed_root, bootstrap_integrity_path=installed_root / "bootstrap-integrity.json",
+        ), required=True, expected_entrypoint="app/Container_Audit.py")
+        if detail.get("status") != "PASS":
+            raise ValueError("installed removal code integrity is not proven")
+        # The existing source verifier binds all executing files, the manifest,
+        # and its version/build to the installed bootstrap's exact inventory.
+        with _readonly_installer_source(source_app, detail["aggregate_sha256"]):
+            release, _ = _READONLY_INSTALLER_SOURCE.get()
+            manifest = _read_json(source_root / "portable-manifest.json", "support removal manifest")
+            proof = manifest.get("data_generation_signed_manifest")
+            signature_hex = manifest.get("data_generation_signature_hex")
+            if proof is not None or signature_hex is not None:
+                if (not isinstance(proof, dict) or not isinstance(signature_hex, str)
+                        or not re.fullmatch(r"[0-9a-f]{128}", signature_hex)):
+                    raise ValueError("support removal signature is invalid")
+                key_path = source_app / "update-manifest-key-config.json"
+                if key_path.stat().st_size > 16 * 1024:
+                    raise ValueError("support removal key config is oversized")
+                key_config = _read_json(key_path, "support removal key config")
+                if (set(key_config) != {"schema", "manifest_public_key"}
+                        or key_config.get("schema") != "container-audit-update-key-config-v1"):
+                    raise ValueError("support removal key config is invalid")
+                verified_private_compatibility(
+                    proof, bytes.fromhex(signature_hex), key_config["manifest_public_key"],
+                    version=release["version"], build_id=release["build_id"],
+                )
+            # Proof work and the source scope's final inventory readback stay
+            # outside writer admission. Nothing is cached beyond this probe.
+            scope = _SUPPORT_REMOVAL_RELEASE.set(dict(release))
+            try:
+                try:
+                    yield
+                except BaseException:
+                    probe_failed = True
+                    raise
+            finally:
+                _SUPPORT_REMOVAL_RELEASE.reset(scope)
+    except DataGenerationBlocked:
+        raise
+    except Exception as exc:
+        if probe_failed:
+            raise
+        raise DataGenerationBlocked({"status": "UNKNOWN", "allowed": False,
+            "message_key": "data_generation_unknown", "message": generation.UNKNOWN_MESSAGE}) from exc
 
 
 class DataGenerationBlocked(RuntimeError):
@@ -196,6 +271,9 @@ def warm_runtime_release():
 
 def _runtime_release():
     """Bind to the running clean source commit or the verified installed packet."""
+    removal_release = _SUPPORT_REMOVAL_RELEASE.get()
+    if removal_release is not None:
+        return dict(removal_release)
     from tools.check_release_version import read_current_version
 
     if getattr(sys, "frozen", False):

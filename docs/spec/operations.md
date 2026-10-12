@@ -110,6 +110,8 @@ G-PAIR-DIFF에 따로 남기고, files 표 또는 stock zip에 들어오면 범�
 검증 버전·실제 subprocess 결과·제외와 한계는
 [G 직접 입구 교정](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-233/REPORT.md)에 기록한다.
 
+지원 packet에 설치용 bootstrap 기록이 없는 사용자 정리는 `--app-root` 설치 packet의 실제 bootstrap inventory와 실행 packet 전체 bytes가 같은 경우에만 진행한다. source에 bootstrap 기록을 만들지 않으며 자료 세대 marker를 쓰지 않는다. 판/build가 다른 지원 packet은 이 근거로 제거할 수 없다. TEST1 실제 되돌림 수용은 별도다.
+
 자료 세대 보호 helper `kmtech_shared/data_generation.py`와
 `kmtech_shared/powershell/data_generation.ps1`은 사용자 자료를 열었던 가장 새 판과
 서명 검증된 최소 호환 판을 기록한다. 기록 없음은 ALLOW, 손상·읽기 실패·판 비교

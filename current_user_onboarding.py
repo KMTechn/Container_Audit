@@ -2257,10 +2257,13 @@ def remove_current_user_setup(
 ) -> dict[str, Any]:
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
     status_dir: Path = paths.status_dir
-    from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths
+    from data_generation_guard import (
+        DataGenerationBlocked, _authenticated_support_removal_source, probe_before_owner_paths,
+    )
     try:
-        with writer_admission("current_user_setup_removal"):
-            probe_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values(), admission_source="current_user_setup_removal")
+        with _authenticated_support_removal_source(app_root):
+            with writer_admission("current_user_setup_removal"):
+                probe_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values(), admission_source="current_user_setup_removal")
     except DataGenerationBlocked as exc:
         raise CurrentUserOnboardingError(
             exc.user_message, report_path=paths.removal_report_path, status="FAILED",
