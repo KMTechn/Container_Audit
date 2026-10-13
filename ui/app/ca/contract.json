@@ -1,0 +1,1295 @@
+{
+ "contract": "km-app-contract/1",
+ "app": "ca",
+ "base": "Container_Audit firstupd-ca-cut-1013 4fb02daac2454be57a1e45dcc44d02cad8594a0b (v2.0.103) — 이음 바탕(w9firstupd 10/12 23:58), 기준일 조립(10/23–25)에 ACCEPT 고침 머리로 한 번 다시 얹음. 설계 = w9uiflow1014 apps-mock/CA-STATE.md, 같이 채우기 = w9firstupd UI-SHAPE-CA-COFILL-1016(서버 코드 이름 가칭 · 계약 목 10/15 · 그 전엔 work.cofill = null)",
+ "state": {
+  "type": "object",
+  "required": [
+   "app",
+   "version",
+   "last_request_seq",
+   "clock",
+   "view",
+   "worker",
+   "legacy",
+   "held_count",
+   "conn",
+   "queue",
+   "update",
+   "alerts",
+   "work",
+   "allow",
+   "admin_menu",
+   "sheet"
+  ],
+  "properties": {
+   "app": {
+    "const": "ca"
+   },
+   "version": {
+    "type": "string"
+   },
+   "last_request_seq": {
+    "type": "integer",
+    "minimum": 0
+   },
+   "clock": {
+    "type": "string"
+   },
+   "view": {
+    "type": "string",
+    "enum": [
+     "work",
+     "progress",
+     "held",
+     "f8",
+     "start"
+    ]
+   },
+   "worker": {
+    "type": [
+     "object",
+     "null"
+    ],
+    "required": [
+     "label"
+    ],
+    "properties": {
+     "label": {
+      "type": "string"
+     }
+    },
+    "additionalProperties": false
+   },
+   "legacy": {
+    "type": "boolean"
+   },
+   "held_count": {
+    "type": "integer",
+    "minimum": 0
+   },
+   "conn": {
+    "type": "object",
+    "required": [
+     "state"
+    ],
+    "properties": {
+     "state": {
+      "type": "string",
+      "enum": [
+       "ok",
+       "offline",
+       "late",
+       "review",
+       "first"
+      ]
+     },
+     "label": {
+      "type": "string"
+     }
+    },
+    "additionalProperties": false
+   },
+   "queue": {
+    "type": "object",
+    "required": [
+     "pending",
+     "failed"
+    ],
+    "properties": {
+     "pending": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "failed": {
+      "type": "integer",
+      "minimum": 0
+     }
+    },
+    "additionalProperties": false
+   },
+   "update": {
+    "type": [
+     "object",
+     "null"
+    ],
+    "required": [
+     "state",
+     "version"
+    ],
+    "properties": {
+     "state": {
+      "type": "string",
+      "enum": [
+       "ready"
+      ]
+     },
+     "version": {
+      "type": "string"
+     }
+    },
+    "additionalProperties": false
+   },
+   "alerts": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "kind",
+      "text"
+     ],
+     "properties": {
+      "kind": {
+       "type": "string",
+       "enum": [
+        "warn",
+        "bad",
+        "quiet",
+        "strong"
+       ]
+      },
+      "text": {
+       "type": "string"
+      },
+      "choices": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "required": [
+         "id",
+         "text",
+         "go"
+        ],
+        "properties": {
+         "id": {
+          "type": "string"
+         },
+         "text": {
+          "type": "string"
+         },
+         "go": {
+          "type": "string"
+         },
+         "default": {
+          "type": "boolean"
+         },
+         "danger": {
+          "type": "boolean"
+         }
+        },
+        "additionalProperties": false
+       },
+       "maxItems": 3
+      },
+      "tail": {
+       "type": "string"
+      }
+     },
+     "additionalProperties": false
+    },
+    "maxItems": 4
+   },
+   "work": {
+    "type": "object",
+    "required": [
+     "tag",
+     "item",
+     "target",
+     "count",
+     "remaining",
+     "left_kind",
+     "list_count",
+     "mode",
+     "checking",
+     "next",
+     "next_sub",
+     "result",
+     "list",
+     "cofill"
+    ],
+    "properties": {
+     "tag": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "item": {
+      "type": [
+       "object",
+       "null"
+      ],
+      "required": [
+       "name",
+       "spec",
+       "code"
+      ],
+      "properties": {
+       "name": {
+        "type": "string"
+       },
+       "spec": {
+        "type": "string"
+       },
+       "code": {
+        "type": "string"
+       }
+      },
+      "additionalProperties": false
+     },
+     "target": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "count": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "remaining": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "minimum": 0
+     },
+     "left_kind": {
+      "type": "string",
+      "enum": [
+       "none",
+       "target_pending",
+       "remaining",
+       "remaining_total",
+       "short",
+       "full",
+       "quota",
+       "closed_short"
+      ]
+     },
+     "list_count": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "mode": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "enum": [
+       null,
+       "swap1",
+       "swap2",
+       "done",
+       "short"
+      ]
+     },
+     "checking": {
+      "type": "boolean"
+     },
+     "next": {
+      "type": "string"
+     },
+     "next_sub": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "text"
+       ],
+       "properties": {
+        "text": {
+         "type": "string"
+        },
+        "on": {
+         "type": "boolean"
+        },
+        "off": {
+         "type": "boolean"
+        }
+       },
+       "additionalProperties": false
+      },
+      "maxItems": 6
+     },
+     "result": {
+      "type": "object",
+      "required": [
+       "kind",
+       "text"
+      ],
+      "properties": {
+       "kind": {
+        "type": "string",
+        "enum": [
+         "ok",
+         "bad",
+         "warn",
+         "idle"
+        ]
+       },
+       "text": {
+        "type": "string"
+       },
+       "sub": {
+        "type": "string"
+       },
+       "sound": {
+        "type": "string"
+       }
+      },
+      "additionalProperties": false
+     },
+     "list": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "no",
+        "code",
+        "at",
+        "st"
+       ],
+       "properties": {
+        "no": {
+         "type": "string"
+        },
+        "code": {
+         "type": "string"
+        },
+        "at": {
+         "type": "string"
+        },
+        "st": {
+         "type": "string",
+         "enum": [
+          "new",
+          "ok",
+          "swap",
+          "swapped",
+          "dup",
+          "held"
+         ]
+        },
+        "tag": {
+         "type": "string"
+        }
+       },
+       "additionalProperties": false
+      },
+      "maxItems": 200
+     },
+     "cofill": {
+      "type": [
+       "object",
+       "null"
+      ],
+      "required": [
+       "mode",
+       "participants",
+       "max_participants",
+       "total_good",
+       "mine_good",
+       "quota_left",
+       "total_age_s",
+       "pending_resend",
+       "closed_by",
+       "complete",
+       "overflow_products"
+      ],
+      "properties": {
+       "mode": {
+        "type": "string",
+        "enum": [
+         "solo",
+         "joined",
+         "offline_quota",
+         "quota_spent",
+         "closed"
+        ]
+       },
+       "participants": {
+        "type": "integer",
+        "minimum": 1
+       },
+       "max_participants": {
+        "type": "integer",
+        "minimum": 1
+       },
+       "total_good": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "mine_good": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "quota_left": {
+        "type": [
+         "integer",
+         "null"
+        ],
+        "minimum": 0
+       },
+       "total_age_s": {
+        "type": "number",
+        "minimum": 0
+       },
+       "pending_resend": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "closed_by": {
+        "type": [
+         "string",
+         "null"
+        ],
+        "enum": [
+         null,
+         "self",
+         "other",
+         "server_auto"
+        ]
+       },
+       "complete": {
+        "type": [
+         "boolean",
+         "null"
+        ]
+       },
+       "overflow_products": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        },
+        "maxItems": 200
+       }
+      },
+      "additionalProperties": false
+     }
+    },
+    "additionalProperties": false
+   },
+   "allow": {
+    "type": "object",
+    "required": [
+     "exchange",
+     "undo",
+     "submit",
+     "park",
+     "f8",
+     "refresh",
+     "reset"
+    ],
+    "properties": {
+     "exchange": {
+      "type": "boolean"
+     },
+     "undo": {
+      "type": "boolean"
+     },
+     "submit": {
+      "type": "boolean"
+     },
+     "park": {
+      "type": "boolean"
+     },
+     "f8": {
+      "type": "boolean"
+     },
+     "refresh": {
+      "type": "boolean"
+     },
+     "reset": {
+      "type": "boolean"
+     }
+    },
+    "additionalProperties": false
+   },
+   "admin_menu": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "name",
+      "enabled"
+     ],
+     "properties": {
+      "name": {
+       "type": "string",
+       "enum": [
+        "quarantine_hold",
+        "pair_hold",
+        "preserve_check",
+        "defer_unsettled",
+        "recheck_review",
+        "check_unsettled",
+        "view_handoff",
+        "list_paired",
+        "resend_completion",
+        "view_sync"
+       ]
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "facts": {
+       "type": "array",
+       "items": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        },
+        "maxItems": 2
+       },
+       "maxItems": 8
+      },
+      "result": {
+       "type": "object",
+       "required": [
+        "kind",
+        "text"
+       ],
+       "properties": {
+        "kind": {
+         "type": "string",
+         "enum": [
+          "ok",
+          "bad",
+          "warn",
+          "idle"
+         ]
+        },
+        "text": {
+         "type": "string"
+        },
+        "sub": {
+         "type": "string"
+        },
+        "sound": {
+         "type": "string"
+        }
+       },
+       "additionalProperties": false
+      },
+      "rows": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "required": [
+         "title",
+         "text",
+         "actions"
+        ],
+        "properties": {
+         "title": {
+          "type": "string"
+         },
+         "text": {
+          "type": "string"
+         },
+         "actions": {
+          "type": "array",
+          "items": {
+           "type": "object",
+           "required": [
+            "text",
+            "go"
+           ],
+           "properties": {
+            "text": {
+             "type": "string"
+            },
+            "go": {
+             "type": "string"
+            },
+            "quiet": {
+             "type": "boolean"
+            },
+            "danger": {
+             "type": "boolean"
+            }
+           },
+           "additionalProperties": false
+          },
+          "maxItems": 3
+         }
+        },
+        "additionalProperties": false
+       },
+       "maxItems": 20
+      },
+      "actions": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "required": [
+         "text",
+         "go"
+        ],
+        "properties": {
+         "text": {
+          "type": "string"
+         },
+         "go": {
+          "type": "string"
+         },
+         "quiet": {
+          "type": "boolean"
+         },
+         "danger": {
+          "type": "boolean"
+         }
+        },
+        "additionalProperties": false
+       },
+       "maxItems": 3
+      }
+     },
+     "additionalProperties": false
+    },
+    "maxItems": 12
+   },
+   "sheet": {
+    "type": [
+     "object",
+     "null"
+    ],
+    "required": [
+     "kind",
+     "title",
+     "actions"
+    ],
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "info",
+       "result",
+       "list"
+      ]
+     },
+     "tag": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     },
+     "lead": {
+      "type": [
+       "string",
+       "array"
+      ],
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 2
+     },
+     "facts": {
+      "type": "array",
+      "items": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "maxItems": 2
+      },
+      "maxItems": 8
+     },
+     "result": {
+      "type": "object",
+      "required": [
+       "kind",
+       "text"
+      ],
+      "properties": {
+       "kind": {
+        "type": "string",
+        "enum": [
+         "ok",
+         "bad",
+         "warn",
+         "idle"
+        ]
+       },
+       "text": {
+        "type": "string"
+       },
+       "sub": {
+        "type": "string"
+       },
+       "sound": {
+        "type": "string"
+       }
+      },
+      "additionalProperties": false
+     },
+     "actions": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "text",
+        "go"
+       ],
+       "properties": {
+        "text": {
+         "type": "string"
+        },
+        "go": {
+         "type": "string"
+        },
+        "quiet": {
+         "type": "boolean"
+        },
+        "danger": {
+         "type": "boolean"
+        }
+       },
+       "additionalProperties": false
+      },
+      "maxItems": 3
+     },
+     "modal": {
+      "type": "boolean"
+     },
+     "cancel": {
+      "type": "string"
+     }
+    },
+    "additionalProperties": false
+   },
+   "progress": {
+    "type": "object",
+    "required": [
+     "date",
+     "conn",
+     "at",
+     "rows"
+    ],
+    "properties": {
+     "date": {
+      "type": "string"
+     },
+     "conn": {
+      "type": "string",
+      "enum": [
+       "ok",
+       "off"
+      ]
+     },
+     "at": {
+      "type": "string"
+     },
+     "rows": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "item",
+        "plan",
+        "ready",
+        "left",
+        "trays_left"
+       ],
+       "properties": {
+        "item": {
+         "type": "string"
+        },
+        "plan": {
+         "type": "integer",
+         "minimum": 0
+        },
+        "ready": {
+         "type": "integer",
+         "minimum": 0
+        },
+        "left": {
+         "type": "integer",
+         "minimum": 0
+        },
+        "trays_left": {
+         "type": "integer",
+         "minimum": 0
+        },
+        "now": {
+         "type": "boolean"
+        }
+       },
+       "additionalProperties": false
+      },
+      "maxItems": 100
+     }
+    },
+    "additionalProperties": false
+   },
+   "park": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "id",
+      "item",
+      "tag",
+      "count",
+      "target",
+      "at"
+     ],
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "item": {
+       "type": "string"
+      },
+      "tag": {
+       "type": "string"
+      },
+      "count": {
+       "type": "integer",
+       "minimum": 0
+      },
+      "target": {
+       "type": "integer",
+       "minimum": 0
+      },
+      "at": {
+       "type": "string"
+      }
+     },
+     "additionalProperties": false
+    },
+    "maxItems": 50
+   },
+   "today": {
+    "type": "object",
+    "required": [
+     "total_trays",
+     "rows",
+     "supply"
+    ],
+    "properties": {
+     "total_trays": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "rows": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "item",
+        "trays"
+       ],
+       "properties": {
+        "item": {
+         "type": "string"
+        },
+        "trays": {
+         "type": "integer",
+         "minimum": 0
+        },
+        "products": {
+         "type": "integer",
+         "minimum": 0
+        }
+       },
+       "additionalProperties": false
+      },
+      "maxItems": 100
+     },
+     "supply": {
+      "type": "integer",
+      "minimum": 0
+     }
+    },
+    "additionalProperties": false
+   },
+   "stats": {
+    "type": "array",
+    "items": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "maxItems": 2
+    },
+    "maxItems": 6
+   },
+   "f8": {
+    "type": "object",
+    "required": [
+     "step",
+     "stop",
+     "next",
+     "sub",
+     "card"
+    ],
+    "properties": {
+     "step": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "stop": {
+      "type": "boolean"
+     },
+     "next": {
+      "type": "string"
+     },
+     "sub": {
+      "type": "string"
+     },
+     "card": {
+      "type": "string",
+      "enum": [
+       "how",
+       "plan",
+       "print"
+      ]
+     },
+     "target": {
+      "type": "object",
+      "required": [
+       "tag",
+       "item"
+      ],
+      "properties": {
+       "tag": {
+        "type": "string"
+       },
+       "item": {
+        "type": "string"
+       }
+      },
+      "additionalProperties": false
+     },
+     "plan": {
+      "type": "object",
+      "required": [
+       "from_qty",
+       "to_qty",
+       "labels",
+       "received_at"
+      ],
+      "properties": {
+       "from_qty": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "to_qty": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "labels": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "received_at": {
+        "type": "string"
+       }
+      },
+      "additionalProperties": false
+     },
+     "print_error": {
+      "type": "string"
+     }
+    },
+    "additionalProperties": false
+   },
+   "roster": {
+    "type": "object",
+    "required": [
+     "count",
+     "at",
+     "names"
+    ],
+    "properties": {
+     "count": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "at": {
+      "type": "string"
+     },
+     "note": {
+      "type": "string"
+     },
+     "names": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "id",
+        "label"
+       ],
+       "properties": {
+        "id": {
+         "type": "string"
+        },
+        "label": {
+         "type": "string"
+        },
+        "last": {
+         "type": "boolean"
+        }
+       },
+       "additionalProperties": false
+      },
+      "maxItems": 500
+     }
+    },
+    "additionalProperties": false
+   },
+   "register": {
+    "type": [
+     "object",
+     "null"
+    ],
+    "required": [
+     "name",
+     "cands"
+    ],
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "cands": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "id",
+        "label"
+       ],
+       "properties": {
+        "id": {
+         "type": "string"
+        },
+        "label": {
+         "type": "string"
+        }
+       },
+       "additionalProperties": false
+      },
+      "maxItems": 10
+     }
+    },
+    "additionalProperties": false
+   },
+   "start_error": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "last_seq": {
+    "type": "integer",
+    "minimum": 0
+   },
+   "profile": {
+    "type": "string"
+   },
+   "pedal": {
+    "type": "object"
+   },
+   "journal_uncertain": {
+    "type": "boolean"
+   },
+   "events_dropped": {
+    "type": "integer",
+    "minimum": 0
+   },
+   "recovery": {
+    "type": "boolean"
+   },
+   "owner_thread_id": {
+    "type": "integer"
+   },
+   "cache_sizes": {
+    "type": "object"
+   }
+  },
+  "additionalProperties": false
+ },
+ "calls": {
+  "state": {
+   "args": {},
+   "reply": "state",
+   "does": "present_ca(app) — 처리 층 값 한 덩어리 · 부작용 0 · Tk 0(CA-STATE §2)"
+  },
+  "scan": {
+   "args": {
+    "text": "string — 빈 Enter 는 \"\"",
+    "meta": "scan.js meta"
+   },
+   "reply": "{ok, accepted, seq, kind, verdict, sound, message} — 셸 BRIDGE-DESIGN §1, 화면은 state 다시 읽기로 그림",
+   "does": "intake_scan(raw) 문 하나(CA-STATE §3) — 화면 판정 0, 빈 Enter · 띠 선택 중 · 경고 중에도 그대로 보냄"
+  },
+  "command": {
+   "ack": {
+    "args": {},
+    "does": "Esc · 확인 단추 — 한 단계 안 화면(진행 현황 · 보류 · F8)이면 작업 화면으로, 작업 화면이면 막는 알림 확인(_acknowledge_active_notice CA:16508)"
+   },
+   "choose": {
+    "args": {
+     "id": "alerts[].choices[].id · sheet 단추 id"
+    },
+    "does": "띠 · 판 안 선택 — 처리 층 id 표 → 콜백(CA:14823 의 그 단추를 누른 것과 같음). 넘친 제품 「꺼냈습니다」 = id cofill_overflow_ack"
+   },
+   "exchange": {
+    "args": {},
+    "does": "제품 교환 시작 — show_exchange_dialog CA:21652 → 인라인 교환(창 없음)"
+   },
+   "undo": {
+    "args": {},
+    "does": "마지막 스캔 취소 · 교환 중이면 교환 취소 · 미달 60초 안이면 되돌림(CA:18723)"
+   },
+   "submit": {
+    "args": {},
+    "does": "트레이 제출 — submit_current_tray CA:15927 · 같이 채우기면 덜 찬 마감 요청"
+   },
+   "park": {
+    "args": {},
+    "does": "트레이 보류 — park_current_tray CA:20507"
+   },
+   "restore": {
+    "args": {
+     "id": "park[].id"
+    },
+    "does": "보류 이어 하기 — restore_parked_tray CA:20811"
+   },
+   "reset": {
+    "args": {
+     "id": "\"confirmed\" — 화면 확인 판에서만"
+    },
+    "does": "현재 작업 리셋 — reset_current_work CA:15860. 지금 코드엔 확인이 없어 화면이 한 번 확인(마우스)한 뒤 id=confirmed 로만 부르고, 처리 층은 아니면 거절"
+   },
+   "refresh_items": {
+    "args": {},
+    "does": "품목 목록 새로 고침 — _refresh_item_catalog CA:1608(결과는 work.result · alerts)"
+   },
+   "change_worker": {
+    "args": {},
+    "does": "작업자 변경 — change_worker CA:3793 → 띠 선택"
+   },
+   "open": {
+    "args": {
+     "id": "progress | held"
+    },
+    "does": "한 단계 안 화면 열기 — state.view 가 바뀜(진행 현황 = show_logistics_progress CA:5559)"
+   },
+   "close": {
+    "args": {},
+    "does": "작업 화면으로(진행 현황 · 보류 · F8 닫기)"
+   },
+   "f8": {
+    "args": {},
+    "does": "현품표 교체 F8 — _on_phs_label_exchange_shortcut CA:7239(처리 층이 지금 단계에 맞게 열기 · 인쇄)"
+   },
+   "f8_reprint": {
+    "args": {},
+    "does": "전에 뽑은 현품표 실물이 없음을 확인하고 다시 인쇄 — 재출력 승인(CA:12221 체크 · CA:8123 띠 선택 두 길을 하나로)"
+   },
+   "start_work": {
+    "args": {
+     "id": "roster.names[].id"
+    },
+    "does": "작업 시작 — 명단 콤보 → 인자"
+   },
+   "register_worker": {
+    "args": {
+     "name": "form 판 글 칸"
+    },
+    "does": "새 이름 등록 — _register_worker_name CA:3282(같은 이름이면 답 result 한 줄 · 고르기 화면에 후보)"
+   },
+   "check_unsettled": {
+    "args": {},
+    "does": "보낸 요청 결과 다시 확인 — _recheck_unsettled_current_work(PIN 없음)"
+   },
+   "resend_completion": {
+    "args": {},
+    "does": "끝낸 트레이 회사 서버에 다시 보내기 — _is_preflight_hold_supervisor 로그인 조건 그대로 · _retry_transfer_post_review 운영 메뉴 명령 · PIN 판 아님(w9firstupd 10/13 05:41)"
+   },
+   "confirm_master_label": {
+    "args": {},
+    "does": "원래 현품표 확인 — 함께 보류한 기록 줄 안 단추(CA:20690–20800)"
+   },
+   "close_app": {
+    "args": {},
+    "does": "창 닫기 — on_closing CA:16900(저장 중이면 미룸)"
+   }
+  },
+  "admin": {
+   "quarantine_hold": {
+    "args": {
+     "admin_id": "string",
+     "pin": "6자리 — 화면 · 처리 층 저장 0"
+    },
+    "reply": "{ok, result, sheet?, state?}",
+    "does": "보류 묶음 따로 두고 다른 작업 계속 — _quarantine_preflight_hold_from_operations"
+   },
+   "pair_hold": {
+    "args": {
+     "admin_id": "string",
+     "pin": "6자리 — 화면 · 처리 층 저장 0"
+    },
+    "reply": "{ok, result, sheet?, state?}",
+    "does": "두 기록 함께 보류하고 계속 — _defer_paired_preflight_from_operations"
+   },
+   "preserve_check": {
+    "args": {
+     "admin_id": "string",
+     "pin": "6자리 — 화면 · 처리 층 저장 0"
+    },
+    "reply": "{ok, result, sheet?, state?}",
+    "does": "현재 현품표 기록 다시 확인 · 다시 저장 — _recheck_paired_stale_current · _retry_paired_stale_current_preservation · _continue_after_paired_stale_current"
+   },
+   "defer_unsettled": {
+    "args": {
+     "admin_id": "string",
+     "pin": "6자리 — 화면 · 처리 층 저장 0"
+    },
+    "reply": "{ok, result, sheet?, state?}",
+    "does": "확정 안 된 묶음 보류하고 다른 작업 계속 — _defer_blocked_current_tray_for_supervisor"
+   },
+   "list_paired": {
+    "args": {
+     "admin_id": "string",
+     "pin": "6자리 — 화면 · 처리 층 저장 0"
+    },
+    "reply": "{ok, result, sheet?, state?}",
+    "does": "함께 보류한 기록 목록 — _show_paired_preflight_handoffs(_authorize_blocked_work_supervisor 먼저). 답 sheet = 목록, 줄 단추는 같은 승인 안에서"
+   },
+   "recheck_review": {
+    "args": {
+     "admin_id": "string",
+     "pin": "6자리 — 화면 · 처리 층 저장 0"
+    },
+    "reply": "{ok, result, sheet?, state?}",
+    "does": "관리자 확인 다시 조회 — _recheck_admin_pin_intents → _recheck_admin_pin_intent_steps(_authorize_blocked_work_supervisor). 답 sheet = 결과"
+   }
+  }
+ },
+ "push": {
+  "changed": "state() 다시 읽기 — push 로 상태를 짓지 않음(놓쳐도 state 가 정답)",
+  "scan_result": "{seq, result, sound} — 방금 결과 강조 · 소리 이름 표시만(소리는 처리 층이 냄)",
+  "admin_result": "{name, status} — admin_request 바뀜 → state 다시 읽기",
+  "cofill_total": "{total_good, participants, closed} → state 다시 읽기",
+  "cofill_closed": "{by, complete} → state 다시 읽기",
+  "cofill_rejected": "{code, products[]} → state 다시 읽기",
+  "cofill_quota": "{quota_left} → state 다시 읽기",
+  "cofill_resync": "{resent, duplicates} → state 다시 읽기",
+  "alert": "셸 · 처리 층 알림 → state 다시 읽기(띠는 state.alerts 가 정답)",
+  "conn": "회사 서버 연결 바뀜 → state 다시 읽기(바닥 줄은 state.conn)",
+  "update": "새 판 준비 바뀜 → state 다시 읽기(state.update)",
+  "focus_state": "셸 창 초점 — 화면 잠깐 상태(받이 띠 「창을 한 번 누르세요」), state 아님"
+ },
+ "errors": {
+  "PROGRAM_STARTING": "프로그램 준비 중입니다. 잠시 뒤 다시 스캔하세요.",
+  "COMPLETION_BUSY": "완료 처리 중입니다 — 끝난 뒤 다시 찍으세요",
+  "RECOVERY_GUARD": "화면을 다시 띄운 직후라 이 스캔은 받지 않았습니다 — 다시 찍으세요",
+  "SCAN_COMMAND_UNKNOWN": "모르는 명령 카드입니다",
+  "OPERATION_RESOURCE_ALREADY_LEASED": "이 현품표는 다른 이적 PC 가 작업 중입니다 — 한 현품표는 한 PC 에서",
+  "COFILL_CLOSED_OR_FULL": "이미 다 찼습니다 — 이 제품은 다음 현품표로",
+  "COFILL_PARTICIPANT_LIMIT": "이 현품표는 이미 {max}대가 채우는 중입니다 — 다른 현품표를 찍으세요",
+  "COFILL_QUOTA_SPENT": "회사 서버 확인 대기 — 다른 현품표 가능"
+ }
+}

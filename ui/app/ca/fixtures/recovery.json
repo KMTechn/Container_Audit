@@ -1,0 +1,275 @@
+{
+  "about": "이전 작업 남음 — 고르기",
+  "state": {
+    "app": "ca",
+    "version": "2.0.103",
+    "last_request_seq": 128,
+    "clock": "14:32",
+    "view": "work",
+    "worker": {
+      "label": "작업자 05"
+    },
+    "legacy": false,
+    "held_count": 2,
+    "conn": {
+      "state": "ok"
+    },
+    "queue": {
+      "pending": 0,
+      "failed": 0
+    },
+    "update": null,
+    "alerts": [
+      {
+        "kind": "warn",
+        "text": "이전 작업이 남아 있습니다 — 현품표 0412 · B-204 도어 트림 LHD · 17 / 40",
+        "choices": [
+          {
+            "id": "recovery_resume",
+            "text": "이어서 작업",
+            "go": "command:choose:recovery_resume",
+            "default": true
+          },
+          {
+            "id": "recovery_park_new",
+            "text": "보류하고 새 작업",
+            "go": "command:choose:recovery_park_new"
+          },
+          {
+            "id": "recovery_pick_worker",
+            "text": "작업자 고르기",
+            "go": "command:choose:recovery_pick_worker"
+          }
+        ],
+        "tail": "다음 스캔 = 이전 작업 보류하고 새 작업"
+      }
+    ],
+    "work": {
+      "tag": null,
+      "item": null,
+      "target": 0,
+      "count": 0,
+      "remaining": null,
+      "left_kind": "none",
+      "list_count": 0,
+      "mode": null,
+      "checking": false,
+      "next": "이전 작업을 어떻게 할지 고르세요",
+      "next_sub": [
+        {
+          "text": "이어서 하거나, 보류하고 새 현품표를 찍으세요"
+        }
+      ],
+      "result": {
+        "kind": "idle",
+        "text": "작업자 05 · 작업 시작",
+        "sub": "이 PC 에 남은 이전 작업 1건"
+      },
+      "list": [],
+      "cofill": null
+    },
+    "allow": {
+      "exchange": false,
+      "undo": false,
+      "submit": false,
+      "park": false,
+      "f8": true,
+      "refresh": true,
+      "reset": false
+    },
+    "admin_menu": [
+      {
+        "name": "quarantine_hold",
+        "enabled": true,
+        "facts": [
+          [
+            "대상",
+            "현품표 0418 · 보관한 제품 3개"
+          ],
+          [
+            "까닭",
+            "회사 서버 현품표 확인이 끝나지 않음 — 30초마다 다시 조회 중"
+          ],
+          [
+            "따로 둔 뒤",
+            "이 현품표는 관리자 확인 전까지 잠김"
+          ]
+        ]
+      },
+      {
+        "name": "pair_hold",
+        "enabled": true,
+        "facts": [
+          [
+            "기록 1",
+            "보류해 둔 기록 · 현품표 0377"
+          ],
+          [
+            "기록 2",
+            "지금 트레이 · 현품표 0418"
+          ],
+          [
+            "보류 뒤",
+            "두 현품표 모두 관리자 확인 전까지 잠김"
+          ]
+        ]
+      },
+      {
+        "name": "preserve_check",
+        "enabled": true,
+        "facts": [
+          [
+            "지금 작업 기록",
+            "있음"
+          ],
+          [
+            "따로 저장한 사본",
+            "있음"
+          ],
+          [
+            "저장 뒤 바뀜",
+            "예 — 둘 다 그대로 두어야 함"
+          ]
+        ]
+      },
+      {
+        "name": "defer_unsettled",
+        "enabled": true,
+        "facts": [
+          [
+            "현재 묶음",
+            "현품표 0418 · B-204 도어 트림 RHD · 스캔 28"
+          ],
+          [
+            "상태",
+            "회사 서버 확정 안 됨"
+          ],
+          [
+            "보류 뒤",
+            "같은 현품표는 관리자 확인 전까지 잠김"
+          ]
+        ]
+      },
+      {
+        "name": "recheck_review",
+        "enabled": true,
+        "facts": []
+      },
+      {
+        "name": "check_unsettled",
+        "enabled": true,
+        "facts": [
+          [
+            "묶음",
+            "현품표 0418 · 스캔 28"
+          ],
+          [
+            "보낸 요청",
+            "이적 확정 · 14:36"
+          ]
+        ],
+        "result": {
+          "kind": "warn",
+          "text": "회사 서버 결과 확인 대기",
+          "sub": "보낸 요청이 회사 서버에서 확정됐는지 아직 모릅니다 — 묶음은 확정 안 된 채로 남습니다"
+        },
+        "actions": [
+          {
+            "text": "인계 내용 보기",
+            "go": "open:view_handoff",
+            "quiet": true
+          },
+          {
+            "text": "확정 안 된 묶음 보류",
+            "go": "open:defer_unsettled"
+          }
+        ]
+      },
+      {
+        "name": "view_handoff",
+        "enabled": true,
+        "facts": [
+          [
+            "보류",
+            "확정 안 된 묶음 · 14:41 보류"
+          ],
+          [
+            "현재 트레이",
+            "현품표 0418"
+          ],
+          [
+            "작업자",
+            "작업자 05"
+          ],
+          [
+            "상태",
+            "확정 안 됨 · 스캔 28"
+          ],
+          [
+            "찍은 기록",
+            "이 PC 보류 폴더에 그대로 있음"
+          ]
+        ]
+      },
+      {
+        "name": "list_paired",
+        "enabled": true,
+        "facts": []
+      },
+      {
+        "name": "resend_completion",
+        "enabled": true,
+        "facts": [
+          [
+            "품목",
+            "B-204 도어 트림 · RHD"
+          ],
+          [
+            "수량",
+            "40개"
+          ],
+          [
+            "완료 작업자",
+            "작업자 05"
+          ]
+        ]
+      },
+      {
+        "name": "view_sync",
+        "enabled": true,
+        "facts": [
+          [
+            "회사 서버",
+            "연결됨"
+          ],
+          [
+            "보낼 것",
+            "0건"
+          ],
+          [
+            "못 보낸 것(10분 넘게)",
+            "0건"
+          ],
+          [
+            "관리자 확인",
+            "1건"
+          ],
+          [
+            "마지막 전송",
+            "14:31:52"
+          ],
+          [
+            "회사 서버 마지막 확인",
+            "14:31:53"
+          ]
+        ]
+      }
+    ],
+    "sheet": null
+  },
+  "screen": {
+    "focus": "on",
+    "open": null
+  },
+  "replies": {}
+}

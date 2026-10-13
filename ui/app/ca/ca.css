@@ -1,0 +1,173 @@
+/* 이적(CA) 화면 몫 — 주인 w9uiflow1014. 자리(.work--side-list · .area-*) · 띠 · 방금 결과 · 단추 · 판 · PIN 칸 = ../frame.css(틀 레인).
+   여기는 이적 몫만: 교환 중 표지 · 수 카드 · 큰 결과 표지 · 찍은 제품 목록 · 단추 두 무리 · 한 단계 안 화면 넷 · 같이 채우기 한 줄.
+   값은 var(--이름)만. 한도: 앱 몫 CSS gzip ≤ 6 KiB(불변식 8). */
+.ca-next__label--swap { display: flex; align-items: center; gap: 8px; color: var(--amber-text); font-weight: 600; }
+.ca-next--done .next__text { color: var(--pri-strong); }
+
+/* 수 카드 — 품목은 위에 붙이고, 큰 수 · 막대 · 남은 수는 한 덩이로 남은 자리 가운데 */
+.ca-count {
+  border-radius: var(--r-sheet);
+  background: var(--surface);
+  box-shadow: var(--elev-2), var(--edge-hi);
+  padding: 22px 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.ca-count__fig { display: grid; gap: 10px; margin: auto 0; }
+.ca-count__item { font-size: var(--s5); font-weight: 600; line-height: 1.3; }
+.ca-count__item span { color: var(--ink-2); font-weight: 400; }
+.ca-count__n {
+  font-family: var(--f-num);
+  font-size: clamp(80px, 19vh, 220px);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  color: var(--pri-strong);
+  margin: 4px 0 2px;
+}
+.ca-count__n span { font-size: .42em; font-weight: 600; color: var(--ink-3); letter-spacing: 0; margin-left: .08em; }
+.ca-bar { height: 10px; border-radius: 3px; background: var(--sunk); overflow: hidden; }
+.ca-bar i { display: block; height: 100%; width: 0; background: var(--pri-fill); }
+.ca-count__left { font-size: clamp(20px, 3.2vh, 32px); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.ca-count__left b { color: var(--ink); font-weight: 700; }
+.ca-count--done .ca-count__n { color: var(--pri); }
+.ca-count--short .ca-bar i { background: var(--amber); }
+.ca-count--none .ca-count__n { color: var(--ink-3); }
+.ca-count--stale .ca-count__n { color: var(--ink-3); }
+
+/* 같이 채우기 한 줄(서버 계약 전엔 처리 층이 cofill = null 로 보내 숨음) */
+.ca-cofill { display: inline-flex; align-self: flex-start; align-items: center; gap: 10px; padding: 8px 12px; border-radius: var(--r-ctl); background: var(--pri-soft); color: var(--pri-deep); font-size: clamp(17px, 2.6vh, 26px); font-weight: 600; }
+.ca-cofill b { font-weight: 700; }
+.ca-cofill__pcs { display: inline-flex; gap: 3px; }
+.ca-cofill__pcs i { width: .5em; height: .75em; border-radius: 2px; box-shadow: inset 0 0 0 1.5px var(--pri); }
+.ca-cofill__pcs i.is-in { background: var(--pri); }
+
+/* 방금 결과 — 공통 .result 를 이적 자리 크기로: 멀리서 초록 / 빨강이 보이게 큰 표지 하나 */
+.result.ca-result { padding: 24px 28px; border-radius: var(--r-sheet); gap: 20px; font-size: clamp(24px, 4.6vh, 48px); line-height: 1.25; }
+.result.ca-result > svg {
+  width: clamp(52px, 9vh, 88px);
+  height: clamp(52px, 9vh, 88px);
+  padding: clamp(12px, 2vh, 20px);
+  border-radius: var(--r-card);
+  background: var(--pri);
+  color: var(--on-pri);
+}
+.ca-result.result--bad > svg { background: var(--red); }
+.ca-result.result--warn > svg { background: var(--amber); color: var(--on-amber); }
+.ca-result.result--idle > svg { background: var(--tint-2); color: var(--ink-2); }
+.result.ca-result > div { min-width: 0; }
+.result.ca-result small { margin-top: 8px; line-height: 1.4; font-size: clamp(17px, 2.3vh, 24px); }
+.result.ca-result .result__sound { font-size: clamp(14px, 1.8vh, 19px); }
+
+/* 찍은 제품 목록 — 찍은 순서 그대로, 최신이 위. 넘치면 「그 앞 N건」(굴리지 않음) */
+.ca-list { display: flex; flex-direction: column; border-radius: var(--r-sheet); background: var(--surface); box-shadow: 0 0 0 1px var(--line); padding: 14px 0 10px; min-width: 0; }
+.ca-list__head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 0 18px 10px; font-size: var(--s4); font-weight: 600; }
+.ca-list__hint { font-size: var(--s2); color: var(--ink-2); font-weight: 400; }
+.ca-list__rows { list-style: none; margin: 0; padding: 0; flex: 1; min-height: 0; overflow: hidden; }
+.ca-row {
+  display: grid;
+  grid-template-columns: 3.4ch minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  height: clamp(38px, 5.2vh, 48px);
+  padding: 0 18px;
+  border-top: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.ca-row__no, .ca-row__at { color: var(--ink-2); font-size: var(--s3); }
+.ca-row__no { text-align: right; }
+.ca-row__code { font-size: var(--s4); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ca-row__tag { font-size: var(--s2); font-weight: 600; }
+.ca-row--new { background: var(--pri-soft); }
+.ca-row--new .ca-row__code { color: var(--pri-deep); }
+.ca-row--swap, .ca-row--swapped { background: var(--amber-soft); color: var(--amber-text); }
+.ca-row--swap .ca-row__code { text-decoration: line-through; }
+.ca-row--dup { background: var(--red-soft); color: var(--red-text); }
+.ca-row--held { background: var(--tint); }
+.ca-list__empty { padding: 16px 18px; border-top: 1px solid var(--line); color: var(--ink-2); font-size: var(--s3); }
+.ca-list__more { min-height: 1.6em; padding: 8px 18px 0; border-top: 1px solid var(--line); font-size: var(--s2); color: var(--ink-2); }
+
+/* 단추 두 무리: 왼쪽 = 덜 쓰는 것(리셋은 띄움), 오른쪽 = 늘 쓰는 넷 */
+.ca-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.ca-actions__quiet, .ca-actions__main { display: flex; align-items: center; gap: 10px; }
+.ca-actions__gap { width: 1px; height: 28px; margin: 0 12px; background: var(--line-2); }
+.ca-change { height: 30px; padding: 0 8px; font-size: var(--s2); }
+.ca-admin { width: 360px; max-height: calc(100vh - var(--hdr-h) - 16px); overflow: auto; }
+.ca-admin button { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+
+/* ── 한 단계 안 화면 — 작업 칸 자리에 들어오고 위 줄 · 바닥 줄은 그대로 ── */
+.ca-pane { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 14px; padding: 18px 24px 16px; }
+.ca-pane__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.ca-pane__title { margin: 0; font-size: clamp(22px, 3.4vh, 34px); font-weight: 700; }
+.ca-pane__sub { margin-top: 4px; font-size: var(--s4); color: var(--ink-2); }
+.ca-pane__sub--off { color: var(--amber-text); font-weight: 600; }
+.ca-pane__body { min-height: 0; overflow: auto; }
+.ca-pane__foot { font-size: var(--s3); color: var(--ink-2); }
+.ca-card { min-width: 0; border-radius: var(--r-sheet); background: var(--surface); box-shadow: 0 0 0 1px var(--line); padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
+.ca-card__title { margin: 0; font-size: var(--s4); font-weight: 700; }
+.ca-card__note { font-size: var(--s3); color: var(--ink-2); }
+
+.ca-table { width: 100%; border-collapse: collapse; border-radius: var(--r-sheet); background: var(--surface); box-shadow: 0 0 0 1px var(--line); overflow: hidden; font-variant-numeric: tabular-nums; }
+.ca-table th, .ca-table td { height: clamp(44px, 6.4vh, 64px); padding: 0 18px; border-top: 1px solid var(--line); text-align: left; font-size: clamp(15px, 2.1vh, 21px); }
+.ca-table th { height: 40px; border-top: 0; background: var(--sunk); color: var(--ink-2); font-size: var(--s3); font-weight: 600; }
+.ca-table .r { text-align: right; }
+.ca-table tr.is-now td { background: var(--pri-soft); font-weight: 600; }
+.ca-table tr.is-done td { color: var(--ink-2); }
+.ca-table__tag { margin-left: 10px; padding: 2px 6px; border-radius: 4px; background: var(--pri-deep); color: var(--on-pri); font-size: var(--s1); font-weight: 600; vertical-align: 2px; }
+.ca-table.is-stale tbody { opacity: .62; }
+.ca-table--tight { box-shadow: none; border-radius: 0; }
+.ca-table--tight th, .ca-table--tight td { height: 40px; padding: 0 10px; font-size: var(--s3); }
+
+.ca-held { display: grid; grid-template-columns: 1.25fr 1fr .85fr; gap: 16px; align-items: start; }
+.ca-park { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.ca-park li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; padding: 12px 14px; border-radius: var(--r-card); background: var(--sunk); }
+.ca-park__item { font-size: var(--s4); font-weight: 600; }
+.ca-park__meta { grid-column: 1; font-size: var(--s3); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.ca-park .act { grid-column: 2; grid-row: 1 / span 2; height: 44px; }
+.ca-today__supply { padding: 10px 12px; border-radius: var(--r-card); background: var(--amber-soft); color: var(--amber-text); font-size: var(--s3); font-weight: 600; }
+.ca-stats { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: var(--s4); }
+.ca-stats dt { color: var(--ink-2); }
+.ca-stats dd { margin: 0; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ca-tray { margin: 6px 0 0; display: grid; gap: 6px; }
+.ca-tray svg { display: block; width: 100%; height: auto; }
+.ca-tray .frame { fill: var(--surface); stroke: var(--dash); stroke-width: 1.5; }
+.ca-tray .slot { fill: var(--sunk); stroke: var(--line-2); }
+.ca-tray .slot--in { fill: color-mix(in srgb, var(--pri-fill) 35%, transparent); }
+.ca-tray figcaption { font-size: var(--s2); color: var(--ink-2); }
+
+.ca-f8 { display: grid; grid-template-columns: minmax(0, 1fr) clamp(340px, 36vw, 600px); grid-template-rows: auto auto; gap: 18px 24px; align-content: start; }
+.ca-f8__steps { grid-column: 1 / -1; list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.ca-f8__steps li { padding: 12px 14px; border-radius: var(--r-card); background: var(--sunk); color: var(--ink-2); font-size: var(--s4); font-weight: 600; }
+.ca-f8__steps li.is-done { background: var(--pri-soft); color: var(--pri-deep); }
+.ca-f8__steps li.is-now { background: var(--surface); color: var(--pri-deep); box-shadow: inset 0 0 0 2px var(--pri); }
+.ca-f8__steps li.is-stop { background: var(--amber-soft); color: var(--amber-text); box-shadow: inset 0 0 0 2px var(--amber); }
+.ca-f8__now { display: grid; gap: 8px; align-content: start; }
+.ca-f8__text { font-size: clamp(32px, 6.4vh, 68px); font-weight: 700; line-height: 1.15; }
+.ca-f8__card { align-self: start; }
+.ca-f8__card--print { background: var(--card-warn); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber) 40%, transparent); }
+.ca-f8__warn { color: var(--amber-text); }
+.ca-f8__para { font-size: var(--s4); line-height: 1.5; color: var(--ink-2); }
+.ca-f8__facts { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin: 0; font-size: var(--s4); }
+.ca-f8__facts dt { color: var(--ink-2); }
+.ca-f8__facts dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ca-f8__facts dd b { color: var(--pri-deep); }
+.ca-f8__card .act { align-self: flex-start; }
+
+.ca-start { grid-template-rows: none; grid-template-columns: minmax(0, 760px); justify-content: center; align-content: center; gap: 28px; }
+.ca-start__box { display: grid; gap: 14px; }
+.ca-start__title { margin: 0; font-size: clamp(32px, 6vh, 60px); font-weight: 700; }
+.ca-start__sub { font-size: var(--s4); color: var(--ink-2); }
+.ca-names { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
+.ca-name { position: relative; height: clamp(56px, 8vh, 76px); border: 0; border-radius: var(--r-card); background: var(--surface); box-shadow: 0 0 0 1px var(--line-2); color: var(--ink); font-size: clamp(17px, 2.4vh, 22px); font-weight: 600; }
+.ca-name:hover { background: var(--pri-soft); }
+.ca-name.is-last { box-shadow: inset 0 0 0 2px var(--pri); color: var(--pri-deep); }
+.ca-name small { position: absolute; top: 6px; right: 8px; font-size: var(--s1); font-weight: 600; color: var(--pri-deep); }
+.ca-start__more { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.ca-register { display: grid; gap: 8px; padding: 12px 14px; border-radius: var(--r-card); background: var(--amber-soft); }
+.ca-register__same { font-size: var(--s3); font-weight: 600; color: var(--amber-text); }
+.ca-register__cands { display: flex; flex-wrap: wrap; gap: 8px; }
+.ca-register__cands .act { height: 44px; }
+.ca-start__error { padding: 10px 12px; border-radius: var(--r-card); background: var(--red-soft); color: var(--red-text); font-size: var(--s3); font-weight: 600; }
