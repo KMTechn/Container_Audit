@@ -1338,8 +1338,6 @@ def _server_origin(value: Any) -> tuple[str, str, int] | None:
                 or parsed.query or parsed.fragment
                 or (port is not None and not 1 <= port <= 65535)):
             return None
-        if ":" not in host and not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", host):
-            return None
         return scheme, host, port if port is not None else (443 if scheme == "https" else 80)
     except ValueError:
         return None

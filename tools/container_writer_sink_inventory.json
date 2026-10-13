@@ -1512,17 +1512,17 @@
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 1953,
+      "line": 1951,
       "mutation_sites": [
         {
           "category": "registry",
-          "line": 1956,
+          "line": 1954,
           "operation": "winreg.CreateKeyEx",
           "writer_admission_sources": []
         },
         {
           "category": "registry",
-          "line": 1960,
+          "line": 1958,
           "operation": "winreg.SetValueEx",
           "writer_admission_sources": []
         }
@@ -1558,11 +1558,11 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 2346,
+      "line": 2344,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2369,
+          "line": 2367,
           "operation": "status_dir.mkdir",
           "writer_admission_sources": [
             "current_user_setup_removal"
@@ -9576,7 +9576,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "5b21293f41291132ba753c7df39e8884b2c2ac912d495e8246e3fe7466ea6e1e",
+  "inventory_sha256": "08475e45b5336ebd7d529d6b5847acdc34767d74b4ec082a6b56ea530bfe9f7c",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -22246,7 +22246,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.restore_current_user_lifecycle_after_replacement",
-      "line": 2430,
+      "line": 2428,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -22262,7 +22262,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.onboard_current_user",
-      "line": 2061,
+      "line": 2059,
       "marker_kind": "decorator",
       "source": "current_user_onboarding"
     },
@@ -22278,7 +22278,7 @@
       "direct_mutation_site_count": 2,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._record_completed_machine_install_id",
-      "line": 1953,
+      "line": 1951,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -22302,7 +22302,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.remove_current_user_setup",
-      "line": 2346,
+      "line": 2344,
       "marker_kind": "writer_admission",
       "source": "current_user_setup_removal"
     },

@@ -249,13 +249,14 @@ def test_installed_server_equal_keeps_ready_and_reused(installed_server_state, n
     assert _preserved_server_state(paths, marker_path) == before
 
 
-@pytest.mark.parametrize("changed", ["scheme", "host", "port"])
+@pytest.mark.parametrize("changed", ["scheme", "host", "unicode_host", "port"])
 def test_installed_server_change_blocks_ready_and_sends_nothing(installed_server_state, changed):
     paths, environment, marker_path, marker = installed_server_state
     parsed = urlsplit(marker["server_base_url"])
     marker["server_base_url"] = urlunsplit((
         "http" if changed == "scheme" else parsed.scheme,
         ("new." + parsed.netloc if changed == "host" else
+         "다른." + parsed.netloc if changed == "unicode_host" else
          parsed.netloc + ":444" if changed == "port" else parsed.netloc), "", "", ""))
     _write_json(marker_path, marker)
     before = _preserved_server_state(paths, marker_path)
