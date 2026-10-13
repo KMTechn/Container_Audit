@@ -832,7 +832,7 @@ def test_quoted_live_relay_post_removal_failure_converges_without_resurrection(t
     source_before = _tree(source)
     with _launch_relay(tmp_path, env) as child:
         result = _run(tmp_path, env, source, install)
-        _assert_canonical_public_failure(result, tmp_path, 'AFTER_REMOVAL_INJECTED_FAILURE', source)
+        _assert_canonical_public_failure(result, tmp_path, 'AFTER_REMOVAL_INJECTED_FAILURE')
         assert child.poll() is not None and not install.exists()
         assert json.loads((tmp_path/'registry.json').read_text())['exists'] is False
         audit = Path(result.fixture_audit['audit_path'])
@@ -883,7 +883,7 @@ def test_normal_uninstall_real_removal_and_forward_convergence(tmp_path, scenari
             # the independent stage evidence retains the first failure.
             if scenario == 'audit_unavailable':
                 assert record['status'] == 'PREIMAGE_SAVED'
-                _assert_canonical_public_failure(result, tmp_path, 'AUDIT_INJECTED_FAILURE', source)
+                _assert_canonical_public_failure(result, tmp_path, 'AUDIT_INJECTED_FAILURE')
             else:
                 assert record['status'] == 'FAILED_REMOVAL_INCOMPLETE'
                 assert record['failure_type'] and record['failure']
