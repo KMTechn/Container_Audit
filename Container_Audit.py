@@ -516,6 +516,8 @@ def container_startup_logistics_client():
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
 CURRENT_VERSION = "v2.0.103"
+CA_NEW_SCREEN_ARGUMENT = "--new-screen"
+CA_SCREEN_HOST = {"requested": False, "active": False, "run": None}
 SAFE_TRANSFER_PREFLIGHT_RETRY_CODES = frozenset(
     {"PHS_LABEL_REPLACEMENT_AMBIGUOUS"}
 )
@@ -22901,6 +22903,17 @@ def _run_application_main(arguments):
     if hosted_result is not None:
         return hosted_result
 
+    if CA_NEW_SCREEN_ARGUMENT in arguments and not CA_SCREEN_HOST["active"]:
+        CA_SCREEN_HOST["requested"] = True
+        from ca_screen_bridge import screen_runner
+        return screen_runner(sys.modules[__name__])(arguments)
+    return _run_gui_application(arguments)
+
+
+def _run_gui_application(arguments):
+    from auto_update import trial_context, publish_gui_ready, trial_stop_requested
+
+    application_code_root = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description="Container_Audit")
     parser.add_argument("--data-root", default=None)
     options, _ = parser.parse_known_args(arguments)
@@ -22956,7 +22969,7 @@ def _run_application_main(arguments):
     try:
         # The resident UI must let the relay and background writers acquire
         # admission between their own guarded mutations.
-        app.run()
+        CA_SCREEN_HOST["run"](app) if CA_SCREEN_HOST["active"] else app.run()
         return 0
     finally:
         if getattr(app, "_loop_cleanup_finished", True):

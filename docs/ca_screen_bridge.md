@@ -2,19 +2,21 @@
 
 - 바탕: `firstupd-ca-cut-1013` **4fb02da**(v2.0.103 — w9firstupd 10/12 23:58). 가지 `ca-newui-bridge-1013`(E: worktree, push 0). 기준일 조립(10/23–25)에 ACCEPT 고침 머리로 한 번 다시 얹음(주인 레인).
 - 화면 원천: 웹 저장소 `static/ui/app/ca/`(가지 web-newui-1014-flow) → `scripts/export_ui_parts.py --app ca` 로 `ui/`(MANIFEST.json · `--check` ok). 꼴 = `ui/app/ca/contract.json`(km-app-contract/1).
-- 셸: `shell/` = 셸 v3.8 고정판 19 파일(`shell/SHELL-READY-v3.8.json` SHA256 대조 — 고치지 않음, 고칠 것은 w9appshell1012 에 한 줄).
+- 셸: `shell/` = 셸 v3.12 고정판(`shell/SHELL-READY-v3.12.json` SHA256 대조 — 고치지 않음, 고칠 것은 w9appshell1012 에 한 줄).
 
-## 1. 처리 층 파일 바꿈 0
-`Container_Audit.py` 와 처리 모듈은 손대지 않았다. 새 파일: `ca_screen_bridge.py`(다리) · `ca_screen_main.py`(새 진입) · `tests/test_ca_screen_bridge.py` · `shell/` · `ui/` · 이 노트.
-지금 Tk 화면 진입(`Container_Audit.py main()`)은 그대로 돈다.
+## 1. 기존 시작 진입에 새 화면 플래그
+진입은 `Container_Audit.py --new-screen` 한 길이다. `main()`의 시작 확인 기록 → `startup_gate` → `dispatch_product_mode`를 거친 뒤 셸을 부르고, 기존 GUI 시작 부분을 옮긴 `_run_gui_application(arguments)`이 주인 스레드에서 앱을 만든다. 플래그가 없으면 같은 함수에서 기존 `app.run()`을 부른다. 처리 모듈과 시작 관문의 판단은 그대로다.
+이음 파일: `ca_screen_bridge.py`(다리) · `tests/test_ca_screen_bridge.py` · `tests/test_ca_new_screen_entry.py` · `shell/` · `ui/` · 이 노트. 별도 진입 `ca_screen_main.py`는 제거했다.
+업데이트 관문에 전달하는 인수에서 플래그를 빼지 않는다. 앱을 만들지 못하면 `fail_owner(CaStartupRefused(code))`로 셸 기다림을 끝내고 기존 종료 값을 돌려준다. 셸 창은 주인이 붙은 뒤 만들어지며 `owner_timeout`은 전달하지 않는다. 앱이 만들어지기 전 messagebox 안내와 시작 거절 함수는 원래 Tk·대화상자 이름으로 호출해 기존 안내를 숨기지 않는다. 주인이 끝나면 Tk·대화상자·거절 함수 이름과 새 화면 실행 상태를 되돌린다.
 
 ## 2. 불변식 1 의 손질 자리 — 파일 대신 다리가 이 인스턴스 · 모듈 이름 자리에서 바꿈
 | 자리 | 전(지금) | 후(새 화면) | 시험 |
 |---|---|---|---|
+| 시작 진입 | `Container_Audit.py`의 기존 시작 확인·업데이트·제품 모드·GUI 준비 | `Container_Audit.py --new-screen`이 같은 관문을 같은 순서로 거친 뒤 셸 주인에게 기존 GUI 시작을 넘김. 관문 종료 값은 그대로, 거절 때 셸 창 0 | `test_ca_new_screen_entry.py` |
 | 스캔 입력(입력 칸 위젯 읽기) | `process_barcode()` 가 `scan_entry.get()` | 다리가 같은 `scan_entry` 에 넣고 `process_barcode()` — 지금 시험 `public_scan` 과 같은 문이라 빈 Enter · 띠 선택 중 · 경고 중 · 현품표 확인 중 판정이 그대로. 빈 Enter(막는 알림 확인)는 `command('ack')` = 같은 문에 빈 글 | `test_scan_goes_through_the_existing_door…` · `test_ack_is_the_empty_enter_door…` |
 | Tk 모달 PIN | `_prompt_blocked_work_admin_pin` = Toplevel + wait_window | 인스턴스 메서드를 `admin(이름, {admin_id, pin})` 인수로 대신 — 그 동작에 한 번만, state · 답 · 기록에 값 0 | `test_admin_pin_replaces_the_modal_once…` · `test_shell_bridge…`(events.jsonl 에 admin 인수 없음) |
 | messagebox · simpledialog · filedialog | 창 | 모듈 이름 자리 = `ScreenDialogs`: show* → 띠(관리자 일 중엔 PIN 판 결과), ask* → `state.sheet`(`modal=true`, `cancel=choose:ask_no`, 예/아니오 단추) + Tk 변수 기다림(그동안 스캔은 미접수). askstring(원 현품표 확인)은 스캔으로 답 · `choose:ask_cancel` 은 `None`. 파일 고르기는 새 화면에 없음(그만두기 + 띠) | `test_question_becomes_a_sheet…` · `test_question_becomes_a_modal_sheet…` · `test_scan_question_modal_cancel…` |
-| Tk 뿌리 창 | `ContainerAudit()` 가 root 를 띄우고 최대화 | `owner_main` 이 `_HiddenTk`(띄우기 · 앞으로 가져오기 막음)로 지금 시작 점검 `_prepare_gui_startup()` 을 그대로 거침 | 창 시험은 시험 PC(호스트 창 0) |
+| Tk 뿌리 창 | `ContainerAudit()` 가 root 를 띄우고 최대화 | `owner_main_for`가 `_HiddenTk`(띄우기 · 앞으로 가져오기 막음)로 기존 `_run_gui_application(arguments)`을 부름. 준비·시험판 확인·실행 잠금 해제는 그 함수가 맡음 | `test_ca_new_screen_entry.py`, 창 시험은 시험 PC(호스트 창 0) |
 | 단추 · 운영 메뉴 | Tk 단추 · `_show_operations_menu` 팝업 | 숨긴 Tk 단추 `invoke()`(허용 규칙 · 제출 ↔ 다시 하기 바뀜 그대로), 단추 아닌 것(교환 · 리셋 · 품목 새로 고침 · 관리자 ▾)은 운영 메뉴를 **띄우지 않는 기록 메뉴**로 한 번 돌려 그 항목의 켜짐 · 명령 — 조건을 베끼지 않음 | `test_state_is_the_contract_shape…` · `test_reset_only_from_the_confirm_sheet` |
 | 띠 선택 | `_request_inline_choice` 안 Tk 단추 → 지역 `choose` | `command('choose', {id})` → 같은 차례(선택 지움 · 줄 없앰 · 확인 · 콜백 · 초점) | `test_band_choice_runs_the_same_callback…` |
 | 소리 | `play_sound`(native_audio) | 그대로 처리 층이 냄 + 마지막 소리 이름만 기록(화면 「소리: …」). 셸에는 `sound=None` 이라 겹쳐 내지 않음 | `test_shell_bridge…`(셸 소리 0) |
@@ -32,7 +34,7 @@
 - 작업자 고르기: 명단 이름만(받은 시각 · 지난번 표시는 다음), 새 이름 등록은 `_register_worker_name` 바로(같은 이름 후보 판은 다음).
 - 관리자 판 사실 줄(facts): `quarantine_hold` · `defer_unsettled` · `preserve_check` · `resend_completion` 은 연결됨. `pair_hold` 는 저장된 짝 원본을 다시 읽어 대상을 정하고, `recheck_review` 는 저장된 PIN 요청 목록, `list_paired` 는 인증 뒤 보류 원본 목록을 새로 읽으므로 동작 전 사실 줄은 `[]` 그대로. 동작이 직접 보여 주는 대상 · 결과는 유지.
 - 같이 채우기: 서버 계약(목 10/15 초안 · 수 10/14 고정 코드) 뒤 — 그 전엔 `work.cofill = null`.
-- 시작 판 고침 문(`_run_application_main` 의 startup_gate · GUI ready 알림)과 새 진입을 어느 쪽으로 둘지: 주인 레인.
+- 새 화면 진입은 `Container_Audit.py --new-screen`으로 고정했다. 바로 가기·설치·업데이트 스크립트는 그대로이며 새 화면을 켜는 방법은 기준일 조립 때 주인 레인이 정한다.
 - 「끝낸 트레이 회사 서버에 다시 보내기」: 로그인 조건 그대로 · PIN 판 아님 · PIN 으로 바꿈은 처리 층 고침이라 기준일 뒤(주인 레인 10/13 05:41). `_is_preflight_hold_supervisor()` 와 기록 메뉴가 켜진 때만 확인 판의 `command('resend_completion')` 으로 기존 `_retry_transfer_post_review` 를 부른다. `admin('resend_completion', …)` 은 거절한다.
 - 창 실물(pywebview · WebView2): 시험 PC 에서(셸 레인 키트 · 호스트 창 0).
 - 다시 내보낸 `ui/app/ca/contract.json` 의 sheet 에 `modal` · `cancel` 칸이 포함됨. 이음 시험은 현재 계약의 상태 꼴과 실제 값 · 취소 답을 함께 확인함. 틀의 물음 우선 표시 · PIN/기능 키/빈 Enter 차단 실물 확인은 주인 레인.

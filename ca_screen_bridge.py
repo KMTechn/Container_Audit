@@ -20,6 +20,8 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import os
+import sys
 import tkinter as tk
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -1023,44 +1025,139 @@ class CaProcessor:
 
 
 # ── 주인 스레드 진입(셸 host run_app(owner_main=…)) ────────────
-def owner_main(bridge: Any) -> None:
-    """Tk 를 이 스레드에서 만들고 · 돌리고 · 끝낸다. 지금 main() 의 시작 점검(_prepare_gui_startup)을 그대로 거친다."""
-    dialogs = ScreenDialogs()
-    ca.messagebox = dialogs  # type: ignore[assignment]
-    ca.simpledialog = dialogs  # type: ignore[assignment]
-    ca.filedialog = dialogs  # type: ignore[assignment]
-    original_tk = ca.tk.Tk
-    ca.tk.Tk = _HiddenTk  # type: ignore[misc]
-    try:
-        startup = ca._prepare_gui_startup()
-    finally:
-        ca.tk.Tk = original_tk  # type: ignore[misc]
-    if not isinstance(startup, tuple):
-        bridge.attach_owner(None)
-        bridge.request_exit()
-        return
-    app, instance_lease = startup
-    processor = CaProcessor(app, bridge=bridge, dialogs=dialogs)
-    processor.install()
-    bridge.attach_owner(processor)
+class CaStartupRefused(RuntimeError):
+    """기존 시작 처리가 앱을 만들지 않고 돌려준 종료 값."""
+
+    def __init__(self, code: Any) -> None:
+        super().__init__("Container Audit startup refused")
+        self.code = code
+
+
+def shell_data_dir() -> Path:
+    """셸 몫 자료 — 기존 새 화면의 사용자 로컬 앱 자료 위치."""
+    base = Path(os.environ.get("LOCALAPPDATA") or APP_DIR)
+    return base / "KMTech" / "ContainerAudit" / "screen"
+
+
+def screen_runner(module: Any) -> Callable[[List[str]], Any]:
+    def run(arguments: List[str]) -> Any:
+        shell_dir = str(APP_DIR / "shell")
+        if shell_dir not in sys.path:
+            sys.path.insert(0, shell_dir)
+        host = module.CA_SCREEN_HOST
+        original_host = dict(host)
+        host.pop("exit", None)
+        host.pop("error", None)
+        try:
+            from host import run_app
+
+            result = run_app("rw", shell_data_dir(), root=APP_DIR / "ui", page=PAGE,
+                             title="이적", owner_main=owner_main_for(module, arguments))
+            if "error" in host:
+                raise host["error"]
+            return host.get("exit", result)
+        except CaStartupRefused as refused:
+            return refused.code
+        finally:
+            host.clear()
+            host.update(original_host)
+            host["requested"] = False
+
+    return run
+
+
+def owner_main_for(module: Any, arguments: List[str]) -> Callable[[Any], Any]:
+    def owner_main(bridge: Any) -> Any:
+        global ca
+        original_module = ca
+        ca = module  # Container_Audit.py may have been launched as __main__.
+        host = module.CA_SCREEN_HOST
+        original_active, original_run = host["active"], host["run"]
+        original_names = [(name, getattr(module, name))
+                          for name in ("messagebox", "simpledialog", "filedialog")]
+        original_tk = module.tk.Tk
+        original_refusal = module._startup_refusal
+        started = False
+
+        def run(app: Any) -> None:
+            nonlocal started
+            started = True
+            run_on_owner(app, bridge)
+
+        def startup_refusal(*args: Any, **kwargs: Any) -> Any:
+            # A refused start has no app: keep its existing notice visible,
+            # including the messagebox fallback when reporting is unavailable.
+            module.tk.Tk = original_tk
+            for name, value in original_names:
+                setattr(module, name, value)
+            return original_refusal(*args, **kwargs)
+
+        dialogs = ScreenDialogs()
+        original_messagebox = dict(original_names)["messagebox"]
+        for name in ("showinfo", "showwarning", "showerror"):
+            original_notice = getattr(original_messagebox, name, None)
+            if not callable(original_notice):
+                continue
+            screen_notice = getattr(dialogs, name)
+
+            def notice(*args: Any, _original=original_notice, _screen=screen_notice, **kwargs: Any) -> Any:
+                if dialogs.processor is not None:
+                    return _screen(*args, **kwargs)
+                module.tk.Tk = original_tk
+                try:
+                    return _original(*args, **kwargs)
+                finally:
+                    module.tk.Tk = _HiddenTk
+
+            setattr(dialogs, name, notice)
+        host["active"], host["run"] = True, run
+        for name, _ in original_names:
+            setattr(module, name, dialogs)
+        module.tk.Tk = _HiddenTk
+        module._startup_refusal = startup_refusal
+        try:
+            code = module._run_gui_application(arguments)
+            host["exit"] = code  # run_app does not return the owner thread's value.
+            if not started:
+                bridge.fail_owner(CaStartupRefused(code))
+            return code
+        except BaseException as error:
+            host["error"] = error
+            if not started:
+                bridge.fail_owner(error)
+            return None  # The main thread raises the original error after run_app.
+        finally:
+            host["active"], host["run"] = original_active, original_run
+            module.tk.Tk = original_tk
+            module._startup_refusal = original_refusal
+            for name, value in original_names:
+                setattr(module, name, value)
+            ca = original_module
+
+    return owner_main
+
+
+def run_on_owner(app: Any, bridge: Any) -> None:
+    processor = CaProcessor(app, bridge=bridge, dialogs=ca.messagebox)
     root = app.root
 
     def pump() -> None:
         if bridge.pump():
             root.after(10, pump)
         else:
-            processor.shutdown()
-            try:
-                app.on_closing(_confirmed=True)
-            finally:
-                try:
-                    root.destroy()
-                except tk.TclError:
-                    pass
+            app.on_closing(_confirmed=True)
 
-    root.after(10, pump)
     try:
-        root.mainloop()
+        try:
+            processor.install()
+        except BaseException as error:
+            bridge.fail_owner(error)
+            raise
+        bridge.attach_owner(processor)
+        root.after(10, pump)
+        app.run()
     finally:
-        if instance_lease is not None:
-            instance_lease.release()
+        try:
+            processor.shutdown()
+        finally:
+            bridge.request_exit()
