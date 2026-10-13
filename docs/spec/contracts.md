@@ -12,7 +12,7 @@ Portable `_runtime_release()`는 전체 무결성 PASS와 version/build 결속 �
 
 Portable metadata의 `data_generation_signed_manifest`·`data_generation_signature_hex`는 설치본 `app/update-manifest-key-config.json`의 공개키로 기존 ES256 업데이트 서명을 검증한다. 선언의 앱·package·판·source_commit이 실행 코드와 맞고 하한이 실행 판 이하인 경우에만 명시 하한을 신뢰한다. 누락·변조·결속 불일치·키 부재는 `(실행 판, False)`이며 unsigned 숫자는 권한을 주지 않는다. 증명 검증도 기존 허가 밖 warmup과 프로세스 캐시에 포함한다. 같은 판·build의 기존 marker를 덮지 않으며 자료·신원·marker 스키마는 바꾸지 않는다.
 
-지원 source packet의 사용자 정리는 설치 bootstrap PASS와 실행 source 전체 inventory·판/build가 일치할 때만 설치 기록을 실행 코드의 증명으로 사용한다. 서명이 있으면 기존 ES256 검증도 통과해야 한다. 증명은 쓰기 허가 밖에서 계산·최종 대조하며 제거 probe 동안만 유지한다. 근거 부재·변조·다른 판/build는 UNKNOWN, 새 자료의 REFUSE와 원 fence 예외는 그대로다. 일반 시작·설치 packet 제거의 기존 무결성 경로는 유지한다.
+지원 source packet의 사용자 정리는 설치 bootstrap PASS와 실행 source 전체 inventory·판/build가 일치할 때만 설치 기록을 실행 코드의 증명으로 사용한다. 매일 업데이트의 고정 current는 먼저 검증하고, 관리 기록이 있으면 policy·active pointer·transition의 완전성·판 선택·단계별 SHA 결속 및 versions/<sha> bootstrap PASS·build·기존 신뢰 키 일치를 확인한 활성 판 inventory에 source를 묶는다. 초기 설치·지원 배치의 DEFERRED 기록에는 transition_id가 없으므로 포인터와 거래 ID 동등성을 요구하지 않는다. CONFIRMED/ROLLED_BACK은 기존 lifecycle처럼 candidate_sha/previous_sha와 활성 SHA를 대조한다. 기록은 probe 전후 다시 대조한다. 서명이 있으면 기존 ES256 검증도 통과해야 한다. 증명은 쓰기 허가 밖에서 계산·최종 대조하며 제거 probe 동안만 유지한다. 근거 부재·변조·다른 판/build는 UNKNOWN, 새 자료의 REFUSE와 원 fence 예외는 그대로다. 다시 설치하기 전 사용자 정리는 이미 검증된 활성 host로 실행하고, 후보 배치 뒤 정리는 후보와 활성 설치 기록을 대조한다. 일반 시작·설치 packet 제거의 기존 무결성 경로는 유지한다.
 
 증명 계산의 암호 API 오류도 같은 fallback과 고정 한 줄 진단을 사용한다. 설치기 onboarding의 실제 첫 owner marker 기록까지 검증은 writer 깊이 0에서 한 번 수행한다. 코드 무결성·실행 신원 실패의 기존 차단 규칙은 유지한다.
 

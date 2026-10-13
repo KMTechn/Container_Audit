@@ -1619,19 +1619,19 @@
       ],
       "file": "data_generation_guard.py",
       "kind": "function",
-      "line": 272,
+      "line": 313,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 294,
+          "line": 335,
           "operation": "subprocess.check_output",
           "writer_admission_sources": []
         },
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 297,
+          "line": 338,
           "operation": "subprocess.check_output",
           "writer_admission_sources": []
         }
@@ -22339,7 +22339,7 @@
       "direct_mutation_site_count": 0,
       "file": "data_generation_guard.py",
       "function": "data_generation_guard.record_before_data_open",
-      "line": 381,
+      "line": 422,
       "marker_kind": "decorator",
       "source": "data_generation_marker"
     },

@@ -96,13 +96,15 @@ def _readonly_installer_source(app_root, expected_inventory_sha256):
 
 @contextmanager
 def _authenticated_support_removal_source(installed_app_root):
-    """Borrow installed proof only for an identical, record-free removal packet."""
+    """Bind a record-free removal packet to the verified active installed release."""
     source_app = Path(__file__).resolve().parent
     source_root = source_app.parent
     if (getattr(sys, "frozen", False) or source_app.name != "app"
             or Path(installed_app_root).resolve() == source_app
             or not (source_root / "portable-manifest.json").is_file()
             or (source_root / "bootstrap-integrity.json").exists()):
+        # Installed hosts also hash their cold inventory before writer admission.
+        warm_runtime_release()
         yield
         return
 
@@ -126,8 +128,43 @@ def _authenticated_support_removal_source(installed_app_root):
         ), required=True, expected_entrypoint="app/Container_Audit.py")
         if detail.get("status") != "PASS":
             raise ValueError("installed removal code integrity is not proven")
+        records, snapshot = [], None
+        if installed_root.name == "current":
+            from auto_update import SCHEMA, read_json, version_bundle
+
+            control = installed_root.parent / "update-control"
+            assert_path_has_no_reparse_components(control, label="removal update control")
+            records = [control / name for name in ("policy.json", "active.json", "transition.json")]
+            present = [path.exists() for path in records]
+            if any(present):
+                if not all(present):
+                    raise ValueError("removal update control is incomplete")
+                snapshot = [read_json(path) for path in records]
+                policy, pointer, state = snapshot
+                phase, active_sha = state.get("phase"), pointer.get("sha")
+                # Installation/placement DEFERRED records carry no transition ID.
+                # Match lifecycle resolution's phase-specific SHA relationships.
+                if (policy.get("schema") != "container-audit-startup-update-policy-v1"
+                        or pointer.get("schema") != SCHEMA or state.get("schema") != SCHEMA
+                        or phase not in {"CONFIRMED", "DEFERRED", "ROLLED_BACK"}
+                        or (phase == "CONFIRMED" and state.get("candidate_sha") != active_sha)
+                        or (phase == "ROLLED_BACK" and state.get("previous_sha") != active_sha)):
+                    raise ValueError("removal active release selection differs")
+                active_root = version_bundle(control, active_sha)
+                _assert_tree_has_no_reparse_points(active_root, "active removal packet")
+                detail = verify_bootstrap_integrity(SimpleNamespace(
+                    app_root=active_root, bootstrap_integrity_path=active_root / "bootstrap-integrity.json",
+                ), required=True, expected_entrypoint="app/Container_Audit.py")
+                if (detail.get("status") != "PASS"
+                        or read_json(active_root / "portable-manifest.json").get("source_commit") != active_sha):
+                    raise ValueError("removal active code integrity is not proven")
+                keys = [root / "app/update-manifest-key-config.json" for root in (installed_root, active_root)]
+                if any(path.stat().st_size > 16 * 1024 for path in keys) or keys[0].read_bytes() != keys[1].read_bytes():
+                    raise ValueError("removal active trust key differs")
+            else:
+                records = []
         # The existing source verifier binds all executing files, the manifest,
-        # and its version/build to the installed bootstrap's exact inventory.
+        # and its version/build to the selected bootstrap's exact inventory.
         with _readonly_installer_source(source_app, detail["aggregate_sha256"]):
             release, _ = _READONLY_INSTALLER_SOURCE.get()
             manifest = _read_json(source_root / "portable-manifest.json", "support removal manifest")
@@ -148,6 +185,8 @@ def _authenticated_support_removal_source(installed_app_root):
                     proof, bytes.fromhex(signature_hex), key_config["manifest_public_key"],
                     version=release["version"], build_id=release["build_id"],
                 )
+            if records and [read_json(path) for path in records] != snapshot:
+                raise ValueError("removal active selection changed during verification")
             # Proof work and the source scope's final inventory readback stay
             # outside writer admission. Nothing is cached beyond this probe.
             scope = _SUPPORT_REMOVAL_RELEASE.set(dict(release))
@@ -159,6 +198,8 @@ def _authenticated_support_removal_source(installed_app_root):
                     raise
             finally:
                 _SUPPORT_REMOVAL_RELEASE.reset(scope)
+        if records and [read_json(path) for path in records] != snapshot:
+            raise ValueError("removal active selection changed during probe")
     except DataGenerationBlocked:
         raise
     except Exception as exc:
