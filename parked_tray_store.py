@@ -693,19 +693,31 @@ class ParkedTrayStore:
         *,
         worker_name: str,
         master_label: str,
+        expected_state: Mapping[str, Any] | None = None,
     ) -> Path:
         self.directory.mkdir(parents=True, exist_ok=True)
         existing_path = self.existing_label_path(worker_name=worker_name, master_label=master_label)
         if existing_path is not None:
-            raise FileExistsError(f"parked tray already exists for master label: {existing_path}")
-        label_path = self.deterministic_label_path(worker_name=worker_name, master_label=master_label)
-        if label_path is not None:
-            path = label_path
+            current = self.load(existing_path)
+            unchanged = lambda value: {key: child for key, child in value.items() if key != "operation_lease_hold"}
+            if (expected_state is None or current != expected_state
+                or self.manager_hold_path(existing_path).exists()
+                or not read_recovery_file(existing_path, "parked").verified
+                or unchanged(current) != unchanged(state)
+                or state.get("operation_lease_hold", {}).get("error_code") != "OPERATION_RESOURCE_ALREADY_LEASED"):
+                raise FileExistsError(f"parked tray already exists for master label: {existing_path}")
+            path = existing_path
         else:
-            label_part = _bounded_name_part(sanitize_filename(master_label), _LABEL_NAME_PART)
-            path = self.directory / (
-                f"parked_legacy_{_worker_name_part(worker_name)}_{label_part}_{uuid.uuid4().hex[:8]}.json"
-            )
+            if expected_state is not None:
+                raise FileNotFoundError("parked tray changed before lease refusal")
+            label_path = self.deterministic_label_path(worker_name=worker_name, master_label=master_label)
+            if label_path is not None:
+                path = label_path
+            else:
+                label_part = _bounded_name_part(sanitize_filename(master_label), _LABEL_NAME_PART)
+                path = self.directory / (
+                    f"parked_legacy_{_worker_name_part(worker_name)}_{label_part}_{uuid.uuid4().hex[:8]}.json"
+                )
         payload = dict(state)
         payload["worker_name"] = persistent_operator_name(
             payload.get("worker_name") or worker_name

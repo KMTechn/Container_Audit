@@ -60,6 +60,39 @@ PARKED_RESTORE_EVENT_TYPES = frozenset(
 )
 
 
+def _validated_operation_lease_hold(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TrayStateValidationError("operation_lease_hold must be an object")
+    if not value:
+        return {}
+    if set(value) != {"error_code", "items", "next_index"} or value["error_code"] not in (
+        "", "OPERATION_RESOURCE_ALREADY_LEASED"
+    ):
+        raise TrayStateValidationError("operation_lease_hold has an unsupported refusal")
+    items = value["items"]
+    index = value["next_index"]
+    if not isinstance(items, list) or not isinstance(index, int) or isinstance(index, bool) or not 0 <= index <= len(items):
+        raise TrayStateValidationError("operation_lease_hold replay cursor is invalid")
+    for item in items:
+        if not isinstance(item, Mapping) or set(item) not in (
+            {"scan_id", "raw_barcode", "received_at"}, {"scan_id", "raw_barcode", "received_at", "audit_event"}
+        ):
+            raise TrayStateValidationError("operation_lease_hold scan is invalid")
+        if any(not isinstance(item[key], str) or not item[key].strip() for key in ("scan_id", "raw_barcode", "received_at")):
+            raise TrayStateValidationError("operation_lease_hold scan fields must be text")
+        if "audit_event" in item:
+            validate_checkpoint_audit_events([item["audit_event"]])
+        if len(item["scan_id"]) != 32 or any(c not in "0123456789abcdef" for c in item["scan_id"]):
+            raise TrayStateValidationError("operation_lease_hold scan receipt is invalid")
+        try:
+            datetime.datetime.fromisoformat(item["received_at"])
+        except ValueError as exc:
+            raise TrayStateValidationError("operation_lease_hold scan time is invalid") from exc
+    if len({item["scan_id"] for item in items}) != len(items):
+        raise TrayStateValidationError("operation_lease_hold scan receipts must be unique")
+    return {**value, "items": [dict(item) for item in items]}
+
+
 def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
     master_label = str(tray.master_label_code or "")
     canonical_input_tag_qr = str(
@@ -107,6 +140,8 @@ def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
             state[key] = list(getattr(tray, key))
     if getattr(tray, "scan_completion_context", None):
         state["scan_completion_context"] = dict(tray.scan_completion_context)
+    if getattr(tray, "operation_lease_hold", None):
+        state["operation_lease_hold"] = _validated_operation_lease_hold(tray.operation_lease_hold)
     if transition_reasons:
         state["transition_reasons"] = transition_reasons
     transition_class = str(getattr(tray, "transition_class", "") or "")
@@ -772,6 +807,7 @@ def validate_tray_state(
             raise TrayStateValidationError(f"{key} must contain unique non-empty strings")
     if not isinstance(state.get("scan_completion_context", {}), Mapping):
         raise TrayStateValidationError("scan_completion_context must be an object")
+    _validated_operation_lease_hold(state.get("operation_lease_hold", {}))
 
     tray_size = state.get("tray_size", default_tray_size)
     if not isinstance(tray_size, int) or isinstance(tray_size, bool) or tray_size <= 0:
@@ -978,6 +1014,7 @@ def tray_session_from_state(
         ),
         active_label_worker_code=state.get("active_label_worker_code", ""),
         operation_lease_id=state.get("operation_lease_id", ""),
+        operation_lease_hold=_validated_operation_lease_hold(state.get("operation_lease_hold", {})),
         item_code=state["item_code"],
         item_name=state["item_name"],
         item_spec=state["item_spec"],

@@ -1019,6 +1019,7 @@ class TraySession:
     active_label_business_date: str = ""
     active_label_worker_code: str = ""
     operation_lease_id: str = ""
+    operation_lease_hold: Dict[str, Any] = field(default_factory=dict)
     known_member_barcodes: List[str] = field(default_factory=list)
     exchange_idempotency_keys: List[str] = field(default_factory=list)
     scan_completion_context: Dict[str, Any] = field(default_factory=dict)
@@ -12577,8 +12578,55 @@ class ContainerAudit:
         except (tk.TclError, AttributeError, TypeError, ValueError):
             return
 
+    def _operation_lease_hold_blocks_scan(self) -> bool:
+        hold = getattr(self.current_tray, "operation_lease_hold", {})
+        return bool(hold.get("error_code") or hold.get("next_index", 0) < len(hold.get("items", [])))
+
+    def _show_operation_lease_hold_notice(self) -> None:
+        self.show_status_message(tray_completion.LEASE_REFUSAL_GUIDANCE, self.COLOR_DANGER, duration=0)
+        self._update_current_item_label()
+
+    def _resume_operation_lease_held_scans(self) -> None:
+        tray = self.current_tray
+        hold = tray.operation_lease_hold
+        if not hold or hold.get("error_code") or not self._operation_lease_hold_blocks_scan():
+            return
+        if self._ui_task_lane().is_busy():
+            self.root.after(10, self._resume_operation_lease_held_scans)
+            return
+        def steps():
+            while self.current_tray is tray and hold["next_index"] < len(hold["items"]):
+                item = hold["items"][hold["next_index"]]
+                # A checkpoint may have landed before its replay cursor. The
+                # barcode receipt prevents counting/logging that scan twice.
+                if self._preflight_scan_receipts().get(item["raw_barcode"]) != item["scan_id"]:
+                    result = yield from self._process_barcode_steps(item["raw_barcode"],
+                        _durable_scan_log=True, _durable_scan_id=item["scan_id"], _lease_hold_replay=True)
+                    if result is False:
+                        return False
+                elif item.get("audit_event"):
+                    if not (yield lambda: self._project_stored_audit_event(item["audit_event"],
+                            stored_worker_record=item["audit_event"].get("worker_record", {}))):
+                        return False
+                hold["next_index"] += 1
+                if not (yield self._current_tray_save_operation()):
+                    hold["next_index"] -= 1
+                    return False
+            self._preflight_completion_due = False
+            self._update_current_item_label()
+            self._update_center_display()
+            if self.current_tray is tray and len(tray.scanned_barcodes) >= tray.tray_size:
+                self.root.after(0, self.request_complete_tray)
+            return True
+        def idle():
+            if self.current_tray is tray and self._operation_lease_hold_blocks_scan() and not hold.get("error_code"):
+                self.root.after(100, self._resume_operation_lease_held_scans)
+        self._submit_scan_steps(steps(), on_idle=idle, task_name="lease-held-scan-replay")
+
     def _active_tray_scan_instruction(self) -> str:
         tray = self.current_tray
+        if self._operation_lease_hold_blocks_scan():
+            return tray_completion.LEASE_REFUSAL_GUIDANCE
         count = len(tray.scanned_barcodes)
         if int(tray.tray_size or 0) > 0 and count >= int(tray.tray_size):
             if getattr(self, "_completion_lane_busy", False):
@@ -12619,6 +12667,10 @@ class ContainerAudit:
                 else 0
             )
             if getattr(self, "_preflight_offline_error_code", ""):
+                if self._preflight_offline_error_code == "OPERATION_RESOURCE_ALREADY_LEASED":
+                    self.current_item_label['text'] = tray_completion.LEASE_REFUSAL_GUIDANCE
+                    self.current_item_label['foreground'] = self.COLOR_DANGER
+                    return
                 self.current_item_label['text'] = (
                     f"서버 연결 끊김 · 저장 {held_count}개 · 대기 {len(self._offline_waiting_preflight_holds())}개"
                 )
@@ -12636,6 +12688,11 @@ class ContainerAudit:
             self.current_item_label['text'] = (
                 f"회사 서버 조회 실패 · 보류 {len(snapshot.items)}건 (삭제되지 않음)"
             )
+            self.current_item_label['foreground'] = self.COLOR_DANGER
+            return
+
+        if self._operation_lease_hold_blocks_scan():
+            self.current_item_label['text'] = tray_completion.LEASE_REFUSAL_GUIDANCE
             self.current_item_label['foreground'] = self.COLOR_DANGER
             return
 
@@ -13272,13 +13329,14 @@ class ContainerAudit:
                 and isinstance(result[4], PreflightHoldSnapshot)
                 and (
                     failure.code == "PHS2_PREFLIGHT_UNAVAILABLE"
+                    or failure.code == "OPERATION_RESOURCE_ALREADY_LEASED"
                     or 500 <= failure.status_code <= 599
                 )
             )
             already_offline = bool(
                 getattr(self, "_preflight_offline_error_code", "")
             )
-            if getattr(self, "legacy_label_transition", False):
+            if getattr(self, "legacy_label_transition", False) and failure.code != "OPERATION_RESOURCE_ALREADY_LEASED":
                 if (
                     failure.code == "OPERATION_LEASE_NOT_YET_VALID" or offline
                 ) and getattr(self, "_transition_preflight_requeried", "") != barcode:
@@ -13473,6 +13531,8 @@ class ContainerAudit:
     ) -> tuple[str, str]:
         if error_code == RESIDUAL_TAG_NOT_ALLOWED:
             return "잔량표 이적 거절", RESIDUAL_TAG_REJECTION
+        if error_code == "OPERATION_RESOURCE_ALREADY_LEASED":
+            return "다른 이적 PC 작업 중", tray_completion.LEASE_REFUSAL_GUIDANCE
         retry = (
             "확인을 누르면 보관한 같은 현품표로 자동 재조회합니다. "
             "현품표를 다시 스캔하지 마세요. 다른 작업이 급하면 "
@@ -13502,6 +13562,9 @@ class ContainerAudit:
 
     def _show_preflight_offline_notice(self) -> None:
         snapshot = getattr(self, "_preflight_hold_snapshot", None)
+        if getattr(snapshot, "error_code", "") == "OPERATION_RESOURCE_ALREADY_LEASED":
+            self._show_operation_lease_hold_notice()
+            return
         held_count = (
             len(snapshot.items) if isinstance(snapshot, PreflightHoldSnapshot) else 0
         )
@@ -13534,9 +13597,10 @@ class ContainerAudit:
             self._preflight_hold_snapshot = snapshot
             self._update_current_item_label()
             self._show_preflight_offline_notice()
-            self._schedule_offline_preflight_retry(
-                token, barcode, canonical_fields, matched_item
-            )
+            if error_code != "OPERATION_RESOURCE_ALREADY_LEASED":
+                self._schedule_offline_preflight_retry(
+                    token, barcode, canonical_fields, matched_item
+                )
             self._schedule_focus_return()
 
         # Serialized behind appends that arrived during the failed lookup.
@@ -14065,6 +14129,17 @@ class ContainerAudit:
             and is_start_item_code(raw, item_code_length=self.ITEM_CODE_LENGTH)
         ):
             snapshot = getattr(self, "_preflight_hold_snapshot", None)
+            if (self._is_offline_preflight_hold(snapshot)
+                and snapshot.error_code == "OPERATION_RESOURCE_ALREADY_LEASED"
+                and self._owns_worker_record(snapshot.to_payload())
+                and canonical_master_label_key(raw) == canonical_master_label_key(snapshot.master_raw)
+                and not self._ui_task_lane().is_busy() and not getattr(self, "_master_preflight_poll_job", None)):
+                if clear_entry_after_ack:
+                    self._clear_consumed_scan_entry(raw)
+                fields = validate_compact_phs2_fields(self._parse_new_format_qr(snapshot.master_raw))
+                self._retry_offline_preflight(self._master_preflight_epoch, snapshot.master_raw,
+                    fields, self._item_catalog().find_by_code(fields["CLC"]))
+                return True
             if (self._is_offline_preflight_hold(snapshot)
                     and self._owns_worker_record(snapshot.to_payload())
                     and not getattr(self.current_tray, "master_label_code", "")
@@ -14980,6 +15055,11 @@ class ContainerAudit:
         if same_label:
             self._inline_exchange_target = ""
             self._inline_exchange_mode = ""
+            if self._operation_lease_hold_blocks_scan():
+                fields = validate_compact_phs2_fields(self._parse_new_format_qr(tray.master_label_code))
+                self._schedule_scanonly_transport(lookup=(tray.master_label_code, fields, tray.start_time))
+                self._show_operation_lease_hold_notice()
+                return
             if raw_barcode == previous[0] and time.monotonic() - previous[1] < 3:
                 if getattr(self, "success_sound", None):
                     play_sound(self.success_sound)
@@ -15064,6 +15144,7 @@ class ContainerAudit:
         _durable_scan_id: str = "",
         _catalog_decision: Optional[ProductScanDecision] = None,
         _offline_hold_switch: Optional[PreflightHoldSnapshot] = None,
+        _lease_hold_replay: bool = False,
     ):
         """바코드 데이터를 받아 실제 처리 로직을 수행합니다."""
         if self._reject_residual_tag(raw_barcode):
@@ -15399,6 +15480,16 @@ class ContainerAudit:
             return
             
         # --- 제품 스캔 로직 ---
+        if not _lease_hold_replay and self._operation_lease_hold_blocks_scan():
+            hold = self.current_tray.operation_lease_hold
+            hold.setdefault("items", []).append({"scan_id": uuid.uuid4().hex,
+                "raw_barcode": raw_barcode, "received_at": datetime.datetime.now().isoformat()})
+            if not (yield self._current_tray_save_operation()):
+                self.show_status_message("보류 스캔을 화면에 보존했습니다. 같은 현품표로 저장을 다시 확인하세요.",
+                                         self.COLOR_DANGER, duration=0)
+                return False
+            self._show_operation_lease_hold_notice()
+            return True
         scan_decision = decide_product_scan(self.current_tray, raw_barcode, item_code_length=self.ITEM_CODE_LENGTH)
         if scan_decision.status == SCAN_FORMAT_ERROR:
             if scan_decision.event_name:
@@ -15480,6 +15571,13 @@ class ContainerAudit:
         held_audit = None
         if _durable_scan_id:
             state.setdefault("preflight_scan_receipts", {})[raw_barcode] = _durable_scan_id
+            if _lease_hold_replay:
+                item = tray.operation_lease_hold["items"][tray.operation_lease_hold["next_index"]]
+                held_audit = item.get("audit_event") or self._checkpoint_audit_event(
+                    'SCAN_OK', detail=build_scan_ok_detail(raw_barcode, interval_sec=interval,
+                        scan_position=len(state['scanned_barcodes']), scan_contract_version=self.SCAN_CONTRACT_VERSION),
+                    event_timestamp=now.isoformat(), idempotency_key=f'preflight-held-scan:{_durable_scan_id}', deduplicate=True)
+                state["operation_lease_hold"]["items"][tray.operation_lease_hold["next_index"]]["audit_event"] = held_audit
             hold = getattr(self, '_preflight_hold_snapshot', None)
             if getattr(hold, 'items', ()) and hold.items[0].scan_id == _durable_scan_id:
                 held_audit = hold.items[0].audit_event
@@ -15507,6 +15605,8 @@ class ContainerAudit:
             self._update_current_item_label()
             self.show_status_message("스캔 상태 저장에 실패했습니다. 스캔을 반영하지 않습니다.", self.COLOR_DANGER)
             return False
+        if _lease_hold_replay:
+            item["audit_event"] = held_audit
         presenter = self._warning_state_presenter()
         self._last_normal_scan_display_item_code = str(tray.item_code or "")
         presenter.record_normal_scan(raw_barcode)
@@ -18951,6 +19051,43 @@ class ContainerAudit:
         coordinator.transport_guard_factory = self._transfer_transport_guard
         return coordinator
 
+    def _apply_operation_lease_refusal(self, lookup) -> None:
+        lane = self._ui_task_lane()
+        tray = self.current_tray
+        same_round = (tray.master_label_code == lookup[0] and tray.start_time == lookup[2]
+                      and not tray.exchange_idempotency_keys and not tray.scan_completion_context)
+        if same_round:
+            hold = tray.operation_lease_hold
+            if not hold:
+                hold = tray.operation_lease_hold = {"items": [], "next_index": 0}
+            hold["error_code"] = "OPERATION_RESOURCE_ALREADY_LEASED"
+            self._show_operation_lease_hold_notice()
+        if lane.is_busy():
+            self.root.after(10, self._apply_operation_lease_refusal, lookup)
+            return
+        def steps():
+            if same_round:
+                if not (yield self._current_tray_save_operation()):
+                    self.root.after(100, self._apply_operation_lease_refusal, lookup)
+                    return False
+            else:
+                # The worker may have parked this round while HTTP was running.
+                # Bind the refusal to that checkpoint, never to the next tray.
+                store = self._parked_store()
+                path = yield lambda: store.existing_label_path(
+                    worker_name=self._record_worker_name(), master_label=lookup[0])
+                if path is not None:
+                    original = yield lambda: store.load(path)
+                    state = dict(original)
+                    if (state.get("start_time") == lookup[2].isoformat()
+                        and not state.get("exchange_idempotency_keys") and not state.get("scan_completion_context")):
+                        hold = state["operation_lease_hold"] = dict(state.get("operation_lease_hold") or {"items": [], "next_index": 0})
+                        hold["error_code"] = "OPERATION_RESOURCE_ALREADY_LEASED"
+                        yield lambda: store.save_state(state, worker_name=state["worker_name"], master_label=lookup[0],
+                                                       expected_state=original)
+            return True
+        self._submit_scan_steps(steps(), task_name="lease-refusal-checkpoint")
+
     def _schedule_scanonly_transport(self, *, lookup=None) -> bool:
         if getattr(self, "_ui_close_requested", False) or getattr(self, "root", None) is None:
             return False
@@ -19145,21 +19282,29 @@ class ContainerAudit:
                         retry_job = self._scanonly_target_retry_job = self.root.after(10, apply_preflight)
                         return
                     known[canonical_master_label_key(lookup[0])] = list(preflight.normalized_barcodes)
-                    prior = (tray.operation_lease_id, tray.tray_size, tray.known_member_barcodes)
+                    prior = (tray.operation_lease_id, tray.tray_size, tray.known_member_barcodes,
+                             dict(tray.operation_lease_hold))
                     tray.operation_lease_id = artifact["lease_id"]
                     tray.known_member_barcodes = list(preflight.normalized_barcodes)
                     tray.tray_size = preflight.member_count
+                    if tray.operation_lease_hold:
+                        tray.operation_lease_hold["error_code"] = ""
                     if not self._save_current_tray_state():
-                        tray.operation_lease_id, tray.tray_size, tray.known_member_barcodes = prior
+                        (tray.operation_lease_id, tray.tray_size, tray.known_member_barcodes,
+                         tray.operation_lease_hold) = prior
                         # Retry this authenticated result locally after I/O
                         # recovers; no extra scan or new remote request is needed.
                         retry_job = self._scanonly_target_retry_job = self.root.after(100, apply_preflight)
                         return
                     self._update_current_item_label()
                     self._update_center_display()
-                    if len(tray.scanned_barcodes) >= tray.tray_size:
+                    if self._operation_lease_hold_blocks_scan():
+                        self._resume_operation_lease_held_scans()
+                    elif len(tray.scanned_barcodes) >= tray.tray_size:
                         self.root.after(0, self.request_complete_tray)
                 apply_preflight()
+            elif lookup is not None and result.get("lookup_error") == "OPERATION_RESOURCE_ALREADY_LEASED":
+                self._apply_operation_lease_refusal(lookup)
             elif lookup is not None and self.current_tray.master_label_code == lookup[0]:
                 jobs.append(lookup)
             self._pending_seal_intent_count = int(result.get("pending", 0))
@@ -21073,6 +21218,9 @@ class ContainerAudit:
             self._restore_operator_review_from_state(saved_state)
             self._invalidate_pending_scan_callbacks(preserve_held_scans=_scan_undo)
             self.show_status_message("이전 트레이 작업을 복구했습니다.", self.COLOR_PRIMARY)
+            if restored_tray.operation_lease_hold:
+                fields = validate_compact_phs2_fields(self._parse_new_format_qr(restored_tray.master_label_code))
+                self._schedule_scanonly_transport(lookup=(restored_tray.master_label_code, fields, restored_tray.start_time))
 
             if _scan_undo:
                 self._update_current_item_label()
@@ -21768,6 +21916,9 @@ class ContainerAudit:
     # ==================== 개별 제품 교환 관련 함수들 ====================
 
     def show_exchange_dialog(self):
+        if self._operation_lease_hold_blocks_scan():
+            self._show_operation_lease_hold_notice()
+            return
         """The existing exchange button enters the same inline card flow."""
         if self._operator_review_blocks_mutation() or self._reject_mutation_during_preflight_hold():
             self._render_warning_state()

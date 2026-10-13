@@ -4677,11 +4677,11 @@
       ],
       "file": "parked_tray_store.py",
       "kind": "function",
-      "line": 798,
+      "line": 810,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 799,
+          "line": 811,
           "operation": "unlink",
           "writer_admission_sources": []
         }
@@ -8382,11 +8382,11 @@
       ],
       "file": "tray_state.py",
       "kind": "function",
-      "line": 910,
+      "line": 946,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 924,
+          "line": 960,
           "operation": "source.replace",
           "writer_admission_sources": []
         }
@@ -22819,7 +22819,7 @@
       "direct_mutation_site_count": 1,
       "file": "parked_tray_store.py",
       "function": "parked_tray_store.ParkedTrayStore.delete",
-      "line": 798,
+      "line": 810,
       "marker_kind": "decorator",
       "source": "parked_tray_delete"
     },
@@ -22827,7 +22827,7 @@
       "direct_mutation_site_count": 0,
       "file": "parked_tray_store.py",
       "function": "parked_tray_store.ParkedTrayStore.load",
-      "line": 780,
+      "line": 792,
       "marker_kind": "decorator",
       "source": "parked_tray_load_normalize"
     },
@@ -23867,7 +23867,7 @@
       "direct_mutation_site_count": 1,
       "file": "tray_state.py",
       "function": "tray_state.quarantine_tray_state_file",
-      "line": 910,
+      "line": 946,
       "marker_kind": "decorator",
       "source": "tray_state_quarantine"
     },
