@@ -9335,6 +9335,7 @@
     "portable.main": [
       "Container_Audit",
       "auto_update",
+      "container_audit_product_host",
       "current_user_onboarding",
       "user_relay",
       "writer_session_fence"

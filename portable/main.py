@@ -75,6 +75,11 @@ def main() -> int:
             from user_relay import main as relay_main
 
             return relay_main(arguments[1:])
+        if arguments[:1] == ["--container-audit-direct-sync-relay"]:
+            # The product host owns the relay startup gate and guarded runner.
+            from container_audit_product_host import dispatch_product_mode
+
+            return dispatch_product_mode(arguments)
         if not arguments or arguments[0] not in {
             "--onboard-current-user", "--remove-current-user-setup",
             "--restore-current-user-lifecycle-after-replacement",
