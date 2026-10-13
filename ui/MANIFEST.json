@@ -1,10 +1,10 @@
 {
  "schema": "ui-parts/1",
  "source": "WorkerAnalysisGUI-web",
- "commit": "199fa1058b19e89e09e0f7e8232c9f31b9f094e6",
+ "commit": "3962eda542c23de5d3759ef844104fba459006bf",
  "dirty": false,
  "app": "ca",
- "parts_fingerprint": "e6a2bc9a07744938",
+ "parts_fingerprint": "513acccd2c9f3d8e",
  "files": [
   {
    "path": "app/ca/ca.css",
@@ -386,21 +386,21 @@
   },
   {
    "path": "app/frame.js",
-   "sha256": "f6af866996e3dc88db860d57978f88989c50c67ae4d8b13d42578d9865a99a2a",
-   "bytes": 21248,
-   "gzip": 7921
+   "sha256": "d6646c5d5ebcd36235a555aa7150e315cf8fc5bbf5b8b5ea68cf701c106c0f7e",
+   "bytes": 21625,
+   "gzip": 8034
   },
   {
    "path": "app/scan.js",
-   "sha256": "e661ef5b71fe390ca55a55a76656d89d776bf8166af9bbe42b208f5a6ec861b5",
-   "bytes": 12544,
-   "gzip": 4514
+   "sha256": "e375a35a0bc4cfb8da8199f1d7926a9e3be6b45bd5f2671d0707a81fcac1daf1",
+   "bytes": 13604,
+   "gzip": 5136
   },
   {
    "path": "app/sheet.js",
-   "sha256": "8bad2c3a2a1d90c848769502ef004530f056b048d94494c675d63494eaedd491",
-   "bytes": 7148,
-   "gzip": 2738
+   "sha256": "9b449b1217d0805e600d5031bd11894df3ff55ec976b6fa3a3e0cb4d41b0a8d8",
+   "bytes": 7668,
+   "gzip": 2995
   },
   {
    "path": "app/transport.js",

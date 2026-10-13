@@ -1,7 +1,7 @@
 // 현장 앱 판 그리기(주인 w9webnewui1014 — 10/13 이적 레인 apps-mock/lane-sheet.js 에서 올림, .ca- 뗌) — 관리자 ▾ 항목 · 되돌릴 수 없는 확인.
 // 판 = {name, tag?, kind: pin|form|result|info|list|confirm, title, load?(열 때 부를 명령 — 답의 sheet 를 덮음), lead?(글 또는 [글, 굵은 글]), facts?:[[이름, 값]], result?:{kind, text, sub?},
 //   fields?:[{name, label, placeholder?, type?, value?(form 처음 값)}](PIN 앞에 더 받을 칸 · form 의 칸), pin?: enter|checking|done|denied, go?(확인 단추 글), command?(confirm · form 이 부를 명령),
-//   rows?:[{title, text, actions:[단추]}], actions?:[단추], note?, modal?(처리 층 state.sheet — 화면 판 위에 먼저), cancel?(처리 층 판을 닫을 때 보낼 명령)}. 단추 = {text, go?: close|retry|open:<판>|command:<이름>, quiet?, danger?}.
+//   rows?:[{title, text, actions:[단추]}], actions?:[단추], note?, modal?(처리 층 state.sheet — 화면 판 위에 먼저), pending?(받는 중 — 처리 층 판이 오면 그 판이 이음), cancel?(판을 닫을 때 보낼 명령 「이름[:id]」)}. 단추 = {text, go?: close|retry|open:<판>|command:<이름>, quiet?, danger?}.
 // 그리기만 한다 — 누름 · PIN 보내기는 frame.js(AppFrame.start), PIN 값은 처리 층이 받고 화면에 남기지 않는다(웹 PIN 상자와 같은 꼴 + 관리자 ID).
 'use strict';
 window.AppSheet = (() => {
@@ -121,6 +121,11 @@ window.AppSheet = (() => {
     form.append(el('p', 'pinform__note', PIN_NOTE));
     return [form, buttons([{ text: '그만두기', go: 'close', quiet: true }])];
   }
+  // 비밀 판(PIN · password 칸): 판의 빈 곳 · 바깥을 눌러도 초점이 칸을 떠나지 않게 — 칸 밖 키는 scan.js 가 버림(막는 길 둘)
+  document.addEventListener('mousedown', (event) => {
+    const box = $('[data-sheet]');
+    if (box && !box.hidden && box.querySelector('input[type=password], [data-pin]') && !event.target.closest('input, button, a, label, select, textarea')) event.preventDefault();
+  }, true);
 
   return { render };
 })();
