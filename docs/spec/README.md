@@ -130,7 +130,7 @@
 | F-53–F-55 | 작업시간·유휴 기록, 오류 안내(다음 스캔이 닫음)·초점 복귀, 소리 | 자동 | 맞음 | `Container_Audit.py:15323`·`:15838`·`:15390` | 그대로 |
 | F-56 | 바닥 한 줄 회사 서버 상태·전송 상태 상세 | 자동 | 확인 대기 | `Container_Audit.py:16839`(CA-03 고친 코드: 저장 전송 카드 없앰). 상세의 기술 말은 관리자 쪽 | §7 CA-3·CA-8 |
 | F-57–F-62 | 감사 기록, 완료 기록 파일 HTTPS 전송, 전송 사용권, 완료·교환 회사 서버 반영, 자동 재전송, 로그온 상주 전송 | 자동 | 맞음 | `Container_Audit.py:16618`·`direct_sync_push.py:2873`·`producer_runtime_client.py:752`·`Container_Audit.py:17916`·`:18803`·`user_relay.py:183` | 그대로 |
-| F-63–F-64 | 옛 코드 폴더 상태 이전(C:\Sync 거부), 정상 종료(작업 중 원격 요청은 현장 [종료] 동의까지 미룸) | 자동·필수 | 맞음 | `legacy_state_migration.py:178`·`Container_Audit.py:_poll_app_stop_request`·[정상 멈춤 운영](operations.md#관리자-정상-멈춤-요청) | 원격 요청 미룸 추가 |
+| F-63–F-64 | 옛 코드 폴더 상태 이전(C:\Sync 거부), 정상 종료(작업 중 원격 요청은 현장 [종료] 동의까지 미룸; 끄기 성공은 귀속 프로세스 나무 0 확인 뒤) | 자동·필수 | 맞음 | `legacy_state_migration.py:178`·`Container_Audit.py:_poll_app_stop_request`·[정상 멈춤 운영](operations.md#관리자-정상-멈춤-요청) | 관리자 끄기 확인 상한 150초 |
 | F-65–F-67 | 이 사용자 준비·등록, 전송 상주 모드, 사용자 준비 제거·교체 뒤 복구 | 설치 | 맞음 | `current_user_onboarding.py:1800`·`container_audit_product_host.py:163` | 그대로 |
 | F-68 | 설치·제거·되돌림(공개 설치기) | 설치 | 이상함 | `INSTALL_CANONICAL_PORTABLE.ps1:1`. 현장 키트가 작업자 세션에서만 돌고 상승은 제품 안 Windows 허용 창 → 관리자 원격 숨김 설치 길 없음 | §7 CA-2 |
 | F-69 | 다음 판 준비·로그온 때 적용·시작 경합 대기·실패 준비 격리·시험 실패 때 앞 판 | 자동·설치 | 맞음(실제 PC 미증명) | `auto_update.py:2583` | §8-3 에서 증명(CA-4) |

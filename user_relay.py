@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import ntpath
 import os
 from pathlib import Path
 import subprocess
@@ -551,10 +552,154 @@ def request_user_relay_stop(
         wait(0.25)
 
 
+def _windows_command_arguments(command: str) -> list[str]:
+    import ctypes
+    from ctypes import wintypes
+    if not command:
+        return []
+    shell = ctypes.WinDLL("shell32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    shell.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    shell.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    kernel.LocalFree.argtypes = [wintypes.HLOCAL]
+    count = ctypes.c_int()
+    argv = shell.CommandLineToArgvW(command, ctypes.byref(count))
+    if not argv:
+        raise OSError("application arguments cannot be observed")
+    try:
+        return [argv[index] for index in range(count.value)]
+    finally:
+        kernel.LocalFree(argv)
+
+
+class AppProcessTracker:
+    """Retain lifetime evidence for children after their verified parent exits."""
+
+    def __init__(self, app_root, data_root, *, own_pid: int):
+        bundle = ntpath.dirname(str(app_root)) if ntpath.basename(str(app_root)).lower() == "app" else str(app_root)
+        self.runtime = ntpath.normcase(ntpath.abspath(ntpath.join(bundle, "runtime")))
+        leaf = ntpath.basename(bundle).lower()
+        parent = ntpath.dirname(bundle)
+        self.managed = (ntpath.normcase(ntpath.abspath(parent)) if leaf == "current" else
+                        ntpath.normcase(ntpath.abspath(ntpath.dirname(parent)))
+                        if ntpath.basename(parent).lower() == "versions" and len(leaf) == 40
+                        and all(c in "0123456789abcdef" for c in leaf) else None)
+        self.udf = ntpath.normcase(ntpath.abspath(ntpath.join(str(data_root), "webview2")))
+        self.own_pid = own_pid
+        self.owned: dict[int, str] = {}
+
+    def observe(self, rows: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+        live = {row["pid"]: row for row in rows if row["pid"] != self.own_pid}
+        selected = set()
+        foreign_udf = set()
+        for pid, row in live.items():
+            name = row.get("name", "").lower()
+            created = row.get("created_at")
+            if pid in self.owned and created and self.owned[pid] == created:
+                selected.add(pid)
+            image = row.get("image", "")
+            if name in {"python.exe", "pythonw.exe", "container_audit.exe"}:
+                runtime = ntpath.normcase(ntpath.dirname(ntpath.abspath(image))) if image else ""
+                version_runtime = False
+                if self.managed and runtime.startswith(self.managed + "\\"):
+                    parts = runtime[len(self.managed) + 1:].split("\\")
+                    version_runtime = (parts == ["current", "runtime"] or len(parts) == 3
+                        and parts[0] == "versions" and parts[2] == "runtime"
+                        and len(parts[1]) == 40 and all(c in "0123456789abcdef" for c in parts[1]))
+                if not image or runtime == self.runtime or version_runtime:
+                    selected.add(pid)
+            elif name == "msedgewebview2.exe":
+                arguments = _windows_command_arguments(row.get("command", ""))
+                has_udf = False
+                for index, argument in enumerate(arguments):
+                    udf = argument.partition("=")[2] if argument.lower().startswith("--user-data-dir=") else (
+                        arguments[index + 1] if argument.lower() == "--user-data-dir" and index + 1 < len(arguments) else "")
+                    if udf and ntpath.isabs(udf):
+                        has_udf = True
+                        normalized = ntpath.normcase(ntpath.abspath(udf))
+                        if normalized == self.udf or normalized.startswith(self.udf + "\\"):
+                            selected.add(pid)
+                if has_udf and pid not in selected:
+                    foreign_udf.add(pid)
+        changed = True
+        while changed:
+            changed = False
+            for pid, row in live.items():
+                if pid in selected or pid in foreign_udf or row.get("name", "").lower() != "msedgewebview2.exe":
+                    continue
+                parent = live.get(row.get("parent_pid"))
+                if parent is None or parent["pid"] not in selected:
+                    continue
+                try:
+                    ordered = datetime.fromisoformat(row["created_at"]) >= datetime.fromisoformat(parent["created_at"])
+                except (KeyError, TypeError, ValueError):
+                    ordered = False
+                if ordered and row.get("session_id") is not None and row.get("session_id") == parent.get("session_id"):
+                    selected.add(pid)
+                    changed = True
+        for pid in selected:
+            try:
+                created = datetime.fromisoformat(live[pid]["created_at"])
+                if created.tzinfo is None or type(live[pid].get("session_id")) is not int:
+                    raise ValueError("application lifetime cannot be observed")
+            except (KeyError, TypeError):
+                raise ValueError("application lifetime cannot be observed") from None
+        self.owned = {pid: live[pid]["created_at"] for pid in selected}
+        return [live[pid] for pid in sorted(selected)]
+
+
+@writer_sink("persistent_relay_status", probe_only=True)
+def native_app_process_snapshot() -> list[dict[str, Any]]:
+    """Read candidates only; captured command lines never enter the stop report."""
+    from auto_update import system_executable
+    script = r"""
+$ErrorActionPreference='Stop'
+[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
+$rows=@()
+foreach($p in @(Get-CimInstance Win32_Process -OperationTimeoutSec 2 -ErrorAction Stop)) {
+ if([string]$p.Name -notmatch '^(pythonw?|Container_Audit|msedgewebview2)\.exe$'){continue}
+ if(-not $p.ExecutablePath -and [string]$p.Name -match '^(pythonw?|Container_Audit)\.exe$') {
+  $p=Get-CimInstance Win32_Process -Filter ('ProcessId='+$p.ProcessId) -OperationTimeoutSec 2 -ErrorAction Stop
+  if($null -eq $p){continue}
+  if(-not $p.ExecutablePath){
+   Start-Sleep -Milliseconds 100
+   $p=Get-CimInstance Win32_Process -Filter ('ProcessId='+$p.ProcessId) -OperationTimeoutSec 2 -ErrorAction Stop
+   if($null -eq $p){continue}
+  }
+ }
+ $rows+=@{pid=[int]$p.ProcessId;name=[string]$p.Name;image=[string]$p.ExecutablePath;
+  command=[string]$p.CommandLine;parent_pid=[int]$p.ParentProcessId;session_id=[int]$p.SessionId;
+  created_at=$(if($p.CreationDate){([datetime]$p.CreationDate).ToUniversalTime().ToString('o')}else{''})}
+}
+ConvertTo-Json -InputObject @($rows) -Compress
+"""
+    completed = subprocess.run([str(system_executable("WindowsPowerShell/v1.0/powershell.exe")),
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script],
+        capture_output=True, text=True, encoding="utf-8", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if completed.returncode:
+        raise OSError("application processes cannot be observed")
+    rows = json.loads(completed.stdout)
+    if not isinstance(rows, list) or any(type(row.get("pid")) is not int or row["pid"] <= 0 for row in rows):
+        raise ValueError("application process observation is incomplete")
+    return rows
+
+
 def request_app_stop(
-    direct_sync_root: str | os.PathLike[str], *, timeout_seconds: float = 10.0,
+    direct_sync_root: str | os.PathLike[str], *, timeout_seconds: float = 150.0,
+    app_root: str | os.PathLike[str] | None = None,
+    data_root: str | os.PathLike[str] | None = None,
+    wait: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     root = Path(direct_sync_root).expanduser().resolve()
+    deadline = time.monotonic() + min(150.0, max(0.0, float(timeout_seconds)))
+    tracker = AppProcessTracker(app_root or Path(__file__).resolve().parent,
+                                data_root or root, own_pid=os.getpid())
+    # Capture the live parent chain before either stop marker can be consumed.
+    try:
+        tracker.observe(native_app_process_snapshot())
+        initial_observable = True
+    except (OSError, ValueError, TypeError, KeyError):
+        initial_observable = False
     request_id = uuid.uuid4().hex
     path = app_stop_path(root)
     _write_json_atomic(path, {
@@ -562,13 +707,38 @@ def request_app_stop(
         "request_id": request_id,
         "requested_at": datetime.now(timezone.utc).isoformat(),
     })
-    relay = request_user_relay_stop(root, timeout_seconds=timeout_seconds)
-    return {
+    relay = request_user_relay_stop(root, timeout_seconds=0)
+    result = {
         "status": "REQUESTED",
         "request_id": request_id,
         "app_stop_request_path": str(path),
         "relay": relay,
     }
+    while True:
+        try:
+            remaining = tracker.observe(native_app_process_snapshot())
+            result["remaining_processes"] = [{"pid": row["pid"], "name": row["name"]} for row in remaining]
+            result["remaining_count"] = len(remaining)
+            observable = all(row.get("image") or row.get("name", "").lower() == "msedgewebview2.exe" for row in remaining)
+        except (OSError, ValueError, TypeError, KeyError):
+            remaining, observable = [], False
+            result["remaining_processes"] = []
+            result["remaining_count"] = None
+        result["observation_status"] = "COMPLETE" if observable and initial_observable else "UNKNOWN"
+        if not remaining and observable and initial_observable and relay["status"] == "ABSENT":
+            result["status"] = "STOPPED"
+            return result
+        budget = deadline - time.monotonic()
+        if budget <= 0 or not initial_observable:
+            result["status"] = "UNKNOWN"
+            result["reason_code"] = "APP_PROCESS_ABSENCE_UNPROVEN"
+            return result
+        wait(min(0.25, budget))
+        if relay["status"] != "ABSENT":
+            lease = acquire_runtime_instance(root / "user-relay-instance")
+            if lease is not None:
+                lease.release()
+                relay["status"] = "ABSENT"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -662,11 +832,11 @@ def main(argv: list[str] | None = None) -> int:
                 app_root=app_root, direct_sync_root=direct_sync_root,
                 scan_source_dir=scan_source_dir,
             )
-            result = request_app_stop(direct_sync_root)
+            result = request_app_stop(direct_sync_root, app_root=app_root, data_root=storage.data_root)
         except (OSError, ValueError):
             return _data_root_unavailable(True)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-        return 0 if result["relay"]["status"] == "ABSENT" else 1
+        return 0 if result["status"] == "STOPPED" else 1
     profile = resolve_logistics_profile_path()
     try:
         from data_generation_guard import warm_runtime_release

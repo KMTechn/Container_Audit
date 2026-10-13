@@ -17,6 +17,11 @@ from tests.test_startup_catalog_notice import startup
 from tests.test_w9scanonly_workflow import flow, fixed_operation_lease_clock
 
 
+@pytest.fixture(autouse=True)
+def isolated_process_snapshot(monkeypatch):
+    monkeypatch.setattr(user_relay, "native_app_process_snapshot", lambda: [])
+
+
 def test_portable_stop_precedes_account_gate(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "path", list(sys.path))
     path = Path(ca.__file__).parent / "portable/main.py"

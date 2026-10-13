@@ -11,6 +11,11 @@ import Container_Audit as application
 import user_relay
 
 
+@pytest.fixture(autouse=True)
+def isolated_process_snapshot(monkeypatch):
+    monkeypatch.setattr(user_relay, "native_app_process_snapshot", lambda: [])
+
+
 def test_request_app_stop_writes_both_controls_without_starting_relay(tmp_path, monkeypatch):
     released = []
     stop_relay = user_relay.request_user_relay_stop
@@ -29,7 +34,7 @@ def test_request_app_stop_writes_both_controls_without_starting_relay(tmp_path, 
     assert request["schema_version"] == user_relay.APP_STOP_SCHEMA
     assert request["request_id"] == result["request_id"]
     assert relay["schema_version"] == "container-audit-user-relay-stop-v1"
-    assert result["status"] == "REQUESTED"
+    assert result["status"] == "STOPPED"
     assert result["relay"]["status"] == "ABSENT"
     assert released == [tmp_path / "user-relay-instance"]
     assert not list((tmp_path / "control").glob("*.tmp"))
@@ -63,7 +68,7 @@ def test_stop_cli_uses_explicit_root_and_only_writes_controls(tmp_path, monkeypa
     assert user_relay.app_stop_path(active / "direct_sync").is_file()
     assert not (active / "events").exists()
     assert not (active / "direct_sync" / "status").exists()
-    assert "REQUESTED" in capsys.readouterr().out
+    assert "STOPPED" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("save_ok", [True, False])
@@ -194,7 +199,7 @@ def test_remote_stop_is_accepted_before_the_update_gate(tmp_path, monkeypatch, c
     assert user_relay.main(["--data-root", str(active), "--direct-sync-root", str(active / "direct_sync"), "--request-app-stop"]) == 0
 
     assert user_relay.app_stop_path(active / "direct_sync").is_file()
-    assert "REQUESTED" in capsys.readouterr().out
+    assert "STOPPED" in capsys.readouterr().out
 
 
 def test_other_relay_modes_still_pass_the_update_gate(tmp_path, monkeypatch):
@@ -235,7 +240,7 @@ def test_elevated_operator_uses_its_own_roots_without_arguments(tmp_path, monkey
     assert user_relay.main(["--request-app-stop"]) == 0
 
     assert user_relay.app_stop_path(active / "direct_sync").is_file()
-    assert "REQUESTED" in capsys.readouterr().out
+    assert "STOPPED" in capsys.readouterr().out
 
 
 def test_remote_stop_reports_an_unavailable_root_without_a_dialog(tmp_path, monkeypatch, capsys):
