@@ -195,10 +195,13 @@ def isolate_product_state(tmp_path, monkeypatch):
     monkeypatch.setenv("KMTECH_TEST_CA_WRITER_ROOT", str(root))
     monkeypatch.setenv("KMTECH_TEST_CA_WRITER_MUTEX", mutex)
     test_dir = Path(__file__).resolve().parent
-    inherited_paths = os.environ.get("PYTHONPATH", "").split(os.pathsep)
-    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(dict.fromkeys((
-        "E:/KMTech/shared-tools/prodblock", *filter(None, inherited_paths), str(test_dir), str(test_dir.parent),
-    ))))
+    prodblock = os.environ.get("KMTECH_TEST_PRODBLOCK")
+    child_paths = [prodblock] if prodblock else []
+    inherited_path = os.environ.get("PYTHONPATH")
+    if inherited_path is not None:
+        child_paths.append(inherited_path)
+    child_paths.extend((str(test_dir), str(test_dir.parent)))
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(child_paths))
     import logistics_runtime_profile as runtime_profile
 
     machine_value = runtime_profile._machine_environment_value

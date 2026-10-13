@@ -26,6 +26,7 @@ def test_default_registration_and_onboarding_addresses_stay_off_production(monke
     }
     production_hosts = {urlsplit(_source_address(root / file, attribute)).hostname
                         for file, attribute in defaults.values()}
+    assert all(host == 'worker.kmtecherp.com' for host in production_hosts), "source default host changed"
     chosen = []
 
     class StopBeforeRunning(Exception):
