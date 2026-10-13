@@ -4,6 +4,26 @@ from pathlib import Path
 from types import SimpleNamespace
 import pytest
 
+
+def test_install_server_change_uses_existing_refusal_guidance():
+    tree = ast.parse((Path(__file__).resolve().parents[1] / "Container_Audit.py").read_text(encoding="utf-8-sig"))
+    nodes = [node for node in tree.body if
+             isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "MACHINE_ONBOARDING_ERROR_MESSAGES" for target in node.targets)
+             or isinstance(node, ast.FunctionDef) and node.name == "_show_first_run_onboarding_error"]
+    messages, observations = [], []
+    namespace = {
+        "CurrentUserOnboardingError": Exception, "DataGenerationBlocked": RuntimeError,
+        "FIRST_RUN_ONBOARDING_ERROR_MESSAGE": "default", "FIRST_RUN_ONBOARDING_ERROR_TITLE": "title",
+        "messagebox": SimpleNamespace(showerror=lambda title, message: messages.append(message)),
+        "_startup_refusal": lambda *_args, **_kwargs: False,
+        "_startup_check_observe": lambda *args, **kwargs: observations.append((args, kwargs)),
+    }
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), "owned-guidance", "exec"), namespace)
+    failure = SimpleNamespace(status="RECOVERY_REQUIRED", report_path=Path("owned-report.json"), __cause__=None)
+    namespace["_show_first_run_onboarding_error"](failure)
+    assert messages == ["설치 주소가 바뀌었습니다. 관리자에게 알려 주세요."]
+    assert observations == [(("finish", "FIRST_RUN_SETUP_REQUIRED"), {"refused": True})]
+
 @pytest.mark.parametrize("status,expected", [
     ("PENDING_WORKER_SID_MISMATCH", "지정된 작업자 계정"),
     ("MACHINE_ONBOARDING_FAILED", "설치 복구"),

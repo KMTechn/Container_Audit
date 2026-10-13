@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from contextlib import contextmanager
+from urllib.parse import urlsplit, urlunsplit
 
 import pytest
 
@@ -181,6 +182,185 @@ def _ready_state(paths, *, source_host_id=TEST_SOURCE_HOST_ID):
     paths.logistics_secret_path.parent.mkdir(parents=True, exist_ok=True)
     paths.logistics_secret_path.write_bytes(b"current-user-dpapi-fixture")
     return identity
+
+
+@pytest.fixture
+def installed_server_state(tmp_path, monkeypatch, existing_possession_key_contract):
+    app_root = tmp_path / "app"
+    app_root.mkdir(parents=True)
+    environment = {
+        "CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "user-state"),
+        "PROGRAMDATA": str(tmp_path / "machine-state"),
+    }
+    monkeypatch.setenv("PROGRAMDATA", environment["PROGRAMDATA"])
+    paths = resolve_current_user_onboarding_paths(app_root, environ=environment)
+    _ready_state(paths)
+    server = urlunsplit(("https", tmp_path.name + ".invalid", "", "", ""))
+    marker_path = (Path(environment["PROGRAMDATA"]) / "KMTech" / "ContainerAudit"
+                   / "machine-install" / "pending-onboarding.json")
+    marker = {
+        "schema": "container-audit-machine-pending-v1", "status": "PENDING",
+        "install_root": str(app_root.parent), "server_base_url": server,
+        "install_id": "a" * 32,
+    }
+    _write_json(marker_path, marker)
+    credential = json.loads(paths.credential_path.read_text(encoding="utf-8"))
+    credential["endpoint_url"] = server + onboarding_module.DEFAULT_ENDPOINT_PATH
+    _write_json(paths.credential_path, credential)
+    # A response-supplied profile host is independent of the registration origin.
+    profile = json.loads(paths.logistics_profile_path.read_text(encoding="utf-8"))
+    profile["base_url"] = urlunsplit(("https", "profile." + tmp_path.name + ".invalid", "", "", ""))
+    _write_json(paths.logistics_profile_path, profile)
+    for directory in (paths.events_dir, paths.queue_dir, paths.spool_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "preserved.txt").write_bytes(b"pending local work")
+    _ledger_factory(paths.ledger_path)
+    return paths, environment, marker_path, marker
+
+
+def _preserved_server_state(paths, marker_path):
+    selected = [paths.identity_path, paths.producer_manifest_path, paths.credential_path,
+                paths.registration_report_path, paths.logistics_profile_path,
+                paths.logistics_secret_path, paths.ledger_path, marker_path]
+    selected += [directory / "preserved.txt"
+                 for directory in (paths.events_dir, paths.queue_dir, paths.spool_dir)]
+    return {path: path.read_bytes() for path in selected}
+
+
+@pytest.mark.parametrize("normalized", [False, True])
+def test_installed_server_equal_keeps_ready_and_reused(installed_server_state, normalized):
+    paths, environment, marker_path, marker = installed_server_state
+    if normalized:
+        parsed = urlsplit(marker["server_base_url"])
+        marker["server_base_url"] = urlunsplit((parsed.scheme.upper(), parsed.netloc.upper() + ":443", "/", "", ""))
+        _write_json(marker_path, marker)
+    before = _preserved_server_state(paths, marker_path)
+    assert inspect_current_user_state(paths, profile_loader=_profile_loader_with_base_url,
+                                      credential_loader=_credential_loader)["status"] == "READY"
+    report = onboard_current_user(
+        paths.app_root, environ=environment, require_bootstrap_integrity=False,
+        registration_runner=lambda _paths: pytest.fail("unexpected registration"),
+        profile_loader=_profile_loader_with_base_url, credential_loader=_credential_loader,
+        ledger_factory=lambda _path: None, autostart_installer=_autostart,
+        relay_launcher=_relay_start,
+    )
+    assert report["status"] == "READY"
+    assert report["action"] == "REUSED"
+    assert _preserved_server_state(paths, marker_path) == before
+
+
+@pytest.mark.parametrize("changed", ["scheme", "host", "port"])
+def test_installed_server_change_blocks_ready_and_sends_nothing(installed_server_state, changed):
+    paths, environment, marker_path, marker = installed_server_state
+    parsed = urlsplit(marker["server_base_url"])
+    marker["server_base_url"] = urlunsplit((
+        "http" if changed == "scheme" else parsed.scheme,
+        ("new." + parsed.netloc if changed == "host" else
+         parsed.netloc + ":444" if changed == "port" else parsed.netloc), "", "", ""))
+    _write_json(marker_path, marker)
+    before = _preserved_server_state(paths, marker_path)
+    calls = []
+    def forbidden(*_args, **_kwargs):
+        calls.append("unexpected side effect")
+        pytest.fail("unexpected side effect")
+    state = inspect_current_user_state(paths, profile_loader=_profile_loader_with_base_url,
+                                       credential_loader=_credential_loader)
+    assert state["status"] == "RECOVERY_REQUIRED"
+    assert state["reason_code"] == "INSTALL_SERVER_ORIGIN_CHANGED"
+    assert state["reason"] == "설치 주소가 바뀌었습니다. 관리자에게 알려 주세요."
+    with pytest.raises(CurrentUserOnboardingError) as failure:
+        onboard_current_user(
+            paths.app_root, environ=environment, require_bootstrap_integrity=False,
+            registration_runner=forbidden, profile_loader=_profile_loader_with_base_url,
+            credential_loader=_credential_loader, ledger_factory=forbidden,
+            autostart_installer=forbidden, relay_launcher=forbidden,
+        )
+    assert failure.value.status == "RECOVERY_REQUIRED"
+    assert calls == []
+    assert _preserved_server_state(paths, marker_path) == before
+
+
+def test_reinstalled_server_never_reuses_old_live_relay(installed_server_state):
+    import user_relay
+    paths, environment, marker_path, marker = installed_server_state
+    live = lambda: user_relay.ensure_user_relay_running(
+        paths.app_root, paths.direct_sync_root, getter=lambda: "registered",
+        lease_factory=lambda _root: None,
+        launcher=lambda *_args, **_kwargs: pytest.fail("live relay was restarted"),
+    )
+    assert live()["status"] == "RUNNING"
+    parsed = urlsplit(marker["server_base_url"])
+    marker["server_base_url"] = urlunsplit((parsed.scheme, "new." + parsed.netloc, "", "", ""))
+    _write_json(marker_path, marker)
+    before = _preserved_server_state(paths, marker_path)
+    reused = []
+    def reuse(*_args, **_kwargs):
+        reused.append(live())
+        return {"status": "START_REQUESTED"}
+    with pytest.raises(CurrentUserOnboardingError) as failure:
+        onboard_current_user(
+            paths.app_root, environ=environment, require_bootstrap_integrity=False,
+            profile_loader=_profile_loader_with_base_url, credential_loader=_credential_loader,
+            ledger_factory=lambda _path: None, autostart_installer=_autostart,
+            relay_launcher=reuse,
+        )
+    assert failure.value.status == "RECOVERY_REQUIRED"
+    assert reused == []
+    assert _preserved_server_state(paths, marker_path) == before
+
+
+@pytest.mark.parametrize("unavailable", ["marker", "endpoint", "invalid_marker", "invalid_origin", "unreadable", "other_install"])
+def test_unproven_server_origin_keeps_existing_ready(installed_server_state, monkeypatch, unavailable):
+    paths, environment, marker_path, marker = installed_server_state
+    if unavailable == "marker":
+        marker_path.unlink()
+    elif unavailable == "endpoint":
+        credential = json.loads(paths.credential_path.read_text(encoding="utf-8"))
+        credential.pop("endpoint_url")
+        _write_json(paths.credential_path, credential)
+    elif unavailable == "invalid_marker":
+        marker_path.write_text("{", encoding="utf-8")
+    elif unavailable == "invalid_origin":
+        marker["server_base_url"] = "invalid origin"
+        _write_json(marker_path, marker)
+    elif unavailable == "other_install":
+        marker["install_root"] = str(paths.app_root.parent.parent / "other")
+        _write_json(marker_path, marker)
+    else:
+        original = onboarding_module._read_json
+        def unreadable(path, label):
+            if path == marker_path:
+                raise OSError("unavailable machine record")
+            return original(path, label)
+        monkeypatch.setattr(onboarding_module, "_read_json", unreadable)
+    state = inspect_current_user_state(paths, profile_loader=_profile_loader_with_base_url,
+                                       credential_loader=_credential_loader)
+    assert state["status"] == "READY"
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_completed_machine_install_still_checks_server_before_reuse(installed_server_state, changed):
+    paths, environment, marker_path, marker = installed_server_state
+    marker["target_sid"] = TEST_SOURCE_HOST_ID
+    if changed:
+        parsed = urlsplit(marker["server_base_url"])
+        marker["server_base_url"] = urlunsplit((parsed.scheme, "new." + parsed.netloc, "", "", ""))
+    _write_json(marker_path, marker)
+    before = _preserved_server_state(paths, marker_path)
+    def consume():
+        return onboarding_module.consume_pending_machine_onboarding(
+            paths.app_root, environ=environment, sid_reader=lambda: TEST_SOURCE_HOST_ID,
+            completion_reader=lambda: marker["install_id"],
+            completion_writer=lambda _value: pytest.fail("completion was rewritten"),
+            onboarder=lambda *_args, **_kwargs: pytest.fail("completed install was registered again"),
+        )
+    if changed:
+        with pytest.raises(CurrentUserOnboardingError) as failure:
+            consume()
+        assert failure.value.status == "RECOVERY_REQUIRED"
+    else:
+        assert consume() == {"status": "READY", "action": "MACHINE_INSTALL_ALREADY_COMPLETED"}
+    assert _preserved_server_state(paths, marker_path) == before
 
 
 def _profile_loader(path: Path):
