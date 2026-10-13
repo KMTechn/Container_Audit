@@ -49,7 +49,7 @@ def _child(directory, mode):
     blocked_release = threading.Event()
     finite = mode.startswith("finite-") or mode == "destroyed"
     if finite:
-        app.LOOP_CLEANUP_TIMEOUT_SECONDS = 0.2
+        app.LOOP_CLEANUP_NOTICE_SECONDS = 0.2
 
     def release():
         events.append("release")
@@ -63,7 +63,7 @@ def _child(directory, mode):
         def unavailable(**kwargs):
             raise OSError("synthetic unavailable CSV sink")
         store.drain = unavailable
-        app.LOOP_CLEANUP_TIMEOUT_SECONDS = 0.2
+        app.LOOP_CLEANUP_NOTICE_SECONDS = 0.2
     app._log_event("SHUTDOWN_PROBE", detail={"probe": 1}, synchronous=True)
     app._recover_checkpoint_audit_events = lambda: []
     app._clear_projected_checkpoint_audits = lambda staged: None

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import sys
 
+_APP_PROCESS_STARTED_AT = datetime.now(timezone.utc)
 
 APP_ROOT = Path(__file__).resolve().parent
 SITE_PACKAGES = APP_ROOT / "site-packages"
@@ -69,6 +71,10 @@ def main() -> int:
         return _portable_smoke()
     arguments = list(sys.argv[1:])
     try:
+        if arguments[:1] == ["--container-audit-user-relay"] and "--request-app-stop" in arguments:
+            from user_relay import main as relay_main
+
+            return relay_main(arguments[1:])
         if not arguments or arguments[0] not in {
             "--onboard-current-user", "--remove-current-user-setup",
             "--restore-current-user-lifecycle-after-replacement",
@@ -88,9 +94,11 @@ def main() -> int:
         gate_result = startup_gate(APP_ROOT, arguments)
         if gate_result is not None:
             return gate_result
-        from Container_Audit import main as application_main
+        import Container_Audit as application
 
-        result = application_main()
+        # Requests during entrypoint imports/onboarding belong to this launch.
+        application._APP_PROCESS_STARTED_AT = _APP_PROCESS_STARTED_AT
+        result = application.main()
         return 0 if result is None else int(result)
     except Exception as error:
         if arguments[:1] not in (["--onboard-current-user"], ["--remove-current-user-setup"],

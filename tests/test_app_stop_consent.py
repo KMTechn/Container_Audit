@@ -8,6 +8,11 @@ import pytest
 
 import Container_Audit as module
 import user_relay
+
+
+@pytest.fixture(autouse=True)
+def isolated_process_snapshot(monkeypatch):
+    monkeypatch.setattr(user_relay, "native_app_process_snapshot", lambda: [])
 from tests.test_scan_persistence_lane import ITEM, app, pump, rows
 
 

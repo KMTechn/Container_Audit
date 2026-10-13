@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from writer_session_fence import writer_sink
+from storage_utils import atomic_write_json
 
 
 ERROR_ALREADY_EXISTS = 183
@@ -20,12 +21,11 @@ SYNCHRONIZE = 0x00100000
 def write_shutdown_stall(data_root: str | os.PathLike[str]) -> None:
     """Record a diagnostic only; accepted business work remains in its stores."""
     path = Path(data_root) / "shutdown-stalled.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({
+    atomic_write_json(path, {
         "pid": os.getpid(), "executable": sys.executable,
         "threads": [t.name[:96] for t in threading.enumerate()
                     if t is not threading.current_thread()][:16],
-    }), encoding="utf-8")
+    })
 
 
 @writer_sink("runtime_shutdown_diagnostic")
@@ -33,21 +33,33 @@ def clear_shutdown_stall(data_root: str | os.PathLike[str]) -> None:
     (Path(data_root) / "shutdown-stalled.json").unlink(missing_ok=True)
 
 
-def shutdown_stall_is_live(data_root: str | os.PathLike[str]) -> bool:
-    """A stale or unreadable diagnostic never establishes process ownership."""
+def read_shutdown_stall(data_root: str | os.PathLike[str]) -> dict | None:
+    """Read bounded recovery evidence without establishing process ownership."""
     try:
         path = Path(data_root) / "shutdown-stalled.json"
         if path.stat().st_size > 4096:
-            return False
+            return None
         with path.open("rb") as stream:
             payload = stream.read(4097)
         if len(payload) > 4096:
-            return False
+            return None
         record = json.loads(payload)
         pid = record["pid"]
         executable = record["executable"]
         if type(pid) is not int or not 0 < pid <= 0xFFFFFFFF or not isinstance(executable, str):
-            return False
+            return None
+        return record
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def shutdown_stall_is_live(data_root: str | os.PathLike[str]) -> bool:
+    """A stale or unreadable diagnostic never establishes process ownership."""
+    record = read_shutdown_stall(data_root)
+    if record is None:
+        return False
+    pid, executable = record["pid"], record["executable"]
+    try:
         if os.name != "nt":
             return False
         api = ctypes.WinDLL("kernel32", use_last_error=True)

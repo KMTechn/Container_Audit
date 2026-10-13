@@ -22,6 +22,7 @@ pytestmark = pytest.mark.usefixtures("fixed_operation_lease_clock", "owned_tk_wo
 @pytest.fixture
 def startup(monkeypatch, tmp_path, flow):
     app = flow(transition=False)
+    app.root.winfo_exists = lambda: True  # ScheduledRoot models a live event queue.
     install_sync_display(app)
     app._direct_sync_health = RelayHealth("idle", 0, 0, 0, "", "", "")
     released = []

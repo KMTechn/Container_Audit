@@ -133,8 +133,27 @@ public static class KMTechStartupUpdateToken {
     $rows = @()
     foreach ($process in @(Get-CimInstance Win32_Process -ErrorAction Stop)) {
         $image = [string]$process.ExecutablePath
+        if (-not $image -and [string]$process.Name -match '^(pythonw?|Container_Audit)\.exe$') {
+            # Exit races are common at logon; re-read the PID before declaring UNKNOWN.
+            $process = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $process.ProcessId) -ErrorAction Stop
+            if ($null -eq $process) { continue }
+            $image = [string]$process.ExecutablePath
+            if (-not $image) {
+                Start-Sleep -Milliseconds 100
+                $process = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $process.ProcessId) -ErrorAction Stop
+                if ($null -eq $process) { continue }
+                $image = [string]$process.ExecutablePath
+            }
+        }
         if (-not $image) {
             if ([string]$process.Name -match '^(pythonw?|Container_Audit)\.exe$') {
+                # Only a proven different owner can remove this ambiguous candidate.
+                # Missing/failed owner observations continue to block replacement.
+                try {
+                    $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop
+                    if ($owner.ReturnValue -eq 0 -and $owner.Sid -and $authority.policy.operator_sid -and
+                        [string]$owner.Sid -cne [string]$authority.policy.operator_sid) { continue }
+                } catch { }
                 $rows += @{pid=[int]$process.ProcessId;observable=$false;bootstrap=$false}
             }
             continue
