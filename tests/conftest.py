@@ -1,4 +1,6 @@
 import functools
+import builtins
+import importlib
 import hashlib
 import json
 import os
@@ -9,9 +11,68 @@ import tempfile
 import time
 import tkinter
 from tkinter import messagebox, simpledialog
+from urllib.parse import urlsplit, urlunsplit
 
 import pytest
 from tests.native_widgets import native_tk_interpreter
+
+
+_TEST_SERVER_ORIGIN = "https://unreachable.invalid"
+_TEST_SERVER_DEFAULTS = {
+    "current_user_onboarding": ("DEFAULT_SERVER_BASE_URL",),
+    "tools.register_container_audit_worker_pc": ("DEFAULT_ENDPOINT_URL",),
+    "Container_Audit": ("UPDATE_BOOTSTRAP_MANIFEST_URL",),
+}
+
+
+@pytest.fixture(autouse=True)
+def pin_test_server_addresses(monkeypatch):
+    """Pin loaded and later-imported defaults without importing unused products."""
+    patched = set()
+    origin = urlsplit(_TEST_SERVER_ORIGIN)
+
+    def pin_loaded_modules():
+        for name, attributes in _TEST_SERVER_DEFAULTS.items():
+            module = sys.modules.get(name)
+            identity = (name, id(module))
+            if module is None or identity in patched or not all(hasattr(module, attribute) for attribute in attributes):
+                continue
+            if not all(isinstance(getattr(module, attribute), str) for attribute in attributes):
+                continue
+            # MonkeyPatch.setattr imports inspect; mark first so our import hook
+            # cannot re-enter the same module while applying its override.
+            patched.add(identity)
+            for attribute in attributes:
+                original = getattr(module, attribute)
+                parsed = urlsplit(original)
+                replacement = urlunsplit((origin.scheme, origin.netloc, parsed.path, parsed.query, parsed.fragment))
+                monkeypatch.setattr(module, attribute, replacement)
+                # The direct onboarding API captured this default at definition
+                # time; changing the module constant alone leaves it on production.
+                if name == "current_user_onboarding":
+                    onboard = getattr(module, "onboard_current_user", None)
+                    while onboard is not None:
+                        defaults = getattr(onboard, "__kwdefaults__", None)
+                        if defaults and defaults.get("server_base_url") == original:
+                            monkeypatch.setattr(onboard, "__kwdefaults__", {**defaults, "server_base_url": replacement})
+                        onboard = getattr(onboard, "__wrapped__", None)
+
+    original_import = builtins.__import__
+    original_import_module = importlib.import_module
+
+    def import_and_pin(*args, **kwargs):
+        module = original_import(*args, **kwargs)
+        pin_loaded_modules()
+        return module
+
+    def import_module_and_pin(*args, **kwargs):
+        module = original_import_module(*args, **kwargs)
+        pin_loaded_modules()
+        return module
+
+    monkeypatch.setattr(builtins, "__import__", import_and_pin)
+    monkeypatch.setattr(importlib, "import_module", import_module_and_pin)
+    pin_loaded_modules()
 
 
 def pytest_addoption(parser):
@@ -134,7 +195,10 @@ def isolate_product_state(tmp_path, monkeypatch):
     monkeypatch.setenv("KMTECH_TEST_CA_WRITER_ROOT", str(root))
     monkeypatch.setenv("KMTECH_TEST_CA_WRITER_MUTEX", mutex)
     test_dir = Path(__file__).resolve().parent
-    monkeypatch.setenv("PYTHONPATH", os.pathsep.join((str(test_dir), str(test_dir.parent))))
+    inherited_paths = os.environ.get("PYTHONPATH", "").split(os.pathsep)
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(dict.fromkeys((
+        "E:/KMTech/shared-tools/prodblock", *filter(None, inherited_paths), str(test_dir), str(test_dir.parent),
+    ))))
     import logistics_runtime_profile as runtime_profile
 
     machine_value = runtime_profile._machine_environment_value

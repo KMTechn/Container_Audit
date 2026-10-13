@@ -1901,7 +1901,7 @@ def _profile_loader_with_base_url(path: Path):
 
 
 @pytest.mark.usefixtures("existing_possession_key_contract")
-def test_onboarding_product_mode_forwards_explicit_server_base_url_and_keeps_product_default(
+def test_onboarding_product_mode_forwards_explicit_server_base_url_and_keeps_test_default(
     tmp_path, monkeypatch
 ):
     from container_audit_product_host import dispatch_product_mode
@@ -1935,7 +1935,7 @@ def test_onboarding_product_mode_forwards_explicit_server_base_url_and_keeps_pro
     assert [entry[0] for entry in captured] == [str(app_root), str(app_root)]
     assert captured[0][1]["server_base_url"] == "https://qualification.example.invalid:8443"
     assert captured[1][1]["server_base_url"] == onboarding_module.DEFAULT_SERVER_BASE_URL
-    assert onboarding_module.DEFAULT_SERVER_BASE_URL == "https://worker.kmtecherp.com"
+    assert urlsplit(onboarding_module.DEFAULT_SERVER_BASE_URL).hostname == "unreachable.invalid"
 
 
 @pytest.mark.usefixtures("existing_possession_key_contract")
