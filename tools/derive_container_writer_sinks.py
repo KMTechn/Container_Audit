@@ -19,12 +19,12 @@ SNAPSHOT_PATH = ROOT / SNAPSHOT_RELATIVE_PATH
 SHIPPED_PACKAGE_DIRS = ("kmtech_factory_contracts", "kmtech_shared", "vendor")
 # The new-screen bridge's pinned companion kit is analysed even before portable assembly.
 SCREEN_SHELL_DIR = "shell"
-SHELL_KIT_READY_VERSION = "v3.14"
-SHELL_KIT_READY_SHA256 = "40710032b00a33a8f8628ccf9960fccd2c876e3f141d5a53dff47086b986be08"
+SHELL_KIT_READY_VERSION = "v3.16"
+SHELL_KIT_READY_SHA256 = "0c3d7524e8c989b61f5f8da698847e6b5b61fc0939e6fd0fb8bd7faa51efeec8"
 SHELL_KIT_PYTHON_SHA256 = {
-    "shell/bridge.py": "2bf161b5b91842d4b32bb3c18c47c677edaeae8b711864c542ab638b7d4e2177",
+    "shell/bridge.py": "215365456cd3a49dd2ec9ae903140f61cadaedd23eaefbbcebfc73decbf3da5c",
     "shell/event_order.py": "48075f599c33bef1b9a3a283717d31f50f00ac2e71b1ebeb6970620b2275c146",
-    "shell/host.py": "29cdfbbdd57643c29961fbc3b23bcecf53aef109d9c01f70ec4bed95b53bb249",
+    "shell/host.py": "5655118f2855310dffa6d6d9f299b5287dfc18ae27e686d7337c8c9a39dbb909",
     "shell/journal.py": "714947eb6685032c896f601ef85fec9eaf7cb2c39b36ed7a8a30f0c86198b7e7",
     "shell/pedal.py": "fe19337649eddcc804398f410e022fce91bead708159ae3f82ae01dc790312f9",
     "shell/scan_rules.py": "a07e19eaac003b775adbe93fac86ce1536cf1e83729f7c654279e5f0c09f1504",
@@ -2991,7 +2991,7 @@ def _shell_kit_delegated_fence(
     if not shell_root.is_dir():
         return None
     paths = {path.relative_to(root).as_posix() for path in shell_root.rglob("*.py")}
-    ready_path = shell_root / "SHELL-READY-v3.14.json"
+    ready_path = shell_root / "SHELL-READY-v3.16.json"
     if (
         paths != set(SHELL_KIT_PYTHON_SHA256)
         or any(hashlib.sha256((root / path).read_bytes()).hexdigest() != sha
@@ -2999,7 +2999,7 @@ def _shell_kit_delegated_fence(
         or not ready_path.is_file()
         or hashlib.sha256(ready_path.read_bytes()).hexdigest() != SHELL_KIT_READY_SHA256
     ):
-        raise InventoryError("screen shell kit must match the pinned SHELL-READY v3.14")
+        raise InventoryError("screen shell kit must match the pinned SHELL-READY v3.16")
     tree = parsed_modules[SHELL_KIT_WRITE_MODULE]["tree"]
     sites = next((ast.literal_eval(node.value) for node in tree.body
                   if isinstance(node, ast.Assign) and len(node.targets) == 1

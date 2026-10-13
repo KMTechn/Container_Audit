@@ -151,11 +151,11 @@ def test_refused_diagnostics_and_receipt_writes_keep_scans_and_state_running(fil
         bridge.close()
 
 
-def test_shell_copy_matches_the_ready_v314_manifest():
-    ready_path = ROOT / "shell" / "SHELL-READY-v3.14.json"
+def test_shell_copy_matches_the_ready_v316_manifest():
+    ready_path = ROOT / "shell" / "SHELL-READY-v3.16.json"
     assert ready_path.is_file()
     ready = json.loads(ready_path.read_text(encoding="utf-8"))
-    assert ready["version"] == "v3.14"
+    assert ready["version"] == "v3.16"
     for row in ready["files"]:
         path = ROOT / row["path"]
         assert path.stat().st_size == row["bytes"]

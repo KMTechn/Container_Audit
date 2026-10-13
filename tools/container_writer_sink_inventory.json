@@ -9754,7 +9754,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "ce78c15fa1b674cfaa1c21d6d6048389f4b278a4c41b7fab31d6ef24f4cd9e5e",
+  "inventory_sha256": "ad1ae78a7c3f5292ab8e8f70ba31271a74f12e23896faec48f8b9e19002182d1",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -22046,7 +22046,7 @@
     "python_files": [
       {
         "path": "shell/bridge.py",
-        "sha256": "2bf161b5b91842d4b32bb3c18c47c677edaeae8b711864c542ab638b7d4e2177"
+        "sha256": "215365456cd3a49dd2ec9ae903140f61cadaedd23eaefbbcebfc73decbf3da5c"
       },
       {
         "path": "shell/event_order.py",
@@ -22054,7 +22054,7 @@
       },
       {
         "path": "shell/host.py",
-        "sha256": "29cdfbbdd57643c29961fbc3b23bcecf53aef109d9c01f70ec4bed95b53bb249"
+        "sha256": "5655118f2855310dffa6d6d9f299b5287dfc18ae27e686d7337c8c9a39dbb909"
       },
       {
         "path": "shell/journal.py",
@@ -22077,8 +22077,8 @@
         "sha256": "808771ebea0eaff17619505984a0364a19e07a11ddc824298f5feeb90bb585a1"
       }
     ],
-    "ready_sha256": "40710032b00a33a8f8628ccf9960fccd2c876e3f141d5a53dff47086b986be08",
-    "ready_version": "v3.14",
+    "ready_sha256": "0c3d7524e8c989b61f5f8da698847e6b5b61fc0939e6fd0fb8bd7faa51efeec8",
+    "ready_version": "v3.16",
     "reason": "Container_Audit --new-screen installs ca_screen_bridge.admission_write_guard through run_app; each shell_fileio write acquires and releases the existing CA writer_admission; shell/host.py standalone kit mode has no product shortcut or installer route",
     "write_module": "shell.shell_fileio",
     "write_sites": [

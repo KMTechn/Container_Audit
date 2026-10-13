@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def shell_inventory_root(tmp_path):
     module = _load_module()
     _write_minimal_inventory_fixture(tmp_path, "def main():\n    return 0\n")
-    for name in [*module.SHELL_KIT_PYTHON_SHA256, "shell/SHELL-READY-v3.14.json", "ca_screen_bridge.py"]:
+    for name in [*module.SHELL_KIT_PYTHON_SHA256, "shell/SHELL-READY-v3.16.json", "ca_screen_bridge.py"]:
         target = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / name, target)
@@ -24,7 +24,7 @@ def test_pinned_shell_mutations_are_all_in_one_admitted_module(shell_inventory_r
     module, root = shell_inventory_root
     payload = module.derive_inventory(root)
     descriptor = payload["shell_kit_delegated_fence"]
-    assert descriptor["ready_version"] == "v3.14"
+    assert descriptor["ready_version"] == "v3.16"
     assert descriptor["writer_source"] == "screen_shell_fileio"
     mutations = [row for row in payload["closure_direct_mutation_functions"] if row["file"].startswith("shell/")]
     assert mutations
@@ -45,7 +45,7 @@ def test_shell_delegation_rejects_kit_and_app_fence_drift(shell_inventory_root, 
     elif drift == "missing":
         (root / "shell/sound.py").unlink()
     elif drift == "ready":
-        path = root / "shell/SHELL-READY-v3.14.json"
+        path = root / "shell/SHELL-READY-v3.16.json"
         path.write_bytes(path.read_bytes() + b"\n")
     else:
         path = root / "ca_screen_bridge.py"
