@@ -1218,29 +1218,29 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 422,
+      "line": 427,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 425,
+          "line": 430,
           "operation": "path.parent.mkdir",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 428,
+          "line": 433,
           "operation": "temporary.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 433,
+          "line": 438,
           "operation": "os.replace",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 436,
+          "line": 441,
           "operation": "temporary.unlink",
           "writer_admission_sources": []
         }
@@ -1289,29 +1289,29 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 440,
+      "line": 445,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 445,
+          "line": 450,
           "operation": "path.parent.mkdir",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 448,
+          "line": 453,
           "operation": "temporary.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 453,
+          "line": 458,
           "operation": "os.link",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 456,
+          "line": 461,
           "operation": "temporary.unlink",
           "writer_admission_sources": []
         }
@@ -1361,12 +1361,12 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 671,
+      "line": 676,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 720,
+          "line": 725,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -1416,12 +1416,12 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 768,
+      "line": 773,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 808,
+          "line": 813,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -1455,12 +1455,12 @@
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 1079,
+      "line": 1084,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 1089,
+          "line": 1094,
           "operation": "subprocess.Popen",
           "writer_admission_sources": []
         }
@@ -1481,17 +1481,17 @@
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 1207,
+      "line": 1212,
       "mutation_sites": [
         {
           "category": "registry",
-          "line": 1215,
+          "line": 1220,
           "operation": "winreg.CreateKeyEx",
           "writer_admission_sources": []
         },
         {
           "category": "registry",
-          "line": 1221,
+          "line": 1226,
           "operation": "winreg.SetValueEx",
           "writer_admission_sources": []
         }
@@ -1512,17 +1512,17 @@
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 1877,
+      "line": 1951,
       "mutation_sites": [
         {
           "category": "registry",
-          "line": 1880,
+          "line": 1954,
           "operation": "winreg.CreateKeyEx",
           "writer_admission_sources": []
         },
         {
           "category": "registry",
-          "line": 1884,
+          "line": 1958,
           "operation": "winreg.SetValueEx",
           "writer_admission_sources": []
         }
@@ -1558,11 +1558,11 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 2249,
+      "line": 2344,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2272,
+          "line": 2367,
           "operation": "status_dir.mkdir",
           "writer_admission_sources": [
             "current_user_setup_removal"
@@ -12031,11 +12031,11 @@
         "command": "reflection invoke",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Initialize-BootstrapRelaySecurity",
-        "guard_line": 2937,
+        "guard_line": 2953,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "reflective_invocation",
-        "line": 2918,
+        "line": 2934,
         "target": "",
         "target_static": false
       },
@@ -12047,7 +12047,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3318,
+        "line": 3334,
         "target": "",
         "target_static": true
       },
@@ -12059,7 +12059,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3837,
+        "line": 3853,
         "target": "",
         "target_static": true
       },
@@ -12071,7 +12071,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3857,
+        "line": 3873,
         "target": "",
         "target_static": true
       },
@@ -12083,7 +12083,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3859,
+        "line": 3875,
         "target": "",
         "target_static": true
       },
@@ -12095,7 +12095,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3883,
+        "line": 3899,
         "target": "",
         "target_static": true
       },
@@ -12107,7 +12107,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3889,
+        "line": 3905,
         "target": "",
         "target_static": true
       },
@@ -13609,7 +13609,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3318,
+        "line": 3334,
         "target": "",
         "target_static": true
       },
@@ -13621,7 +13621,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3837,
+        "line": 3853,
         "target": "",
         "target_static": true
       },
@@ -13633,7 +13633,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3857,
+        "line": 3873,
         "target": "",
         "target_static": true
       },
@@ -13645,7 +13645,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3859,
+        "line": 3875,
         "target": "",
         "target_static": true
       },
@@ -13657,7 +13657,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3883,
+        "line": 3899,
         "target": "",
         "target_static": true
       },
@@ -13669,7 +13669,7 @@
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 3889,
+        "line": 3905,
         "target": "",
         "target_static": true
       },
@@ -14903,11 +14903,11 @@
         "command": "reflection invoke",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Initialize-BootstrapRelaySecurity",
-        "guard_line": 2937,
+        "guard_line": 2953,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "reflective_invocation",
-        "line": 2918,
+        "line": 2934,
         "target": "",
         "target_static": false
       },
@@ -17207,11 +17207,11 @@
             "command": "reflection invoke",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Initialize-BootstrapRelaySecurity",
-            "guard_line": 2937,
+            "guard_line": 2953,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "reflective_invocation",
-            "line": 2918,
+            "line": 2934,
             "target": "",
             "target_static": false
           },
@@ -17223,7 +17223,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 3318,
+            "line": 3334,
             "target": "",
             "target_static": true
           },
@@ -17235,7 +17235,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 3837,
+            "line": 3853,
             "target": "",
             "target_static": true
           },
@@ -17247,7 +17247,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 3857,
+            "line": 3873,
             "target": "",
             "target_static": true
           },
@@ -17259,7 +17259,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 3859,
+            "line": 3875,
             "target": "",
             "target_static": true
           },
@@ -17271,7 +17271,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 3883,
+            "line": 3899,
             "target": "",
             "target_static": true
           },
@@ -17283,7 +17283,7 @@
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 3889,
+            "line": 3905,
             "target": "",
             "target_static": true
           }
@@ -19232,12 +19232,12 @@
             "caller": "Get-BootstrapRelaySecurity",
             "file": "tools/bootstrap_integrity.ps1",
             "installer_guarded": false,
-            "line": 2937
+            "line": 2953
           }
         ],
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Initialize-BootstrapRelaySecurity",
-        "guard_line": 2937,
+        "guard_line": 2953,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "non_production_only": false,
@@ -19635,13 +19635,13 @@
           {
             "caller": "Assert-BootstrapProtectedRelayPath",
             "guarded_top_level": false,
-            "line": 2860,
+            "line": 2881,
             "non_production_mode": ""
           },
           {
             "caller": "Assert-BootstrapProtectedRelayPath",
             "guarded_top_level": false,
-            "line": 2879,
+            "line": 2900,
             "non_production_mode": ""
           }
         ],
@@ -20137,7 +20137,7 @@
           {
             "caller": "Write-BootstrapReplacementReceipt",
             "guarded_top_level": false,
-            "line": 3323,
+            "line": 3339,
             "non_production_mode": ""
           }
         ],
@@ -22259,7 +22259,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._replacement_identities_match",
-      "line": 768,
+      "line": 773,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -22267,7 +22267,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._start_replacement_user_relay_process",
-      "line": 1079,
+      "line": 1084,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -22275,7 +22275,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.restore_current_user_lifecycle_after_replacement",
-      "line": 2333,
+      "line": 2428,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -22283,7 +22283,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._windows_acl_identity",
-      "line": 671,
+      "line": 676,
       "marker_kind": "decorator",
       "source": "current_user_onboarding"
     },
@@ -22291,7 +22291,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.onboard_current_user",
-      "line": 1976,
+      "line": 2059,
       "marker_kind": "decorator",
       "source": "current_user_onboarding"
     },
@@ -22299,7 +22299,7 @@
       "direct_mutation_site_count": 2,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._install_replacement_user_relay_autostart",
-      "line": 1207,
+      "line": 1212,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -22307,7 +22307,7 @@
       "direct_mutation_site_count": 2,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._record_completed_machine_install_id",
-      "line": 1877,
+      "line": 1951,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -22315,7 +22315,7 @@
       "direct_mutation_site_count": 4,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._write_json_atomic",
-      "line": 422,
+      "line": 427,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -22323,7 +22323,7 @@
       "direct_mutation_site_count": 4,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._write_json_atomic_create_new",
-      "line": 440,
+      "line": 445,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -22331,7 +22331,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.remove_current_user_setup",
-      "line": 2249,
+      "line": 2344,
       "marker_kind": "writer_admission",
       "source": "current_user_setup_removal"
     },

@@ -2856,6 +2856,27 @@ function Test-BootstrapJsonInteger($Value) {
     return ($Value -is [int] -or $Value -is [long])
 }
 
+function Get-BootstrapRelayPathRightsMask([string]$Path,[bool]$Leaf) {
+    # Windows grants Users create/attribute rights on ProgramData by default and
+    # older KMTech apps leave KMTech under it with that inherited ACL. Neither lets
+    # a user replace or re-permission our protected children, so these two shared
+    # data ancestors only reject delete, permission, owner and generic rights.
+    $machineData=[IO.Path]::GetFullPath([Environment]::GetFolderPath('CommonApplicationData')).TrimEnd('\')
+    if($machineData -and ($Path -ieq $machineData -or $Path -ieq ($machineData+'\KMTech'))){return 0x500D0040}
+    if($Leaf){return 0x500D0156}
+    return 0x500D0150
+}
+
+function Test-BootstrapRelayAclUserMutable($Acl,[int64]$Mask) {
+    foreach($rule in $Acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+        if($rule.AccessControlType -eq 'Allow' -and
+            -not($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -and
+            $rule.IdentityReference.Value -cnotin @('S-1-5-18','S-1-5-32-544') -and
+            ([int64]$rule.FileSystemRights -band $Mask)){return $true}
+    }
+    return $false
+}
+
 function Assert-BootstrapProtectedRelayPath([string]$Path,[switch]$AllowSupportedPreparation) {
     if($AllowSupportedPreparation){Protect-KmtechCodeAncestors 'C:\KMTech\Apps\Container_Audit' -AdmissionOnly}
     $full=Get-StrictFullPath $Path 'protected relay path';$leaf=$true
@@ -2886,15 +2907,10 @@ function Assert-BootstrapProtectedRelayPath([string]$Path,[switch]$AllowSupporte
             }
             $full=[IO.Path]::GetDirectoryName($full);$leaf=$false;continue
         }
-        $mask=if($leaf){0x500D0156}else{0x500D0150}
-        foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
-            if($rule.AccessControlType -eq 'Allow' -and
-                -not($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -and
-                $rule.IdentityReference.Value -cnotin @('S-1-5-18','S-1-5-32-544') -and
-                ([int64]$rule.FileSystemRights -band $mask) -and -not($AllowSupportedPreparation -and $shared)){
-                $failure=[InvalidOperationException]::new('Relay path is user mutable.')
-                $failure.Data['installation_preparation_exit_code']=61;throw $failure
-            }
+        if(-not($AllowSupportedPreparation -and $shared) -and
+            (Test-BootstrapRelayAclUserMutable $acl (Get-BootstrapRelayPathRightsMask $full $leaf))){
+            $failure=[InvalidOperationException]::new('Relay path is user mutable.')
+            $failure.Data['installation_preparation_exit_code']=61;throw $failure
         }
         if($full -eq [IO.Path]::GetPathRoot($full)){break}
         $full=[IO.Path]::GetDirectoryName($full);$leaf=$false

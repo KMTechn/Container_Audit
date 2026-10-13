@@ -178,7 +178,7 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "4de07d61fe6d56e8a50d945609c28f95c1cefc6663019c76b305fe804dca761c"
+      "after": "4f47f360b8e2da10ae3490b9a5a4d42844039b543c1857399aee83a0b7a18fc8"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -213,7 +213,7 @@
     {
       "path": "app/current_user_onboarding.py",
       "before": "3781e04e185b139c0bacb8b8c3bd2c69f42cc3735760d45191d851d4d98914aa",
-      "after": "73c7fbac89f26eb0c50750f1f7b0f62b01e0c053e11737c3fe5674d9dcdb7cd6"
+      "after": "89e2cb364300e0beb2578bdce530464b272aecad28e2d1368b42211173834fb4"
     },
     {
       "path": "app/data_generation_guard.py",
@@ -4508,7 +4508,7 @@
     {
       "path": "tools/bootstrap_integrity.ps1",
       "before": "01919751911b37dea315a412585c85ec397e479ca02df36554ca7309a27fa9ba",
-      "after": "73f1dfc7e074317d9c9faf0e0c560cdb4456ddcfcdec73d887ba921e96468008"
+      "after": "3d0cc138714363e9184277d9344e527ee2363490c70c14aa120d30adb65f7b07"
     },
     {
       "path": "tools/container_writer_fence.ps1",
@@ -4540,7 +4540,7 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "4de07d61fe6d56e8a50d945609c28f95c1cefc6663019c76b305fe804dca761c"
+      "after": "4f47f360b8e2da10ae3490b9a5a4d42844039b543c1857399aee83a0b7a18fc8"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -4560,7 +4560,7 @@
     {
       "path": "current_user_onboarding.py",
       "before": "3781e04e185b139c0bacb8b8c3bd2c69f42cc3735760d45191d851d4d98914aa",
-      "after": "73c7fbac89f26eb0c50750f1f7b0f62b01e0c053e11737c3fe5674d9dcdb7cd6"
+      "after": "89e2cb364300e0beb2578bdce530464b272aecad28e2d1368b42211173834fb4"
     },
     {
       "path": "data_generation_guard.py",
