@@ -3465,8 +3465,65 @@ function Resolve-CanonicalMachineWorker([string]$Account,[string]$InventoryPath,
     finally { $digest.Dispose() }
     return [pscustomobject]@{sid=$sid;profile_root=$profile;survey_sha256=$sha;survey_path=$path;same_caller=($sid -ceq [string]$Caller.sid)}
 }
-function Write-CanonicalMachinePublicRecord([string]$Code,[string]$Status='FAILED') {
+function Get-CanonicalMachineHelperReason([string]$Stdout,[string]$Code='') {
+    # Only the pinned helper's fixed reason codes cross this edge. Any other
+    # child text, including a malformed or unknown reason, stays private.
+    $allowed=@('lifecycle_operation_invalid','lifecycle_owned_namespace_collision','lifecycle_namespace_parent_unavailable',
+        'lifecycle_data_namespace_collision','lifecycle_removed_control_remains','lifecycle_register_requires_installed_code',
+        'lifecycle_removed_tasks_remain_or_unknown','lifecycle_stock_protection_invalid','lifecycle_stock_layout_invalid',
+        'lifecycle_stock_manifest_invalid','lifecycle_control_incomplete','lifecycle_transition_requires_recovery',
+        'lifecycle_confirmed_pointer_mismatch','lifecycle_rolled_back_pointer_mismatch','lifecycle_pointer_mismatch',
+        'lifecycle_active_manifest_mismatch','lifecycle_active_trust_key_mismatch','lifecycle_task_absence_or_unknown',
+        'lifecycle_state_changed_during_verification','lifecycle_from_commit_mismatch',
+        'WRITER_GATE_TIMEOUT','ACTIVE_WRITER_FENCE','FENCE_REPARSE_REJECTED','FENCE_PATH_UNOBSERVABLE',
+        'STARTUP_UPDATE_INITIAL_VERSION_INVALID','STARTUP_UPDATE_INITIAL_VERSION_READBACK_FAILED',
+        'STARTUP_UPDATE_VERSION_ALREADY_HAS_DIFFERENT_BYTES','STARTUP_UPDATE_DURING_WORK_FORBIDDEN',
+        'STARTUP_UPDATE_OPERATOR_BINDING_DIFFERS','STARTUP_UPDATE_OPERATOR_DIFFERS','STARTUP_UPDATE_DURABLE_RECORD_FAILED',
+        'STARTUP_UPDATE_PREIMAGE_PATH_INVALID','STARTUP_UPDATE_PREIMAGE_READBACK_FAILED','STARTUP_UPDATE_WRITER_HELPER_PIN_DIFFERS',
+        'STARTUP_UPDATE_TASK_SPEC_FAILED','STARTUP_UPDATE_TASK_SPEC_INVALID','STARTUP_UPDATE_OWNED_TASK_DIFFERS',
+        'STARTUP_UPDATE_TASK_IS_RUNNING','STARTUP_UPDATE_TASK_READBACK_FAILED')
+    if (-not $Code) {
+        $lines=@(([string]$Stdout) -split '\r?\n' | Where-Object { $_ -clike 'installation_failure_summary=*' })
+        if ($lines.Count) {
+            try { $Code=[string](($lines[-1].Substring('installation_failure_summary='.Length) | ConvertFrom-Json).reason_code) } catch { $Code='' }
+        }
+    }
+    if ($Code -cin $allowed) { return $Code }
+    return 'PLACEMENT_HELPER_FAILED'
+}
+function Get-CanonicalMachineFailureReason($Failure) {
+    # Exact pre-transaction refusals only; everything else is UNCLASSIFIED.
+    $known=@(@('CONTAINER_WRITER_FENCE_ALREADY_ACTIVE','PRIOR_INSTALL_UNFINISHED'),
+        @('Existing worker deployment requires recovery.','WORKER_INSTALL_UNFINISHED'),
+        @('Machine installation requires an already privileged token.','ADMINISTRATOR_REQUIRED'),
+        @('CODE_PRESTATE_WRITER_SEMANTICS_DIFFER','INSTALLED_WRITER_SEMANTICS_DIFFER'))
+    $exception=if($Failure -is [Exception]){$Failure}elseif($null -ne $Failure){$Failure.Exception}else{$null}
+    for ($depth=0; $null -ne $exception -and $depth -lt 8; $depth++) {
+        if ($exception.Data.Contains('canonical_machine_helper_reason')) {
+            return (Get-CanonicalMachineHelperReason '' ([string]$exception.Data['canonical_machine_helper_reason']))
+        }
+        foreach ($pair in $known) { if ([string]$exception.Message -ceq $pair[0]) { return $pair[1] } }
+        $exception=$exception.InnerException
+    }
+    return 'UNCLASSIFIED'
+}
+function Write-CanonicalMachinePublicRecord([string]$Code,[string]$Status='FAILED',$Failure=(Get-Variable -Name outputFailure -ValueOnly -ErrorAction SilentlyContinue)) {
     $message='작업자 계정과 살펴보기 기록을 확인하고 관리자 설치 키트로 다시 실행하세요.'
+    $reason=''
+    if ($Code -ceq 'MACHINE_INSTALL_FAILED') {
+        $reason=Get-CanonicalMachineFailureReason $Failure
+        if ($reason -cin @('PRIOR_INSTALL_UNFINISHED','WORKER_INSTALL_UNFINISHED')) {
+            $message='이전 설치가 끝나지 않았습니다. 자료와 설치 기록을 보존하고 관리자 지원 복구를 요청하세요.'
+        } elseif ($reason -ceq 'ADMINISTRATOR_REQUIRED') {
+            $message='관리자 권한으로 연 창에서 관리자 설치 키트를 다시 실행하세요.'
+        } elseif ($reason -ceq 'INSTALLED_WRITER_SEMANTICS_DIFFER') {
+            $message='설치된 판과 이 설치 묶음의 기록 방식이 달라 바꾸지 않았습니다. 지원 담당자에게 문의하세요.'
+        } elseif ($reason -clike 'lifecycle_*') {
+            $message='기존 설치 상태와 예약 작업을 확인하고 관리자 지원 복구를 요청하세요.'
+        } elseif ($reason -clike 'STARTUP_UPDATE_*') {
+            $message='자동 업데이트 등록 단계에서 멈췄습니다. 자료와 설치 기록을 보존하고 관리자 지원 복구를 요청하세요.'
+        }
+    }
     if ($Code -ceq 'PASS_MACHINE_WORKER_PENDING') {
         $message='프로그램 배치가 끝났습니다. 지정 작업자 계정으로 처음 실행해야 설치가 끝납니다.'
     } elseif ($Code -ceq 'PASS_UNINSTALLED_DATA_PRESERVED') {
@@ -3479,10 +3536,12 @@ function Write-CanonicalMachinePublicRecord([string]$Code,[string]$Status='FAILE
         $message='설치 자식의 종료를 확인하지 못했습니다. 자료와 설치 기록을 보존하고 관리자 지원 복구를 요청하세요.'
     }
     $fields=[ordered]@{status=$Status;code=$Code;stage='machine_install';guidance=$message;report_status='REPORT_UNAVAILABLE'}
+    $summary=''
+    if ($reason) { $summary=$Code+' reason='+$reason; $fields.reason_code=$reason; $fields.summary_message=$summary }
     $public=ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes @('FAILED','PASS','machine_install',
         'PENDING_TARGET_AMBIGUOUS','MACHINE_WORKER_ARGUMENTS_REQUIRE_ADMINISTRATOR','MACHINE_INSTALL_FAILED',
         'PASS_MACHINE_WORKER_PENDING','PASS_UNINSTALLED_DATA_PRESERVED','PASS_RESTORED_VERIFIED','REPORT_UNAVAILABLE',
-        'MACHINE_RECOVERY_CHILD_UNRECORDED','MACHINE_RECOVERY_CHILD_IDENTITY_INVALID','MACHINE_RECOVERY_CHILD_ACTIVE','MACHINE_RECOVERY_CHILD_EXIT_UNPROVEN') -SafeMessages @($message)
+        'MACHINE_RECOVERY_CHILD_UNRECORDED','MACHINE_RECOVERY_CHILD_IDENTITY_INVALID','MACHINE_RECOVERY_CHILD_ACTIVE','MACHINE_RECOVERY_CHILD_EXIT_UNPROVEN',$reason) -SafeMessages @($message,$summary)
     Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+($public|ConvertTo-Json -Depth 4 -Compress))
 }
 
@@ -3979,7 +4038,7 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         $startupControl=Join-Path (Split-Path -Parent $Root) 'update-control'
         $startupBefore=Get-CanonicalMachineArtifactPreimage (@('policy.json','active.json','transition.json' | ForEach-Object {Join-Path $startupControl $_})+@(Join-Path (Split-Path -Parent $Root) 'removed.json'))
     }
-    $complete=$false;$placementBaseArguments=$null;$prestate=$null
+    $complete=$false;$placementBaseArguments=$null;$prestate=$null;$helperReason=''
     $audit.placement_child=@{status='NOT_STARTED'}
     $audit.compensation_child=@{status='NOT_STARTED'}
     $audit.machine_prestate=@{path='';sha256=''}
@@ -4055,6 +4114,7 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         } } else { $null }
         $child=Invoke-InstallationEvidenceChild 'machine-placement-helper' $engine $arguments -OnStarted $placementStarted
         $audit.placement_child.status='EXITED';$audit.placement_child.exit_code=[int]$child.ExitCode
+        if ($child.ExitCode -ne 0) { $helperReason=Get-CanonicalMachineHelperReason ([string]$child.Stdout) }
         if (-not $testMode) {
             $binding=Read-InstallationHelperEvidenceBinding @($child.Stdout -split "`r?`n") `
                 (Join-Path $state ('install-audit\placement-'+$run+'.jsonl')) $child.ProcessId ([string]$Manifest.helper_sha256)
@@ -4117,6 +4177,8 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         Write-CanonicalMachinePublicRecord ([string]$audit.status) 'PASS'
     } catch {
         $audit.status='MACHINE_INSTALL_FAILED';$audit.fence_retained=$active
+        # A failed placement child is the cause; publish only its allowlisted code.
+        if ($helperReason) { $_.Exception.Data['canonical_machine_helper_reason']=$helperReason }
         if ($machineStateReady) { try { Save $path $audit } catch {} }
         throw
     } finally {
