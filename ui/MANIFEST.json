@@ -2,9 +2,9 @@
  "schema": "ui-parts/1",
  "source": "WorkerAnalysisGUI-web",
  "commit": "3962eda542c23de5d3759ef844104fba459006bf",
- "dirty": false,
+ "dirty": true,
  "app": "ca",
- "parts_fingerprint": "513acccd2c9f3d8e",
+ "parts_fingerprint": "714d9cb6ab9b9612",
  "files": [
   {
    "path": "app/ca/ca.css",
@@ -20,9 +20,9 @@
   },
   {
    "path": "app/ca/contract.json",
-   "sha256": "92bb279c19c5d3ac0a70557bd2465b184b27be6322cbfe33c517c5bdec7972ae",
-   "bytes": 26925,
-   "gzip": 5679
+   "sha256": "3cee473ebc498a30a4ec35fcb01ef05160821188f1b8ab6382647fb0e1c6e200",
+   "bytes": 26994,
+   "gzip": 5693
   },
   {
    "path": "app/ca/fixtures/admin-defer.json",

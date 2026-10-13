@@ -17,6 +17,23 @@ BYTE_EXACT_CHECKOUT_PATHS = (SNAPSHOT_RELATIVE_PATH, Path("tools/bootstrap_integ
 SNAPSHOT_PATH = ROOT / SNAPSHOT_RELATIVE_PATH
 
 SHIPPED_PACKAGE_DIRS = ("kmtech_factory_contracts", "kmtech_shared", "vendor")
+# The new-screen bridge's pinned companion kit is analysed even before portable assembly.
+SCREEN_SHELL_DIR = "shell"
+SHELL_KIT_READY_VERSION = "v3.14"
+SHELL_KIT_READY_SHA256 = "40710032b00a33a8f8628ccf9960fccd2c876e3f141d5a53dff47086b986be08"
+SHELL_KIT_PYTHON_SHA256 = {
+    "shell/bridge.py": "2bf161b5b91842d4b32bb3c18c47c677edaeae8b711864c542ab638b7d4e2177",
+    "shell/event_order.py": "48075f599c33bef1b9a3a283717d31f50f00ac2e71b1ebeb6970620b2275c146",
+    "shell/host.py": "29cdfbbdd57643c29961fbc3b23bcecf53aef109d9c01f70ec4bed95b53bb249",
+    "shell/journal.py": "714947eb6685032c896f601ef85fec9eaf7cb2c39b36ed7a8a30f0c86198b7e7",
+    "shell/pedal.py": "fe19337649eddcc804398f410e022fce91bead708159ae3f82ae01dc790312f9",
+    "shell/scan_rules.py": "a07e19eaac003b775adbe93fac86ce1536cf1e83729f7c654279e5f0c09f1504",
+    "shell/shell_fileio.py": "4c550a6e00e506503ee2d202183b1aa15c2be157c3b92d08f8597f8516cdf295",
+    "shell/sound.py": "808771ebea0eaff17619505984a0364a19e07a11ddc824298f5feeb90bb585a1",
+}
+SHELL_KIT_WRITE_MODULE = "shell.shell_fileio"
+SHELL_KIT_WRITE_SITES = ("append_bytes", "create_new", "truncate", "replace_atomic", "make_dirs")
+SHELL_KIT_WRITER_SOURCE = "screen_shell_fileio"
 SHARED_UNUSED_DIAGNOSTIC_SHA256 = "085c47ad7cf42130de74240a6e3dccefc2502d844591f775d46fedaabc6ad36b"
 PS_MODULE_PROLOGUE = (
     b"Import-Module -Name (Join-Path $PSHOME 'Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop\n"
@@ -504,10 +521,10 @@ def _discover_frozen_tool_paths(root: Path) -> set[Path]:
 
 
 def _discover_shipped_application_paths(root: Path) -> tuple[Path, ...]:
-    """Mirror the portable builder's code-copy rules without a hand list."""
+    """Mirror the builder's code-copy rules and include the pinned screen companion."""
 
     paths = {path.relative_to(root) for path in root.glob("*.py")}
-    for package_name in SHIPPED_PACKAGE_DIRS:
+    for package_name in (*SHIPPED_PACKAGE_DIRS, SCREEN_SHELL_DIR):
         package_root = root / package_name
         if package_root.is_dir():
             paths.update(path.relative_to(root) for path in package_root.rglob("*.py"))
@@ -997,6 +1014,7 @@ class _NodeVisitor(ast.NodeVisitor):
         current_class: str,
         known_nodes: set[str],
         initial_import_scope: str,
+        shell_kit_delegated: bool = False,
     ) -> None:
         self.collector = collector
         self.current_qualname = current_qualname
@@ -1010,6 +1028,7 @@ class _NodeVisitor(ast.NodeVisitor):
             self.current_function_info.get("pathlike_params", ())
         )
         self.writer_admission_stack: list[str] = []
+        self.shell_kit_delegated = shell_kit_delegated
 
     def visit_Import(self, node: ast.Import) -> None:
         scope = self.import_scope_stack[-1]
@@ -1110,6 +1129,15 @@ class _NodeVisitor(ast.NodeVisitor):
                 resolve_callable=self._resolve_callable,
                 display_name=self._display_name,
             )
+            if (
+                self.shell_kit_delegated
+                and self.collector.module_name == SHELL_KIT_WRITE_MODULE
+                and self.current_function_info.get("name") in SHELL_KIT_WRITE_SITES
+                and isinstance(item.context_expr, ast.Call)
+                and isinstance(item.context_expr.func, ast.Name)
+                and item.context_expr.func.id == "_guard"
+            ):
+                admission = SHELL_KIT_WRITER_SOURCE
             if admission:
                 admitted.append(admission)
             self.visit(item.context_expr)
@@ -1357,6 +1385,7 @@ def _analyze_closure(
     *,
     parsed_modules: dict[str, dict[str, Any]],
     import_graph: dict[str, list[str]],
+    shell_kit_delegated: bool = False,
 ) -> tuple[
     dict[str, dict[str, Any]],
     dict[str, list[str]],
@@ -1404,6 +1433,7 @@ def _analyze_closure(
                 current_class=info["class_qualname"],
                 known_nodes=known_nodes,
                 initial_import_scope=qualname.rsplit(".", 1)[0],
+                shell_kit_delegated=shell_kit_delegated,
             )
             for child in info["node"].body:
                 visitor.visit(child)
@@ -2953,6 +2983,73 @@ def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
     }
 
 
+def _shell_kit_delegated_fence(
+    root: Path, parsed_modules: dict[str, dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Trust only the exact kit and an app entry that installs the real CA admission."""
+    shell_root = root / SCREEN_SHELL_DIR
+    if not shell_root.is_dir():
+        return None
+    paths = {path.relative_to(root).as_posix() for path in shell_root.rglob("*.py")}
+    ready_path = shell_root / "SHELL-READY-v3.14.json"
+    if (
+        paths != set(SHELL_KIT_PYTHON_SHA256)
+        or any(hashlib.sha256((root / path).read_bytes()).hexdigest() != sha
+               for path, sha in SHELL_KIT_PYTHON_SHA256.items())
+        or not ready_path.is_file()
+        or hashlib.sha256(ready_path.read_bytes()).hexdigest() != SHELL_KIT_READY_SHA256
+    ):
+        raise InventoryError("screen shell kit must match the pinned SHELL-READY v3.14")
+    tree = parsed_modules[SHELL_KIT_WRITE_MODULE]["tree"]
+    sites = next((ast.literal_eval(node.value) for node in tree.body
+                  if isinstance(node, ast.Assign) and len(node.targets) == 1
+                  and isinstance(node.targets[0], ast.Name)
+                  and node.targets[0].id == "SHELL_WRITE_SITES"), None)
+    if sites != SHELL_KIT_WRITE_SITES:
+        raise InventoryError("screen shell write sites differ from the pinned kit")
+    app = parsed_modules.get("ca_screen_bridge", {}).get("tree")
+    functions = {node.name: node for node in app.body if isinstance(node, ast.FunctionDef)} if app else {}
+    guard = functions.get("admission_write_guard")
+    body = list(guard.body) if guard else []
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+        body = body[1:]
+    returned = body[0].value if len(body) == 1 and isinstance(body[0], ast.Return) else None
+    imports_admission = bool(app) and any(
+        isinstance(node, ast.ImportFrom) and node.module == "writer_session_fence"
+        and any(alias.name == "writer_admission" and alias.asname is None for alias in node.names)
+        for node in app.body
+    )
+    real_guard = (
+        imports_admission and guard is not None and not guard.decorator_list
+        and [arg.arg for arg in guard.args.args] == ["op", "path", "kind"]
+        and isinstance(returned, ast.Call) and isinstance(returned.func, ast.Name)
+        and returned.func.id == "writer_admission" and not returned.keywords
+        and len(returned.args) == 1 and _string_literal(returned.args[0]) == SHELL_KIT_WRITER_SOURCE
+    )
+    runner = functions.get("screen_runner")
+    installs_guard = runner is not None and any(
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "run_app"
+        and any(keyword.arg == "write_guard" and isinstance(keyword.value, ast.Name)
+                and keyword.value.id == "admission_write_guard" for keyword in node.keywords)
+        for node in ast.walk(runner)
+    )
+    if not real_guard or not installs_guard:
+        raise InventoryError("CA screen entry must install the existing writer admission as the shell write guard")
+    return {
+        "ready_version": SHELL_KIT_READY_VERSION,
+        "ready_sha256": SHELL_KIT_READY_SHA256,
+        "python_files": [{"path": path, "sha256": sha} for path, sha in sorted(SHELL_KIT_PYTHON_SHA256.items())],
+        "write_module": SHELL_KIT_WRITE_MODULE,
+        "write_sites": sorted(SHELL_KIT_WRITE_SITES),
+        "writer_source": SHELL_KIT_WRITER_SOURCE,
+        "reason": (
+            "Container_Audit --new-screen installs ca_screen_bridge.admission_write_guard through run_app; "
+            "each shell_fileio write acquires and releases the existing CA writer_admission; "
+            "shell/host.py standalone kit mode has no product shortcut or installer route"
+        ),
+    }
+
+
 def derive_inventory(root: Path | None = None) -> dict[str, Any]:
     repo_root = (root or ROOT).resolve()
     module_index = _build_module_index(repo_root)
@@ -2998,9 +3095,11 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
             raise InventoryError("shared diagnostic_log must remain byte-pinned and unconsumed in CA")
         del analysis_modules[unused_module]
         pinned_unused_sources.append({"path": _relative(unused["path"]), "sha256": unused_sha})
+    shell_kit_fence = _shell_kit_delegated_fence(repo_root, analysis_modules)
     node_analysis, call_graph, sink_sources, sink_marker_kinds = _analyze_closure(
         parsed_modules=analysis_modules,
         import_graph=import_graph,
+        shell_kit_delegated=shell_kit_fence is not None,
     )
     start_nodes = _normalize_start_names(call_graph)
     coverage, predecessor = _coverage_states(
@@ -3109,7 +3208,8 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
         "entrypoint_derivation": (
             "all root Python files, all Python files under the portable builder's "
             "shipped package directories, portable/main.py, frozen/update-archive tool "
-            "entrypoints parsed from their shipping contracts, and their local import closure"
+            "entrypoints parsed from their shipping contracts, the pinned new-screen shell companion, "
+            "and their local import closure"
         ),
         "product_entrypoints": start_nodes,
         "closure_modules": [
@@ -3193,6 +3293,8 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
     }
     if pinned_unused_sources:
         payload["pinned_unused_sources"] = pinned_unused_sources
+    if shell_kit_fence is not None:
+        payload["shell_kit_delegated_fence"] = shell_kit_fence
     payload["inventory_sha256"] = _inventory_sha256(payload)
     return payload
 
@@ -3240,6 +3342,27 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.write:
         SNAPSHOT_PATH.write_bytes(encoded)
+    if args.write or args.check:
+        bindings = (
+            (ROOT / "tools/container_writer_fence.ps1",
+             rb"(\$Script:ContainerWriterFenceInventorySha256 = ')[0-9a-f]{64}(')"),
+            (ROOT / "tools/container_writer_session_contract.json",
+             rb'("writer_inventory_sha256": ")[0-9a-f]{64}(\")'),
+        )
+        for path, pattern in bindings:
+            original = path.read_bytes()
+            pinned, count = re.subn(
+                pattern,
+                lambda match: match[1] + payload["inventory_sha256"].encode("ascii") + match[2],
+                original,
+            )
+            if count != 1:
+                raise SystemExit("container writer inventory consumer pin is missing or ambiguous")
+            if pinned != original:
+                if args.write:
+                    path.write_bytes(pinned)
+                else:
+                    raise SystemExit("container writer inventory consumer pin is stale")
     print(payload["inventory_sha256"])
     return 0
 

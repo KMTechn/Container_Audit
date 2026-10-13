@@ -11,3 +11,4 @@ tests/contracts/*.py text eol=lf
 tests/contracts/*.json text eol=lf
 tests/late_result_guard.py -text
 tools/validate_capture_bundle_v1.py -text
+shell/** -text

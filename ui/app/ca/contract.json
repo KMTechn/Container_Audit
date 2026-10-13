@@ -1093,6 +1093,10 @@
    "journal_uncertain": {
     "type": "boolean"
    },
+   "events_dropped": {
+    "type": "integer",
+    "minimum": 0
+   },
    "recovery": {
     "type": "boolean"
    },

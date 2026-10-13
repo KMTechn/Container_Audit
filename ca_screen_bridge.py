@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import Container_Audit as ca
+from writer_session_fence import writer_admission
 from scan_display import compact_scan_value
 from warning_presenter import CompletionOutcome, NoticeSeverity
 
@@ -1040,6 +1041,11 @@ def shell_data_dir() -> Path:
     return base / "KMTech" / "ContainerAudit" / "screen"
 
 
+def admission_write_guard(op: str, path: Path, kind: str) -> Any:
+    """셸의 지역 쓰기 하나 동안만 기존 이적 쓰기 허락을 얻는다."""
+    return writer_admission("screen_shell_fileio")
+
+
 def screen_runner(module: Any) -> Callable[[List[str]], Any]:
     def run(arguments: List[str]) -> Any:
         shell_dir = str(APP_DIR / "shell")
@@ -1053,7 +1059,8 @@ def screen_runner(module: Any) -> Callable[[List[str]], Any]:
             from host import run_app
 
             result = run_app("rw", shell_data_dir(), root=APP_DIR / "ui", page=PAGE,
-                             title="이적", owner_main=owner_main_for(module, arguments))
+                             title="이적", owner_main=owner_main_for(module, arguments),
+                             write_guard=admission_write_guard)
             if "error" in host:
                 raise host["error"]
             return host.get("exit", result)

@@ -1,10 +1,10 @@
 {
-  "created_utc": "2026-10-13T03:09:41.802136+00:00",
+  "created_utc": "2026-10-13T03:47:15.375317+00:00",
   "files": [
     {
       "path": "shell/bridge.py",
-      "bytes": 26883,
-      "sha256": "62c25e2eb327df0ac755a3eeacc84dde8565c51ee86cc60c6e040cdf3bd23115"
+      "bytes": 27169,
+      "sha256": "2bf161b5b91842d4b32bb3c18c47c677edaeae8b711864c542ab638b7d4e2177"
     },
     {
       "path": "shell/event_order.py",
@@ -13,18 +13,18 @@
     },
     {
       "path": "shell/host.py",
-      "bytes": 30951,
-      "sha256": "4711cfa772a08290bfd838c3ef5925856b7b42cfa7f54fd3fa717904966cb0a5"
+      "bytes": 31190,
+      "sha256": "29cdfbbdd57643c29961fbc3b23bcecf53aef109d9c01f70ec4bed95b53bb249"
     },
     {
       "path": "shell/journal.py",
-      "bytes": 3987,
-      "sha256": "d94dc76c875b957993c4be70cd9e0c20a8e9933fe662cad62be4c1d7420677ff"
+      "bytes": 4027,
+      "sha256": "714947eb6685032c896f601ef85fec9eaf7cb2c39b36ed7a8a30f0c86198b7e7"
     },
     {
       "path": "shell/pedal.py",
-      "bytes": 3430,
-      "sha256": "b0928f632e038bb9675c210378400c035e8a51cc608a0d2f790430391216aa97"
+      "bytes": 3437,
+      "sha256": "fe19337649eddcc804398f410e022fce91bead708159ae3f82ae01dc790312f9"
     },
     {
       "path": "shell/scan_rules.py",
@@ -32,14 +32,14 @@
       "sha256": "a07e19eaac003b775adbe93fac86ce1536cf1e83729f7c654279e5f0c09f1504"
     },
     {
-      "path": "shell/sound.py",
-      "bytes": 1002,
-      "sha256": "9a5a225f15d00fcd22b5e5b6322f75fac08cd881da65d29e5eafb2d0685a7e0e"
+      "path": "shell/shell_fileio.py",
+      "bytes": 2357,
+      "sha256": "4c550a6e00e506503ee2d202183b1aa15c2be157c3b92d08f8597f8516cdf295"
     },
     {
-      "path": "shell/tk_ab.py",
-      "bytes": 6897,
-      "sha256": "ac9272790f77ae7b8bbed96110443d58ffcccc6716154406190671057a05a356"
+      "path": "shell/sound.py",
+      "bytes": 1513,
+      "sha256": "808771ebea0eaff17619505984a0364a19e07a11ddc824298f5feeb90bb585a1"
     },
     {
       "path": "shell/web/app.css",
@@ -97,7 +97,7 @@
       "sha256": "fdb207a3b596271368fe67a4781d0cbb81c28619bd98057f12487f605b64c07a"
     }
   ],
-  "version": "v3.13",
+  "version": "v3.14",
   "status": "source ready; native window behavior NOT TESTED on host",
   "run_commands": [
     "<python> -I -B app/shell/host.py --profile rw --data <isolated-data> --udf <isolated-udf> --test-control <control-dir>",
@@ -151,6 +151,12 @@
   "exit": "bridge.request_exit() any thread -> window.destroy on its own thread, X question skipped; window X -> processor.closing() on owner (False cancels, 3 s no answer or error -> close)",
   "reply_shape": "command/admin -> {ok: True, result: <processor value>, state}; exception -> {ok: False, error, state}; frame.js unwraps a result dict carrying ok (57f87c1a)",
   "bundle_root": "run_app(root=<bundle>, page=<bundle>/app/<app>/index.html): pywebview global server started on root before webview.start so ../ shared files load; page outside root -> ValueError before anything starts",
-  "file_picker": "bridge.pick_file(title,kinds=None,timeout=None): host posts the OPEN_DIALOG to the UI thread (BeginInvoke) and returns a Future; the owner keeps pumping (queued scans/state/push_state, sequence-gap timer, attach_owner(idle=) hook e.g. Tk root.update) until it settles; cancel/closing/detach -> None, timeout -> None + result timeout (late choice dropped); synchronous fake pickers still accepted; test sub-1/test_v313.py",
-  "sink_key_log": "frame scan.js 280f5625 rule: key rows {type,t,editing[,key for Enter/Escape/Tab/Backspace/F12]} inside and outside fields; key_diag/keypress_path/alt_numpad carry no key/code; outside keys dropped (no scan) while a password/[data-pin] field is visible, F12 kept; test sub-1/test_v313_sink.cjs"
+  "kit_only_files": [
+    {
+      "path": "shell/tk_ab.py",
+      "bytes": 6897,
+      "sha256": "ac9272790f77ae7b8bbed96110443d58ffcccc6716154406190671057a05a356"
+    }
+  ],
+  "local_writes": "every shell file write goes through shell/shell_fileio.py (SHELL_WRITE_SITES append_bytes, create_new, truncate, replace_atomic, make_dirs), each raw write inside `with _guard(op, path, kind)`; app installs factory(op, path, kind) -> context manager via shell_fileio.set_write_guard or run_app(write_guard=); kind events|journal|sound_cache|udf|test_control; none = plain writes; refused events/sound writes lose only diagnostics (state.events_dropped); processor-mode journal failure records journal_write_failed and scanning continues; in-memory queues use put_nowait; IW derive_inventory@a211ea48 over webshell/*: 9 sinks, all in shell_fileio under _guard; test sub-1/test_v314.py"
 }
