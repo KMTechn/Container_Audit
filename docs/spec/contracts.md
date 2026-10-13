@@ -572,6 +572,13 @@ CA의 Windows 출력 어댑터는 현재 기본 프린터의 이름·`GetPrinter
 <a id="ca-c10"></a>
 ## CA-C10 현재 사용자 등록·설치 식별자·소유 증명
 
+**설치 주소 결속:** 기계 설치의 `pending-onboarding.json`에 남은 `server_base_url`과
+등록에 사용한 relay credential의 `endpoint_url`을 scheme·host·기본 port로 정규화해 비교한다.
+서로 다른 경우 READY·온보딩 재사용·완료된 설치의 빠른 재사용을
+`RECOVERY_REQUIRED`/`INSTALL_SERVER_ORIGIN_CHANGED`로 차단한다. 로컬 자료와 대기열은 보존하며
+새 등록·relay 시작 요청은 하지 않는다. 응답 profile의 주소는 비교하지 않으며,
+주소 기록 부재·손상·판독 실패는 기존 판정을 유지한다.
+
 작업자 바로 가기는 설치 readback 뒤 이 앱 설치 루트 안의 없는 대상만 전환한다.
 원 대상·인수·아이콘과 원 `.lnk` 바이트를 변경 전에 보존하며, 옛 앱 복원/제거 때 원본을
 되돌리고 새 링크는 지운다. 사용자/공용 범위와 기록 위치는 [CA-O05](operations.md#ca-o05)를 따른다.

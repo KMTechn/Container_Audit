@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "2c1c7266eec44b9a02d9a1cc52b6d4c8d314ac4f52e343c4bccc5ffff05c19e6",
+  "after_inventory_sha256": "5b21293f41291132ba753c7df39e8884b2c2ac912d495e8246e3fe7466ea6e1e",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -188,7 +188,7 @@
     {
       "path": "app/Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "3cd2230aea4457d08ada396d424edb03dd45d434df1581279c5956db7afe5d2e"
+      "after": "aef9b7db61812f373cb17b23a0e0c24449139158e3ced193203ad76634a26c70"
     },
     {
       "path": "app/best_time_records.py",
@@ -213,7 +213,7 @@
     {
       "path": "app/current_user_onboarding.py",
       "before": "3781e04e185b139c0bacb8b8c3bd2c69f42cc3735760d45191d851d4d98914aa",
-      "after": "73c7fbac89f26eb0c50750f1f7b0f62b01e0c053e11737c3fe5674d9dcdb7cd6"
+      "after": "69bf16eb22f485cbfb54f3ecea976e607ef5e9aa66de9c1f4e1ad4c2a1369b50"
     },
     {
       "path": "app/data_generation_guard.py",
@@ -1463,7 +1463,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "29968193a5f57db60079c2aefa184d598a76260b8b810be3b0c966c9112413e3"
+      "after": "eab6c1de4ebef6dd4be48be2b2b609df5cca57b6e906e2481e1bcabf5256a435"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4513,7 +4513,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "17f81996cf99b282460f2e51a9a8a65853151e5e34076eba9219cc8b8d8ebc16"
+      "after": "1cafcf58784f71d36e6aacd1321d5eade57426053bfeabb8a39033406e29ee82"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4523,19 +4523,19 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "12f0d5871215f832414f47767de296a5cecec99ecaa828efac9d8c5dcc589fc5"
+      "after": "80ae2fd16adca37d3b8880be85eb639394701e4293e856a4c9a51feaaba9dd34"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "8769f7f0f4c7b48d2df83b43c03297844cc9c4393bf680e7133a28a3a4d8fa55"
+      "after": "8b55ed752cf518f2d4ebf1aef5b1f206aa088d2df1147d1a60b769d6c942fb75"
     }
   ],
   "source_replacements": [
     {
       "path": "Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "3cd2230aea4457d08ada396d424edb03dd45d434df1581279c5956db7afe5d2e"
+      "after": "aef9b7db61812f373cb17b23a0e0c24449139158e3ced193203ad76634a26c70"
     },
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
@@ -4560,7 +4560,7 @@
     {
       "path": "current_user_onboarding.py",
       "before": "3781e04e185b139c0bacb8b8c3bd2c69f42cc3735760d45191d851d4d98914aa",
-      "after": "73c7fbac89f26eb0c50750f1f7b0f62b01e0c053e11737c3fe5674d9dcdb7cd6"
+      "after": "69bf16eb22f485cbfb54f3ecea976e607ef5e9aa66de9c1f4e1ad4c2a1369b50"
     },
     {
       "path": "data_generation_guard.py",
@@ -4645,7 +4645,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "17f81996cf99b282460f2e51a9a8a65853151e5e34076eba9219cc8b8d8ebc16"
+      "after": "1cafcf58784f71d36e6aacd1321d5eade57426053bfeabb8a39033406e29ee82"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4695,7 +4695,7 @@
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "29968193a5f57db60079c2aefa184d598a76260b8b810be3b0c966c9112413e3"
+      "after": "eab6c1de4ebef6dd4be48be2b2b609df5cca57b6e906e2481e1bcabf5256a435"
     }
   ],
   "hash_provenance": {

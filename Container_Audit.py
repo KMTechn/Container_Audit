@@ -22735,6 +22735,7 @@ def _first_run_onboarding_enabled() -> bool:
 
 
 MACHINE_ONBOARDING_ERROR_MESSAGES = {
+    "RECOVERY_REQUIRED": "설치 주소가 바뀌었습니다. 관리자에게 알려 주세요.",
     "PENDING_WORKER_SID_MISMATCH": "이 프로그램은 다른 작업자 계정에 설치되었습니다. 지정된 작업자 계정으로 로그인하거나 관리자에게 알려 주세요.",
     "MACHINE_ONBOARDING_FAILED": "작업자 계정의 설치 마무리를 확인하지 못했습니다. 자료를 보존하고 관리자에게 설치 복구를 요청하세요.",
 }
@@ -22793,7 +22794,9 @@ def _show_first_run_onboarding_error(failure: CurrentUserOnboardingError) -> Non
         reason = _startup_data_reason(failure.__cause__)
     elif failure.status == "PENDING_WORKER_SID_MISMATCH":
         reason = "ACCOUNT_MISMATCH"
-    if _startup_refusal(reason):
+    if failure.status == "RECOVERY_REQUIRED":
+        _startup_check_observe("finish", reason, refused=True)
+    elif _startup_refusal(reason):
         return
     report_path = str(failure.report_path)
     operator_message = f"{FIRST_RUN_ONBOARDING_ERROR_MESSAGE}\n보고서: {report_path}"

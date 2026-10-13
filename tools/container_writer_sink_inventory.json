@@ -1218,29 +1218,29 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 422,
+      "line": 427,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 425,
+          "line": 430,
           "operation": "path.parent.mkdir",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 428,
+          "line": 433,
           "operation": "temporary.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 433,
+          "line": 438,
           "operation": "os.replace",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 436,
+          "line": 441,
           "operation": "temporary.unlink",
           "writer_admission_sources": []
         }
@@ -1289,29 +1289,29 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 440,
+      "line": 445,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 445,
+          "line": 450,
           "operation": "path.parent.mkdir",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 448,
+          "line": 453,
           "operation": "temporary.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 453,
+          "line": 458,
           "operation": "os.link",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 456,
+          "line": 461,
           "operation": "temporary.unlink",
           "writer_admission_sources": []
         }
@@ -1361,12 +1361,12 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 671,
+      "line": 676,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 720,
+          "line": 725,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -1416,12 +1416,12 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 768,
+      "line": 773,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 808,
+          "line": 813,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -1455,12 +1455,12 @@
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 1079,
+      "line": 1084,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 1089,
+          "line": 1094,
           "operation": "subprocess.Popen",
           "writer_admission_sources": []
         }
@@ -1481,17 +1481,17 @@
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 1207,
+      "line": 1212,
       "mutation_sites": [
         {
           "category": "registry",
-          "line": 1215,
+          "line": 1220,
           "operation": "winreg.CreateKeyEx",
           "writer_admission_sources": []
         },
         {
           "category": "registry",
-          "line": 1221,
+          "line": 1226,
           "operation": "winreg.SetValueEx",
           "writer_admission_sources": []
         }
@@ -1512,17 +1512,17 @@
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 1877,
+      "line": 1953,
       "mutation_sites": [
         {
           "category": "registry",
-          "line": 1880,
+          "line": 1956,
           "operation": "winreg.CreateKeyEx",
           "writer_admission_sources": []
         },
         {
           "category": "registry",
-          "line": 1884,
+          "line": 1960,
           "operation": "winreg.SetValueEx",
           "writer_admission_sources": []
         }
@@ -1558,11 +1558,11 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 2249,
+      "line": 2346,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2272,
+          "line": 2369,
           "operation": "status_dir.mkdir",
           "writer_admission_sources": [
             "current_user_setup_removal"
@@ -9576,7 +9576,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "2c1c7266eec44b9a02d9a1cc52b6d4c8d314ac4f52e343c4bccc5ffff05c19e6",
+  "inventory_sha256": "5b21293f41291132ba753c7df39e8884b2c2ac912d495e8246e3fe7466ea6e1e",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -22230,7 +22230,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._replacement_identities_match",
-      "line": 768,
+      "line": 773,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -22238,7 +22238,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._start_replacement_user_relay_process",
-      "line": 1079,
+      "line": 1084,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -22246,7 +22246,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.restore_current_user_lifecycle_after_replacement",
-      "line": 2333,
+      "line": 2430,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -22254,7 +22254,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._windows_acl_identity",
-      "line": 671,
+      "line": 676,
       "marker_kind": "decorator",
       "source": "current_user_onboarding"
     },
@@ -22262,7 +22262,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.onboard_current_user",
-      "line": 1976,
+      "line": 2061,
       "marker_kind": "decorator",
       "source": "current_user_onboarding"
     },
@@ -22270,7 +22270,7 @@
       "direct_mutation_site_count": 2,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._install_replacement_user_relay_autostart",
-      "line": 1207,
+      "line": 1212,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -22278,7 +22278,7 @@
       "direct_mutation_site_count": 2,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._record_completed_machine_install_id",
-      "line": 1877,
+      "line": 1953,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -22286,7 +22286,7 @@
       "direct_mutation_site_count": 4,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._write_json_atomic",
-      "line": 422,
+      "line": 427,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -22294,7 +22294,7 @@
       "direct_mutation_site_count": 4,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._write_json_atomic_create_new",
-      "line": 440,
+      "line": 445,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -22302,7 +22302,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.remove_current_user_setup",
-      "line": 2249,
+      "line": 2346,
       "marker_kind": "writer_admission",
       "source": "current_user_setup_removal"
     },
@@ -22502,7 +22502,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 22967,
+      "line": 22970,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },

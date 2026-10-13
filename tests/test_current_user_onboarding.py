@@ -222,8 +222,8 @@ def _preserved_server_state(paths, marker_path):
     selected = [paths.identity_path, paths.producer_manifest_path, paths.credential_path,
                 paths.registration_report_path, paths.logistics_profile_path,
                 paths.logistics_secret_path, paths.ledger_path, marker_path]
-    selected += [directory / "preserved.txt"
-                 for directory in (paths.events_dir, paths.queue_dir, paths.spool_dir)]
+    selected += [path for directory in (paths.events_dir, paths.queue_dir, paths.spool_dir)
+                 for path in directory.rglob("*") if path.is_file()]
     return {path: path.read_bytes() for path in selected}
 
 
@@ -276,7 +276,11 @@ def test_installed_server_change_blocks_ready_and_sends_nothing(installed_server
             autostart_installer=forbidden, relay_launcher=forbidden,
         )
     assert failure.value.status == "RECOVERY_REQUIRED"
+    assert failure.value.reason_code == "INSTALL_SERVER_ORIGIN_CHANGED"
     assert calls == []
+    persisted = json.loads(paths.onboarding_report_path.read_text(encoding="utf-8"))
+    assert persisted["status"] == "RECOVERY_REQUIRED"
+    assert persisted["reason_code"] == "INSTALL_SERVER_ORIGIN_CHANGED"
     assert _preserved_server_state(paths, marker_path) == before
 
 
@@ -305,6 +309,7 @@ def test_reinstalled_server_never_reuses_old_live_relay(installed_server_state):
             relay_launcher=reuse,
         )
     assert failure.value.status == "RECOVERY_REQUIRED"
+    assert failure.value.reason_code == "INSTALL_SERVER_ORIGIN_CHANGED"
     assert reused == []
     assert _preserved_server_state(paths, marker_path) == before
 
@@ -358,8 +363,27 @@ def test_completed_machine_install_still_checks_server_before_reuse(installed_se
         with pytest.raises(CurrentUserOnboardingError) as failure:
             consume()
         assert failure.value.status == "RECOVERY_REQUIRED"
+        assert failure.value.reason_code == "INSTALL_SERVER_ORIGIN_CHANGED"
     else:
         assert consume() == {"status": "READY", "action": "MACHINE_INSTALL_ALREADY_COMPLETED"}
+    assert _preserved_server_state(paths, marker_path) == before
+
+
+def test_completed_machine_install_keeps_old_decision_when_paths_are_unreadable(installed_server_state, monkeypatch):
+    paths, environment, marker_path, marker = installed_server_state
+    marker["target_sid"] = TEST_SOURCE_HOST_ID
+    _write_json(marker_path, marker)
+    before = _preserved_server_state(paths, marker_path)
+    def unreadable(*_args, **_kwargs):
+        raise ValueError("unavailable user-state paths")
+    monkeypatch.setattr(onboarding_module, "resolve_current_user_onboarding_paths", unreadable)
+    result = onboarding_module.consume_pending_machine_onboarding(
+        paths.app_root, environ=environment, sid_reader=lambda: TEST_SOURCE_HOST_ID,
+        completion_reader=lambda: marker["install_id"],
+        completion_writer=lambda _value: pytest.fail("completion was rewritten"),
+        onboarder=lambda *_args, **_kwargs: pytest.fail("completed install was registered again"),
+    )
+    assert result == {"status": "READY", "action": "MACHINE_INSTALL_ALREADY_COMPLETED"}
     assert _preserved_server_state(paths, marker_path) == before
 
 

@@ -18,6 +18,7 @@ import subprocess
 import sys
 import time
 from typing import Any, Callable, Mapping, MutableMapping
+from urllib.parse import urlsplit
 import uuid
 from contextlib import nullcontext
 
@@ -71,6 +72,8 @@ BOOTSTRAP_INTEGRITY_VERSION = "container-audit-bootstrap-integrity-v1"
 LOGISTICS_PROFILE_PATH_ENV = PROFILE_PATH_ENV
 ENROLLMENT_TLS_CA_BUNDLE_PATH_ENV = "CONTAINER_AUDIT_ENROLLMENT_TLS_CA_BUNDLE_PATH"
 ONBOARDING_EXIT_CODE = 4
+INSTALL_SERVER_ORIGIN_CHANGED = "INSTALL_SERVER_ORIGIN_CHANGED"
+INSTALL_SERVER_ORIGIN_MESSAGE = "설치 주소가 바뀌었습니다. 관리자에게 알려 주세요."
 WRITER_FENCE_EXIT_CODE = 23
 INSTALLER_FAILURE_PREFIX = "CONTAINER_AUDIT_INSTALLER_FAILURE="
 INSTALLER_WRITER_FENCE_CODES = frozenset({
@@ -139,13 +142,15 @@ _REPLACEMENT_RECEIPT_FIELDS = frozenset(
 
 class CurrentUserOnboardingError(RuntimeError):
     def __init__(
-        self, message: str, *, report_path: Path, status: str = "FAILED"
+        self, message: str, *, report_path: Path, status: str = "FAILED",
+        reason_code: str = "",
     ) -> None:
         from auto_update import _failure_text, failure_user_line
         self.original_failure_text = _failure_text(message, limit=65536)
         super().__init__(failure_user_line(message))
         self.report_path = Path(report_path)
         self.status = status
+        self.reason_code = reason_code
 
 
 class CurrentUserPossessionRecoveryRequired(ValueError):
@@ -1317,12 +1322,77 @@ def _observe_startup_onboarding(state, **kwargs):
         pass
 
 
+def _server_origin(value: Any) -> tuple[str, str, int] | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    if any(character.isspace() for character in value) or "\\" in value:
+        return None
+    try:
+        parsed = urlsplit(value)
+        scheme = parsed.scheme.lower()
+        host = (parsed.hostname or "").lower().rstrip(".")
+        port = parsed.port
+        if (scheme not in {"http", "https"} or not host
+                or parsed.username is not None or parsed.password is not None
+                or parsed.query or parsed.fragment
+                or (port is not None and not 1 <= port <= 65535)):
+            return None
+        if ":" not in host and not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", host):
+            return None
+        return scheme, host, port if port is not None else (443 if scheme == "https" else 80)
+    except ValueError:
+        return None
+
+
+def _install_server_origin_changed(
+    paths: CurrentUserOnboardingPaths,
+    credential: Mapping[str, Any] | None = None,
+    *, environ: Mapping[str, str] | None = None,
+) -> bool:
+    # The administrator-owned intent survives completion and records the
+    # installation origin. A response-supplied logistics host is not this binding.
+    values = os.environ if environ is None else environ
+    program_data = str(values.get("PROGRAMDATA") or "").strip()
+    if not program_data:
+        return False
+    marker_path = Path(program_data) / "KMTech/ContainerAudit/machine-install/pending-onboarding.json"
+    try:
+        from logistics_runtime_profile import assert_path_has_no_reparse_components
+        assert_path_has_no_reparse_components(marker_path, label="machine onboarding intent")
+        if marker_path.stat().st_size > 65536:
+            return False
+        marker = _read_json(marker_path, "machine onboarding intent")
+        if marker.get("schema") != "container-audit-machine-pending-v1" or marker.get("status") != "PENDING":
+            return False
+        install_root = marker.get("install_root")
+        if not isinstance(install_root, str) or not Path(install_root).is_absolute():
+            return False
+        installed_root = _resolved(install_root)
+        code_root = paths.app_root.parent
+        if code_root != installed_root and not (
+            code_root.parent == installed_root.parent / "versions"
+        ):
+            return False
+        installed_origin = _server_origin(marker.get("server_base_url"))
+        if installed_origin is None:
+            return False
+        if credential is None:
+            credential = _read_json(paths.credential_path, "producer credential")
+        registered_origin = _server_origin(credential.get("endpoint_url"))
+        return registered_origin is not None and installed_origin != registered_origin
+    except Exception:
+        # Missing or unreadable historical records retain the existing decision.
+        return False
+
+
 def inspect_current_user_state(
     paths: CurrentUserOnboardingPaths,
     *,
     profile_loader: Callable[[Path], Any] = _default_profile_loader,
     credential_loader: Callable[[Path], Any] = load_credentials_from_json,
     prepared_credential: PreparedCredentialConfig | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     state_paths = {
         "identity": paths.identity_path,
@@ -1432,6 +1502,12 @@ def inspect_current_user_state(
             raise ValueError("producer credential is not current-user scoped")
         if str(profile_payload.get("credential_scope") or "") != "current_user":
             raise ValueError("logistics profile is not current-user scoped")
+        if _install_server_origin_changed(paths, credential, environ=environ):
+            return {
+                "status": "RECOVERY_REQUIRED", "present": present,
+                "reason_code": INSTALL_SERVER_ORIGIN_CHANGED,
+                "reason": INSTALL_SERVER_ORIGIN_MESSAGE,
+            }
         resolved_credential = (credential_loader(paths.credential_path, prepared_config=prepared_credential)
                                if prepared_credential is not None else credential_loader(paths.credential_path))
         resolved_profile = profile_loader(paths.logistics_profile_path)
@@ -1935,6 +2011,15 @@ def consume_pending_machine_onboarding(
             return {"status": "PENDING"}
         reader = completion_reader or _completed_machine_install_id
         if reader() == install_id:
+            try:
+                paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
+            except Exception:
+                paths = None
+            if paths is not None and _install_server_origin_changed(paths, environ=environ):
+                raise CurrentUserOnboardingError(
+                    INSTALL_SERVER_ORIGIN_MESSAGE, report_path=paths.onboarding_report_path,
+                    status="RECOVERY_REQUIRED", reason_code=INSTALL_SERVER_ORIGIN_CHANGED,
+                )
             return {"status": "READY", "action": "MACHINE_INSTALL_ALREADY_COMPLETED"}
         root = _resolved(app_root).parent
         installed_root = _resolved(marker.get("install_root", ""))
@@ -2077,6 +2162,7 @@ def onboard_current_user(
                 profile_loader=profile_loader,
                 credential_loader=credential_loader,
                 prepared_credential=prepared_credential,
+                environ=environ,
             )
             _observe_startup_onboarding(state, can_onboard=True)
             report["initial_state"] = state
@@ -2097,8 +2183,14 @@ def onboard_current_user(
                     profile_loader=profile_loader,
                     credential_loader=credential_loader,
                     prepared_credential=prepared_credential,
+                    environ=environ,
                 )
             if state["status"] == "RECOVERY_REQUIRED":
+                if state.get("reason_code") == INSTALL_SERVER_ORIGIN_CHANGED:
+                    raise CurrentUserOnboardingError(
+                        INSTALL_SERVER_ORIGIN_MESSAGE, report_path=paths.onboarding_report_path,
+                        status="RECOVERY_REQUIRED", reason_code=INSTALL_SERVER_ORIGIN_CHANGED,
+                    )
                 if state.get("recovery_action") == ADMIN_RECOVERY_ACTION:
                     raise CurrentUserOnboardingError(
                         str(
@@ -2134,6 +2226,7 @@ def onboard_current_user(
                 profile_loader=profile_loader,
                 credential_loader=credential_loader,
                 prepared_credential=prepared_credential,
+                environ=environ,
             )
             if state["status"] != "READY":
                 raise ValueError(
@@ -2146,6 +2239,7 @@ def onboard_current_user(
             current_state = inspect_current_user_state(
                 paths, profile_loader=profile_loader, credential_loader=credential_loader,
                 prepared_credential=prepared_credential,
+                environ=environ,
             )
             if not attempt.is_current():
                 raise ValueError("a newer onboarding attempt superseded this response")
@@ -2194,6 +2288,7 @@ def onboard_current_user(
             if inspect_current_user_state(
                 paths, profile_loader=profile_loader, credential_loader=credential_loader,
                 prepared_credential=prepared_credential,
+                environ=environ,
             ) != state:
                 raise ValueError("current-user owner state changed before local onboarding apply")
             apply_current_user_runtime_environment(
@@ -2219,6 +2314,8 @@ def onboard_current_user(
         ) from exc
     except CurrentUserOnboardingError as exc:
         report["status"] = exc.status
+        if exc.reason_code:
+            report["reason_code"] = exc.reason_code
         report["error_type"] = exc.__class__.__name__
         if attempt is None:
             _persist_failure_report(paths.onboarding_report_path, report, exc)

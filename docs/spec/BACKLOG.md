@@ -365,6 +365,9 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g09"></a>
 ## CA-G09 복사 VM의 등록 충돌과 일반 설치 후속
 
+- 설치·등록 주소 불일치의 READY/재사용 차단은 로컬 가짜 상태로 검증한다.
+  실제 재설치·상주 relay·현장 안내창 확인은 별도 랩 수용 범위다. 주소 기록 부재나 판독 실패는 기존 동작을 유지한다.
+
 - **11:55Z 현재 판정:** 지정 VM의 정상 등록 recovery·a7 업무/설치 lifecycle, d440 진짜 교체/취소 회복/공개 Restore09, 복원 a7 F4 target GOOD2 ACK와 마지막 cold boot까지 실제 확인했다. Main은 d440 source review와 Restore09의 exact 증거를 독립 수용했고 Web은 F4 receipt1/exact2를 확인했다. F4는 Label/Web에 명시 인계, VM은 Off로 Main에 반환하여 CA의 적용 가능한 일반 qualification 작업을 완료했다. 이전 bullet의 미실행·실패는 당시 이력이다. 남은 독립 경계는 F4 downstream 교체/포장 수용, case03 expired/unreconciled의 Main custody, 실장비/강제 crash/다른 환경이며 전체 Ready를 임의 승격하지 않는다. [CA-O09](operations.md#ca-o09)와 [최종 실행 보고서](E:/KMTech/ca-install-qualification-20260908/REPORT.md)로 source/artifact·VM 반환·증거 범위를 대조한다.
 
 - **유형·우선순위·상태:** 실제 qualification 후속, P1, 첫 fresh 실패 보존·정상 recovery와 후속 설치 PASS·업무 검증 중. [첫 시도](E:/KMTech/ca-install-qualification-20260908/REPORT.md)의 frozen source68dd/동일 ZIP은 guest PlanOnly·HTTPS·일반 사용자 token·코드 배치까지 통과했으나 registration `producer_identity_conflict`로 canonical exit1 / **FAILED_ROLLED_BACK**다. 위 CA-G08의 설치 NOT TESTED는 빌드 당시 이력이며 현재 결과에 자동 적용하지 않는다.
