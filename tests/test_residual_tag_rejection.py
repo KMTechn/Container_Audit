@@ -1,4 +1,5 @@
 import base64
+import datetime
 import hashlib
 import json
 import queue
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 import label_qr
+import Container_Audit as container_module
 from Container_Audit import ContainerAudit, TraySession
 from preflight_scan_hold import HOLD_LOOKUP_FAILED
 from tests.operation_lease_fixtures import fixed_operation_lease_clock  # noqa: F401
@@ -15,10 +17,17 @@ from tests.test_container_audit_contracts import _completion_app
 from tests.test_phs2_master_preflight import (
     BlockingClient, COMPACT_QR, ITEM, ScheduledRoot, _app, _pump_until, _resolved,
 )
-from tray_state import tray_session_to_state
+from parked_tray_store import ParkedTrayStore
+from tray_state import OPERATOR_REVIEW_STATE_KEY, tray_session_to_state
 from transfer_client import LogisticsTransferClient
 from transfer_common import TransferSealError
-from tests.test_transfer_member_exchange import _runtime as exchange_runtime, _prepare as prepare_exchange
+from warning_presenter import CompletionOutcome, CompletionOutcomeSnapshot, WarningPresenter
+from tests.test_container_p0_contracts import _linked_test_pin
+from tests.test_transfer_member_exchange import (
+    INPUT_HASH_PREFIX, INPUT_LABEL, INPUT_TAG, ITEM as EXCHANGE_ITEM, NEW_1, OLD_1, PHS2_MASTER,
+    TransferMemberExchangeCoordinator as ExchangeCoordinator, _phs2_target_projection,
+    TransferMemberExchangeStore as ExchangeStore, _runtime as exchange_runtime, _prepare as prepare_exchange,
+)
 from tests.test_transfer_seal import (
     FakeResponse, TransferSealCoordinator, TransferSealStore,
     _client, _prepare as prepare_seal, _resolved_bundle, _LogisticsServer,
@@ -321,3 +330,172 @@ def test_rejected_durable_seal_does_not_recheck_or_retry(tmp_path):
             authorize=lambda: True, record_audit=lambda _event: pytest.fail("terminal rejection reached retry audit"))
     assert raised.value.code == "TRANSFER_REVIEW_RETRY_NOT_AVAILABLE"
     assert len(session.calls) == before
+
+
+def _residual_seal_runtime(path, server):
+    def handler(call):
+        if call["method"] == "POST" and server.mode == "residual":
+            return FakeResponse(409, {"ok": False, "retryable": False,
+                                      "error": {"code": CODE, "message": REJECTION}})
+        return server(call)
+    client, session = _client(handler)
+    return TransferSealCoordinator(TransferSealStore(path), client), session
+
+
+@pytest.mark.parametrize("kind", ["seal", "exchange"])
+def test_residual_rejected_command_never_resends_after_drain_or_restart(tmp_path, kind):
+    if kind == "seal":
+        server = _LogisticsServer()
+        coordinator, session = _residual_seal_runtime(tmp_path / "seal.db", server)
+        prepared = _pending_with_command(coordinator, "residual-final")
+        server.mode = "residual"
+        reopen = lambda: TransferSealCoordinator(TransferSealStore(tmp_path / "seal.db"), coordinator.client)
+    else:
+        coordinator, _posted, session = exchange_runtime(tmp_path,
+            replace_error=TransferSealError(CODE, REJECTION, retryable=False))
+        prepared = prepare_exchange(coordinator)
+        reopen = lambda: ExchangeCoordinator(ExchangeStore(tmp_path / "exchange.db"), coordinator.client)
+    first = coordinator.attempt(prepared.intent_id)
+    assert (first.status, first.error_code) == ("OPERATOR_REVIEW", CODE)
+    sent = len(session.calls)
+    # Same session (relay drain, direct attempt) and a reopened store (app restart).
+    for current in (coordinator, reopen()):
+        assert prepared.intent_id not in current.store.pending_ids()
+        current.drain_pending()
+        current.attempt(prepared.intent_id)
+        if kind == "seal":
+            current.drain_pending_through(prepared.intent_id)
+            current.recheck_operator_review_receipt(prepared.intent_id)
+        row = current.store.load(prepared.intent_id)
+        assert (row["status"], row["last_error_code"]) == ("OPERATOR_REVIEW", CODE)
+    assert len(session.calls) == sent
+    assert not [call for call in session.calls[sent:] if call["method"] == "POST"]
+
+
+def _review_escape_app(tmp_path, *, tray=None):
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.worker_name = "review-worker"
+    app.worker_role = "WORKER"
+    app.computer_id = "host-01"
+    app.root = SimpleNamespace(after_cancel=lambda _job: None)
+    app.current_tray = tray or TraySession()
+    app.warning_presenter = WarningPresenter()
+    app._pending_operator_review_snapshot = None
+    app._pending_completion_event_contract = None
+    app.save_folder = str(tmp_path)
+    app.parked_trays_dir = str(tmp_path / "parked")
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_DANGER = "danger"
+    app._is_completed_master_label = lambda _label: False
+    app._preflight_context_blocks_mutation = lambda **_kwargs: False
+    app._current_transfer_member_exchange_attempt = lambda: None
+    app._ui_lane = None
+    app.events = []
+    app._log_event = lambda event, *_args, **_kwargs: app.events.append(event) or True
+    for name in ("_invalidate_pending_scan_callbacks", "_start_warning_beep", "_stop_warning_beep",
+                 "_reset_ui_to_waiting_state", "_update_all_summaries", "_update_parked_trays_list",
+                 "_show_left_sidebar_view", "_render_warning_state", "_update_action_button_states",
+                 "show_status_message"):
+        setattr(app, name, lambda *_args, **_kwargs: None)
+    app.scanned_listbox = SimpleNamespace(delete=lambda *_args: None)
+    _linked_test_pin(app)
+    return app
+
+
+def _residual_review_tray(master_label=COMPACT_QR):
+    now = datetime.datetime.now()
+    return TraySession(master_label_code=master_label, item_code=ITEM, item_name="fixture item",
+        item_spec="fixture spec", scanned_barcodes=["held-product"], scan_times=[now],
+        tray_size=2, stopwatch_seconds=30.0, start_time=now)
+
+
+def _no_modal(monkeypatch):
+    for name in ("askyesno", "showwarning", "showerror"):
+        monkeypatch.setattr(container_module.messagebox, name,
+            lambda *_a, **_k: pytest.fail("unexpected modal in residual review escape"))
+
+
+def _assert_escaped_to_parked(app, tmp_path, master_label):
+    assert app._defer_blocked_current_tray_for_supervisor(confirm=False) is True
+    parked = list((tmp_path / "parked").glob("*.json"))
+    assert len(parked) == 1
+    held = ParkedTrayStore.load(parked[0])
+    assert held["master_label_code"] == master_label
+    assert not (tmp_path / "current.json").exists()
+    assert app.current_tray.master_label_code == ""
+    assert app._operator_review_blocks_mutation() is False
+    return held
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_residual_seal_review_tray_escapes_by_supervisor_hold(tmp_path, monkeypatch, restart):
+    _no_modal(monkeypatch)
+    app = _review_escape_app(tmp_path, tray=_residual_review_tray())
+    app.warning_presenter.present_completion(CompletionOutcomeSnapshot(
+        outcome=CompletionOutcome.OPERATOR_REVIEW, item_name="fixture item", master_label=COMPACT_QR,
+        scan_count=1, target_count=2, message=REJECTION, error_code=CODE))
+    assert app._save_current_tray_state() is True
+    if restart:
+        app = _review_escape_app(tmp_path)
+        app._load_current_tray_state()
+        assert app.current_tray.master_label_code == COMPACT_QR
+    assert app._active_blocking_completion_snapshot().error_code == CODE
+    assert app._operator_review_blocks_mutation() is True
+    held = _assert_escaped_to_parked(app, tmp_path, COMPACT_QR)
+    assert held[OPERATOR_REVIEW_STATE_KEY]["error_code"] == CODE
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_residual_exchange_review_tray_escapes_by_supervisor_hold(tmp_path, monkeypatch, restart):
+    _no_modal(monkeypatch)
+    coordinator, posted, session = exchange_runtime(tmp_path, target_response=_phs2_target_projection(),
+        replace_error=TransferSealError(CODE, REJECTION, retryable=False))
+    prepared = coordinator.prepare(master_label=PHS2_MASTER, master_label_fields={
+        "PHS": "2", "SRC": "KMTECH_INPUT_TAG", "ITG": INPUT_TAG, "CLC": EXCHANGE_ITEM,
+        "LBL": INPUT_LABEL, "HSH": INPUT_HASH_PREFIX,
+    }, item_id=EXCHANGE_ITEM, operator="tester", old_barcodes=[OLD_1], new_barcodes=[NEW_1])
+    assert coordinator.attempt(prepared.intent_id).status == "OPERATOR_REVIEW"
+    if restart:
+        coordinator = ExchangeCoordinator(ExchangeStore(tmp_path / "exchange.db"), coordinator.client)
+    sent = len(session.calls)
+    master = coordinator.store.load(prepared.intent_id)["master_label"]
+    tray = _residual_review_tray(master)
+    tray.item_code = EXCHANGE_ITEM
+    tray.canonical_input_tag_qr = tray.active_label_qr_payload = master
+    app = _review_escape_app(tmp_path, tray=tray)
+    del app._current_transfer_member_exchange_attempt
+    app.transfer_seal_coordinator = None
+    app.transfer_member_exchange_coordinator = coordinator
+    app._apply_transfer_coordinator_ui_snapshot(app._work_transfer_coordinator_ui_snapshot(master_label=master))
+    attempt = app._current_transfer_member_exchange_attempt()
+    assert (attempt.status, attempt.error_code) == ("OPERATOR_REVIEW", CODE)
+    assert app._save_current_tray_state() is True
+    _assert_escaped_to_parked(app, tmp_path, master)
+    assert app._current_transfer_member_exchange_attempt() is None
+    assert len(session.calls) == sent and len(posted) == 1
+
+
+def test_residual_preflight_hold_escapes_by_supervisor_quarantine_after_restart(flow, monkeypatch):
+    _no_modal(monkeypatch)
+    client = BlockingClient(_resolved(), error=TransferSealError(CODE, REJECTION, status_code=409, retryable=False))
+    app = flow(transition=True, client=client)
+    app._start_warning_beep = lambda: None
+    app._process_barcode_logic(COMPACT_QR)
+    _pump_until(app.root, lambda: not app._master_preflight_pending)
+    _pump_until(app.root, lambda: app._preflight_hold_store().exists()
+                and app._preflight_hold_store().load().state == HOLD_LOOKUP_FAILED)
+    # Restart: a new app over the same data folder restores the rejected hold locked.
+    app = flow(transition=True, client=client)
+    app._start_warning_beep = lambda: None
+    assert app._restore_preflight_scan_hold() is True
+    assert app._preflight_scan_input_locked is True
+    assert app._preflight_context_blocks_mutation() is True
+    app.worker_role = "WORKER"
+    _linked_test_pin(app)
+    assert app._quarantine_preflight_hold_for_supervisor(reason="residual tag rejected", confirm=False) is True
+    assert not app._preflight_hold_store().exists()
+    assert app._preflight_scan_input_locked is False
+    assert app._preflight_context_blocks_mutation() is False
+    assert len(client.identities) == 1
+    assert not app.seal_calls
