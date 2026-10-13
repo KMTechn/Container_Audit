@@ -882,11 +882,19 @@ def test_container_audit_keeps_worker_registry_import_compatibility():
     assert WorkerRegistry is worker_registry.WorkerRegistry
 
 
+def _is_gui_ready_marker(callback):
+    # main() schedules its daily GUI-ready marker (88b1ca9) on the root; that
+    # is not an update notice or work step, so call ledgers skip only it.
+    return getattr(callback, "__name__", "") == "report_gui_ready"
+
+
 def test_main_starts_work_without_scheduling_update_notice(monkeypatch):
     calls = []
 
     class FakeRoot:
         def after(self, delay_ms, callback):
+            if _is_gui_ready_marker(callback):
+                return
             calls.append(("after", delay_ms))
             self.callback = callback
 
@@ -927,7 +935,9 @@ def test_main_completes_current_user_onboarding_before_catalog_and_client(
             calls.append("release")
 
     class FakeRoot:
-        def after(self, _delay_ms, _callback):
+        def after(self, _delay_ms, callback):
+            if _is_gui_ready_marker(callback):
+                return
             calls.append("update-scheduled")
 
     class FakeApp(ContainerAudit):
@@ -1001,7 +1011,9 @@ def test_main_warns_and_continues_with_verified_catalog_cache(monkeypatch, tmp_p
             calls.append("release")
 
     class FakeRoot:
-        def after(self, delay_ms, _callback):
+        def after(self, delay_ms, callback):
+            if _is_gui_ready_marker(callback):
+                return
             calls.append(("after", delay_ms))
 
     class FakeApp(ContainerAudit):
@@ -5950,8 +5962,9 @@ def test_mismatch_scan_saves_dirty_current_tray_state(tmp_path):
     assert saved_state["has_error_or_reset"] is True
 
 
-def test_product_scan_rejects_when_tray_is_already_full():
+def test_product_scan_rejects_when_tray_is_already_full(tmp_path):
     app = _headless_app()
+    app.save_folder = str(tmp_path)  # storage-failure quarantine root read by scans
     app.worker_name = "fixture worker"
     app.current_tray = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=1",
@@ -6337,8 +6350,9 @@ def test_undo_last_scan_keeps_saved_undo_when_audit_projection_fails(tmp_path, m
 
 
 @pytest.mark.parametrize("held", [False, True])
-def test_product_scan_rolls_back_when_state_save_fails(held):
+def test_product_scan_rolls_back_when_state_save_fails(held, tmp_path):
     app = _headless_app()
+    app.save_folder = str(tmp_path)  # storage-failure quarantine root read by scans
     app.worker_name = "fixture-worker"
     app.current_tray = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=2",
@@ -6387,8 +6401,9 @@ def test_product_scan_rolls_back_when_state_save_fails(held):
 
 
 @pytest.mark.parametrize("held", [False, True])
-def test_product_scan_saves_before_logging_scan_ok(held):
+def test_product_scan_saves_before_logging_scan_ok(held, tmp_path):
     app = _headless_app()
+    app.save_folder = str(tmp_path)  # storage-failure quarantine root read by scans
     app.worker_name = "fixture-worker"
     app.current_tray = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=2",
@@ -6435,7 +6450,7 @@ def test_product_scan_saves_before_logging_scan_ok(held):
     assert not hasattr(app, "completed")
 
 
-def test_product_scan_clamps_clock_rollback_interval_before_scan_ok(monkeypatch):
+def test_product_scan_clamps_clock_rollback_interval_before_scan_ok(monkeypatch, tmp_path):
     class FixedDateTime(datetime.datetime):
         @classmethod
         def now(cls, tz=None):
@@ -6443,6 +6458,7 @@ def test_product_scan_clamps_clock_rollback_interval_before_scan_ok(monkeypatch)
             return value if tz is None else value.replace(tzinfo=tz)
 
     app = _headless_app()
+    app.save_folder = str(tmp_path)  # storage-failure quarantine root read by scans
     app.worker_name = "fixture-worker"
     app.current_tray = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=3",
@@ -6557,8 +6573,9 @@ def test_product_scan_logs_unsafe_format_failure_without_raw_payload_or_state_mu
     assert app.warning[0] == "바코드 형식 오류"
 
 
-def test_product_scan_rejects_barcode_matching_multiple_item_codes():
+def test_product_scan_rejects_barcode_matching_multiple_item_codes(tmp_path):
     app = _headless_app()
+    app.save_folder = str(tmp_path)  # storage-failure quarantine root read by scans
     app.worker_name = "fixture worker"
     app.current_tray = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=2",
@@ -6611,8 +6628,9 @@ def test_product_scan_rejects_barcode_matching_multiple_item_codes():
     assert app.warning[0] == "품목 코드 모호"
 
 
-def test_product_scan_rejects_catalog_resolved_different_overlapping_item_code():
+def test_product_scan_rejects_catalog_resolved_different_overlapping_item_code(tmp_path):
     app = _headless_app()
+    app.save_folder = str(tmp_path)  # storage-failure quarantine root read by scans
     app.worker_name = "fixture worker"
     app.current_tray = TraySession(
         master_label_code="PHS=1|CLC=AAA227073|QT=2",
@@ -6849,6 +6867,7 @@ def test_process_barcode_starts_tray_from_json_master_label(tmp_path):
 
 def test_worker_scanner_full_tray_flow_writes_csv_sequence_before_relay_plan(tmp_path):
     app = _headless_app()
+    app.save_folder = str(tmp_path)  # storage-failure quarantine root read by scans
     app.legacy_label_transition = True  # a pre-PHS2 label starts only in transition mode
     app.worker_name = "홍길동"
     app.log_file_path = str(tmp_path / "이적작업이벤트로그_홍길동_20260624.csv")

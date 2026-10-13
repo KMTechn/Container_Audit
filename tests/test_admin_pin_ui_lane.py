@@ -264,10 +264,34 @@ def test_terminal_notice_exception_releases_pending(recovery, monkeypatch):
         raise RuntimeError("injected terminal notice error")
     monkeypatch.setattr(case.app._admin_pin_client, "verify", failed_verify)
     monkeypatch.setattr(module.messagebox, "showwarning", failed_notice)
+    # 9c9f5d5: a lane fault durably records itself, quarantines the original
+    # hold and admits a new lane generation instead of staying BROKEN.
+    case.app.computer_id = "test-host"
+    original = case.original.read_bytes()
+    held_id = case.hold.load().preflight_id
+    faults = []
+    real_log_event = case.app._log_event
+
+    def log_event(event, *args, **kwargs):
+        written = real_log_event(event, *args, **kwargs)
+        if event == "UI_LANE_FAULT":
+            faults.append(written)
+        return written
+
+    case.app._log_event = log_event
     case.app._quarantine_preflight_hold_from_operations()
-    case.root.run_until(lambda: case.app._ui_lane.state == "BROKEN")
+    old_lane = case.app._ui_lane
+    case.root.run_until(lambda: case.app._ui_lane is not old_lane)
     assert not case.app._admin_pin_ui_pending
-    assert case.original.exists()
+    assert old_lane.state == "CLOSED" and not old_lane.worker_thread.is_alive()
+    assert case.app._ui_lane.state == "IDLE"
+    assert faults == [True]
+    quarantined = next(case.app._preflight_hold_quarantine_directory().glob("preflight_hold_*.json"))
+    assert not case.original.exists() and quarantined.read_bytes() == original
+    store = case.app._parked_store()
+    saved = [store.load(path) for path in store.directory.glob("parked_recovery_*.json")]
+    assert len(saved) == 1 and saved[0]["ui_lane_fault"]["result"] == "UNKNOWN"
+    assert saved[0]["ui_lane_fault"]["preflight_hold"]["preflight_id"] == held_id
 
 
 def test_applied_requery_updates_list_once_without_repeating_effect(recovery):

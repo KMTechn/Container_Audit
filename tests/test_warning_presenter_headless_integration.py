@@ -81,8 +81,11 @@ def _raise(message):
     raise AssertionError(message)
 
 
-def _scan_app(*, save_succeeds, events):
+def _scan_app(*, save_succeeds, events, save_root=None):
     app = ContainerAudit.__new__(ContainerAudit)
+    if save_root is not None:
+        # Product scans first read the storage-failure quarantine under save_folder.
+        app.save_folder = str(save_root)
     app.worker_name = "홍길동"
     app.current_tray = TraySession(
         master_label_code=MASTER_LABEL,
@@ -211,9 +214,9 @@ def _completion_app(*, save_root, seal_status, ledger_succeeds, events):
     return app
 
 
-def test_last_normal_scan_advances_only_after_current_state_save_succeeds():
+def test_last_normal_scan_advances_only_after_current_state_save_succeeds(tmp_path):
     events = []
-    app = _scan_app(save_succeeds=True, events=events)
+    app = _scan_app(save_succeeds=True, events=events, save_root=tmp_path)
 
     app._process_barcode_logic(SECOND_BARCODE)
 
@@ -222,9 +225,9 @@ def test_last_normal_scan_advances_only_after_current_state_save_succeeds():
     assert events.index(("save_state", True)) < events.index(("record_normal_scan", SECOND_BARCODE))
 
 
-def test_state_save_failure_rolls_back_scan_and_preserves_previous_last_normal():
+def test_state_save_failure_rolls_back_scan_and_preserves_previous_last_normal(tmp_path):
     events = []
-    app = _scan_app(save_succeeds=False, events=events)
+    app = _scan_app(save_succeeds=False, events=events, save_root=tmp_path)
 
     app._process_barcode_logic(SECOND_BARCODE)
 
@@ -235,9 +238,9 @@ def test_state_save_failure_rolls_back_scan_and_preserves_previous_last_normal()
     assert not any(event[:2] == ("log_event", "SCAN_OK") for event in events)
 
 
-def test_duplicate_scan_preserves_tray_rows_and_previous_last_normal():
+def test_duplicate_scan_preserves_tray_rows_and_previous_last_normal(tmp_path):
     events = []
-    app = _scan_app(save_succeeds=True, events=events)
+    app = _scan_app(save_succeeds=True, events=events, save_root=tmp_path)
     original_tray = app.current_tray
     original_rows = list(app.scanned_listbox.rows)
 
