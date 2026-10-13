@@ -23,11 +23,13 @@ import hashlib
 import json
 import os
 import sys
+import threading
 import tkinter as tk
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import Container_Audit as ca
+from screen_startup_fallback import ScreenLaunchAttempt, ScreenStartupUnavailable
 from writer_session_fence import writer_admission
 from scan_display import compact_scan_value
 from warning_presenter import CompletionOutcome, NoticeSeverity
@@ -1046,6 +1048,54 @@ def admission_write_guard(op: str, path: Path, kind: str) -> Any:
     return writer_admission("screen_shell_fileio")
 
 
+def _check_screen_ready() -> None:
+    try:
+        raw = (APP_DIR / "shell" / "SHELL-READY-v3.16.json").read_bytes()
+        if hashlib.sha256(raw).hexdigest() != "0c3d7524e8c989b61f5f8da698847e6b5b61fc0939e6fd0fb8bd7faa51efeec8":
+            raise ValueError("shell ready differs")
+        ready = json.loads(raw)
+        if ready["version"] != "v3.16":
+            raise ValueError("shell ready version differs")
+        for row in ready["files"]:
+            relative = Path(row["path"])
+            if relative.is_absolute() or ".." in relative.parts or relative.parts[0] != "shell":
+                raise ValueError("shell ready path differs")
+            data = (APP_DIR / relative).read_bytes()
+            if len(data) != row["bytes"] or hashlib.sha256(data).hexdigest() != row["sha256"]:
+                raise ValueError("shell ready payload differs")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ScreenStartupUnavailable("SHELL_READY_FAILED") from error
+
+
+def _screen_failure_reason(error: Exception) -> str:
+    if isinstance(error, ScreenStartupUnavailable):
+        return error.reason if error.reason in {
+            "WEBVIEW2_MISSING", "SHELL_READY_FAILED", "SHELL_DATA_REFUSED", "SCREEN_START_ERROR",
+        } else "SCREEN_START_ERROR"
+    data_codes = {"SHELL_DATA_IN_APP_ROOT", "SHELL_DATA_NOT_WRITABLE", "NOT_WRITABLE"}
+    if getattr(error, "code", None) in data_codes or any(str(error).startswith(code) for code in data_codes):
+        return "SHELL_DATA_REFUSED"
+    if isinstance(error, PermissionError):
+        return "SHELL_DATA_REFUSED"
+    if isinstance(error, ImportError) and (getattr(error, "name", "") or "").split(".")[0] in {
+        "webview", "clr", "pythonnet", "clr_loader", "System", "Microsoft",
+    }:
+        return "WEBVIEW2_MISSING"
+    message = str(error).lower()
+    if ("webview2" in message or "edgechromium" in message) and any(
+        word in message for word in ("runtime", "missing", "not found", "not available")
+    ):
+        return "WEBVIEW2_MISSING"
+    return "SCREEN_START_ERROR"
+
+
+def _can_fall_back(attempt: ScreenLaunchAttempt) -> bool:
+    try:
+        return not attempt.surface_was_seen() and attempt.cleanup_before_fallback()
+    except Exception:
+        return False  # Unknown cleanup never grants permission to open another UI.
+
+
 def screen_runner(module: Any) -> Callable[[List[str]], Any]:
     def run(arguments: List[str]) -> Any:
         shell_dir = str(APP_DIR / "shell")
@@ -1055,37 +1105,65 @@ def screen_runner(module: Any) -> Callable[[List[str]], Any]:
         original_host = dict(host)
         host.pop("exit", None)
         host.pop("error", None)
+        attempt = ScreenLaunchAttempt()
+        fallback_reason = None
         try:
+            _check_screen_ready()
+            import host as shell_host
             from host import run_app
 
-            result = run_app("rw", shell_data_dir(), root=APP_DIR / "ui", page=PAGE,
-                             title="이적", owner_main=owner_main_for(module, arguments),
-                             write_guard=admission_write_guard)
+            with attempt.observe_host(shell_host):
+                result = run_app("rw", shell_data_dir(), root=APP_DIR / "ui", page=PAGE,
+                                 title="이적", owner_main=owner_main_for(module, arguments, attempt=attempt),
+                                 write_guard=admission_write_guard)
             if "error" in host:
                 raise host["error"]
-            return host.get("exit", result)
+            if getattr(attempt, "startup_refused", False) or attempt.surface_was_seen():
+                return host.get("exit", result)
+            raise ScreenStartupUnavailable("SCREEN_START_ERROR")
         except CaStartupRefused as refused:
             return refused.code
+        except Exception as error:
+            from writer_session_fence import WriterFenceError
+            intentional = (WriterFenceError, module.DataGenerationBlocked, module.DataRootUnavailableError)
+            if isinstance(error, intentional) or not _can_fall_back(attempt):
+                raise
+            fallback_reason = _screen_failure_reason(error)
         finally:
-            host.clear()
-            host.update(original_host)
+            owner = attempt.owner_thread
+            if owner is None or owner is threading.current_thread() or not owner.is_alive():
+                host.clear()
+                host.update(original_host)
             host["requested"] = False
+
+        # The owner and all observed forms have ended before restoring the Tk
+        # route. Call it directly: gates already ran, and fallback cannot recurse.
+        code = "SCREEN_UNAVAILABLE_FALLBACK_OLD_" + fallback_reason
+        try:
+            module._startup_check_observe("note", code)
+            module._startup_check_observe("publish")
+        except Exception:
+            pass  # A failed optional record cannot stop the recovered UI.
+        return module._run_gui_application(arguments)
 
     return run
 
 
-def owner_main_for(module: Any, arguments: List[str]) -> Callable[[Any], Any]:
+def owner_main_for(module: Any, arguments: List[str], *, attempt: Optional[ScreenLaunchAttempt] = None) -> Callable[[Any], Any]:
     context = copy_context()
 
     def owner_main(bridge: Any) -> Any:
         return context.run(run_owner, bridge)
 
     def run_owner(bridge: Any) -> Any:
+        if attempt is not None:
+            attempt.enter_owner(bridge)
         global ca
         original_module = ca
         ca = module  # Container_Audit.py may have been launched as __main__.
         host = module.CA_SCREEN_HOST
         original_active, original_run = host["active"], host["run"]
+        original_attempt = host.get("attempt")
         original_names = [(name, getattr(module, name))
                           for name in ("messagebox", "simpledialog", "filedialog")]
         original_tk = module.tk.Tk
@@ -1095,6 +1173,8 @@ def owner_main_for(module: Any, arguments: List[str]) -> Callable[[Any], Any]:
         def run(app: Any) -> None:
             nonlocal started
             started = True
+            if attempt is not None:
+                attempt.enter_app(app)
             run_on_owner(app, bridge)
 
         def startup_refusal(*args: Any, **kwargs: Any) -> Any:
@@ -1124,14 +1204,20 @@ def owner_main_for(module: Any, arguments: List[str]) -> Callable[[Any], Any]:
 
             setattr(dialogs, name, notice)
         host["active"], host["run"] = True, run
+        if attempt is not None:
+            host["attempt"] = attempt
         for name, _ in original_names:
             setattr(module, name, dialogs)
         module.tk.Tk = _HiddenTk
         module._startup_refusal = startup_refusal
         try:
             code = module._run_gui_application(arguments)
+            if attempt is not None:
+                attempt.owner_completed()
             host["exit"] = code  # run_app does not return the owner thread's value.
             if not started:
+                if attempt is not None:
+                    attempt.startup_refused = True
                 bridge.fail_owner(CaStartupRefused(code))
             return code
         except BaseException as error:
@@ -1141,11 +1227,17 @@ def owner_main_for(module: Any, arguments: List[str]) -> Callable[[Any], Any]:
             return None  # The main thread raises the original error after run_app.
         finally:
             host["active"], host["run"] = original_active, original_run
+            if original_attempt is None:
+                host.pop("attempt", None)
+            else:
+                host["attempt"] = original_attempt
             module.tk.Tk = original_tk
             module._startup_refusal = original_refusal
             for name, value in original_names:
                 setattr(module, name, value)
             ca = original_module
+            if attempt is not None:
+                attempt.owner_finished.set()
 
     return owner_main
 

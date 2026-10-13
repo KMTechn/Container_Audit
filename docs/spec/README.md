@@ -7,6 +7,7 @@
 - 옛 명세(0f82c54 판 README, 기술 이력 포함)는 git 이력에 그대로 있다.
 - 기술 계약은 [contracts.md](contracts.md), 운영은 [operations.md](operations.md), 제품 교환은 [member-exchange-view.md](member-exchange-view.md) 가 정본이다.
 - 설치된 앱의 읽기 전용 확인 계약·실행법은 [startup-check.md](startup-check.md)를 따른다.
+- v2.0.105 시작은 기본 새 화면이다(`--new-screen`도 같은 뜻). `--old-screen`은 비상 옛 화면이며, 새 화면을 한 번도 못 열었을 때만 정상 정리를 확인한 뒤 옛 화면 하나로 자동 넘어간다. 기존 시작 거절은 우회하지 않는다([운영·복구](operations.md)).
 - 근거:
   - 지금 상태 조사표: `D:\KMTech\program-improvement-20260912\work\program\w9archplan\sub-26\INVENTORY.md`(정적, F-01–F-72).
   - 현장 사실: 사용자 확인분. 화면 기준: `specs/UI-AUDIT-1009.md` U7. 허브 결정: `Program_Spec_Hub/DECISIONS.md`.

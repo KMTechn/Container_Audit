@@ -518,8 +518,9 @@ def container_startup_logistics_client():
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.104"
+CURRENT_VERSION = "v2.0.105"
 CA_NEW_SCREEN_ARGUMENT = "--new-screen"
+CA_OLD_SCREEN_ARGUMENT = "--old-screen"
 CA_SCREEN_HOST = {"requested": False, "active": False, "run": None}
 SAFE_TRANSFER_PREFLIGHT_RETRY_CODES = frozenset(
     {"PHS_LABEL_REPLACEMENT_AMBIGUOUS"}
@@ -21599,6 +21600,7 @@ class ContainerAudit:
         while any(
             thread is not threading.current_thread() and thread.is_alive()
             and thread not in PRINT_SUBMISSION_THREADS and thread is not cleanup_watch
+            and not (CA_SCREEN_HOST["active"] and thread is threading.main_thread())
             for thread in threading.enumerate()
         ):
             wait_tick()
@@ -23175,7 +23177,7 @@ def _run_application_main(arguments):
     if hosted_result is not None:
         return hosted_result
 
-    if CA_NEW_SCREEN_ARGUMENT in arguments and not CA_SCREEN_HOST["active"]:
+    if CA_OLD_SCREEN_ARGUMENT not in arguments and not CA_SCREEN_HOST["active"]:
         CA_SCREEN_HOST["requested"] = True
         from ca_screen_bridge import screen_runner
         return screen_runner(sys.modules[__name__])(arguments)
@@ -23246,6 +23248,9 @@ def _run_gui_application(arguments):
     finally:
         if getattr(app, "_loop_cleanup_finished", True):
             instance_lease.release()
+            attempt = CA_SCREEN_HOST.get("attempt")
+            if attempt is not None:
+                attempt.release_instance()
 
 
 def _consume_startup_app_stop_request(direct_sync_root) -> bool:

@@ -60,6 +60,7 @@ APP_ROOT_FILES = (
     "best_time_records.py",
     "Container_Audit.py",
     "ca_screen_bridge.py",
+    "screen_startup_fallback.py",
     "container_admin_pin.py",
     "container_audit_product_host.py",
     "container_audit_test_harness.py",

@@ -16,7 +16,8 @@ def _function(tree, name):
 
 def assert_packet_screen_entry(app):
     for source, target in (("portable/main.py", "main.py"), ("Container_Audit.py", "Container_Audit.py"),
-                           ("ca_screen_bridge.py", "ca_screen_bridge.py")):
+                           ("ca_screen_bridge.py", "ca_screen_bridge.py"),
+                           ("screen_startup_fallback.py", "screen_startup_fallback.py")):
         assert (app / target).read_bytes() == (ROOT / source).read_bytes()
     entry = ast.parse((app / "main.py").read_text(encoding="utf-8"))
     assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -30,11 +31,21 @@ def assert_packet_screen_entry(app):
                for node in ast.walk(_function(product, "main")))
     product_main = _function(product, "_run_application_main")
     route = next(node for node in ast.walk(product_main) if isinstance(node, ast.If)
-                 and any(isinstance(item, ast.Name) and item.id == "CA_NEW_SCREEN_ARGUMENT" for item in ast.walk(node.test)))
+                 and any(isinstance(item, ast.Name) and item.id == "CA_OLD_SCREEN_ARGUMENT" for item in ast.walk(node.test)))
+    selector = compile(ast.Expression(route.test), "packet-screen-route", "eval")
+    values = {"CA_OLD_SCREEN_ARGUMENT": "--old-screen", "CA_SCREEN_HOST": {"active": False}}
+    assert eval(selector, values | {"arguments": []})
+    assert eval(selector, values | {"arguments": ["--new-screen"]})
+    assert not eval(selector, values | {"arguments": ["--old-screen"]})
+    assert not eval(selector, values | {"arguments": [], "CA_SCREEN_HOST": {"active": True}})
     assert any(isinstance(node, ast.ImportFrom) and node.module == "ca_screen_bridge" for node in ast.walk(route))
     assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "screen_runner"
                for node in ast.walk(route))
     bridge = ast.parse((app / "ca_screen_bridge.py").read_text(encoding="utf-8"))
+    assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_can_fall_back"
+               for node in ast.walk(_function(bridge, "screen_runner")))
+    assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "cleanup_before_fallback"
+               for node in ast.walk(_function(bridge, "_can_fall_back")))
     call = next(node for node in ast.walk(_function(bridge, "screen_runner"))
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "run_app")
     keywords = {item.arg: item.value for item in call.keywords}

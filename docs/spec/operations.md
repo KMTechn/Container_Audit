@@ -1,12 +1,14 @@
 ﻿# 운영·환경·장애 복구
 
-업데이트 후보의 판정은 설치된 판의 `tools/apply_prepared_update.ps1`이 한다. v2.0.103처럼 unsigned 목록이 빈 판만 받는 옛 helper가 깔린 PC는 v2.0.104 자동 업데이트를 `STARTUP_UPDATE_PORTABLE_MANIFEST_DIFFERS`로 거절하며 업무를 멈추지 않는다. 그런 PC는 정식 제거 뒤 새로 설치한다. 자료꼴 호환 하한 v2.0.103은 업데이트 출발판을 뜻하지 않는다.
+자동 업데이트 출발판은 v2.0.104 이상이다. 업데이트 후보는 설치된 판의 `tools/apply_prepared_update.ps1`이 판정한다. v2.0.103처럼 unsigned 목록이 빈 판만 받는 옛 helper가 깔린 PC는 v2.0.104 이후 자동 업데이트를 `STARTUP_UPDATE_PORTABLE_MANIFEST_DIFFERS`로 거절하며 업무를 멈추지 않는다. 그런 PC는 정식 제거 뒤 새로 설치한다. 자료꼴 호환 하한 v2.0.103은 업데이트 출발판을 뜻하지 않는다.
+
+v2.0.105부터 인수 없이 시작하면 새 화면 하나를 연다. `--old-screen`은 옛 Tk 화면을 직접 여는 비상 인수다. 새 화면이 한 번도 보이지 않고 ready도 받지 못한 채 실패하면, 숨은 앱의 정상 저장·종료와 잠금 해제·주인 스레드 종료 및 셸 폼 0을 확인한 뒤 옛 화면을 한 번만 연다. 창이 이미 보였거나 시작 관문이 의도적으로 거절한 경우에는 넘어가지 않는다. 정리를 확인하지 못한 갈래도 기존 오류 출구로 끝낸다. 옛 화면을 열기 전에 시작 관측에 `SCREEN_UNAVAILABLE_FALLBACK_OLD_`와 `WEBVIEW2_MISSING`, `SHELL_READY_FAILED`, `SHELL_DATA_REFUSED`, `SCREEN_START_ERROR` 중 한 갈래로 된 고정 코드 하나를 기록한다. 오류 원문·경로·사용자 이름은 기록하지 않고 안내 창을 추가하지 않는다. 기록 실패도 복구한 업무를 막지 않는다. 다음 시작에서는 다시 새 화면부터 시도한다. 실제 보이는 창 하나 확인은 현장 PC 몫이다.
 
 새 화면 portable 패킷은 `ca_screen_bridge.py`, `shell/`, `ui/`와 검사 앱 `dceb851d`의 같은 pywebview 6.2.1 의존성을 싣는다. 빌드는 `requirements-portable-build-win-py312.lock`의 정확한 15분포 환경을 요구한다. 셸 v3.16 READY SHA256 `0c3d7524e8c989b61f5f8da698847e6b5b61fc0939e6fd0fb8bd7faa51efeec8`와 이음 `94778c17`의 20파일 바이트, UI `3962eda5` 매니페스트의 72파일을 복사 뒤 대조한다. 결과 manifest에 셸 판·READY·대조 PASS와 UI pin을 기록한다.
 
 앱 native는 검사와 바이트가 같은 여섯 파일만 허용한다. unsigned 예외는 `_cffi_backend.cp312-win_amd64.pyd`, amd64 `ClrLoader.dll`, `Python.Runtime.dll` 세 개이며 WebView2 Core·WinForms·x64 Loader DLL은 서명 검증 대상이다. 두 설치기의 패킷·설치본 및 자동 업데이트 helper의 manifest 판독은 unsigned 목록이 빈 옛 판 또는 정확히 이 세 경로·SHA인 경우만 받는다. 빌더는 앱 PE 전체 크기·SHA·파일 집합과 설치기·업데이트 helper/빌더/실제 패킷 unsigned pin을 대조하며 빠짐·추가·바이트 변경을 거절한다. 다른 아키텍처 및 WebBrowserInterop 변형은 복사하지 않는다. 패킷의 `--new-screen`, writer guard, 「그래도 닫기」와 기본 `on_force_exit=None` 연결은 AST/바이트로 확인한다. 호스트에서는 실제 창을 띄우지 않고 현장 PC에서 창 동작을 확인한다.
 
-새 화면 이음(`Container_Audit.py --new-screen`)은 고정 셸 v3.16의 지역 쓰기를 `shell/shell_fileio.py` 한 곳으로 모으고, 각 쓰기 동안 기존 이적 `writer_admission("screen_shell_fileio")`을 얻는다. 진단·셸 접수 캐시 쓰기 거절은 화면과 다음 스캔을 중단하지 않으며 진단 누락 수는 `events_dropped`로 전달한다. 시작용 journal/UDF 폴더 생성이 거절되면 창을 만들기 전에 실패한다. 쓰기 선언은 사본 해시와 실제 담장 설치를 함께 확인한다([이음 계약](../ca_screen_bridge.md)). 실제 창·현장 PC 동작은 별도 확인 범위다.
+기본 새 화면 이음(`Container_Audit.py`, `--new-screen`은 같은 뜻)은 고정 셸 v3.16의 지역 쓰기를 `shell/shell_fileio.py` 한 곳으로 모으고, 각 쓰기 동안 기존 이적 `writer_admission("screen_shell_fileio")`을 얻는다. 진단·셸 접수 캐시 쓰기 거절은 화면과 다음 스캔을 중단하지 않으며 진단 누락 수는 `events_dropped`로 전달한다. 시작용 journal/UDF 폴더 생성이 거절되면 창을 만들기 전에 실패한다. 쓰기 선언은 사본 해시와 실제 담장 설치를 함께 확인한다([이음 계약](../ca_screen_bridge.md)). 실제 창·현장 PC 동작은 별도 확인 범위다.
 새 화면 창 X의 답이 늦으면 창을 유지하고 끝내는 중 띠를 보여 준다. 120초 뒤 더 기다리기 또는 그래도 닫기를 고르며, 그래도 닫기에는 저장 중인 것을 잃을 수 있다는 경고를 표시한다. 앱의 별도 스레드용 비상 마무리는 연결하지 않았다. 기존 앱 작업 배수에는 전체 종료 상한이 없으므로 셸의 120초와 구분한다([이음 계약](../ca_screen_bridge.md)).
 
 종료 시 CSV 배경 투영은 1초씩 최대 세 번 기다리고 화면을 닫는다. 예산에 남은 내구 outbox와 checkpoint 감사는 그대로 보존하며 다음 실행에서 원 키·순서로 재생한다. 아직 outbox 원본 저장에 실패한 메모리 감사가 있으면 기존 저장 재시도와 종료 차단을 유지한다. 끊김 복구에서 손상 CSV 꼬리를 제거할 때는 내용 없이 바이트 수와 고정 사유 코드만 기록한다.

@@ -9,12 +9,13 @@
 `reasons`, `category`, `categories`, `checked_at`(+09:00)이다. 경로·계정 식별자·
 오류 원문·자격 정보는 담지 않는다. `category`는 첫 시작 불가 묶음이며,
 시작 가능하면 READY다. `categories`는 겹치는 묶음을 순서대로 담는다.
-ALREADY_RUNNING·FIRST_RUN_PENDING은 시작 불가에 세지 않는다. 첫 실행에서 앱이 마칠 수 있는
+ALREADY_RUNNING·FIRST_RUN_PENDING·SCREEN_FALLBACK은 시작 불가에 세지 않는다. 첫 실행에서 앱이 마칠 수 있는
 검증된 기계 PENDING, 사용자 ABSENT·ABSENT_RETRYABLE(기계 대기 또는 기존 첫 실행 설정 켬)는
 FIRST_RUN_PENDING이다. 이 까닭만 있으면 startable=true, status/category=READY,
 categories=[READY,FIRST_RUN_PENDING], 종료 0이다. 기계 PENDING은 실제 consumer의 신원·설치 판
 검증을 통과한 결과만 인정한다. 사용자 RECOVERY_REQUIRED·명시 FAILED는 기존 설정 실패로 막고,
 SID 불일치도 유지한다. 못 읽거나 미등록 상태면 UNKNOWN/20이다.
+SCREEN_FALLBACK은 화면 길의 정상 정리와 창 0을 확인한 자동 넘어감에서만 기록한다. 허용 코드는 `SCREEN_UNAVAILABLE_FALLBACK_OLD_` 뒤 `WEBVIEW2_MISSING`·`SHELL_READY_FAILED`·`SHELL_DATA_REFUSED`·`SCREEN_START_ERROR` 한 갈래뿐이다. 미등록 코드와 기존 UNKNOWN은 계속 시작 불가다.
 까닭→묶음의 정본은 [startup_check.py](../../startup_check.py)의 `REASON_CATEGORIES`다.
 K1은 이 정본의 고정 코드와 TEST_<고정 묶음>만 허용한다. TEST_FIRST_RUN_PENDING도 시험 전용이다.
 

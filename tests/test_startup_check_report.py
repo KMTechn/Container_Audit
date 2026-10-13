@@ -12,6 +12,7 @@ import pytest
 
 import auto_update
 import Container_Audit as app
+import ca_screen_bridge as screen
 import startup_check as check
 import startup_check_report as report
 import writer_session_fence as fence
@@ -62,6 +63,15 @@ def flow(monkeypatch):
     monkeypatch.setattr(app.messagebox, "showwarning", lambda *_args: legacy.append("warning"))
     monkeypatch.setattr(check, "check_startup",
                         lambda *_args: pytest.fail("app must never run the standalone checker"))
+    # This fixture owns a resident-UI double, and measures startup observation
+    # and refusal semantics. Screen selection and availability have their own
+    # entry tests; give this UI double the same runner boundary on both routes.
+    def resident_runner(module):
+        def run(arguments):
+            module.CA_SCREEN_HOST["requested"] = False
+            return module._run_gui_application(arguments)
+        return run
+    monkeypatch.setattr(screen, "screen_runner", resident_runner)
     return types.SimpleNamespace(events=events, notices=notices, legacy=legacy, lease=lease, window=window)
 
 

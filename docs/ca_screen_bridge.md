@@ -4,8 +4,9 @@
 - 화면 원천: 웹 저장소 `static/ui/app/ca/`(가지 web-newui-1014-flow) → `scripts/export_ui_parts.py --app ca` 로 `ui/`. 꼴 = `ui/app/ca/contract.json`(km-app-contract/1). 셸의 `events_dropped`(0 이상 정수)를 이음 계약에 추가했으며 MANIFEST의 원천 커밋은 유지하고 `dirty=true`·파일 해시·부품 지문을 갱신했다. 원천 3962eda5의 exporter `--check`로 자료를 확인한다.
 - 셸: `shell/` = 셸 v3.16 고정판(`shell/SHELL-READY-v3.16.json`의 19개 파일 SHA256·크기와 같음). kit 전용 `tk_ab.py`는 앱 사본에서 제외한다. 사본 바이트를 유지하도록 `shell/** -text`를 적용한다.
 
-## 1. 기존 시작 진입에 새 화면 플래그
-진입은 `Container_Audit.py --new-screen` 한 길이다. `main()`의 시작 확인 기록 → `startup_gate` → `dispatch_product_mode`를 거친 뒤 셸을 부르고, 기존 GUI 시작 부분을 옮긴 `_run_gui_application(arguments)`이 주인 스레드에서 앱을 만든다. 플래그가 없으면 같은 함수에서 기존 `app.run()`을 부른다. 처리 모듈과 시작 관문의 판단은 그대로다.
+## 1. 기존 시작 진입의 기본 새 화면과 비상 옛 화면
+인수 없는 `Container_Audit.py`가 새 화면을 연다. `--new-screen`은 같은 뜻이고 `--old-screen`만 옛 Tk를 직접 고른다. `main()`의 시작 확인 기록 → `startup_gate` → `dispatch_product_mode`와 기존 GUI 준비의 판정·순서는 유지한다. 새 화면의 주인 스레드는 `_run_gui_application(arguments)`에서 앱을 만든다.
+창 보임(`window.events.shown`) 또는 셸 ready(`Bridge._view_count > 0`)가 한 번이라도 확인되면 자동 넘어감은 금지한다. `CaStartupRefused`와 writer·자료 거절도 우회하지 않는다. 실패 전 창 0인 경우에만 지역 HTTP 서버·bridge·주인 스레드의 정상 종료, `_application_close_complete`·`_loop_cleanup_finished`, 실제 instance lease 해제 표식 및 WinForms `BrowserView.instances`의 폼 0을 확인하고 옛 GUI 함수를 직접 한 번 호출한다. 알 수 없는 backend·남은 폼·불완전한 정리는 기존 오류로 끝낸다. 숨은 주인의 종료는 셸을 기다리는 MainThread를 앱 worker로 세지 않으며, 다른 살아 있는 앱 worker는 기존처럼 모두 기다린다. 기록은 시작 관측의 고정 fallback 코드 한 줄이고 추가 안내는 없다.
 이음 파일: `ca_screen_bridge.py`(다리) · `tests/test_ca_screen_bridge.py` · `tests/test_ca_new_screen_entry.py` · `shell/` · `ui/` · 이 노트. 별도 진입 `ca_screen_main.py`는 제거했다. 시작 확인의 ContextVar 문맥도 `copy_context()`로 주인 스레드에 넘겨 관문에서 확인한 판·build 신원을 유지한다.
 `screen_runner`가 `run_app(write_guard=admission_write_guard)`로 셸 담장을 설치한다. `shell_fileio`의 다섯 함수는 지역 쓰기 하나 동안만 기존 `writer_admission("screen_shell_fileio")`을 얻고 내려놓는다. 허락을 화면·스캔·네트워크 대기 동안 유지하지 않는다. 진단 기록·처리 층 모드의 셸 접수 캐시 쓰기가 거절되면 그 기록만 잃고 화면과 다음 스캔은 계속한다(진단 누락 수 `events_dropped`). 시작에 필요한 journal/UDF 폴더 생성 거절은 셸 v3.16처럼 창 생성 전 실패한다.
 쓰기 선언은 셸의 여덟 Python 파일·READY 해시와 실제 이적 담장 설치를 확인한 뒤에만 `shell/shell_fileio.py`의 쓰기를 보호된 것으로 인정한다. 사본·파일 목록·설치 호출·허락 함수가 달라지면 정적 검사를 거절한다. `shell/host.py`의 단독 kit 실행은 제품 바로 가기나 설치 진입이 아니다. 현재 stock 빌더의 새 화면 kit·UI 조립은 별도 수용 범위다.
