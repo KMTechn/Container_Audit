@@ -324,6 +324,29 @@ def test_malformed_fence_denies_and_releases_admission_mutex(tmp_path: Path) -> 
     assert (active.read_bytes(), active.stat().st_mtime_ns) == before
 
 
+def test_abandoned_writer_gate_refuses_once_releases_and_admits_next_open(monkeypatch, tmp_path):
+    events = []
+
+    class Lease:
+        def __init__(self, abandoned):
+            self.abandoned = abandoned
+
+        def release(self):
+            events.append(("release", self.abandoned))
+
+    leases = iter([Lease(True), Lease(False)])
+    monkeypatch.setattr(fence, "_acquire_named_mutex", lambda *_args: next(leases))
+    monkeypatch.setattr(fence, "active_fence", lambda *_args, **_kwargs: None)
+    with pytest.raises(fence.WriterFencedError) as caught:
+        with fence.writer_admission("test_sink", control_root=tmp_path):
+            events.append("first body")
+    assert caught.value.code == "WRITER_GATE_ABANDONED"
+    assert events == [("release", True)]
+    with fence.writer_admission("test_sink", control_root=tmp_path):
+        events.append("next body")
+    assert events == [("release", True), "next body", ("release", False)]
+
+
 def test_installing_delegation_without_prepared_receipt_denies_zero_mutation(
     tmp_path: Path,
 ) -> None:

@@ -219,6 +219,64 @@ def test_pre_attach_refusal_keeps_the_existing_tk_notice(entry, monkeypatch):
     assert len(entry.failures) == 1 and "attach_owner" not in entry.events
 
 
+@pytest.mark.parametrize("code", [
+    "WRITER_GATE_ABANDONED", "WRITER_GATE_TIMEOUT", "ACTIVE_WRITER_FENCE",
+    "WRITER_EXIT_CLOSED", "WRITER_MUTEX_WAIT_FAILED",
+])
+def test_only_abandoned_writer_gate_requests_one_more_open(entry, monkeypatch, code):
+    from startup_check_report import NOTICE
+    from writer_session_fence import WriterFencedError
+
+    failure = WriterFencedError(code, "fixture writer refusal")
+    notices, observations, destroyed = [], [], []
+
+    class NoticeRoot:
+        def title(self, _title):
+            pass
+
+        def resizable(self, *_args):
+            pass
+
+        def protocol(self, *_args):
+            pass
+
+        def mainloop(self):
+            pass
+
+        def destroy(self):
+            destroyed.append(True)
+
+    def refuse(_arguments):
+        raise failure
+
+    def observe(action, *args, **kwargs):
+        observations.append((action, args, kwargs))
+        return action == "finish" and kwargs.get("refused", False)
+
+    def label(_root, *, text, **_kwargs):
+        notices.append(text)
+        return SimpleNamespace(pack=lambda **_kw: None)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ca, "_run_application_main", refuse)
+        patch.setattr(ca, "_startup_refusal", entry.existing_refusal)
+        patch.setattr(ca, "_startup_check_observe", observe)
+        patch.setattr(ca.tk, "Tk", NoticeRoot)
+        patch.setattr(ca.tk, "Label", label)
+        patch.setattr(ca.tk, "Button", lambda *_args, **_kwargs: SimpleNamespace(pack=lambda **_kw: None))
+        with pytest.raises(WriterFencedError) as caught:
+            ca.main([])
+    expected = "이적 다시 열기 — 한 번 더 여세요" if code == "WRITER_GATE_ABANDONED" else NOTICE
+    assert notices == [expected] and destroyed == [True]
+    assert caught.value is failure and caught.value.code == code
+    reason = "DEPLOY_FENCE" if code in {"WRITER_GATE_TIMEOUT", "ACTIVE_WRITER_FENCE"} else "UNKNOWN_DEPLOY_FENCE"
+    assert observations == [
+        ("begin", (ca.CURRENT_VERSION,), {"enabled": True}),
+        ("finish", (reason,), {"refused": True, "failed": False}),
+        ("finish", (), {}),
+    ]
+
+
 def test_unconfirmed_startup_report_keeps_the_existing_messagebox_fallback(entry, monkeypatch):
     messages = []
     blocked = ca.DataGenerationBlocked({"status": "REFUSE", "safe": False})

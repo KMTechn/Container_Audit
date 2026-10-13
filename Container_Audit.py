@@ -23025,14 +23025,14 @@ def _startup_check_observe(action, *args, **kwargs):
         return False
 
 
-def _show_startup_unavailable():
+def _show_startup_unavailable(notice=None):
     root = None
     try:
         from startup_check_report import NOTICE
         root = tk.Tk()
         root.title("프로그램 시작 확인")
         root.resizable(False, False)
-        tk.Label(root, text=NOTICE, padx=20, pady=20).pack()
+        tk.Label(root, text=NOTICE if notice is None else notice, padx=20, pady=20).pack()
         tk.Button(root, text="닫기", command=root.destroy).pack(pady=(0, 12))
         root.protocol("WM_DELETE_WINDOW", root.destroy)
         root.mainloop()
@@ -23046,9 +23046,12 @@ def _show_startup_unavailable():
                 pass
 
 
-def _startup_refusal(reason, *, failed=False):
+def _startup_refusal(reason, *, failed=False, notice=None):
     if _startup_check_observe("finish", reason, refused=True, failed=failed):
-        _show_startup_unavailable()
+        if notice is None:
+            _show_startup_unavailable()
+        else:
+            _show_startup_unavailable(notice)
         return True
     return False
 
@@ -23151,7 +23154,10 @@ def main(argv: list[str] | None = None):
     except WriterFenceError as failure:
         reason = "DEPLOY_FENCE" if failure.code in {"ACTIVE_WRITER_FENCE", "WRITER_GATE_TIMEOUT"} else "UNKNOWN_DEPLOY_FENCE"
         if enabled:
-            _startup_refusal(reason)
+            if failure.code == "WRITER_GATE_ABANDONED":
+                _startup_refusal(reason, notice="이적 다시 열기 — 한 번 더 여세요")
+            else:
+                _startup_refusal(reason)
         raise
     except Exception:
         _startup_refusal(None, failed=True)
