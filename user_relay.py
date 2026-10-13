@@ -585,6 +585,11 @@ class AppProcessTracker:
                         if ntpath.basename(parent).lower() == "versions" and len(leaf) == 40
                         and all(c in "0123456789abcdef" for c in leaf) else None)
         self.udf = ntpath.normcase(ntpath.abspath(ntpath.join(str(data_root), "webview2")))
+        # Match ca_screen_bridge.shell_data_dir without importing the GUI app.
+        screen_base = Path(os.environ.get("LOCALAPPDATA") or Path(__file__).resolve().parent)
+        self.screen_udf = ntpath.normcase(ntpath.abspath(str(
+            screen_base / "KMTech" / "ContainerAudit" / "screen" / "webview2"
+        )))
         self.own_pid = own_pid
         self.owned: dict[int, str] = {}
 
@@ -617,7 +622,8 @@ class AppProcessTracker:
                     if udf and ntpath.isabs(udf):
                         has_udf = True
                         normalized = ntpath.normcase(ntpath.abspath(udf))
-                        if normalized == self.udf or normalized.startswith(self.udf + "\\"):
+                        if any(normalized == root or normalized.startswith(root + "\\")
+                               for root in (self.udf, self.screen_udf)):
                             selected.add(pid)
                 if has_udf and pid not in selected:
                     foreign_udf.add(pid)

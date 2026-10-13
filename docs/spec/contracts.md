@@ -151,7 +151,8 @@ GUI의 기존 1초 Tk 시계는 스캔·저장 대기·보류 비우기가 없�
 요청 파일은 실제 닫기 완료 뒤 같은 요청 ID일 때만 지우며 새 요청을 보존한다.
 현재 입력 저장·진행 중 처리 배수·저장 실패 시 종료 거절 계약은 유지한다.
 요청 접수와 실제 GUI·relay 종료 증명은 구분한다.
-관리자 끄기 명령은 같은 설치의 current·versions runtime Python과 자료 루트의 WebView2 프로필 및 검증된
+관리자 끄기 명령은 같은 설치의 current·versions runtime Python과 새 화면의
+`%LOCALAPPDATA%/KMTech/ContainerAudit/screen/webview2` 및 자료 루트의 옛 WebView2 프로필과 검증된
 자식 나무가 0이고 relay 실행 잠금도 없을 때만 `STOPPED`/rc 0을 반환한다.
 부모 사슬은 요청 전에 확인하며 PID·생성 시각·같은 세션으로 묶은 자식의 잔류를
 부모 종료 뒤에도 추적한다. 150초를 나눠 쓰고 관측 불명·잔류는 `UNKNOWN`/rc 1이다.
@@ -589,7 +590,8 @@ CA의 Windows 출력 어댑터는 현재 기본 프린터의 이름·`GetPrinter
 **설치 주소 결속:** 기계 설치의 `pending-onboarding.json`에 남은 `server_base_url`과
 등록에 사용한 relay credential의 `endpoint_url`을 scheme·host·기본 port로 정규화해 비교한다.
 서로 다른 경우 READY·온보딩 재사용·완료된 설치의 빠른 재사용을
-`RECOVERY_REQUIRED`/`INSTALL_SERVER_ORIGIN_CHANGED`로 차단한다. 로컬 자료와 대기열은 보존하며
+`RECOVERY_REQUIRED`/`INSTALL_SERVER_ORIGIN_CHANGED`로 차단한다. 공개 지원 기록에도 이 고정 원인 코드를 유지한다.
+로컬 자료와 대기열은 보존하며
 새 등록·relay 시작 요청은 하지 않는다. 응답 profile의 주소는 비교하지 않으며,
 주소 기록 부재·손상·판독 실패는 기존 판정을 유지한다.
 

@@ -751,8 +751,9 @@ outbox가 있으면 정상 닫기는 창을 유지하므로 이 상한에 들어
 끄기 명령은 요청 전에 귀속된 프로세스 나무를 확인하고, 요청 뒤 최대 150초(셸
 120초 + 정리 여유 30초) 안에 나무와 relay 실행 잠금이 모두 없어질 때만
 `STOPPED`와 종료 코드 0을 반환한다. 같은 설치의 `current`·`versions/<commit>` runtime
-Python·pythonw와 실제 자료
-루트의 `webview2` 프로필을 쓰는 WebView2를 확인한다. UDF 인수 없는 자식은 살아 있는
+Python·pythonw와 새 화면의 `%LOCALAPPDATA%/KMTech/ContainerAudit/screen/webview2`
+및 실제 자료 루트의 옛 `webview2` 프로필을 쓰는 WebView2를 확인한다. 다른 앱의 UDF는 제외한다.
+UDF 인수 없는 자식은 살아 있는
 부모의 PID·생성 시각·세션으로 묶고 부모 종료 뒤에도 같은 생성 시각의 잔류를 확인한다.
 WebView2를 따로 종료하지 않는다. 시간 초과·관측 실패는 `UNKNOWN`과 종료 코드 1이며,
 남은 수와 이름·PID만 표시한다. relay `ABSENT`만으로 GUI 종료를 판정하지 않는다.
