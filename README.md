@@ -8,7 +8,7 @@
 
 KMTech 제조업 이적 검사를 위한 실시간 데스크톱 애플리케이션입니다.
 
-비상 옛 화면은 같은 설치판에 `--ui tk`를 붙여 시작합니다(`--old-screen`도 같은 뜻). 관리자용 바로 가기는 설치 경로 결정 뒤 제공됩니다.
+비상 옛 화면은 앱 폴더(`C:\KMTech\Apps\Container_Audit`)\관리용의 「이적 옛 화면 (비상)」 바로 가기로 시작합니다. 같은 설치판에 `--ui tk`를 붙인 실행이며 `--old-screen`도 같은 뜻입니다.
 
 > **📋 문서 구성**
 > • **작업자 안내 정본**: [`docs/OUTLINE_CONTAINER_AUDIT_USER_MANUAL_20260627.md`](docs/OUTLINE_CONTAINER_AUDIT_USER_MANUAL_20260627.md)

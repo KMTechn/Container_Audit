@@ -5,6 +5,8 @@
 v2.0.106 어댑터의 기본은 새 화면이며 `--new-screen`·`--ui web`도 같은 뜻이다. `--old-screen`·`--ui tk`는 그 실행만 옛 Tk를 고르고 설정을 쓰지 않는다. 모르는 `--ui` 값은 기본 길이다. `main`은 `wait_previous_from_argv`를 시작 관문·lease·mutex보다 먼저 호출하며 이전 프로세스 대기가 거절되면 시작하지 않는다.
 웹 창이 생긴 뒤 시작 실패는 셸의 재실행 한 길이다. 같은 프로세스 Tk 전환은 없으며 셸이 쓰기 닫음·판 표지·destroy 최선 2초·before_exit·relaunch_self·os._exit를 수행한다. before_exit는 새 writer admission을 막고 이미 허가된 쓰기와 mutex가 비었는지만 120초 기다린다. 다른 정리는 하지 않는다. False면 셸이 5초마다 다시 확인한다. 새 프로세스는 relaunch_wait로 앞 PID 종료를 기다린 뒤 같은 판 web_allowed=False이면 Tk를 연다. main의 첫 import는 stdlib 전용 relaunch_wait 하나이며 비상 Tk의 셸 import는 0이다. 다른 셸 import 실패는 SHELL_IMPORT_FAILED 한 줄 뒤 Tk로 간다. 창 생성 전·시작 거절·업무 gate 거부는 기존 길을 유지한다.
 
+비상 바로 가기는 InstallRoot(current)의 부모인 앱 폴더의 `관리용\이적 옛 화면 (비상).lnk`에 둔다. 기존 작업자 바로 가기와 대상·작업 폴더·아이콘이 같고 인수는 `--ui tk`이다. 설치·재설치·업데이트의 기존 바로 가기 흐름에서 생성 또는 readback 확인하며, 제거 때 소유 링크와 빈 관리용 폴더만 지운다. 같은 이름의 남의 링크나 다른 파일이 있는 관리용 폴더는 손대지 않고 경고 한 줄을 남긴다. current의 코드 목록·무결성 범위와 예외 규칙은 바뀌지 않는다.
+
 
 현재 사본은 v3.16이다. 어댑터 시험은 v3.16.2 API를 monkeypatch하며, 지정 `SHELL-SHA.txt`로 사본·READY·핀을 맞추기 전에는 stock을 만들거나 배포하지 않는다. 실제 창 하나·설치·현장 확인은 별도다.
 
