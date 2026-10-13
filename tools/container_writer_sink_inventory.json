@@ -9311,6 +9311,7 @@
     "portable.main": [
       "Container_Audit",
       "auto_update",
+      "container_audit_product_host",
       "current_user_onboarding",
       "writer_session_fence"
     ],
@@ -9576,7 +9577,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "a2e1ac84486f6b8485ab8c095b4bdf546a19ddafa8d9bbe85e6b092b82a2e0ad",
+  "inventory_sha256": "fb31620b4fe46d162925f6b53bb083f5a5943e9dad895666d2e49be060025994",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",

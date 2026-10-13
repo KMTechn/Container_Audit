@@ -998,6 +998,7 @@ guest 실물 설치와 ACL 접근은 **NOT TESTED**다. 기존 HKCU·DPAPI·업�
 | relay 저장 압력 | `DirectSyncRuntimeConfig`의 `min_free_bytes`, `max_active_queue_count`, `max_active_queue_age_seconds` 기본 0; 실제 배포값은 별도 | 0을 검증된 무제한 용량이나 승인된 장애 임계치로 해석하지 않음. [direct_sync_runtime](../../direct_sync_runtime.py) |
 | relay 반복 prefix | ACK 완료 source의 파일 identity·size·mtime/ctime와 cursor hash가 같으면 마지막 전체 검증 후 300초 미만 재읽기 생략; SQLite 힌트로 새 child 실행에서도 유지 | cursor 변경 시 무효화. 미완료/손상 delta는 매번 기존 복구 경로, 변경 파일은 전체 검사. 같은 metadata의 변조는 기한 후 다음 실행에서 확인하며 즉시 탐지라고 주장하지 않음. [CA-C05](contracts.md#ca-c05) |
 | portable 코드 판 확인 | 전체 파일 무결성과 version/build 결속의 성공 결과를 프로세스마다 기억. GUI·상주 relay·raw runner 첫 자료 admission 전에 전체 확인 | 실패는 재확인하고 자료 guard가 거절한다. 실행 중 디스크 코드 변경은 다음 프로세스에서 확인하며, 자료 세대 marker는 매번 판정한다. 실제 현장 HDD의 허가 보유 시간은 미측정. |
+| portable relay 자식 시작 | direct-sync 모드만 기존 product host의 `startup_gate(role="relay")` 뒤 runner를 실행하며 `Container_Audit`를 적재하지 않는다. 별도 자식 프로세스·원 인자·writer sink·상태/로그/종료 코드 계약 유지 | 판 확인의 프로세스 간 캐시는 없다. 실제 설치본의 바퀴당 CPU 4초 미만과 HDD 적재 시간은 현장 측정 대상이다. |
 | lease 시간 | v1 서명 duration 60초~24시간 검증, 기존 완료의 재검증은 저장된 완료 시각 사용 | 실제 발급 기간·허용 offline 업무시간을 확정하는 값이 아님. [terminal_operation_lease](../../terminal_operation_lease.py), [TransferSealCoordinator._verified_operation_lease](../../transfer_seal.py) |
 | 수신→화면 최신성 | whole-file relay·projection·API·렌더의 분리, `pcs_completed`는 관측 완료 수량 | 허용 지연/업무일·누락 경고·복구 후 따라잡기 시간 미정, live 측정 없음. [CA-C07](contracts.md#ca-c07) |
 

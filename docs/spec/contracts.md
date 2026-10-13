@@ -472,6 +472,8 @@ capability의 `max_pairs=2`, `atomic`, `two_bundle_cas` 등은 [logistics_transf
 <a id="ca-c05"></a>
 ## CA-C05 CA 파일 snapshot → producer ingest·projection
 
+- **portable 자식 진입:** `--container-audit-direct-sync-relay`는 `container_audit_product_host.dispatch_product_mode`의 기존 `startup_gate(role="relay")` 뒤 runner로 바로 간다. 앱 모듈을 적재하지 않으며 원 인자·sys.path·별도 프로세스·writer sink·상태/로그/종료 코드와 업데이트 trial·판 확인 계약을 유지한다. 다른 진입 모드는 기존 경로를 따른다.
+
 **방향/API:** CA relay → Web `POST /api/producer-ingest/v1/source-file`; multipart metadata+file. [build_source_file_plan / drain_one_relay_batch](../../direct_sync_push.py), [enqueue_completed_source_file](../../direct_sync_runtime.py), [Web producer_ingest_source_file](../../../WorkerAnalysisGUI-web/app.py), [handle_source_file_request](../../../WorkerAnalysisGUI-web/producer_ingest.py).
 
 - **schema·키:** metadata는 contract, install identity, source_file_id, content SHA256, byte_length, row_count, batch identity를 포함한다. whole-file snapshot의 hash/바이트와 큐 상태를 맞춰 전송한다. 새로운 파일 내용은 단순히 이전 relay의 ACK로 생략할 수 없다.
