@@ -107,7 +107,7 @@ def test_clock_stop_uses_normal_close_and_preserves_unfinished_tray(tmp_path, mo
     monkeypatch.setattr(user_relay, "request_user_relay_stop", lambda *args, **kwargs: {"status": "ABSENT"})
     user_relay.request_app_stop(tmp_path)
 
-    app._update_clock()
+    app._poll_app_stop_request()
 
     assert app.root.winfo_exists() and not getattr(app, "_application_close_complete", False)
     assert not getattr(app, "_ui_close_requested", False)
@@ -121,7 +121,6 @@ def test_clock_stop_uses_normal_close_and_preserves_unfinished_tray(tmp_path, mo
     assert ("work_end" in calls) is save_ok
     assert app.current_tray.scanned_barcodes == ["fixture scan"]
     assert user_relay.app_stop_path(tmp_path).exists() is not save_ok
-    assert calls[0] == (1000, app._update_clock)
     if not save_ok:
         assert "notice" in calls
         assert not app._ui_close_requested
@@ -172,7 +171,7 @@ def test_clock_stop_ignores_requests_before_process_start(tmp_path, monkeypatch,
     app.root = SimpleNamespace(winfo_exists=lambda: True, after=lambda *args: None)
     app._check_short_confirmation_expiry = lambda: None
 
-    app._update_clock()
+    app._poll_app_stop_request()
 
     assert bool(closed) is after_start
     assert not user_relay.app_stop_path(tmp_path).exists()

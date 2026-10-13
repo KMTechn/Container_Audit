@@ -1095,7 +1095,9 @@ class ContainerAudit:
     AUDIO_ENABLED_ENV = "CONTAINER_AUDIT_AUDIO_ENABLED"
     EVENT_LOG_CLOSE_JOIN_TIMEOUT_SECONDS = 1.0
     EVENT_LOG_CLOSE_MAX_JOIN_ATTEMPTS = 3
-    LOOP_CLEANUP_TIMEOUT_SECONDS = 5.0
+    LOOP_CLEANUP_NOTICE_SECONDS = 5.0
+    # Allow slow HDD projections a minute, then recover durable originals on restart.
+    LOOP_CLEANUP_TIMEOUT_SECONDS = 60.0
     DIRECT_SYNC_LOG_EVENTS = frozenset({
         "TRAY_COMPLETE", "PRODUCT_EXCHANGE_COMPLETED", "PHS_REPLACEMENT_WAITING_MARKED",
     })
@@ -1409,6 +1411,7 @@ class ContainerAudit:
             add="+",
         )
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self._start_app_stop_poll()
         # Registration/catalog startup finishes before the Tk callback runs.
         self.root.after(0, lambda: self._start_remembered_worker(remembered_worker))
 
@@ -16075,7 +16078,6 @@ class ContainerAudit:
         if hasattr(self, 'date_label') and self.date_label.winfo_exists(): self.date_label['text'] = now.strftime('%Y-%m-%d')
         if hasattr(self, 'clock_label') and self.clock_label.winfo_exists(): self.clock_label['text'] = now.strftime('%H:%M:%S')
         self.clock_job = self.root.after(1000, self._update_clock)
-        self._poll_app_stop_request()
 
     def _start_stopwatch(self, resume=False):
         if self.is_idle:
@@ -16841,6 +16843,19 @@ class ContainerAudit:
         session = getattr(self, "current_exchange_session", ProductExchangeSession())
         return bool(session.defective_barcodes or session.good_barcodes
                     or session.current_step in {"scan_defective", "scan_good"})
+
+    def _start_app_stop_poll(self) -> None:
+        if getattr(self, "_app_stop_poll_job", None) is None:
+            self._app_stop_poll_job = self.root.after(0, self._poll_app_stop_control)
+
+    def _poll_app_stop_control(self) -> None:
+        self._app_stop_poll_job = None
+        try:
+            self._poll_app_stop_request()
+        finally:
+            # Logout and a canceled close cancel work-screen timers only.
+            if not getattr(self, "_application_close_complete", False) and self.root.winfo_exists():
+                self._app_stop_poll_job = self.root.after(1000, self._poll_app_stop_control)
 
     def _poll_app_stop_request(self) -> None:
         from user_relay import consume_app_stop_request, read_app_stop_request
@@ -21243,20 +21258,33 @@ class ContainerAudit:
         self._loop_cleanup_finished = False
         errors = []
         deadline = time.monotonic() + self.LOOP_CLEANUP_TIMEOUT_SECONDS
+        notice_deadline = time.monotonic() + self.LOOP_CLEANUP_NOTICE_SECONDS
         marked = False
         # Match the startup marker's selected data root, including custom roots.
         data_root = getattr(self, "_runtime_data_root", getattr(self, "save_folder", None))
+        cleanup_finished = threading.Event()
+
+        def enforce_deadline():
+            if not cleanup_finished.wait(max(0.0, deadline - time.monotonic())):
+                # A stuck pump/driver cannot defeat the cap. Original checkpoints,
+                # event outboxes and transport intents remain for recovery.
+                os._exit(1)
+
+        cleanup_watch = threading.Thread(target=enforce_deadline, name="ca-close-deadline", daemon=True)
+        cleanup_watch.start()
+        if data_root is not None:
+            try:
+                # Record incomplete cleanup before possibly blocking work. The
+                # atomic, fsynced diagnostic is removed only on completed cleanup.
+                write_shutdown_stall(data_root)
+            except Exception as exc:
+                print(f"종료 지연 표시 오류: {exc.__class__.__name__}")
 
         def wait_tick():
             nonlocal marked
-            if not marked and time.monotonic() >= deadline:
+            if not marked and time.monotonic() >= notice_deadline:
                 marked = True
                 print("화면 종료 정리가 지연되어 계속 기다립니다.")
-                if data_root is not None:
-                    try:
-                        write_shutdown_stall(data_root)
-                    except Exception as exc:
-                        print(f"종료 지연 표시 오류: {exc.__class__.__name__}")
             time.sleep(0.01)
 
         if not getattr(self, "_application_close_complete", False):
@@ -21299,8 +21327,7 @@ class ContainerAudit:
                         if not errors:
                             errors.append(exc)
                 wait_tick()
-            # The deadline triggers the diagnostic, never abandonment of
-            # accepted work. Original outboxes remain available on restart.
+            # Unfinished projections retain original outboxes on restart.
             log_thread = getattr(self, "log_thread", None)
             if log_thread is not None and log_thread.is_alive():
                 if not getattr(self, "_event_log_close_requested", False):
@@ -21331,16 +21358,17 @@ class ContainerAudit:
         # late diagnostics and never keep window exit waiting for the driver.
         while any(
             thread is not threading.current_thread() and thread.is_alive()
-            and thread not in PRINT_SUBMISSION_THREADS
+            and thread not in PRINT_SUBMISSION_THREADS and thread is not cleanup_watch
             for thread in threading.enumerate()
         ):
             wait_tick()
-        self._loop_cleanup_finished = True
-        if marked and data_root is not None:
+        if data_root is not None:
             try:
                 clear_shutdown_stall(data_root)
             except Exception as exc:
                 print(f"종료 지연 표시 정리 오류: {exc.__class__.__name__}")
+        self._loop_cleanup_finished = True
+        cleanup_finished.set()
         if errors:
             raise errors[0]
 
@@ -22963,6 +22991,20 @@ def _run_application_main(arguments):
             instance_lease.release()
 
 
+def _consume_startup_app_stop_request(direct_sync_root) -> bool:
+    from user_relay import consume_app_stop_request, read_app_stop_request
+    request = read_app_stop_request(direct_sync_root)
+    if request is None:
+        return False
+    current = datetime.datetime.fromisoformat(request["requested_at"]) >= _APP_PROCESS_STARTED_AT
+    try:
+        consume_app_stop_request(direct_sync_root, request["request_id"])
+    except (OSError, WriterFenceError) as exc:
+        print(f"종료 요청 정리 오류: {type(exc).__name__}")
+    # Before scans are admitted, each startup unit finishes its own writes first.
+    return current
+
+
 @writer_sink("gui_startup", probe_only=True)
 def _prepare_gui_startup(*, data_root=None):
     """Check the kernel instance lease before admitting startup mutations."""
@@ -23007,6 +23049,8 @@ def _prepare_gui_startup(*, data_root=None):
         return
     startup_complete = False
     try:
+        if _consume_startup_app_stop_request(storage_paths.direct_sync_root):
+            return 0
         try:
             from data_generation_guard import warm_runtime_release
             warm_runtime_release()
@@ -23049,6 +23093,9 @@ def _prepare_gui_startup(*, data_root=None):
                 # Keep onboarding, GUI constructors and subprocesses on this selection.
                 os.environ[DATA_ROOT_ENV] = str(storage_paths.data_root)
         try:
+            from runtime_instance import read_shutdown_stall
+            if read_shutdown_stall(storage_paths.data_root) is not None:
+                print("CONTAINER_AUDIT_SHUTDOWN_RECOVERY")
             clear_shutdown_stall(storage_paths.data_root)
         except Exception as exc:
             # A diagnostic cannot prevent a launch that owns the instance lease.
@@ -23056,8 +23103,12 @@ def _prepare_gui_startup(*, data_root=None):
         try:
             pending_onboarding_report = consume_pending_machine_onboarding(application_path)
         except CurrentUserOnboardingError as exc:
+            if _consume_startup_app_stop_request(storage_paths.direct_sync_root):
+                return 0
             _show_first_run_onboarding_error(exc)
             return ONBOARDING_EXIT_CODE
+        if _consume_startup_app_stop_request(storage_paths.direct_sync_root):
+            return 0
         if _first_run_onboarding_enabled() and pending_onboarding_report is None:
             try:
                 onboarding_report = onboard_current_user(
@@ -23066,8 +23117,12 @@ def _prepare_gui_startup(*, data_root=None):
                     startup=True,
                 )
             except CurrentUserOnboardingError as exc:
+                if _consume_startup_app_stop_request(storage_paths.direct_sync_root):
+                    return 0
                 _show_first_run_onboarding_error(exc)
                 return ONBOARDING_EXIT_CODE
+            if _consume_startup_app_stop_request(storage_paths.direct_sync_root):
+                return 0
             if onboarding_report.get("bootstrap_integrity") == "absent":
                 _show_bootstrap_integrity_warning(
                     resolve_current_user_onboarding_paths(
@@ -23081,6 +23136,8 @@ def _prepare_gui_startup(*, data_root=None):
             try:
                 active_catalog_path = prepare_startup_item_catalog()
             except ItemCatalogSyncError as exc:
+                if _consume_startup_app_stop_request(storage_paths.direct_sync_root):
+                    return 0
                 if not legacy_label_transition_enabled():
                     raise
                 # Transition mode starts without a trusted catalog: the bundled
@@ -23096,6 +23153,8 @@ def _prepare_gui_startup(*, data_root=None):
                 catalog_context = {"transition_cause_code": exc.cause_code}
                 catalog_unconfirmed = True
                 active_catalog_path = None
+            if _consume_startup_app_stop_request(storage_paths.direct_sync_root):
+                return 0
             if active_catalog_path is not None:
                 catalog_context = get_catalog_attempt_context()
                 try:
@@ -23135,6 +23194,9 @@ def _prepare_gui_startup(*, data_root=None):
                 exception_type=exc.diagnostic_context.get("exception_type"),
             )
             return ITEM_CATALOG_STARTUP_EXIT_CODE
+        start_stop_poll = getattr(app, "_start_app_stop_poll", None)
+        if callable(start_stop_poll):
+            start_stop_poll()
         startup_complete = True
         return app, instance_lease
     finally:

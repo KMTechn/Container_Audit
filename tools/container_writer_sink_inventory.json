@@ -25,23 +25,23 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 3958,
+      "line": 3961,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 3960,
+          "line": 3963,
           "operation": "path.parent.mkdir",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 3963,
+          "line": 3966,
           "operation": "temporary.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 3969,
+          "line": 3972,
           "operation": "temporary.unlink",
           "writer_admission_sources": []
         }
@@ -90,11 +90,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 3976,
+      "line": 3979,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 3991,
+          "line": 3994,
           "operation": "os.replace",
           "writer_admission_sources": []
         }
@@ -146,11 +146,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 5519,
+      "line": 5522,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 5523,
+          "line": 5526,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -4857,17 +4857,17 @@
       ],
       "file": "portable/main.py",
       "kind": "function",
-      "line": 22,
+      "line": 24,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 58,
+          "line": 60,
           "operation": "marker.parent.mkdir",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 59,
+          "line": 61,
           "operation": "marker.write_text",
           "writer_admission_sources": []
         }
@@ -5431,39 +5431,6 @@
       "caller_guard_reason": "",
       "caller_guard_sources": [],
       "coverage_status": "covered",
-      "covered_entrypoints": [],
-      "decorated_source": "runtime_shutdown_diagnostic",
-      "direct_callers": [
-        "Container_Audit.ContainerAudit._cleanup_after_mainloop.wait_tick"
-      ],
-      "file": "runtime_instance.py",
-      "kind": "function",
-      "line": 20,
-      "mutation_sites": [
-        {
-          "category": "filesystem",
-          "line": 23,
-          "operation": "path.parent.mkdir",
-          "writer_admission_sources": []
-        },
-        {
-          "category": "filesystem",
-          "line": 24,
-          "operation": "path.write_text",
-          "writer_admission_sources": []
-        }
-      ],
-      "node": "runtime_instance.write_shutdown_stall",
-      "reachable_entrypoints": [],
-      "reachable_from_product_entrypoint": false,
-      "trust_reason": "",
-      "unsunk_entrypoints": [],
-      "unsunk_paths": []
-    },
-    {
-      "caller_guard_reason": "",
-      "caller_guard_sources": [],
-      "coverage_status": "covered",
       "covered_entrypoints": [
         "Container_Audit.__file_entry__",
         "Container_Audit.main",
@@ -5770,6 +5737,7 @@
         "parked_tray_store.ParkedTrayStore.save_state",
         "preflight_scan_hold.PreflightScanHoldStore._write",
         "recovery_two_phase.RecoveryTwoPhaseJournal._write",
+        "runtime_instance.write_shutdown_stall",
         "storage_utils.RemoteAttempt.begin",
         "storage_utils.StorageFailureQuarantine.hold",
         "tools.register_container_audit_worker_pc._write_registration_json",
@@ -8844,7 +8812,7 @@
   ],
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
-    "closure_direct_mutation_function_count": 172,
+    "closure_direct_mutation_function_count": 171,
     "closure_module_count": 111,
     "external_process_mutation_site_count": 18,
     "powershell_direct_mutation_site_count": 112,
@@ -9312,6 +9280,7 @@
       "Container_Audit",
       "auto_update",
       "current_user_onboarding",
+      "user_relay",
       "writer_session_fence"
     ],
     "preflight_scan_hold": [
@@ -9360,6 +9329,7 @@
       "writer_session_fence"
     ],
     "runtime_instance": [
+      "storage_utils",
       "writer_session_fence"
     ],
     "scan_display": [],
@@ -9576,7 +9546,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "a2e1ac84486f6b8485ab8c095b4bdf546a19ddafa8d9bbe85e6b092b82a2e0ad",
+  "inventory_sha256": "e5a9060272e1ad8434136f620e9033ab554d835b9756860568c7188e4e4ccb68",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -22494,7 +22464,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1526,
+      "line": 1529,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -22502,7 +22472,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 22967,
+      "line": 23009,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -22510,7 +22480,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 5519,
+      "line": 5522,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -22518,7 +22488,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._clear_projected_checkpoint_audits",
-      "line": 4109,
+      "line": 4112,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -22526,7 +22496,7 @@
       "direct_mutation_site_count": 3,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._prepare_tray_state_snapshot",
-      "line": 3958,
+      "line": 3961,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -22534,7 +22504,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._publish_tray_state_snapshot",
-      "line": 3976,
+      "line": 3979,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -22542,7 +22512,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._recover_checkpoint_audit_events",
-      "line": 4077,
+      "line": 4080,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -22550,7 +22520,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot_admitted",
-      "line": 4000,
+      "line": 4003,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -22558,7 +22528,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 4586,
+      "line": 4589,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },
@@ -22902,7 +22872,7 @@
       "direct_mutation_site_count": 2,
       "file": "portable/main.py",
       "function": "portable.main._portable_smoke",
-      "line": 22,
+      "line": 24,
       "marker_kind": "decorator",
       "source": "portable_smoke_marker"
     },
@@ -23379,10 +23349,10 @@
       "source": "runtime_shutdown_diagnostic"
     },
     {
-      "direct_mutation_site_count": 2,
+      "direct_mutation_site_count": 0,
       "file": "runtime_instance.py",
       "function": "runtime_instance.write_shutdown_stall",
-      "line": 20,
+      "line": 21,
       "marker_kind": "decorator",
       "source": "runtime_shutdown_diagnostic"
     },
