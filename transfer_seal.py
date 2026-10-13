@@ -3128,6 +3128,8 @@ class TransferSealCoordinator:
         """Read the original key only; never resend a reviewed command."""
         self._assert_owner()
         row = self.store.load(intent_id)
+        if row["last_error_code"] == "RESIDUAL_TAG_NOT_ALLOWED":
+            return self._attempt_from_row(row)
         if row["status"] != "OPERATOR_REVIEW" or not row["command_json"]:
             return self._attempt_from_row(row)
         try:
@@ -3176,6 +3178,7 @@ class TransferSealCoordinator:
         row = self.store.load(intent_id)
         if (
             row["status"] != "OPERATOR_REVIEW"
+            or row["last_error_code"] == "RESIDUAL_TAG_NOT_ALLOWED"
             or not bool(row["completion_checkpoint_confirmed"])
             or not row["local_completion_id"]
             or not row["command_json"]

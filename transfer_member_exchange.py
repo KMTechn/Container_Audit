@@ -746,6 +746,7 @@ class TransferMemberExchangeStore:
     def record_error(self, intent_id: str, error: TransferSealError) -> sqlite3.Row:
         self._assert_coordinator_owner()
         operator_review_codes = {
+            "RESIDUAL_TAG_NOT_ALLOWED",
             "CAPABILITY_UNAVAILABLE",
             "AUTHORITY_PROFILE_MISMATCH",
             "AMBIGUOUS_BUNDLE",
@@ -890,6 +891,7 @@ class TransferMemberExchangeStore:
             rows = conn.execute(
                 f"""SELECT intent_id FROM transfer_member_exchange_intents i
                       WHERE i.status IN ({placeholders})
+                        AND COALESCE(i.last_error_code, '') != 'RESIDUAL_TAG_NOT_ALLOWED'
                         AND NOT EXISTS (SELECT 1 FROM transfer_scan_exchanges s
                             WHERE s.intent_id=i.intent_id AND s.state!='READY')
                         AND NOT EXISTS (
@@ -2475,6 +2477,8 @@ class TransferMemberExchangeCoordinator:
     def attempt(self, intent_id: str) -> MemberExchangeAttempt:
         self._assert_owner()
         row = self.store.load(intent_id)
+        if row["last_error_code"] == "RESIDUAL_TAG_NOT_ALLOWED":
+            return self._attempt(row)
         if not self.store.scan_exchange_ready(intent_id):
             return self._attempt(row)
         if self.store.has_dismissed_command_fence(intent_id):

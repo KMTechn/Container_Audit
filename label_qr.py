@@ -20,6 +20,8 @@ TRANSITION_CLASSES = (
 NEW_SYSTEM_IDENTITY_KEYS = (
     "ITG", "LBL", "HSH", "HSH_CORE", "HSH_LABEL", "BND", "BUNDLE_ID", "SOURCE_BUNDLE_ID",
 )
+RESIDUAL_TAG_NOT_ALLOWED = "RESIDUAL_TAG_NOT_ALLOWED"
+RESIDUAL_TAG_REJECTION = "잔량표는 이적에 쓸 수 없습니다 — 검사실로 돌려보내세요"
 # Local CSV classification stays fixed; valid PHS2_LOCAL also queues a deferred seal.
 TRANSITION_LOCAL_SEAL_STATUS = {
     TRANSITION_LEGACY: "LEGACY_LOCAL_ONLY",
@@ -348,6 +350,20 @@ def normalize_master_label_input(raw_value: str) -> str:
     except (binascii.Error, UnicodeDecodeError, ValueError):
         return value
     return decoded if parse_new_format_qr(decoded) else value
+
+
+def is_residual_tag(raw_value: str) -> bool:
+    """Recognize the source before strict/transition parsing, including repeats."""
+    text = str(raw_value or "").strip()
+    if "|" not in text and not text.startswith("{"):
+        try:
+            padded = text.replace("-", "+").replace("_", "/")
+            text = base64.b64decode(padded + "=" * (-len(padded) % 4)).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            return False
+    pairs, _is_json = transition_label_pairs(text)
+    return any(key == "SRC" and str(value or "").upper() == "KMTECH_RESIDUAL_TAG"
+               for key, value in pairs)
 
 
 def canonical_master_label_key(raw_value: str) -> str:

@@ -874,6 +874,7 @@ class TransferSealStore:
     def record_error(self, intent_id: str, error: TransferSealError) -> sqlite3.Row:
         self._assert_coordinator_owner()
         operator_review_codes = {
+            "RESIDUAL_TAG_NOT_ALLOWED",
             "AMBIGUOUS_BUNDLE",
             "SOURCE_IDENTITY_MISMATCH",
             "BUNDLE_IDENTITY_MISMATCH",
