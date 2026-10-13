@@ -297,6 +297,40 @@ def test_owner_thread_error_is_raised_on_the_main_thread(entry, monkeypatch):
     assert "request_exit" in entry.events
 
 
+def test_owner_thread_keeps_the_existing_startup_observation_identity(entry, monkeypatch):
+    import startup_check_report as report
+
+    identities = []
+    original_gate = updates.startup_gate
+
+    def gate(*args):
+        result = original_gate(*args)
+        report.release_identity({"version": ca.CURRENT_VERSION, "build_id": "probe-build"})
+        return result
+
+    def observe(action, *args, **kwargs):
+        result = report.observe(action, *args, **kwargs)
+        if action == "gui_identity":
+            identities.append(result)
+        return result
+
+    def run_app(_profile, _data, **kwargs):
+        owner = Thread(target=kwargs["owner_main"], args=(entry.bridge,))
+        owner.start()
+        owner.join(5)
+        assert not owner.is_alive()
+        return 99
+
+    monkeypatch.setattr(updates, "startup_gate", gate)
+    monkeypatch.setattr(report, "publish", lambda *_args, **_kwargs: False)
+    with monkeypatch.context() as patch:
+        patch.setattr(ca, "_startup_check_observe", observe)
+        patch.setitem(sys.modules, "host", SimpleNamespace(run_app=run_app))
+        assert ca.main(["--new-screen"]) == 0
+    assert identities == [(ca.CURRENT_VERSION, "probe-build")]
+    assert entry.releases == [True]
+
+
 @pytest.mark.parametrize("stop", [False, True])
 def test_new_screen_keeps_existing_trial_readiness_and_stop(entry, monkeypatch, stop):
     published = []

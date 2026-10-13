@@ -6,7 +6,7 @@
 
 ## 1. 기존 시작 진입에 새 화면 플래그
 진입은 `Container_Audit.py --new-screen` 한 길이다. `main()`의 시작 확인 기록 → `startup_gate` → `dispatch_product_mode`를 거친 뒤 셸을 부르고, 기존 GUI 시작 부분을 옮긴 `_run_gui_application(arguments)`이 주인 스레드에서 앱을 만든다. 플래그가 없으면 같은 함수에서 기존 `app.run()`을 부른다. 처리 모듈과 시작 관문의 판단은 그대로다.
-이음 파일: `ca_screen_bridge.py`(다리) · `tests/test_ca_screen_bridge.py` · `tests/test_ca_new_screen_entry.py` · `shell/` · `ui/` · 이 노트. 별도 진입 `ca_screen_main.py`는 제거했다.
+이음 파일: `ca_screen_bridge.py`(다리) · `tests/test_ca_screen_bridge.py` · `tests/test_ca_new_screen_entry.py` · `shell/` · `ui/` · 이 노트. 별도 진입 `ca_screen_main.py`는 제거했다. 시작 확인의 ContextVar 문맥도 `copy_context()`로 주인 스레드에 넘겨 관문에서 확인한 판·build 신원을 유지한다.
 업데이트 관문에 전달하는 인수에서 플래그를 빼지 않는다. 앱을 만들지 못하면 `fail_owner(CaStartupRefused(code))`로 셸 기다림을 끝내고 기존 종료 값을 돌려준다. 셸 창은 주인이 붙은 뒤 만들어지며 `owner_timeout`은 전달하지 않는다. 앱이 만들어지기 전 messagebox 안내와 시작 거절 함수는 원래 Tk·대화상자 이름으로 호출해 기존 안내를 숨기지 않는다. 주인이 끝나면 Tk·대화상자·거절 함수 이름과 새 화면 실행 상태를 되돌린다.
 
 ## 2. 불변식 1 의 손질 자리 — 파일 대신 다리가 이 인스턴스 · 모듈 이름 자리에서 바꿈

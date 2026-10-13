@@ -17,6 +17,7 @@ w9uiflow1014, APP-SCREENS-1013 ③. 처리 층(Container_Audit.ContainerAudit)�
 
 from __future__ import annotations
 
+from contextvars import copy_context
 import datetime
 import hashlib
 import json
@@ -1067,7 +1068,12 @@ def screen_runner(module: Any) -> Callable[[List[str]], Any]:
 
 
 def owner_main_for(module: Any, arguments: List[str]) -> Callable[[Any], Any]:
+    context = copy_context()
+
     def owner_main(bridge: Any) -> Any:
+        return context.run(run_owner, bridge)
+
+    def run_owner(bridge: Any) -> Any:
         global ca
         original_module = ca
         ca = module  # Container_Audit.py may have been launched as __main__.
