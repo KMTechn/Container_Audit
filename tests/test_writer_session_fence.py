@@ -525,6 +525,8 @@ def test_probe_only_admission_is_refused_for_every_unapproved_sink() -> None:
                 "direct_sync_auto_bootstrap._run_command",
             ),
             ("persistent_relay_status", "user_relay.main"),
+            # Accepted stop-result observation is a read-only process probe.
+            ("persistent_relay_status", "user_relay.native_app_process_snapshot"),
             ("transfer_api_request", "transfer_client.LogisticsTransferClient._request"),
             *(('transfer_seal', 'transfer_client.LogisticsTransferClient.' + name)
               for name in ('issue_operation_lease', 'adopt_phs_label',

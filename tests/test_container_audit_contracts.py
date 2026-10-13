@@ -882,10 +882,11 @@ def test_container_audit_keeps_worker_registry_import_compatibility():
     assert WorkerRegistry is worker_registry.WorkerRegistry
 
 
-def _is_gui_ready_marker(callback):
-    # main() schedules its daily GUI-ready marker (88b1ca9) on the root; that
-    # is not an update notice or work step, so call ledgers skip only it.
-    return getattr(callback, "__name__", "") == "report_gui_ready"
+def _is_startup_control_callback(callback):
+    # GUI readiness and the accepted app-stop watcher are startup controls.
+    # Keep other scheduled work/update callbacks in the call ledgers.
+    return (getattr(callback, "__name__", "") == "report_gui_ready"
+            or getattr(callback, "__func__", None) is ContainerAudit._poll_app_stop_control)
 
 
 def test_main_starts_work_without_scheduling_update_notice(monkeypatch):
@@ -893,7 +894,7 @@ def test_main_starts_work_without_scheduling_update_notice(monkeypatch):
 
     class FakeRoot:
         def after(self, delay_ms, callback):
-            if _is_gui_ready_marker(callback):
+            if _is_startup_control_callback(callback):
                 return
             calls.append(("after", delay_ms))
             self.callback = callback
@@ -936,7 +937,7 @@ def test_main_completes_current_user_onboarding_before_catalog_and_client(
 
     class FakeRoot:
         def after(self, _delay_ms, callback):
-            if _is_gui_ready_marker(callback):
+            if _is_startup_control_callback(callback):
                 return
             calls.append("update-scheduled")
 
@@ -1012,7 +1013,7 @@ def test_main_warns_and_continues_with_verified_catalog_cache(monkeypatch, tmp_p
 
     class FakeRoot:
         def after(self, delay_ms, callback):
-            if _is_gui_ready_marker(callback):
+            if _is_startup_control_callback(callback):
                 return
             calls.append(("after", delay_ms))
 
