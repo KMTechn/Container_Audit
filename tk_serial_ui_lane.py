@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import queue
 import threading
+from writer_session_fence import start_lane_worker
 from typing import Any, Callable, Optional
 
 
@@ -174,7 +175,7 @@ class TkSerialUiLane:
             name="container-audit-tk-ui-lane",
             daemon=False,
         )
-        self.worker_thread.start()
+        start_lane_worker(self.worker_thread)
         if not self._worker_started.wait(timeout=2.0):
             raise RuntimeError("Tk UI lane worker did not start")
         self._schedule_pump()

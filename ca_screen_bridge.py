@@ -901,6 +901,7 @@ class CaProcessor:
             self._park_paths[park_id] = path
             park.append({"id": park_id, "item": str(_attr(entry, "problem", "") or _attr(entry, "item_name", "") or "품목 미확인"),
                          "tag": "", "count": int(_attr(entry, "scan_count", 0) or 0), "target": 0, "at": ""})
+        restricted = []
         for held in self.app._quarantined_preflight_holds():
             snapshot = held.snapshot
             fields = self.app._parse_new_format_qr(snapshot.master_raw) or {}
@@ -914,12 +915,21 @@ class CaProcessor:
             if reason == "중앙 PHS=2 확인 실패":
                 reason = "현품표 확인이 필요합니다"
             # Only controlled guidance reaches the screen; paths and error text stay private.
-            park.append({"id": hashlib.sha256(str(held.path).encode("utf-8")).hexdigest()[:12],
+            restricted.append({"id": hashlib.sha256(str(held.path).encode("utf-8")).hexdigest()[:12],
                          "item": item, "tag": tag, "count": count, "target": 0,
                          "at": snapshot.created_at, "kind": kind, "restorable": False,
                          "label": f"{item} · {tag} · {count}개", "note": f"{title} — {reason}"})
-        park = park[:50]
-        return {"park": park, "held_count": len(park), "today": today_values(self.app), "stats": []}
+        total = len(park) + len(restricted)
+        shown_restricted = restricted[:50]
+        # Both recovery-only kinds remain visible even if they alone exceed the cap.
+        for kind in ("quarantine", "server_wait"):
+            if not any(row["kind"] == kind for row in shown_restricted):
+                missing = next((row for row in restricted if row["kind"] == kind), None)
+                if missing is not None:
+                    shown_restricted[-1] = missing
+        park = park[:50 - len(shown_restricted)] + shown_restricted
+        return {"park": park, "held_count": total, "overflow": total > len(park),
+                "today": today_values(self.app), "stats": []}
 
     # 명령 ──────────────────────────────────────────────
     def _cmd_ack(self, _id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:

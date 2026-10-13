@@ -24,6 +24,7 @@ import threading
 import time
 from typing import Any, Callable, Iterator, Mapping, ParamSpec, TypeVar
 import unicodedata
+import weakref
 
 
 APP_ID = "container_audit"
@@ -45,18 +46,29 @@ _WRITER_LOCAL = threading.local()
 _WRITER_EXIT_CONDITION = threading.Condition()
 _WRITER_EXIT_CLOSED = False
 _WRITER_EXIT_COUNT = 0
+_LANE_WORKERS = weakref.WeakSet()
+EXIT_WRITE_WAIT_S = 120
+EXIT_POLL_S = 5
+
+
+def start_lane_worker(worker: threading.Thread) -> None:
+    """Track every lane worker, including one whose lane later becomes BROKEN."""
+    with _WRITER_EXIT_CONDITION:
+        _LANE_WORKERS.add(worker)
+        worker.start()
 
 
 def close_and_wait_writers(timeout_seconds: float) -> bool:
-    """Close new process admissions and wait only for admitted writes to drain."""
+    """Close admissions; wait for writes and every lane worker's actual exit."""
     global _WRITER_EXIT_CLOSED
     deadline = time.monotonic() + max(0.0, timeout_seconds)
     with _WRITER_EXIT_CONDITION:
         _WRITER_EXIT_CLOSED = True
-        if not _WRITER_EXIT_CONDITION.wait_for(
-            lambda: _WRITER_EXIT_COUNT == 0, timeout=max(0.0, deadline - time.monotonic())
-        ):
-            return False
+        while _WRITER_EXIT_COUNT or any(worker.is_alive() for worker in tuple(_LANE_WORKERS)):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            _WRITER_EXIT_CONDITION.wait(min(EXIT_POLL_S, remaining))
     try:
         lease = _acquire_named_mutex(
             writer_admission_mutex_name(canonical_control_root()),
@@ -73,7 +85,7 @@ def close_and_wait_writers(timeout_seconds: float) -> bool:
 
 # This pin is generated and checked by tools/derive_container_writer_sinks.py.
 # It is updated together with the inventory after all sink markers are placed.
-WRITER_INVENTORY_SHA256 = "4f347643cf3f25cf2f81f82e2995f1312d00ce2c150e878b2f984b43045c44ee"
+WRITER_INVENTORY_SHA256 = "1c2a459f67f0d0c5f3fe679a36740955a6237436a164a4cd8fb17cc7d6207fe9"
 
 DELEGATION_TOKEN_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN"
 DELEGATION_SESSION_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID"

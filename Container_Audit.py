@@ -23141,10 +23141,7 @@ def _item_catalog_cache_time_for_display(value: object) -> str:
 
 
 def main(argv: list[str] | None = None):
-    from relaunch_wait import wait_previous_from_argv
     arguments = list(sys.argv[1:] if argv is None else argv)
-    if not wait_previous_from_argv(arguments):
-        return 1
     from container_audit_product_host import PRODUCT_MODES
     from writer_session_fence import WriterFenceError
     enabled = not any(argument in PRODUCT_MODES or argument in {"--help", "-h"} for argument in arguments)

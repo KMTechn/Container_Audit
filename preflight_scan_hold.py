@@ -526,7 +526,8 @@ class PreflightScanHoldWriter:
             # process alive after its result pump is gone.
             daemon=True,
         )
-        self.thread.start()
+        from writer_session_fence import start_lane_worker
+        start_lane_worker(self.thread)
         self._schedule_pump()
 
     def _assert_owner(self) -> None:

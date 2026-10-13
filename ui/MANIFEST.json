@@ -14,15 +14,15 @@
   },
   {
    "path": "app/ca/ca.js",
-   "sha256": "dc896374ed58f324f5cf4cf22dfadf7014403d53d2aeeba2baa7cf46df87ab50",
-   "bytes": 17481,
-   "gzip": 6394
+   "sha256": "bd2c35864a1a2156659c34c5fa60ee350315c480e63ef9037318bea86502d5a5",
+   "bytes": 17650,
+   "gzip": 6442
   },
   {
    "path": "app/ca/contract.json",
-   "sha256": "41fb6a0b3db4d1b0af675b2eab56c4803e53205f376da2df9c00b6ef092e34d2",
-   "bytes": 27735,
-   "gzip": 5798
+   "sha256": "a313498c5a737458cdd97951c4eee86f6eefc8bfff91671793e9d0f9f8a6e9d8",
+   "bytes": 27780,
+   "gzip": 5805
   },
   {
    "path": "app/ca/fixtures/admin-defer.json",

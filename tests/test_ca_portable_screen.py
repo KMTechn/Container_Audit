@@ -17,8 +17,7 @@ def _function(tree, name):
 def assert_packet_screen_entry(app):
     for source, target in (("portable/main.py", "main.py"), ("Container_Audit.py", "Container_Audit.py"),
                            ("ca_screen_bridge.py", "ca_screen_bridge.py"),
-                           ("screen_startup_fallback.py", "screen_startup_fallback.py"),
-                            ("relaunch_wait.py", "relaunch_wait.py")):
+                            ("screen_startup_fallback.py", "screen_startup_fallback.py")):
         assert (app / target).read_bytes() == (ROOT / source).read_bytes()
     entry = ast.parse((app / "main.py").read_text(encoding="utf-8"))
     assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)

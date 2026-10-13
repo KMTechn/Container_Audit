@@ -62,7 +62,7 @@
       else tag.textContent = '현품표를 찍으면 여기 나옵니다';
     }
     $('[data-legacy]').hidden = !s.legacy;
-    $('[data-held]').textContent = `보류 ${s.park ? s.park.length : s.held_count}건 · 오늘 현황`;
+    $('[data-held]').textContent = `보류 ${s.held_count}건 · 오늘 현황`;
     for (const link of document.querySelectorAll('[data-nav] [data-go]')) link.hidden = starting;
     $('[data-change]').hidden = starting;
   }
@@ -168,7 +168,7 @@
   }
 
   function renderHeld(s) {
-    $('[data-park-title]').textContent = `보류 작업 · ${s.park.length}건`;
+    $('[data-park-title]').textContent = `보류 작업 · ${s.held_count}건`;
     $('[data-park]').replaceChildren(...s.park.map((p) => {
       const li = el('li');
       if (p.restorable === false) {
@@ -181,6 +181,9 @@
         el('span', 'ca-park__meta', [p.tag && `현품표 ${p.tag}`, p.target ? `${p.count} / ${p.target}` : `찍은 제품 ${p.count}개`, p.at && `보류 ${p.at}`].filter(Boolean).join(' · ')));
       return li;
     }));
+    if (s.overflow) {
+      $('[data-park]').append(el('li', 'ca-park__meta', `전체 ${s.held_count}건 중 ${s.park.length}건 표시 · 나머지는 옛 화면에서 확인하세요`));
+    }
     const today = s.today;
     $('[data-today-title]').textContent = `오늘 작업 현황 · 완료 ${today.total_trays} 트레이`;
     $('[data-today-rows]').replaceChildren(...today.rows.map((r) => {

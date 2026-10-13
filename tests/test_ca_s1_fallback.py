@@ -1,15 +1,12 @@
-"""Verify the M83 relaunch adapter with no native windows or process exits."""
-import ast
+"""Verify M84 exit and manual next-start behavior without native windows."""
 import builtins
 from contextlib import contextmanager
-from pathlib import Path
 import sys
 import threading
 from types import MethodType, SimpleNamespace
 
 import pytest
 import Container_Audit as ca
-import relaunch_wait
 import writer_session_fence as fence
 from tests.test_ca_new_screen_entry import entry, _SurfaceEvent
 
@@ -29,9 +26,8 @@ def visible(entry, monkeypatch):
 
 
 @pytest.mark.parametrize('failure', ('SHELL_START_FAILED', 'SHELL_START_TIMEOUT'))
-def test_created_web_failure_relaunches_once_then_waits_and_opens_one_tk(entry, visible, monkeypatch, failure):
+def test_created_web_failure_exits_without_restart_then_manual_start_opens_one_tk(entry, visible, monkeypatch, failure):
     marker, order = [], []
-    old_ended = threading.Event()
     entry.bridge._startup_failure = failure
     entry.bridge.pump = lambda: False
     entry.bridge.attach_owner = lambda processor: None
@@ -66,26 +62,21 @@ def test_created_web_failure_relaunches_once_then_waits_and_opens_one_tk(entry, 
         visible.web = 0
         order.append('destroy')
         assert kwargs['before_exit'](failure, 120) is True
-        order.extend(('relaunch_self', 'exit_3'))
+        order.append('exit_3')
         assert visible.tk + visible.web == 0
         raise SystemExit(3)
     fake = SimpleNamespace(run_app=run_app, web_allowed=lambda data, version: version not in marker)
     monkeypatch.setitem(sys.modules, 'host', fake)
     with pytest.raises(SystemExit) as ended:
         ca.main([])
-    assert ended.value.code == 3 and order.count('relaunch_self') == 1
-    assert order.index('destroy') < order.index('writes_empty') < order.index('relaunch_self')
-    old_ended.set()
-    def wait(pid, timeout):
-        order.append('previous_ended')
-        return old_ended.is_set()
-    monkeypatch.setattr(relaunch_wait, '_wait_for_previous_process', wait)
+    assert ended.value.code == 3 and order.count('exit_3') == 1
+    assert order.index('destroy') < order.index('writes_empty') < order.index('exit_3')
     def tk_loop():
         assert fence._WRITER_EXIT_COUNT == 0
     entry.app.run = tk_loop
-    assert ca.main(['--after-pid', '123']) == 0
+    assert ca.main([]) == 0
     assert visible.preparations == [0, 1] and visible.tk + visible.web == 1
-    assert entry.gate_arguments == [] and order.count('previous_ended') == 1
+    assert entry.gate_arguments == []
     assert len(entry.releases) == 2 and not webview.windows
 
 
@@ -120,7 +111,7 @@ def test_hung_exit_defers_until_writer_mutex_is_released(entry, visible, monkeyp
         thread.join(5)
         assert not thread.is_alive() and released.is_set()
         assert kwargs['before_exit']('SHELL_START_HUNG', 0) is True
-        order.extend(('relaunch_self', 'exit_3'))
+        order.append('exit_3')
         raise SystemExit(3)
     monkeypatch.setitem(sys.modules, 'host', SimpleNamespace(run_app=run_app))
     try:
@@ -130,7 +121,7 @@ def test_hung_exit_defers_until_writer_mutex_is_released(entry, visible, monkeyp
     finally:
         finish.set()
         thread.join(5)
-    assert order == ['SHELL_EXIT_DEFERRED', 'relaunch_self', 'exit_3']
+    assert order == ['SHELL_EXIT_DEFERRED', 'exit_3']
     assert visible.tk + visible.web == 0 and 'deiconify' not in entry.events
 
 
@@ -167,22 +158,8 @@ def test_emergency_routes_leave_shell_modules_unimported(entry, visible, monkeyp
     assert visible.tk + visible.web == 1 and len(entry.releases) == 1
 
 
-def test_previous_pid_wait_precedes_guards_and_timeout_opens_no_app(entry, visible, monkeypatch):
-    monkeypatch.setattr(relaunch_wait, '_wait_for_previous_process', lambda pid, timeout: False)
-    assert ca.main(['--after-pid', '123']) == 1
-    assert entry.events == [] and not entry.releases and not entry.host_calls
-    assert visible.tk + visible.web == 0
 
 
-def test_relaunch_wait_has_only_standard_library_dependencies():
-    tree = ast.parse(Path(relaunch_wait.__file__).read_text(encoding='utf-8'))
-    names = {node.module if isinstance(node, ast.ImportFrom) else alias.name
-             for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
-             for alias in (node.names if isinstance(node, ast.Import) else [None])}
-    assert names <= sys.stdlib_module_names
-    main = next(node for node in ast.parse(Path(ca.__file__).read_text(encoding='utf-8')).body
-                if isinstance(node, ast.FunctionDef) and node.name == 'main')
-    assert isinstance(main.body[0], ast.ImportFrom) and main.body[0].module == 'relaunch_wait'
 
 
 def test_exit_waits_for_writer_mutex_even_without_a_local_admission(entry, visible, monkeypatch):
@@ -223,3 +200,73 @@ def test_exit_waits_for_writer_mutex_even_without_a_local_admission(entry, visib
         finish.set()
         writer.join(5)
     assert visible.tk + visible.web == 0
+
+
+@pytest.mark.parametrize('worker_kind', ('ui', 'transport', 'hold', 'broken'))
+def test_exit_requires_every_lane_worker_to_be_dead(entry, monkeypatch, worker_kind):
+    from tk_serial_ui_lane import TkSerialUiLane
+    from preflight_scan_hold import PreflightScanHoldWriter
+    monkeypatch.setattr(fence, '_WRITER_EXIT_CLOSED', False)
+    if worker_kind == 'hold':
+        lane = PreflightScanHoldWriter(entry.app.root, queue_capacity=2)
+        worker = lane.thread
+        close = lane.close_idle
+    else:
+        lane = TkSerialUiLane(entry.app.root)
+        worker = lane.worker_thread
+        close = lane.close_idle
+        if worker_kind == 'broken':
+            lane.mark_broken(RuntimeError('Synthetic broken lane'))
+    closed = []
+    def run_app(profile, data, **kwargs):
+        assert worker.is_alive() and fence._WRITER_EXIT_COUNT == 0
+        assert kwargs['before_exit']('SHELL_START_HUNG', 0) is False
+        assert worker.is_alive() and not entry.releases and not closed
+        close()
+        closed.append(True)
+        assert not worker.is_alive()
+        assert kwargs['before_exit']('SHELL_START_HUNG', 0) is True
+        raise SystemExit(3)
+    monkeypatch.setitem(sys.modules, 'host', SimpleNamespace(run_app=run_app))
+    try:
+        with pytest.raises(SystemExit):
+            ca.main([])
+    finally:
+        close()
+    assert closed == [True]
+
+
+def test_entry_and_packet_have_no_automatic_restart_wait():
+    from pathlib import Path
+    from tools import build_portable_release_candidate as builder
+    root = Path(ca.__file__).parent
+    for path in (root / 'Container_Audit.py', root / 'portable/main.py'):
+        text = path.read_text(encoding='utf-8')
+        for removed in ('relaunch_wait', 'wait_previous_from_argv', '--after-pid'):
+            assert removed not in text
+    assert not (root / 'relaunch_wait.py').exists()
+    assert 'relaunch_wait.py' not in builder.APP_ROOT_FILES
+    assert fence.EXIT_WRITE_WAIT_S == 120 and fence.EXIT_POLL_S == 5
+
+
+def test_failed_fallback_mark_exits_without_automatic_retry(entry, visible, monkeypatch):
+    import subprocess
+    records = []
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('Unexpected automatic process start'))
+    monkeypatch.setattr(fence, 'close_and_wait_writers', lambda timeout: True)
+    webview = sys.modules['webview']
+    def run_app(profile, data, **kwargs):
+        webview.windows.append(SimpleNamespace(events=SimpleNamespace(shown=_SurfaceEvent())))
+        visible.web = 1
+        kwargs['owner_main'](entry.bridge)
+        records.append('SHELL_FALLBACK_MARK_FAILED')
+        webview.windows.clear()
+        visible.web = 0
+        assert kwargs['before_exit']('SHELL_START_FAILED', 120) is True
+        assert visible.tk + visible.web == 0
+        raise SystemExit(3)
+    monkeypatch.setitem(sys.modules, 'host', SimpleNamespace(run_app=run_app))
+    with pytest.raises(SystemExit) as ended:
+        ca.main([])
+    assert ended.value.code == 3 and records == ['SHELL_FALLBACK_MARK_FAILED']
+    assert visible.preparations == [0] and visible.tk + visible.web == 0

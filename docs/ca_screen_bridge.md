@@ -1,14 +1,14 @@
 # 이적 새 화면 이음 — 노트 (w9uiflow1014, APP-SCREENS-1013 ③)
 
 - 바탕: `firstupd-ca-cut-1013` **4fb02da**(v2.0.103 — w9firstupd 10/12 23:58). 가지 `ca-newui-bridge-1013`(E: worktree, push 0). 기준일 조립(10/23–25)에 ACCEPT 고침 머리로 한 번 다시 얹음(주인 레인).
-- 화면 원천: 웹 committed `c706dbb2f7f0e62430da4a26f24ac515ab432283`의 `static/ui/` → `ui/`(72파일). 71파일은 원천 바이트와 같고 앱 계약에는 기존 `events_dropped` 및 보류 `kind`를 추가한다. MANIFEST의 원천 SHA·`dirty=true`·파일 해시·부품 지문을 함께 갱신한다.
+- 화면 원천: 웹 committed `c706dbb2f7f0e62430da4a26f24ac515ab432283`의 `static/ui/` → `ui/`(72파일). 70파일은 원천 바이트와 같고 앱 계약의 기존 `events_dropped`·보류 `kind`에 `overflow`를 더하며 ca.js의 건수·넘침 안내를 고친다. MANIFEST의 원천 SHA·`dirty=true`·파일 해시·부품 지문을 함께 갱신한다.
 - 셸: `shell/` = 셸 v3.16 고정판(`shell/SHELL-READY-v3.16.json`의 19개 파일 SHA256·크기와 같음). kit 전용 `tk_ab.py`는 앱 사본에서 제외한다. 사본 바이트를 유지하도록 `shell/** -text`를 적용한다.
 
-## 1. 시작과 셸 재실행 어댑터 (M83)
-main은 표준 라이브러리 전용 `relaunch_wait` 하나를 먼저 import하고 이전 PID 종료를 시작 관문·lease·mutex보다 먼저 확인한다. 기본·`--new-screen`·`--ui web`·모르는 `--ui` 값은 web, `--old-screen`·`--ui tk`는 그 실행만 Tk다. 비상 Tk에는 셸 import가 없으며 다른 셸 import는 try 안에서 처리한다. 실패하면 `SHELL_IMPORT_FAILED` 한 줄 뒤 기존 Tk 길을 사용한다.
-웹 창이 생긴 뒤 실패에는 앱의 같은 프로세스 Tk 전환이 없다. 셸이 쓰기 닫음·판 표지·destroy 최선 2초·before_exit·relaunch_self·os._exit를 담당한다. 새 프로세스는 이전 PID 종료를 최대 30초 기다리고 같은 판의 `web_allowed=False`이면 Tk를 연다. 시작 거절·업무 gate 거부와 창 생성 전의 기존 안전한 Tk 길은 유지한다.
-`before_exit`는 process writer admission을 닫고 현재 허가된 쓰기와 mutex가 비었는지만 최대 120초 기다린다. Tk/owner/lease 정리는 하지 않는다. 미완료면 셸이 `SHELL_EXIT_DEFERRED`를 기록하고 5초마다 다시 확인한다. owner pump는 기존 정상 정리를 한 번 수행하고 lease는 정리 완료 뒤 반납한다.
-현재 셸 사본은 v3.16이다. v3.16.2 SHA·READY 핀 통합 전에는 API를 headless mock으로 검증하며 사본·빌드·stock은 보류한다.
+## 1. 시작과 셸 끝내기 어댑터 (M84)
+기본·`--new-screen`·`--ui web`·모르는 `--ui` 값은 web, `--old-screen`·`--ui tk`는 그 실행만 Tk다. 비상 Tk의 셸 import는 0이다. 다른 셸 import는 try 안에서 처리하며 실패하면 `SHELL_IMPORT_FAILED` 한 줄 뒤 Tk로 간다. 같은 판의 `web_allowed=False`도 Tk를 고른다. 진입에 별도 PID 대기나 자동 재실행은 없다.
+웹 창 생성 뒤 실패는 셸이 쓰기 문 닫음·판 표지·destroy·before_exit·끝을 맡는다. 앱의 같은 프로세스 Tk 전환은 없다. 표지 저장 실패도 끝내며 되풀이하지 않는다. 다음에 사람이 켜면 같은 판의 표지로 Tk를 연다. 생성 전 안전한 Tk 길·시작 거절·업무 gate는 유지한다.
+`before_exit`는 새 writer admission을 닫고 writer 허가·mutex가 비었으며 UI/중앙 전송/보류 쓰기 worker가 실제 죽었는지만 확인한다. BROKEN도 살아 있으면 미완료다. 이 callback에서 lane 닫기·Tk/owner/lease 정리는 하지 않는다. 120초 상한·5초 확인이며 False면 셸이 `SHELL_EXIT_DEFERRED`로 끝내기를 미룬다. worker 종료는 기존 owner 정리가 맡는다. 일반 닫기의 bridge.request_exit에는 force 인수가 없다.
+보류는 전체 건수와 `overflow`를 유지하고 표시 줄만 50개로 제한한다. 격리·서버 확인 대기에 자리를 먼저 주며, 그 종류만 50개를 넘으면 두 종류가 각각 보이도록 한다. 넘친 목록은 옛 화면에서 확인한다.
 
 ## 2. 불변식 1 의 손질 자리 — 파일 대신 다리가 이 인스턴스 · 모듈 이름 자리에서 바꿈
 | 자리 | 전(지금) | 후(새 화면) | 시험 |
