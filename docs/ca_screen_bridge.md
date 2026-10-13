@@ -1,17 +1,14 @@
 # 이적 새 화면 이음 — 노트 (w9uiflow1014, APP-SCREENS-1013 ③)
 
 - 바탕: `firstupd-ca-cut-1013` **4fb02da**(v2.0.103 — w9firstupd 10/12 23:58). 가지 `ca-newui-bridge-1013`(E: worktree, push 0). 기준일 조립(10/23–25)에 ACCEPT 고침 머리로 한 번 다시 얹음(주인 레인).
-- 화면 원천: 웹 저장소 `static/ui/app/ca/`(가지 web-newui-1014-flow) → `scripts/export_ui_parts.py --app ca` 로 `ui/`. 꼴 = `ui/app/ca/contract.json`(km-app-contract/1). 셸의 `events_dropped`(0 이상 정수)를 이음 계약에 추가했으며 MANIFEST의 원천 커밋은 유지하고 `dirty=true`·파일 해시·부품 지문을 갱신했다. 원천 3962eda5의 exporter `--check`로 자료를 확인한다.
+- 화면 원천: 웹 committed `c706dbb2f7f0e62430da4a26f24ac515ab432283`의 `static/ui/` → `ui/`(72파일). 71파일은 원천 바이트와 같고 앱 계약에는 기존 `events_dropped` 및 보류 `kind`를 추가한다. MANIFEST의 원천 SHA·`dirty=true`·파일 해시·부품 지문을 함께 갱신한다.
 - 셸: `shell/` = 셸 v3.16 고정판(`shell/SHELL-READY-v3.16.json`의 19개 파일 SHA256·크기와 같음). kit 전용 `tk_ab.py`는 앱 사본에서 제외한다. 사본 바이트를 유지하도록 `shell/** -text`를 적용한다.
 
-## 1. 기존 시작 진입의 기본 새 화면과 비상 옛 화면
-인수 없는 `Container_Audit.py`가 새 화면을 연다. `--new-screen`은 같은 뜻이고 `--old-screen`만 옛 Tk를 직접 고른다. `main()`의 시작 확인 기록 → `startup_gate` → `dispatch_product_mode`와 기존 GUI 준비의 판정·순서는 유지한다. 새 화면의 주인 스레드는 `_run_gui_application(arguments)`에서 앱을 만든다.
-창 보임(`window.events.shown`) 또는 셸 ready(`Bridge._view_count > 0`)가 한 번이라도 확인되면 자동 넘어감은 금지한다. `CaStartupRefused`와 writer·자료 거절도 우회하지 않는다. 실패 전 창 0인 경우에만 지역 HTTP 서버·bridge·주인 스레드의 정상 종료, `_application_close_complete`·`_loop_cleanup_finished`, 실제 instance lease 해제 표식 및 WinForms `BrowserView.instances`의 폼 0을 확인하고 옛 GUI 함수를 직접 한 번 호출한다. 알 수 없는 backend·남은 폼·불완전한 정리는 기존 오류로 끝낸다. 숨은 주인의 종료는 셸을 기다리는 MainThread를 앱 worker로 세지 않으며, 다른 살아 있는 앱 worker는 기존처럼 모두 기다린다. 기록은 시작 관측의 고정 fallback 코드 한 줄이고 추가 안내는 없다.
-이음 파일: `ca_screen_bridge.py`(다리) · `tests/test_ca_screen_bridge.py` · `tests/test_ca_new_screen_entry.py` · `shell/` · `ui/` · 이 노트. 별도 진입 `ca_screen_main.py`는 제거했다. 시작 확인의 ContextVar 문맥도 `copy_context()`로 주인 스레드에 넘겨 관문에서 확인한 판·build 신원을 유지한다.
-`screen_runner`가 `run_app(write_guard=admission_write_guard)`로 셸 담장을 설치한다. `shell_fileio`의 다섯 함수는 지역 쓰기 하나 동안만 기존 `writer_admission("screen_shell_fileio")`을 얻고 내려놓는다. 허락을 화면·스캔·네트워크 대기 동안 유지하지 않는다. 진단 기록·처리 층 모드의 셸 접수 캐시 쓰기가 거절되면 그 기록만 잃고 화면과 다음 스캔은 계속한다(진단 누락 수 `events_dropped`). 시작에 필요한 journal/UDF 폴더 생성 거절은 셸 v3.16처럼 창 생성 전 실패한다.
-쓰기 선언은 셸의 여덟 Python 파일·READY 해시와 실제 이적 담장 설치를 확인한 뒤에만 `shell/shell_fileio.py`의 쓰기를 보호된 것으로 인정한다. 사본·파일 목록·설치 호출·허락 함수가 달라지면 정적 검사를 거절한다. `shell/host.py`의 단독 kit 실행은 제품 바로 가기나 설치 진입이 아니다. 현재 stock 빌더의 새 화면 kit·UI 조립은 별도 수용 범위다.
-창 X의 답이 0.3초 안에 오지 않으면 창을 유지하고 「끝내는 중 — 남은 일을 마치고 닫습니다」 띠를 보여 준다. 늦은 허용 답은 닫고 거절 답은 띠를 내린다. 같은 질문 하나를 기다리며 120초 뒤 「그래도 닫기 / 더 기다리기」와 「그래도 닫으면 저장 중인 것은 잃을 수 있습니다」를 보여 준다. 처음 초점은 더 기다리기다. `on_force_exit`은 기본 `None`으로 둔다. 기존 마무리는 Tk 주인 스레드나 스레드 소유 뮤텍스에 의존하여 별도 스레드에서 2초 안에 부를 안전한 함수가 없다. 이음 `closing()`은 바쁨을 즉시 거절하며, 실제 앱 `on_closing()`의 배수와 mainloop 뒤 정리에는 전체 대기 상한이 없다(주인 몫 — 상한 필요). 로그 투영 join만 1초씩 최대 세 번이다.
-업데이트 관문에 전달하는 인수에서 플래그를 빼지 않는다. 앱을 만들지 못하면 `fail_owner(CaStartupRefused(code))`로 셸 기다림을 끝내고 기존 종료 값을 돌려준다. 셸 창은 주인이 붙은 뒤 만들어지며 `owner_timeout`은 전달하지 않는다. 앱이 만들어지기 전 messagebox 안내와 시작 거절 함수는 원래 Tk·대화상자 이름으로 호출해 기존 안내를 숨기지 않는다. 주인이 끝나면 Tk·대화상자·거절 함수 이름과 새 화면 실행 상태를 되돌린다.
+## 1. 시작과 셸 재실행 어댑터 (M83)
+main은 표준 라이브러리 전용 `relaunch_wait` 하나를 먼저 import하고 이전 PID 종료를 시작 관문·lease·mutex보다 먼저 확인한다. 기본·`--new-screen`·`--ui web`·모르는 `--ui` 값은 web, `--old-screen`·`--ui tk`는 그 실행만 Tk다. 비상 Tk에는 셸 import가 없으며 다른 셸 import는 try 안에서 처리한다. 실패하면 `SHELL_IMPORT_FAILED` 한 줄 뒤 기존 Tk 길을 사용한다.
+웹 창이 생긴 뒤 실패에는 앱의 같은 프로세스 Tk 전환이 없다. 셸이 쓰기 닫음·판 표지·destroy 최선 2초·before_exit·relaunch_self·os._exit를 담당한다. 새 프로세스는 이전 PID 종료를 최대 30초 기다리고 같은 판의 `web_allowed=False`이면 Tk를 연다. 시작 거절·업무 gate 거부와 창 생성 전의 기존 안전한 Tk 길은 유지한다.
+`before_exit`는 process writer admission을 닫고 현재 허가된 쓰기와 mutex가 비었는지만 최대 120초 기다린다. Tk/owner/lease 정리는 하지 않는다. 미완료면 셸이 `SHELL_EXIT_DEFERRED`를 기록하고 5초마다 다시 확인한다. owner pump는 기존 정상 정리를 한 번 수행하고 lease는 정리 완료 뒤 반납한다.
+현재 셸 사본은 v3.16이다. v3.16.2 SHA·READY 핀 통합 전에는 API를 headless mock으로 검증하며 사본·빌드·stock은 보류한다.
 
 ## 2. 불변식 1 의 손질 자리 — 파일 대신 다리가 이 인스턴스 · 모듈 이름 자리에서 바꿈
 | 자리 | 전(지금) | 후(새 화면) | 시험 |

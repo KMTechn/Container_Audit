@@ -17,7 +17,8 @@ def _function(tree, name):
 def assert_packet_screen_entry(app):
     for source, target in (("portable/main.py", "main.py"), ("Container_Audit.py", "Container_Audit.py"),
                            ("ca_screen_bridge.py", "ca_screen_bridge.py"),
-                           ("screen_startup_fallback.py", "screen_startup_fallback.py")):
+                           ("screen_startup_fallback.py", "screen_startup_fallback.py"),
+                            ("relaunch_wait.py", "relaunch_wait.py")):
         assert (app / target).read_bytes() == (ROOT / source).read_bytes()
     entry = ast.parse((app / "main.py").read_text(encoding="utf-8"))
     assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -31,13 +32,21 @@ def assert_packet_screen_entry(app):
                for node in ast.walk(_function(product, "main")))
     product_main = _function(product, "_run_application_main")
     route = next(node for node in ast.walk(product_main) if isinstance(node, ast.If)
-                 and any(isinstance(item, ast.Name) and item.id == "CA_OLD_SCREEN_ARGUMENT" for item in ast.walk(node.test)))
+                 and any(isinstance(item, ast.Call) and isinstance(item.func, ast.Name)
+                          and item.func.id == "_old_screen_requested" for item in ast.walk(node.test)))
     selector = compile(ast.Expression(route.test), "packet-screen-route", "eval")
-    values = {"CA_OLD_SCREEN_ARGUMENT": "--old-screen", "CA_SCREEN_HOST": {"active": False}}
+    values = {"CA_OLD_SCREEN_ARGUMENT": "--old-screen", "CA_SCREEN_HOST": {"active": False},
+              "argparse": __import__("argparse")}
+    helper = _function(product, "_old_screen_requested")
+    exec(compile(ast.Module(body=[helper], type_ignores=[]), "packet-screen-selector", "exec"), values)
     assert eval(selector, values | {"arguments": []})
     assert eval(selector, values | {"arguments": ["--new-screen"]})
     assert not eval(selector, values | {"arguments": ["--old-screen"]})
     assert not eval(selector, values | {"arguments": [], "CA_SCREEN_HOST": {"active": True}})
+    assert not eval(selector, values | {"arguments": ["--ui", "tk"]})
+    assert not eval(selector, values | {"arguments": ["--ui=tk"]})
+    assert eval(selector, values | {"arguments": ["--ui", "web"]})
+    assert eval(selector, values | {"arguments": ["--ui", "unknown"]})
     assert any(isinstance(node, ast.ImportFrom) and node.module == "ca_screen_bridge" for node in ast.walk(route))
     assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "screen_runner"
                for node in ast.walk(route))

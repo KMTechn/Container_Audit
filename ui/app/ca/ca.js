@@ -62,18 +62,24 @@
       else tag.textContent = '현품표를 찍으면 여기 나옵니다';
     }
     $('[data-legacy]').hidden = !s.legacy;
-    $('[data-held]').textContent = `보류 ${s.held_count}건 · 오늘 현황`;
+    $('[data-held]').textContent = `보류 ${s.park ? s.park.length : s.held_count}건 · 오늘 현황`;
     for (const link of document.querySelectorAll('[data-nav] [data-go]')) link.hidden = starting;
     $('[data-change]').hidden = starting;
   }
 
   function renderAdmin(s) {
-    for (const item of s.admin_menu || []) {
-      const sheet = sheets[item.name];
+    for (const entry of document.querySelectorAll('[data-admin] [data-open]')) {
+      const name = entry.dataset.open;
+      const sheet = sheets[name];
       if (!sheet) continue;
-      for (const key of ['facts', 'result', 'rows', 'actions']) sheet[key] = item[key];
-      const entry = document.querySelector(`[data-admin] [data-open="${item.name}"]`);
-      if (entry) entry.disabled = !item.enabled;
+      const item = (s.admin_menu || []).find((row) => row.name === name);
+      for (const key of ['facts', 'result', 'rows', 'actions']) sheet[key] = item && item[key];
+      entry.disabled = !(item && item.enabled);
+      if (sheet.kind === 'info' || sheet.kind === 'result') {
+        sheet.load = item && item.load;
+        sheet.command = item && item.command;
+        entry.hidden = !(sheet.load || sheet.command) || !(sheet.facts && sheet.facts.length);
+      }
     }
   }
 
@@ -165,6 +171,12 @@
     $('[data-park-title]').textContent = `보류 작업 · ${s.park.length}건`;
     $('[data-park]').replaceChildren(...s.park.map((p) => {
       const li = el('li');
+      if (p.restorable === false) {
+        li.append(el('span', 'ca-park__item', p.label));
+        if (p.note) li.append(el('span', 'ca-park__meta', p.note));
+        li.append(el('span', 'ca-park__meta', '관리자: 옛 화면에서 복원'));
+        return li;
+      }
       li.append(el('span', 'ca-park__item', p.item), button('act', '이어 하기', `command:restore:${p.id}`),
         el('span', 'ca-park__meta', [p.tag && `현품표 ${p.tag}`, p.target ? `${p.count} / ${p.target}` : `찍은 제품 ${p.count}개`, p.at && `보류 ${p.at}`].filter(Boolean).join(' · ')));
       return li;

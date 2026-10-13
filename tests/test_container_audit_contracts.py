@@ -1458,10 +1458,12 @@ def test_legacy_test1_settings_bootstrap_private_update_prompt_on_tk_thread(tmp_
         monkeypatch.delenv(env_name, raising=False)
 
     manifest_url = (
-        "https://worker.kmtecherp.com/static/update-feed/channels/"
+        "https://unreachable.invalid/static/update-feed/channels/"
         "container_audit/stable/latest.json"
     )
     signature_url = f"{manifest_url}.sig"
+    monkeypatch.setattr(container_audit_module, 'UPDATE_BOOTSTRAP_MANIFEST_URL', manifest_url)
+    monkeypatch.setattr(container_audit_module, 'UPDATE_BOOTSTRAP_MANIFEST_SIGNATURE_URL', signature_url)
     public_key = _approved_update_public_key()
     assert json.loads(config_path.read_text(encoding="utf-8")) == legacy_settings
     assert container_audit_module._get_update_provider() == "private_manifest"

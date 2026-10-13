@@ -504,6 +504,7 @@ def test_portable_packet_copies_and_imports_derived_tool_closure(
         "Container_Audit",
         "container_audit_product_host",
         "current_user_onboarding",
+        "ca_screen_bridge", "webview", "clr_loader", "pythonnet",
     ):
         (repo_root / f"{module_name}.py").write_text(
             "VALUE = 1\n",
@@ -528,6 +529,7 @@ def test_portable_packet_copies_and_imports_derived_tool_closure(
     monkeypatch.setattr(portable_builder, "APP_ROOT_FILES", (
         "Container_Audit.py", "container_audit_product_host.py",
         "current_user_onboarding.py", "entrypoint.py",
+        "ca_screen_bridge.py", "webview.py", "clr_loader.py", "pythonnet.py",
     ))
     monkeypatch.setattr(portable_builder, "APP_PACKAGE_DIRS", ())
     monkeypatch.setattr(portable_builder, "APP_DATA_DIRS", ())

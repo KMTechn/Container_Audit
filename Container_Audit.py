@@ -518,7 +518,7 @@ def container_startup_logistics_client():
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.105"
+CURRENT_VERSION = "v2.0.106"
 CA_NEW_SCREEN_ARGUMENT = "--new-screen"
 CA_OLD_SCREEN_ARGUMENT = "--old-screen"
 CA_SCREEN_HOST = {"requested": False, "active": False, "run": None}
@@ -21509,7 +21509,10 @@ class ContainerAudit:
             if not cleanup_finished.wait(max(0.0, deadline - time.monotonic())):
                 # A stuck pump/driver cannot defeat the cap. Original checkpoints,
                 # event outboxes and transport intents remain for recovery.
-                os._exit(1)
+                if getattr(self, "_screen_exit_waiting", False):
+                    cleanup_finished.wait()  # H8 keeps admission until durable writers finish.
+                else:
+                    os._exit(1)
 
         cleanup_watch = threading.Thread(target=enforce_deadline, name="ca-close-deadline", daemon=True)
         cleanup_watch.start()
@@ -23138,7 +23141,10 @@ def _item_catalog_cache_time_for_display(value: object) -> str:
 
 
 def main(argv: list[str] | None = None):
+    from relaunch_wait import wait_previous_from_argv
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if not wait_previous_from_argv(arguments):
+        return 1
     from container_audit_product_host import PRODUCT_MODES
     from writer_session_fence import WriterFenceError
     enabled = not any(argument in PRODUCT_MODES or argument in {"--help", "-h"} for argument in arguments)
@@ -23160,6 +23166,15 @@ def main(argv: list[str] | None = None):
         _startup_check_observe("finish")
 
 
+def _old_screen_requested(arguments) -> bool:
+    if CA_OLD_SCREEN_ARGUMENT in arguments:
+        return True
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--ui", nargs="?", const="web", default="web")
+    options, _ = parser.parse_known_args(arguments)
+    return options.ui == "tk"
+
+
 def _run_application_main(arguments):
     from auto_update import startup_gate, trial_context, publish_gui_ready, trial_stop_requested
 
@@ -23177,9 +23192,18 @@ def _run_application_main(arguments):
     if hosted_result is not None:
         return hosted_result
 
-    if CA_OLD_SCREEN_ARGUMENT not in arguments and not CA_SCREEN_HOST["active"]:
+    if not _old_screen_requested(arguments) and not CA_SCREEN_HOST["active"]:
         CA_SCREEN_HOST["requested"] = True
-        from ca_screen_bridge import screen_runner
+        try:
+            from ca_screen_bridge import screen_runner
+        except Exception:
+            CA_SCREEN_HOST["requested"] = False
+            try:
+                _startup_check_observe("note", "SHELL_IMPORT_FAILED")
+                _startup_check_observe("publish")
+            except Exception:
+                pass
+            return _run_gui_application(arguments)
         return screen_runner(sys.modules[__name__])(arguments)
     return _run_gui_application(arguments)
 

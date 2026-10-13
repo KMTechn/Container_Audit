@@ -1,10 +1,10 @@
 {
  "schema": "ui-parts/1",
  "source": "WorkerAnalysisGUI-web",
- "commit": "3962eda542c23de5d3759ef844104fba459006bf",
+ "commit": "c706dbb2f7f0e62430da4a26f24ac515ab432283",
  "dirty": true,
  "app": "ca",
- "parts_fingerprint": "714d9cb6ab9b9612",
+ "parts_fingerprint": "abd4fb72caa54e12",
  "files": [
   {
    "path": "app/ca/ca.css",
@@ -14,15 +14,15 @@
   },
   {
    "path": "app/ca/ca.js",
-   "sha256": "1d0ce4c1e744e4b67ec26f4da9a2b46f05f401db580631d7f9295faa9cfc6a16",
-   "bytes": 16867,
-   "gzip": 6247
+   "sha256": "dc896374ed58f324f5cf4cf22dfadf7014403d53d2aeeba2baa7cf46df87ab50",
+   "bytes": 17481,
+   "gzip": 6394
   },
   {
    "path": "app/ca/contract.json",
-   "sha256": "3cee473ebc498a30a4ec35fcb01ef05160821188f1b8ab6382647fb0e1c6e200",
-   "bytes": 26994,
-   "gzip": 5693
+   "sha256": "41fb6a0b3db4d1b0af675b2eab56c4803e53205f376da2df9c00b6ef092e34d2",
+   "bytes": 27735,
+   "gzip": 5798
   },
   {
    "path": "app/ca/fixtures/admin-defer.json",
@@ -374,9 +374,9 @@
   },
   {
    "path": "app/ca/index.html",
-   "sha256": "436f9156c1d9490b373acc1b95336bee0deba6f7c4606e453e86895358fb9b99",
-   "bytes": 10206,
-   "gzip": 3204
+   "sha256": "74c9c48d6429af98f69f02d7bf95ec69e369bdd1ceb32446dab10d63f96b0395",
+   "bytes": 10227,
+   "gzip": 3209
   },
   {
    "path": "app/frame.css",

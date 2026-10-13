@@ -654,6 +654,7 @@ class CaProcessor:
         self._credentials: Optional[Tuple[str, str]] = None
         self._admin_notes: Optional[List[Dict[str, Any]]] = None
         self._fingerprint = ""
+        self._registration_name: Optional[str] = None
         self._watch_job: Any = None
 
     # 설치 — 처리 층 파일은 고치지 않고 이 인스턴스 · 모듈 이름 자리만 바꾼다
@@ -864,7 +865,14 @@ class CaProcessor:
         """한 단계 안 화면 값 — 그 화면이 열렸을 때만 읽는다(파일 읽기가 있는 것)."""
         view = _view(self.app, self.view)
         if view == "start":
-            return {"roster": roster_values(self.app), "register": None, "start_error": None}
+            register = None
+            if self._registration_name:
+                roster = _attr(self.app, "worker_roster")
+                candidates = roster.duplicate_workers(self._registration_name) if roster is not None else []
+                register = {"name": self._registration_name,
+                            "cands": [{"id": row["worker_id"], "label": ca.worker_choice_label(row)}
+                                      for row in candidates[:10]]}
+            return {"roster": roster_values(self.app), "register": register, "start_error": None}
         if view == "held":
             return self._held_values()
         if view == "progress":
@@ -876,17 +884,42 @@ class CaProcessor:
     def _held_values(self) -> Dict[str, Any]:
         park = []
         try:
-            entries = self.app._parked_store().scan_for_worker(ca.persistent_operator_name(self.app.worker_name))
+            roster = _attr(self.app, "worker_roster")
+            worker_id = str(_attr(self.app, "_selected_roster_id", "") or "")
+            entries = self.app._parked_store().scan_for_worker(
+                ca.persistent_operator_name(self.app.worker_name),
+                tray_size=_attr(self.app, "TRAY_SIZE", 60), strict=True,
+                worker_id=worker_id,
+                worker_id_aliases=roster.identity_aliases(worker_id) if roster is not None else (),
+            )
         except Exception:
             entries = []
         self._park_paths = {}
-        for entry in list(entries)[:50]:  # ParkedTraySummary(path, item_name, scan_count, problem)
+        for entry in entries:
             path = str(_attr(entry, "path", "") or "")
             park_id = hashlib.sha256(path.encode("utf-8")).hexdigest()[:12]
             self._park_paths[park_id] = path
             park.append({"id": park_id, "item": str(_attr(entry, "problem", "") or _attr(entry, "item_name", "") or "품목 미확인"),
                          "tag": "", "count": int(_attr(entry, "scan_count", 0) or 0), "target": 0, "at": ""})
-        return {"park": park, "today": today_values(self.app), "stats": []}
+        for held in self.app._quarantined_preflight_holds():
+            snapshot = held.snapshot
+            fields = self.app._parse_new_format_qr(snapshot.master_raw) or {}
+            item = str(fields.get("CLC") or "품목 미확인")
+            tag = str(fields.get("LBL") or "현품표 미확인")
+            count = len(snapshot.items)
+            waiting = self.app._is_offline_preflight_hold(snapshot)
+            kind, title = ("server_wait", "서버 확인 대기") if waiting else ("quarantine", "사전조회 격리")
+            reason = ("회사 서버 연결을 확인하세요" if waiting else
+                      self.app._preflight_failure_guidance(snapshot.error_code, held_retry=False)[0])
+            if reason == "중앙 PHS=2 확인 실패":
+                reason = "현품표 확인이 필요합니다"
+            # Only controlled guidance reaches the screen; paths and error text stay private.
+            park.append({"id": hashlib.sha256(str(held.path).encode("utf-8")).hexdigest()[:12],
+                         "item": item, "tag": tag, "count": count, "target": 0,
+                         "at": snapshot.created_at, "kind": kind, "restorable": False,
+                         "label": f"{item} · {tag} · {count}개", "note": f"{title} — {reason}"})
+        park = park[:50]
+        return {"park": park, "held_count": len(park), "today": today_values(self.app), "stats": []}
 
     # 명령 ──────────────────────────────────────────────
     def _cmd_ack(self, _id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
@@ -1003,6 +1036,16 @@ class CaProcessor:
         except AttributeError:
             entry.delete(0, tk.END)
             entry.insert(0, str(label))
+        if self._registration_name:
+            roster = _attr(self.app, "worker_roster")
+            candidates = roster.duplicate_workers(self._registration_name) if roster is not None else []
+            if any(roster.same_person(row["worker_id"], str(label)) for row in candidates):
+                self.app._register_worker_name(self._registration_name, existing_worker_id=str(label))
+                self._registration_name = None
+            elif str(label) not in self.app._worker_selection_names():
+                return {"ok": False, "result": {"kind": "warn", "text": "이름이 바뀌었습니다 — 다시 등록하세요"}}
+            else:
+                self._registration_name = None
         self.view = None
         self.app.start_work()
         return {"ok": True}
@@ -1011,7 +1054,17 @@ class CaProcessor:
         name = str(args.get("name") or "").strip()
         if not name:
             return {"ok": False, "result": {"kind": "warn", "text": "이름을 넣으세요"}}
-        self.app._register_worker_name(name)
+        name = ca.normalize_registration_name(name)
+        roster = _attr(self.app, "worker_roster")
+        candidates = roster.duplicate_workers(name) if roster is not None else []
+        existing = str(args.get("existing_worker_id") or "")
+        if existing and not any(roster.same_person(row["worker_id"], existing) for row in candidates):
+            return {"ok": False, "result": {"kind": "warn", "text": "이름이 바뀌었습니다 — 다시 등록하세요"}}
+        if candidates and not existing:
+            self._registration_name = name
+            return {"ok": True}
+        self.app._register_worker_name(name, existing_worker_id=existing)
+        self._registration_name = None
         return {"ok": True}
 
     def _cmd_check_unsettled(self, _id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
@@ -1039,7 +1092,10 @@ class CaStartupRefused(RuntimeError):
 
 def shell_data_dir() -> Path:
     """셸 몫 자료 — 기존 새 화면의 사용자 로컬 앱 자료 위치."""
-    base = Path(os.environ.get("LOCALAPPDATA") or APP_DIR)
+    local = os.environ.get("LOCALAPPDATA")
+    if not local:
+        raise RuntimeError("SHELL_DATA_UNAVAILABLE")
+    base = Path(local)
     return base / "KMTech" / "ContainerAudit" / "screen"
 
 
@@ -1091,7 +1147,7 @@ def _screen_failure_reason(error: Exception) -> str:
 
 def _can_fall_back(attempt: ScreenLaunchAttempt) -> bool:
     try:
-        return not attempt.surface_was_seen() and attempt.cleanup_before_fallback()
+        return not attempt.windows and not attempt.initial_windows and not attempt.surface_was_seen() and attempt.cleanup_before_fallback()
     except Exception:
         return False  # Unknown cleanup never grants permission to open another UI.
 
@@ -1107,15 +1163,31 @@ def screen_runner(module: Any) -> Callable[[List[str]], Any]:
         host.pop("error", None)
         attempt = ScreenLaunchAttempt()
         fallback_reason = None
+        importing_shell = True
+
+        def before_exit(_code: str, deadline_s: float) -> bool:
+            from writer_session_fence import close_and_wait_writers
+            return close_and_wait_writers(deadline_s)
+
         try:
-            _check_screen_ready()
             import host as shell_host
             from host import run_app
+            importing_shell = False
+            _check_screen_ready()
+            data = shell_data_dir()
+            allowed = getattr(shell_host, "web_allowed", None)
+            if allowed is not None:
+                with admission_write_guard("web_allowed", data, "udf"):
+                    use_web = allowed(data, module.CURRENT_VERSION)
+                if not use_web:
+                    host["requested"] = False
+                    return module._run_gui_application(arguments)
 
             with attempt.observe_host(shell_host):
-                result = run_app("rw", shell_data_dir(), root=APP_DIR / "ui", page=PAGE,
+                result = run_app("rw", data, root=APP_DIR / "ui", page=PAGE,
                                  title="이적", owner_main=owner_main_for(module, arguments, attempt=attempt),
-                                 write_guard=admission_write_guard)
+                                 write_guard=admission_write_guard,
+                                 version=module.CURRENT_VERSION, before_exit=before_exit)
             if "error" in host:
                 raise host["error"]
             if getattr(attempt, "startup_refused", False) or attempt.surface_was_seen():
@@ -1128,7 +1200,7 @@ def screen_runner(module: Any) -> Callable[[List[str]], Any]:
             intentional = (WriterFenceError, module.DataGenerationBlocked, module.DataRootUnavailableError)
             if isinstance(error, intentional) or not _can_fall_back(attempt):
                 raise
-            fallback_reason = _screen_failure_reason(error)
+            fallback_reason = "SHELL_IMPORT_FAILED" if importing_shell or isinstance(error, ImportError) else _screen_failure_reason(error)
         finally:
             owner = attempt.owner_thread
             if owner is None or owner is threading.current_thread() or not owner.is_alive():
@@ -1138,7 +1210,7 @@ def screen_runner(module: Any) -> Callable[[List[str]], Any]:
 
         # The owner and all observed forms have ended before restoring the Tk
         # route. Call it directly: gates already ran, and fallback cannot recurse.
-        code = "SCREEN_UNAVAILABLE_FALLBACK_OLD_" + fallback_reason
+        code = fallback_reason if fallback_reason == "SHELL_IMPORT_FAILED" else "SCREEN_UNAVAILABLE_FALLBACK_OLD_" + fallback_reason
         try:
             module._startup_check_observe("note", code)
             module._startup_check_observe("publish")
@@ -1250,6 +1322,8 @@ def run_on_owner(app: Any, bridge: Any) -> None:
         if bridge.pump():
             root.after(10, pump)
         else:
+            if getattr(bridge, "_startup_failure", None):
+                app._screen_exit_waiting = True
             app.on_closing(_confirmed=True)
 
     try:
@@ -1265,4 +1339,5 @@ def run_on_owner(app: Any, bridge: Any) -> None:
         try:
             processor.shutdown()
         finally:
-            bridge.request_exit()
+            if not getattr(bridge, "_startup_failure", None):
+                bridge.request_exit()

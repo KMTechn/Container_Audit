@@ -124,7 +124,9 @@ def test_default_and_new_screen_keep_gate_order_arguments_and_gui_exit_value(ent
     profile, data, kwargs = entry.host_calls[0]
     assert profile == "rw" and data == screen.shell_data_dir()
     assert kwargs["root"] == screen.APP_DIR / "ui" and kwargs["page"] == screen.PAGE
-    assert kwargs["title"] == "이적" and "owner_timeout" not in kwargs
+    assert kwargs["title"] == "이적"
+    assert "on_fallback" not in kwargs and callable(kwargs["before_exit"])
+    assert kwargs["version"] == ca.CURRENT_VERSION
 
 
 @pytest.mark.parametrize("code", [0, 20, 7])
@@ -377,7 +379,7 @@ def test_owner_uses_the_launched_module_and_restores_it(entry):
     names = {name: object() for name in ("messagebox", "simpledialog", "filedialog")}
     original_tk = object()
     original_refusal = object()
-    module = SimpleNamespace(CA_SCREEN_HOST=host, tk=SimpleNamespace(Tk=original_tk),
+    module = SimpleNamespace(CURRENT_VERSION=ca.CURRENT_VERSION, CA_SCREEN_HOST=host, tk=SimpleNamespace(Tk=original_tk),
                              _startup_refusal=original_refusal, **names)
 
     def gui(arguments):
@@ -452,7 +454,7 @@ def _observe_fallbacks(entry, monkeypatch):
 
 
 @pytest.mark.parametrize("kind,reason", [
-    ("webview_import", "WEBVIEW2_MISSING"), ("shell_ready", "SHELL_READY_FAILED"),
+    ("webview_import", "SHELL_IMPORT_FAILED"), ("shell_ready", "SHELL_READY_FAILED"),
     ("data_folder", "SHELL_DATA_REFUSED"),
 ])
 @pytest.mark.parametrize("arguments", [[], ["--new-screen"]])
@@ -470,7 +472,7 @@ def test_previsible_unavailable_falls_back_once_with_one_public_record(entry, mo
         monkeypatch.setitem(sys.modules, "host", SimpleNamespace(run_app=unavailable))
     assert ca.main(arguments) == 0
     assert legacy == [arguments] and entry.releases == [True]
-    code = "SCREEN_UNAVAILABLE_FALLBACK_OLD_" + reason
+    code = reason if reason == "SHELL_IMPORT_FAILED" else "SCREEN_UNAVAILABLE_FALLBACK_OLD_" + reason
     assert records == [("note", (code,)), ("publish", ())]
     assert all(str(tmp_path) not in str(item) for item in records)
     assert not ca.CA_SCREEN_HOST["active"] and not getattr(sys.modules.get("webview"), "windows", [])
@@ -548,7 +550,7 @@ def test_live_or_unknown_form_blocks_fallback(entry, monkeypatch, unknown):
     assert caught.value is error and not legacy and not records
 
 
-def test_closed_previsible_form_allows_only_one_legacy_window(entry, monkeypatch):
+def test_created_previsible_form_never_allows_same_process_legacy_window(entry, monkeypatch):
     records, legacy = _observe_fallbacks(entry, monkeypatch)
     webview = sys.modules["webview"]
     created = []
@@ -561,10 +563,10 @@ def test_closed_previsible_form_allows_only_one_legacy_window(entry, monkeypatch
         webview.create_window()
         raise RuntimeError("previsible screen failed")
     monkeypatch.setitem(sys.modules, "host", SimpleNamespace(run_app=failed))
-    assert ca.main([]) == 0
-    assert legacy == [[]] and len(created) == 1 and created[0].events.closed.is_set()
-    assert not webview.windows and not created[0].gui.BrowserView.instances
-    assert len(records) == 2 and records[0][0] == "note"
+    with pytest.raises(RuntimeError):
+        ca.main([])
+    assert legacy == [] and len(created) == 1
+    assert not records and len(webview.windows) == 1
 
 
 def test_fallback_record_failure_keeps_work_running(entry, monkeypatch):
@@ -615,157 +617,11 @@ def test_auto_update_empty_arguments_reach_default_screen(entry, monkeypatch, tm
 def test_fallback_record_uses_only_approved_nonblocking_codes():
     from startup_check import startup_result
     for reason in ("WEBVIEW2_MISSING", "SHELL_READY_FAILED", "SHELL_DATA_REFUSED", "SCREEN_START_ERROR"):
-        code = "SCREEN_UNAVAILABLE_FALLBACK_OLD_" + reason
+        code = reason if reason == "SHELL_IMPORT_FAILED" else "SCREEN_UNAVAILABLE_FALLBACK_OLD_" + reason
         result = startup_result(reasons=[code])
         assert result["startable"] and result["reasons"] == [code]
     assert not startup_result(reasons=["SCREEN_UNAVAILABLE_FALLBACK_OLD_UNKNOWN"])["startable"]
 
-
-def test_hidden_owner_saves_closes_and_releases_isolated_locks_before_fallback(entry, monkeypatch, tmp_path):
-    import heapq
-    import hashlib
-    import importlib.util
-    import sqlite3
-    import threading
-    import time
-    import writer_session_fence as fence
-    from runtime_instance import acquire_runtime_instance
-
-    monkeypatch.syspath_prepend(str(screen.APP_DIR / "shell"))
-    spec = importlib.util.spec_from_file_location("ca_fallback_test_host", screen.APP_DIR / "shell" / "host.py")
-    host = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(host)
-    monkeypatch.setitem(sys.modules, "host", host)
-    webview = SimpleNamespace(windows=[], settings={})
-    webview.create_window = lambda *args, **kwargs: _surface(webview)
-    http_stopped, http_started, http_threads, http_closes = Event(), Event(), [], []
-    class Server:
-        def shutdown(self):
-            http_closes.append("shutdown")
-            http_stopped.set()
-        def server_close(self):
-            http_closes.append("close")
-    webview.http = SimpleNamespace(make_server=lambda *args, **kwargs: Server())
-    def start_http(*args, **kwargs):
-        def serve():
-            webview.http.make_server()
-            http_started.set()
-            http_stopped.wait()
-        thread = Thread(target=serve, name="screen-test-http", daemon=True)
-        http_threads.append(thread)
-        thread.start()
-        assert http_started.wait(2)
-        return None, None, SimpleNamespace(thread=thread)
-    webview.http.start_global_server = start_http
-    def unavailable(*args, **kwargs):
-        raise RuntimeError("WebView2 runtime missing")
-    webview.start = unavailable
-    monkeypatch.setitem(sys.modules, "webview", webview)
-
-    class Native:
-        _closing_banner = None
-        def __init__(self, *args, **kwargs):
-            self.closed = False
-        def close(self):
-            self.closed = True
-        def show_closing(self, *args):
-            pytest.fail("previsible fallback opened a closing prompt")
-        def __getattr__(self, name):
-            return lambda *args, **kwargs: None
-    monkeypatch.setattr(host, "NativeHost", Native)
-    records, legacy = _observe_fallbacks(entry, monkeypatch)
-    hidden, leases, admissions, saves = [], [], [], []
-    business = tmp_path / "business"
-    business.mkdir()
-    scope = hashlib.sha256(str(tmp_path).encode()).hexdigest()
-    session_name = fence.session_authority_mutex_name(scope, scope, scope, scope, scope)
-
-    class Root:
-        def __init__(self):
-            self.jobs, self.cancelled, self.number, self.closed = [], set(), 0, False
-        def after(self, delay, callback):
-            self.number += 1
-            heapq.heappush(self.jobs, (time.monotonic() + delay / 1000, self.number, callback))
-            return self.number
-        def after_cancel(self, job):
-            self.cancelled.add(job)
-        def destroy(self):
-            self.closed = True
-        def mainloop(self):
-            deadline = time.monotonic() + 10
-            while not self.closed and time.monotonic() < deadline:
-                if self.jobs and self.jobs[0][0] <= time.monotonic():
-                    _, job, callback = heapq.heappop(self.jobs)
-                    if job not in self.cancelled:
-                        callback()
-                else:
-                    time.sleep(0.001)
-            assert self.closed
-
-    class App:
-        LOOP_CLEANUP_TIMEOUT_SECONDS = ca.ContainerAudit.LOOP_CLEANUP_TIMEOUT_SECONDS
-        LOOP_CLEANUP_NOTICE_SECONDS = ca.ContainerAudit.LOOP_CLEANUP_NOTICE_SECONDS
-        _runtime_data_root = None
-        _application_close_complete = False
-        _loop_cleanup_finished = False
-        def __init__(self, session=None):
-            self.root, self.session, self.db = Root(), session, None
-            if session is not None:
-                self.db = sqlite3.connect(business / "ledger.sqlite")
-                self.db.execute("CREATE TABLE pending (count INTEGER)")
-                self.db.execute("INSERT INTO pending VALUES (1)")
-        def on_closing(self, *, _confirmed=False):
-            assert _confirmed and threading.current_thread() is self.owner
-            with fence.writer_admission("screen_fallback_save"):
-                admissions.append(True)
-                if self.db is not None:
-                    self.db.commit()
-                    self.db.close()
-                    self.db = None
-                    saves.append(True)
-                if self.session is not None:
-                    self.session.release()
-                    self.session = None
-            self._application_close_complete = True
-            self.root.destroy()
-        def run(self):
-            self.owner = threading.current_thread()
-            if not ca.CA_SCREEN_HOST["active"]:
-                self.on_closing(_confirmed=True)
-            try:
-                self.root.mainloop()
-            finally:
-                ca.ContainerAudit._cleanup_after_mainloop(self)
-
-    def prepare(**kwargs):
-        lease = acquire_runtime_instance(business)
-        assert lease is not None
-        leases.append(lease)
-        session = fence._acquire_named_mutex(session_name, 1)
-        assert session is not None and not session.abandoned
-        if ca.CA_SCREEN_HOST["active"]:
-            app = App(session)
-            hidden.append(app)
-        else:
-            assert http_stopped.is_set() and not any(thread.is_alive() for thread in http_threads)
-            assert http_closes == ["shutdown", "close"]
-            assert hidden[0]._application_close_complete and hidden[0]._loop_cleanup_finished
-            assert hidden[0].db is None and hidden[0].session is None
-            with fence.writer_admission("screen_fallback_reacquire"):
-                connection = sqlite3.connect(business / "ledger.sqlite")
-                try:
-                    assert connection.execute("SELECT count FROM pending").fetchone() == (1,)
-                finally:
-                    connection.close()
-            session.release()
-            app = App()
-        return app, lease
-    monkeypatch.setattr(ca, "_prepare_gui_startup", prepare)
-    assert ca.main([]) == 0
-    assert len(hidden) == 1 and len(leases) == 2 and legacy == [[]]
-    assert saves == [True] and admissions == [True, True]
-    assert not webview.windows and len(records) == 2
-    assert not any(thread.name == "app-owner" and thread.is_alive() for thread in threading.enumerate())
 
 
 @pytest.mark.parametrize("code", ["SHELL_DATA_IN_APP_ROOT", "SHELL_DATA_NOT_WRITABLE"])
@@ -776,3 +632,50 @@ def test_future_shell_data_refusal_uses_the_same_safe_fallback(entry, monkeypatc
     monkeypatch.setitem(sys.modules, "host", SimpleNamespace(run_app=unavailable))
     assert ca.main([]) == 0 and legacy == [[]]
     assert records == [("note", ("SCREEN_UNAVAILABLE_FALLBACK_OLD_SHELL_DATA_REFUSED",)), ("publish", ())]
+
+
+def test_restart_exit_waits_for_isolated_durable_write_and_mutex_release(entry, monkeypatch, tmp_path):
+    import sqlite3
+    import threading
+    import writer_session_fence as fence
+    entered, finish, durable = threading.Event(), threading.Event(), threading.Event()
+    monkeypatch.setattr(fence, '_WRITER_EXIT_CLOSED', False)
+    database = tmp_path / 'durable.sqlite3'
+    failures = []
+    def writing():
+        try:
+            with fence.writer_admission('screen_fallback_save'):
+                with sqlite3.connect(database) as connection:
+                    connection.execute('CREATE TABLE saved (value INTEGER)')
+                    connection.execute('INSERT INTO saved VALUES (1)')
+                    entered.set()
+                    assert finish.wait(5)
+                durable.set()
+        except BaseException as error:
+            failures.append(error)
+            entered.set()
+    writer = threading.Thread(target=writing)
+    writer.start()
+    def run_app(profile, data, **kwargs):
+        assert entered.wait(5) and not failures
+        assert kwargs['before_exit']('SHELL_START_TIMEOUT', 0) is False
+        assert not durable.is_set() and not entry.releases
+        finish.set()
+        writer.join(5)
+        assert not writer.is_alive() and not failures and durable.is_set()
+        assert kwargs['before_exit']('SHELL_START_TIMEOUT', 0) is True
+        mutex = fence._acquire_named_mutex(fence.writer_admission_mutex_name(fence.canonical_control_root()), 0)
+        assert mutex is not None
+        mutex.release()
+        raise SystemExit(3)
+    monkeypatch.setitem(sys.modules, 'host', SimpleNamespace(run_app=run_app))
+    try:
+        with pytest.raises(SystemExit) as ended:
+            ca.main([])
+        assert ended.value.code == 3
+    finally:
+        finish.set()
+        writer.join(5)
+    with sqlite3.connect(database) as connection:
+        assert connection.execute('SELECT value FROM saved').fetchall() == [(1,)]
+    assert 'prepare' not in entry.events and 'deiconify' not in entry.events

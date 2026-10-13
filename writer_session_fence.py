@@ -21,6 +21,7 @@ import re
 import secrets
 import sys
 import threading
+import time
 from typing import Any, Callable, Iterator, Mapping, ParamSpec, TypeVar
 import unicodedata
 
@@ -41,10 +42,38 @@ _ISO_UTC = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?(?:Z|[+-]\d{2}:\d{2})$"
 )
 _WRITER_LOCAL = threading.local()
+_WRITER_EXIT_CONDITION = threading.Condition()
+_WRITER_EXIT_CLOSED = False
+_WRITER_EXIT_COUNT = 0
+
+
+def close_and_wait_writers(timeout_seconds: float) -> bool:
+    """Close new process admissions and wait only for admitted writes to drain."""
+    global _WRITER_EXIT_CLOSED
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    with _WRITER_EXIT_CONDITION:
+        _WRITER_EXIT_CLOSED = True
+        if not _WRITER_EXIT_CONDITION.wait_for(
+            lambda: _WRITER_EXIT_COUNT == 0, timeout=max(0.0, deadline - time.monotonic())
+        ):
+            return False
+    try:
+        lease = _acquire_named_mutex(
+            writer_admission_mutex_name(canonical_control_root()),
+            max(0.0, deadline - time.monotonic()),
+        )
+    except WriterFenceError:
+        return False
+    if lease is None:
+        return False
+    try:
+        return not lease.abandoned
+    finally:
+        lease.release()
 
 # This pin is generated and checked by tools/derive_container_writer_sinks.py.
 # It is updated together with the inventory after all sink markers are placed.
-WRITER_INVENTORY_SHA256 = "06c12f4b3988b750b9b308215a1ce3436064999ced086740954d4bb4da1752ee"
+WRITER_INVENTORY_SHA256 = "820a0a8f8aec2c86f1e58148822f53c2c2ded71a5036ea0cad372f7902b749fb"
 
 DELEGATION_TOKEN_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN"
 DELEGATION_SESSION_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID"
@@ -486,6 +515,30 @@ def _delegation_matches(
 
 @contextmanager
 def writer_admission(
+    source: str,
+    *,
+    control_root: str | os.PathLike[str] | None = None,
+    timeout_seconds: float = 5.0,
+    environ: Mapping[str, str] | None = None,
+) -> Iterator[None]:
+    global _WRITER_EXIT_COUNT
+    nested = bool(getattr(_WRITER_LOCAL, "depth", 0))
+    with _WRITER_EXIT_CONDITION:
+        if _WRITER_EXIT_CLOSED and not nested:
+            raise WriterFencedError("WRITER_EXIT_CLOSED", "writer admission is closed for exit")
+        _WRITER_EXIT_COUNT += 1
+    try:
+        with _writer_admission(source, control_root=control_root,
+                               timeout_seconds=timeout_seconds, environ=environ):
+            yield
+    finally:
+        with _WRITER_EXIT_CONDITION:
+            _WRITER_EXIT_COUNT -= 1
+            _WRITER_EXIT_CONDITION.notify_all()
+
+
+@contextmanager
+def _writer_admission(
     source: str,
     *,
     control_root: str | os.PathLike[str] | None = None,

@@ -8966,6 +8966,7 @@
     "protected_admin.py",
     "recovery_file_read.py",
     "recovery_two_phase.py",
+    "relaunch_wait.py",
     "replacement_log_lookup.py",
     "replacement_workflow.py",
     "responsive_layout.py",
@@ -9024,7 +9025,7 @@
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
     "closure_direct_mutation_function_count": 177,
-    "closure_module_count": 121,
+    "closure_module_count": 122,
     "external_process_mutation_site_count": 19,
     "powershell_direct_mutation_site_count": 112,
     "powershell_execution_site_count": 99,
@@ -9129,6 +9130,7 @@
     "protected_admin.py",
     "recovery_file_read.py",
     "recovery_two_phase.py",
+    "relaunch_wait.py",
     "replacement_log_lookup.py",
     "replacement_workflow.py",
     "responsive_layout.py",
@@ -9218,6 +9220,7 @@
       "product_scan",
       "protected_admin",
       "recovery_file_read",
+      "relaunch_wait",
       "replacement_log_lookup",
       "replacement_workflow",
       "responsive_layout",
@@ -9546,6 +9549,7 @@
       "storage_utils",
       "writer_session_fence"
     ],
+    "relaunch_wait": [],
     "replacement_log_lookup": [
       "label_qr",
       "session_history"
@@ -9785,7 +9789,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "06c12f4b3988b750b9b308215a1ce3436064999ced086740954d4bb4da1752ee",
+  "inventory_sha256": "820a0a8f8aec2c86f1e58148822f53c2c2ded71a5036ea0cad372f7902b749fb",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -21970,6 +21974,7 @@
     "protected_admin.__file_entry__",
     "recovery_file_read.__file_entry__",
     "recovery_two_phase.__file_entry__",
+    "relaunch_wait.__file_entry__",
     "replacement_log_lookup.__file_entry__",
     "replacement_workflow.__file_entry__",
     "responsive_layout.__file_entry__",
@@ -22773,7 +22778,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 23271,
+      "line": 23295,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },

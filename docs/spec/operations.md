@@ -2,9 +2,16 @@
 
 자동 업데이트 출발판은 v2.0.104 이상이다. 업데이트 후보는 설치된 판의 `tools/apply_prepared_update.ps1`이 판정한다. v2.0.103처럼 unsigned 목록이 빈 판만 받는 옛 helper가 깔린 PC는 v2.0.104 이후 자동 업데이트를 `STARTUP_UPDATE_PORTABLE_MANIFEST_DIFFERS`로 거절하며 업무를 멈추지 않는다. 그런 PC는 정식 제거 뒤 새로 설치한다. 자료꼴 호환 하한 v2.0.103은 업데이트 출발판을 뜻하지 않는다.
 
-v2.0.105부터 인수 없이 시작하면 새 화면 하나를 연다. `--old-screen`은 옛 Tk 화면을 직접 여는 비상 인수다. 새 화면이 한 번도 보이지 않고 ready도 받지 못한 채 실패하면, 숨은 앱의 정상 저장·종료와 잠금 해제·주인 스레드 종료 및 셸 폼 0을 확인한 뒤 옛 화면을 한 번만 연다. 창이 이미 보였거나 시작 관문이 의도적으로 거절한 경우에는 넘어가지 않는다. 정리를 확인하지 못한 갈래도 기존 오류 출구로 끝낸다. 옛 화면을 열기 전에 시작 관측에 `SCREEN_UNAVAILABLE_FALLBACK_OLD_`와 `WEBVIEW2_MISSING`, `SHELL_READY_FAILED`, `SHELL_DATA_REFUSED`, `SCREEN_START_ERROR` 중 한 갈래로 된 고정 코드 하나를 기록한다. 오류 원문·경로·사용자 이름은 기록하지 않고 안내 창을 추가하지 않는다. 기록 실패도 복구한 업무를 막지 않는다. 다음 시작에서는 다시 새 화면부터 시도한다. 실제 보이는 창 하나 확인은 현장 PC 몫이다.
+v2.0.106 어댑터의 기본은 새 화면이며 `--new-screen`·`--ui web`도 같은 뜻이다. `--old-screen`·`--ui tk`는 그 실행만 옛 Tk를 고르고 설정을 쓰지 않는다. 모르는 `--ui` 값은 기본 길이다. `main`은 `wait_previous_from_argv`를 시작 관문·lease·mutex보다 먼저 호출하며 이전 프로세스 대기가 거절되면 시작하지 않는다.
+웹 창이 생긴 뒤 시작 실패는 셸의 재실행 한 길이다. 같은 프로세스 Tk 전환은 없으며 셸이 쓰기 닫음·판 표지·destroy 최선 2초·before_exit·relaunch_self·os._exit를 수행한다. before_exit는 새 writer admission을 막고 이미 허가된 쓰기와 mutex가 비었는지만 120초 기다린다. 다른 정리는 하지 않는다. False면 셸이 5초마다 다시 확인한다. 새 프로세스는 relaunch_wait로 앞 PID 종료를 기다린 뒤 같은 판 web_allowed=False이면 Tk를 연다. main의 첫 import는 stdlib 전용 relaunch_wait 하나이며 비상 Tk의 셸 import는 0이다. 다른 셸 import 실패는 SHELL_IMPORT_FAILED 한 줄 뒤 Tk로 간다. 창 생성 전·시작 거절·업무 gate 거부는 기존 길을 유지한다.
 
-새 화면 portable 패킷은 `ca_screen_bridge.py`, `shell/`, `ui/`와 검사 앱 `dceb851d`의 같은 pywebview 6.2.1 의존성을 싣는다. 빌드는 `requirements-portable-build-win-py312.lock`의 정확한 15분포 환경을 요구한다. 셸 v3.16 READY SHA256 `0c3d7524e8c989b61f5f8da698847e6b5b61fc0939e6fd0fb8bd7faa51efeec8`와 이음 `94778c17`의 20파일 바이트, UI `3962eda5` 매니페스트의 72파일을 복사 뒤 대조한다. 결과 manifest에 셸 판·READY·대조 PASS와 UI pin을 기록한다.
+
+현재 사본은 v3.16이다. 어댑터 시험은 v3.16.2 API를 monkeypatch하며, 지정 `SHELL-SHA.txt`로 사본·READY·핀을 맞추기 전에는 stock을 만들거나 배포하지 않는다. 실제 창 하나·설치·현장 확인은 별도다.
+
+
+새 화면 보류 목록은 기존 작업자 신원 규칙으로 일반 보류와 사전조회 격리·서버 확인 대기를 읽는다. 격리·대기는 `kind`, `restorable:false`, 품목·현품표 번호·수량의 `label`, 고정 안내의 `note`를 전달하며 복원 명령을 받아도 일반 복원으로 넘기지 않는다. 목록은 기존 50줄 한도이고 화면의 건수는 전달한 줄 수와 같다. 등록 때 동명이 있으면 현재 명단의 UUID·표시 이름을 후보로 보내고, 선택 직전에 다시 대조해 기존 등록 함수를 부른다. 다른 사람은 구분 이름으로 새로 등록한다. 명단 저장·승인·전송 계약은 그대로다.
+
+새 화면 portable 패킷은 `ca_screen_bridge.py`, `shell/`, `ui/`와 검사 앱 `dceb851d`의 같은 pywebview 6.2.1 의존성을 싣는다. 빌드는 `requirements-portable-build-win-py312.lock`의 정확한 15분포 환경을 요구한다. 현재 셸 v3.16 READY SHA256 `0c3d7524e8c989b61f5f8da698847e6b5b61fc0939e6fd0fb8bd7faa51efeec8`는 유지하며 v3.16.2 입력을 기다린다. UI `c706dbb2`의 72파일 중 71개는 committed 바이트와 같다. 앱 계약은 기존 `events_dropped`와 보류 `kind`를 추가해 `dirty=true`로 기록하며, 매니페스트 72파일의 바이트·해시와 부품 지문을 대조한다.
 
 앱 native는 검사와 바이트가 같은 여섯 파일만 허용한다. unsigned 예외는 `_cffi_backend.cp312-win_amd64.pyd`, amd64 `ClrLoader.dll`, `Python.Runtime.dll` 세 개이며 WebView2 Core·WinForms·x64 Loader DLL은 서명 검증 대상이다. 두 설치기의 패킷·설치본 및 자동 업데이트 helper의 manifest 판독은 unsigned 목록이 빈 옛 판 또는 정확히 이 세 경로·SHA인 경우만 받는다. 빌더는 앱 PE 전체 크기·SHA·파일 집합과 설치기·업데이트 helper/빌더/실제 패킷 unsigned pin을 대조하며 빠짐·추가·바이트 변경을 거절한다. 다른 아키텍처 및 WebBrowserInterop 변형은 복사하지 않는다. 패킷의 `--new-screen`, writer guard, 「그래도 닫기」와 기본 `on_force_exit=None` 연결은 AST/바이트로 확인한다. 호스트에서는 실제 창을 띄우지 않고 현장 PC에서 창 동작을 확인한다.
 

@@ -642,6 +642,12 @@
         "additionalProperties": false
        },
        "maxItems": 3
+      },
+      "load": {
+       "type": "string"
+      },
+      "command": {
+       "type": "string"
       }
      },
      "additionalProperties": false
@@ -825,14 +831,6 @@
     "type": "array",
     "items": {
      "type": "object",
-     "required": [
-      "id",
-      "item",
-      "tag",
-      "count",
-      "target",
-      "at"
-     ],
      "properties": {
       "id": {
        "type": "string"
@@ -853,9 +851,57 @@
       },
       "at": {
        "type": "string"
+      },
+      "restorable": {
+       "type": "boolean"
+      },
+      "label": {
+       "type": "string"
+      },
+      "note": {
+       "type": "string"
+      },
+      "kind": {
+       "type": "string",
+       "enum": [
+        "quarantine",
+        "server_wait"
+       ]
       }
      },
-     "additionalProperties": false
+     "additionalProperties": false,
+     "anyOf": [
+      {
+       "required": [
+        "id",
+        "item",
+        "tag",
+        "count",
+        "target",
+        "at"
+       ],
+       "properties": {
+        "restorable": {
+         "enum": [
+          true
+         ]
+        }
+       }
+      },
+      {
+       "required": [
+        "label",
+        "restorable"
+       ],
+       "properties": {
+        "restorable": {
+         "enum": [
+          false
+         ]
+        }
+       }
+      }
+     ]
     },
     "maxItems": 50
    },
@@ -1093,10 +1139,6 @@
    "journal_uncertain": {
     "type": "boolean"
    },
-   "events_dropped": {
-    "type": "integer",
-    "minimum": 0
-   },
    "recovery": {
     "type": "boolean"
    },
@@ -1105,6 +1147,10 @@
    },
    "cache_sizes": {
     "type": "object"
+   },
+   "events_dropped": {
+    "type": "integer",
+    "minimum": 0
    }
   },
   "additionalProperties": false

@@ -198,7 +198,7 @@ def isolate_product_state(tmp_path, monkeypatch):
     prodblock = os.environ.get("KMTECH_TEST_PRODBLOCK")
     child_paths = [prodblock] if prodblock else []
     inherited_path = os.environ.get("PYTHONPATH")
-    if inherited_path is not None:
+    if inherited_path:
         child_paths.append(inherited_path)
     child_paths.extend((str(test_dir), str(test_dir.parent)))
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(child_paths))
