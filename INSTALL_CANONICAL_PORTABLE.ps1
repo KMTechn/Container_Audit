@@ -570,6 +570,23 @@ function Manifest([string]$Root, [bool]$UnsignedOk) {
     )
     $path = Join-Path $Root 'portable-manifest.json'
     $value = Read-KmtechPortableManifest $Root
+    # New Container Audit screen (same pins as Inspection_worker 402d3b1a): an older zero-PE release lists no
+    # unsigned PE; otherwise exactly these app-relative files, each byte-identical to the builder pin.
+    $unsignedPe = @{
+        'site-packages/_cffi_backend.cp312-win_amd64.pyd' = '9af5e4f68a41f26b726f2e9424f9d58a4f5666189f6a48be95f406b257102aec'
+        'site-packages/clr_loader/ffi/dlls/amd64/ClrLoader.dll' = '07f62bcb1b70320f221ffb2cfc5ce6133815195f3e7cdb8d833222506188c2ac'
+        'site-packages/pythonnet/runtime/Python.Runtime.dll' = '2ebd4492e28442ef1f1af587afe5b3a090c2ebfa220758ded4f1450f2a27f13a'
+    }
+    $listedPe = @(@($value.allowed_unsigned_app_pe) | ForEach-Object { [string]$_ })
+    $unsignedPeOk = $listedPe.Count -eq 0 -or (
+        $listedPe.Count -eq $unsignedPe.Count -and
+        @($listedPe | Sort-Object -Unique -CaseSensitive).Count -eq $unsignedPe.Count -and
+        @($listedPe | Where-Object {
+            $_ -cin @($unsignedPe.Keys) -and
+            (Test-Path -LiteralPath (Join-Path (Join-Path $Root 'app') $_.Replace('/', '\')) -PathType Leaf) -and
+            (Sha (Join-Path (Join-Path $Root 'app') $_.Replace('/', '\'))) -ceq $unsignedPe[$_]
+        }).Count -eq $unsignedPe.Count
+    )
     if ([string]$value.schema -cne 'container-audit-portable-tree-v1' -or
         [string]$value.entrypoint -cne 'runtime/pythonw.exe app/main.py' -or
         [string]$value.launcher -cne 'launch-container-audit.cmd' -or
@@ -580,7 +597,7 @@ function Manifest([string]$Root, [bool]$UnsignedOk) {
         [string]$value.writer_session_contract_schema -cne 'container-audit-writer-session-cli-contract-v1' -or
         [string]$value.source_commit -cnotmatch '^[0-9a-f]{40}$' -or
         [string]$value.source_tree -cnotmatch '^[0-9a-f]{40}$' -or
-        @($value.allowed_unsigned_app_pe).Count -ne 0 -or
+        -not $unsignedPeOk -or
         @($value.forbidden_dependency_paths).Count -ne 0 -or
         (Sha (Join-Path $Root 'runtime\pythonw.exe')) -cne ([string]$value.runtime_pythonw_sha256).ToLowerInvariant() -or
         (Sha (Join-Path $Root 'launch-container-audit.cmd')) -cne ([string]$value.launcher_sha256).ToLowerInvariant() -or
@@ -643,6 +660,23 @@ function InstalledManifest([string]$Root, [bool]$UnsignedOk) {
     $path = Join-Path $Root 'portable-manifest.json'
     if ((Get-Item $path).Length -gt 65536) { throw 'Installed portable manifest is oversized.' }
     $value = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    # New Container Audit screen (same pins as Inspection_worker 402d3b1a): an older zero-PE release lists no
+    # unsigned PE; otherwise exactly these app-relative files, each byte-identical to the builder pin.
+    $unsignedPe = @{
+        'site-packages/_cffi_backend.cp312-win_amd64.pyd' = '9af5e4f68a41f26b726f2e9424f9d58a4f5666189f6a48be95f406b257102aec'
+        'site-packages/clr_loader/ffi/dlls/amd64/ClrLoader.dll' = '07f62bcb1b70320f221ffb2cfc5ce6133815195f3e7cdb8d833222506188c2ac'
+        'site-packages/pythonnet/runtime/Python.Runtime.dll' = '2ebd4492e28442ef1f1af587afe5b3a090c2ebfa220758ded4f1450f2a27f13a'
+    }
+    $listedPe = @(@($value.allowed_unsigned_app_pe) | ForEach-Object { [string]$_ })
+    $unsignedPeOk = $listedPe.Count -eq 0 -or (
+        $listedPe.Count -eq $unsignedPe.Count -and
+        @($listedPe | Sort-Object -Unique -CaseSensitive).Count -eq $unsignedPe.Count -and
+        @($listedPe | Where-Object {
+            $_ -cin @($unsignedPe.Keys) -and
+            (Test-Path -LiteralPath (Join-Path (Join-Path $Root 'app') $_.Replace('/', '\')) -PathType Leaf) -and
+            (Sha (Join-Path (Join-Path $Root 'app') $_.Replace('/', '\'))) -ceq $unsignedPe[$_]
+        }).Count -eq $unsignedPe.Count
+    )
     if ([string]$value.schema -cne 'container-audit-portable-tree-v1' -or
         [string]$value.entrypoint -cne 'runtime/pythonw.exe app/main.py' -or
         [string]$value.launcher -cne 'launch-container-audit.cmd' -or
@@ -653,7 +687,7 @@ function InstalledManifest([string]$Root, [bool]$UnsignedOk) {
         [string]$value.writer_session_contract_schema -cne 'container-audit-writer-session-cli-contract-v1' -or
         [string]$value.source_commit -cnotmatch '^[0-9a-f]{40}$' -or
         [string]$value.source_tree -cnotmatch '^[0-9a-f]{40}$' -or
-        @($value.allowed_unsigned_app_pe).Count -ne 0 -or
+        -not $unsignedPeOk -or
         @($value.forbidden_dependency_paths).Count -ne 0 -or
         (Sha (Join-Path $Root 'runtime\pythonw.exe')) -cne ([string]$value.runtime_pythonw_sha256).ToLowerInvariant() -or
         (Sha (Join-Path $Root 'launch-container-audit.cmd')) -cne ([string]$value.launcher_sha256).ToLowerInvariant() -or

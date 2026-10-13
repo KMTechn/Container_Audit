@@ -214,12 +214,29 @@ function Assert-StartupUpdateVersion([string]$Root, [string]$Candidate) {
     }
     Assert-KmtechPortableTree $full @('portable-manifest.json','runtime\python.exe','runtime\pythonw.exe','app\main.py')
     $manifest = Read-KmtechPortableManifest $full
+    # New Container Audit screen (same pins as Inspection_worker 402d3b1a): an older zero-PE release lists no
+    # unsigned PE; otherwise exactly these app-relative files, each byte-identical to the builder pin.
+    $unsignedPe = @{
+        'site-packages/_cffi_backend.cp312-win_amd64.pyd' = '9af5e4f68a41f26b726f2e9424f9d58a4f5666189f6a48be95f406b257102aec'
+        'site-packages/clr_loader/ffi/dlls/amd64/ClrLoader.dll' = '07f62bcb1b70320f221ffb2cfc5ce6133815195f3e7cdb8d833222506188c2ac'
+        'site-packages/pythonnet/runtime/Python.Runtime.dll' = '2ebd4492e28442ef1f1af587afe5b3a090c2ebfa220758ded4f1450f2a27f13a'
+    }
+    $listedPe = @(@($manifest.allowed_unsigned_app_pe) | ForEach-Object { [string]$_ })
+    $unsignedPeOk = $listedPe.Count -eq 0 -or (
+        $listedPe.Count -eq $unsignedPe.Count -and
+        @($listedPe | Sort-Object -Unique -CaseSensitive).Count -eq $unsignedPe.Count -and
+        @($listedPe | Where-Object {
+            $_ -cin @($unsignedPe.Keys) -and
+            (Test-Path -LiteralPath (Join-Path (Join-Path $full 'app') $_.Replace('/', '\')) -PathType Leaf) -and
+            (Get-FileSha256 (Join-Path (Join-Path $full 'app') $_.Replace('/', '\'))) -ceq $unsignedPe[$_]
+        }).Count -eq $unsignedPe.Count
+    )
     if ([string]$manifest.schema -cne 'container-audit-portable-tree-v1' -or
         $manifest.startup_update_protocol -ne 1 -or
         [string]$manifest.source_commit -cnotmatch '^[0-9a-f]{40}$' -or
         [string]$manifest.entrypoint -cne 'runtime/pythonw.exe app/main.py' -or
         (Get-FileSha256 (Join-Path $full 'runtime\pythonw.exe')) -cne [string]$manifest.runtime_pythonw_sha256 -or
-        @($manifest.allowed_unsigned_app_pe).Count -ne 0 -or @($manifest.forbidden_dependency_paths).Count -ne 0) {
+        -not $unsignedPeOk -or @($manifest.forbidden_dependency_paths).Count -ne 0) {
         throw 'STARTUP_UPDATE_PORTABLE_MANIFEST_DIFFERS'
     }
     $pins = @{

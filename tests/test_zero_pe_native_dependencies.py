@@ -385,9 +385,14 @@ def test_frozen_package_guard_rejects_actual_forbidden_files(tmp_path, forbidden
     assert forbidden in result.stderr
 
 
-def test_portable_builder_requires_empty_native_closure_and_curated_tools():
+def test_portable_builder_requires_pinned_screen_native_closure_and_curated_tools():
     assert portable_builder.EXPECTED_PYTHON == (3, 12, 10)
-    assert portable_builder.ALLOWED_APP_NATIVE_NAMES == set()
+    assert len(portable_builder.APP_NATIVE_ALLOWLIST) == 6
+    assert len(portable_builder.APP_NATIVE_UNSIGNED) == 3
+    assert portable_builder.APP_NATIVE_UNSIGNED <= set(portable_builder.APP_NATIVE_ALLOWLIST)
+    assert "ca_screen_bridge.py" in portable_builder.APP_ROOT_FILES
+    assert "shell" in portable_builder.APP_PACKAGE_DIRS
+    assert "ui" in portable_builder.APP_DATA_DIRS
     assert "config" not in portable_builder.APP_DATA_DIRS
     assert "config/container_audit_settings.json" in portable_builder.APP_DATA_FILES
     assert portable_builder.EXTERNAL_TOOL_MODULES == ("tools.direct_sync_relay_operator",)
@@ -405,6 +410,7 @@ def test_portable_builder_requires_empty_native_closure_and_curated_tools():
         ("INSTALL_THIS_PC.ps1", "INSTALL_THIS_PC.ps1"),
         ("tools/bootstrap_integrity.ps1", "tools/bootstrap_integrity.ps1"),
         ("kmtech_shared/powershell/portable.ps1", "app/kmtech_shared/powershell/portable.ps1"),
+        ("kmtech_shared/powershell/ps51_module_prologue.ps1", "app/kmtech_shared/powershell/ps51_module_prologue.ps1"),
         ("tools/container_writer_fence.ps1", "tools/container_writer_fence.ps1"),
         ("tools/container_writer_session.ps1", "tools/container_writer_session.ps1"),
         (
@@ -420,7 +426,7 @@ def test_portable_builder_requires_empty_native_closure_and_curated_tools():
             "tools/container_data_generation_transition.json",
         ),
     }
-    for forbidden in ("cffi", "cryptography", "pillow", "pygame", "pycparser"):
+    for forbidden in ("cryptography", "pillow", "pygame"):
         assert forbidden not in portable_builder.THIRD_PARTY
 
 
@@ -428,7 +434,7 @@ def test_portable_manifest_preserves_existing_application_file_set(tmp_path):
     # The old builder shipped every root Python file. Keep that migration
     # baseline independent of APP_ROOT_FILES so an omission cannot self-validate.
     expected = {path.name: path for path in ROOT.glob("*.py")}
-    for directory in ("kmtech_factory_contracts", "kmtech_shared", "vendor", "assets"):
+    for directory in ("kmtech_factory_contracts", "kmtech_shared", "vendor", "assets", "shell", "ui"):
         for source in (ROOT / directory).rglob("*"):
             if (source.is_file() and "__pycache__" not in source.parts
                     and source.suffix not in {".pyc", ".pyo"}):
@@ -436,7 +442,7 @@ def test_portable_manifest_preserves_existing_application_file_set(tmp_path):
     for name in (
         "contract.lock.json", "kmtech_shared.manifest.json", "kmtech_shared.lock.json",
         "config/container_audit_settings.json",
-        "config/validator_settings.json", "tools/direct_sync_relay_runner.py",
+        "tools/direct_sync_relay_runner.py",
         "tools/check_release_version.py",
         "tools/direct_sync_relay_operator.py",
         "tools/install_logistics_runtime_profile.py",

@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,8 @@ from vendor.kmtech_zero_pe.release_signature import (  # noqa: E402
     validate_public_key_config,
 )
 from tools.derive_container_writer_sinks import (  # noqa: E402
+    SHELL_KIT_READY_SHA256,
+    SHELL_KIT_READY_VERSION,
     _canonical_json_bytes as _writer_inventory_json_bytes,
     derive_inventory as _derive_writer_inventory,
 )
@@ -56,6 +59,7 @@ APP_ROOT_FILES = (
     "startup_check_report.py",
     "best_time_records.py",
     "Container_Audit.py",
+    "ca_screen_bridge.py",
     "container_admin_pin.py",
     "container_audit_product_host.py",
     "container_audit_test_harness.py",
@@ -120,8 +124,9 @@ APP_PACKAGE_DIRS = (
     "kmtech_factory_contracts",
     "kmtech_shared",
     "vendor",
+    "shell",
 )
-APP_DATA_DIRS = ("assets",)
+APP_DATA_DIRS = ("assets", "ui")
 APP_DATA_FILES = (
     "contract.lock.json",
     "kmtech_shared.manifest.json",
@@ -158,10 +163,43 @@ THIRD_PARTY = {
     "requests": ("2.34.2", ("requests",)),
     "typing-extensions": ("4.15.0", ("typing_extensions.py",)),
     "urllib3": ("2.7.0", ("urllib3",)),
+    # Same shell runtime closure as Inspection_worker dceb851d.
+    "keyboard": ("0.13.5", ("keyboard",)),
+    "bottle": ("0.13.4", ("bottle.py",)),
+    "cffi": ("2.1.1", ("cffi", "_cffi_backend.cp312-win_amd64.pyd")),
+    "clr_loader": ("0.3.1", ("clr_loader",)),
+    "proxy_tools": ("0.1.0", ("proxy_tools",)),
+    "pycparser": ("3.11", ("pycparser",)),
+    "pythonnet": ("3.2.1", ("pythonnet", "clr.py")),
+    "pywebview": ("6.2.1", ("webview",)),
 }
-ALLOWED_APP_NATIVE_NAMES: set[str] = set()
+BUILD_ENVIRONMENT_LOCK = "requirements-portable-build-win-py312.lock"
+NATIVE_ALLOWLIST_SOURCE_SHA256 = "d88fc67bd49ccfba37b991c975d6eff38233b00bc24fb66369640b5e140691d7"
+# Byte-identical to Inspection_worker dceb851d; only its unsigned subset is
+# exempt from signature validation. The three WebView2 DLLs remain signed.
+APP_NATIVE_ALLOWLIST: dict[str, tuple[int, str]] = {
+    "site-packages/_cffi_backend.cp312-win_amd64.pyd": (181248, "9af5e4f68a41f26b726f2e9424f9d58a4f5666189f6a48be95f406b257102aec"),
+    "site-packages/clr_loader/ffi/dlls/amd64/ClrLoader.dll": (10752, "07f62bcb1b70320f221ffb2cfc5ce6133815195f3e7cdb8d833222506188c2ac"),
+    "site-packages/pythonnet/runtime/Python.Runtime.dll": (451584, "2ebd4492e28442ef1f1af587afe5b3a090c2ebfa220758ded4f1450f2a27f13a"),
+    "site-packages/webview/lib/Microsoft.Web.WebView2.Core.dll": (649800, "8219a3135436c147f8eb02fb831e99596103eebc18b6d7b794ca93f4c67018a2"),
+    "site-packages/webview/lib/Microsoft.Web.WebView2.WinForms.dll": (39016, "c48f8d729dc531288d2c53a6241effe7922ed1b947850b2442008a945c098c48"),
+    "site-packages/webview/lib/runtimes/win-x64/native/WebView2Loader.dll": (161864, "eb5335edeaa6f2122c044e82aab2351dc8c9b4e0fe5e578c71922fb61be285e7"),
+}
+APP_NATIVE_UNSIGNED = frozenset({
+    "site-packages/_cffi_backend.cp312-win_amd64.pyd",
+    "site-packages/clr_loader/ffi/dlls/amd64/ClrLoader.dll",
+    "site-packages/pythonnet/runtime/Python.Runtime.dll",
+})
+THIRD_PARTY_EXCLUDED_PATHS = frozenset({
+    "clr_loader/ffi/dlls/x86/ClrLoader.dll",
+    "webview/lib/WebBrowserInterop.x64.dll",
+    "webview/lib/WebBrowserInterop.x86.dll",
+    "webview/lib/runtimes/win-arm64/native/WebView2Loader.dll",
+    "webview/lib/runtimes/win-x86/native/WebView2Loader.dll",
+})
+SHELL_BRIDGE_SOURCE_COMMIT = "94778c1719960966477664032ed6ae3869944c78"
 FORBIDDEN_PACKAGE_NAMES = frozenset(
-    {"PIL", "_cffi_backend", "cffi", "charset_normalizer", "cryptography", "pygame"}
+    {"PIL", "charset_normalizer", "cryptography", "pygame"}
 )
 
 
@@ -182,10 +220,16 @@ def _ignore(_directory: str, names: list[str]) -> set[str]:
     return ignored
 
 
-def _copy_tree(source: Path, target: Path) -> None:
+def _copy_tree(source: Path, target: Path, excluded: frozenset[str] = frozenset()) -> None:
     if not source.is_dir():
         raise PortableBuildError(f"required source directory is missing: {source}")
-    shutil.copytree(source, target, ignore=_ignore)
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        relative = Path(directory).relative_to(source.parent)
+        return _ignore(directory, names) | {
+            name for name in names if (relative / name).as_posix() in excluded
+        }
+
+    shutil.copytree(source, target, ignore=ignore)
 
 
 def _tool_module_source(repo_root: Path, module_name: str) -> Path:
@@ -353,7 +397,7 @@ def _copy_third_party(site_packages: Path) -> dict[str, str]:
             source = source_root / package_name
             target = site_packages / package_name
             if source.is_dir():
-                _copy_tree(source, target)
+                _copy_tree(source, target, THIRD_PARTY_EXCLUDED_PATHS)
             elif source.is_file():
                 shutil.copy2(source, target)
             else:
@@ -404,6 +448,10 @@ def _assert_portable_import_closure(
         "Container_Audit",
         "container_audit_product_host",
         "current_user_onboarding",
+        "ca_screen_bridge",
+        "webview",
+        "clr_loader",
+        "pythonnet",
     ]
     modules.extend(
         "tools."
@@ -456,13 +504,121 @@ def _app_native_inventory(app_root: Path) -> list[str]:
         for path in app_root.rglob("*")
         if _is_pe(path)
     )
-    names = {Path(path).name for path in native}
-    if names != ALLOWED_APP_NATIVE_NAMES or native:
+    mismatched = [
+        path for path in native
+        if path not in APP_NATIVE_ALLOWLIST
+        or (app_root / path).stat().st_size != APP_NATIVE_ALLOWLIST[path][0]
+        or _sha256(app_root / path) != APP_NATIVE_ALLOWLIST[path][1]
+    ]
+    if mismatched or set(native) != set(APP_NATIVE_ALLOWLIST):
         raise PortableBuildError(
-            "portable app native closure must be empty: "
-            + ", ".join(native)
+            "portable app native closure must be exactly the pinned allowlist: "
+            + ", ".join(sorted(set(mismatched) | (set(native) ^ set(APP_NATIVE_ALLOWLIST))))
         )
     return native
+
+
+INSTALLER_UNSIGNED_PIN = re.compile(r"'(site-packages/[^']+)' = '([0-9a-f]{64})'")
+
+
+def _assert_installer_unsigned_pins(output: Path, app_root: Path) -> None:
+    expected = {path: APP_NATIVE_ALLOWLIST[path][1] for path in APP_NATIVE_UNSIGNED}
+    actual = {path: _sha256(app_root / path) for path in APP_NATIVE_UNSIGNED if (app_root / path).is_file()}
+    if actual != expected:
+        raise PortableBuildError("packet unsigned natives differ from the builder pins")
+    for name in ("INSTALL_CANONICAL_PORTABLE.ps1", "INSTALL_THIS_PC.ps1", "tools/apply_prepared_update.ps1"):
+        rows = INSTALLER_UNSIGNED_PIN.findall((output / name).read_text(encoding="utf-8-sig"))
+        if dict(rows) != expected or any(expected.get(path) != sha for path, sha in rows):
+            raise PortableBuildError(f"{name} unsigned native pins differ from the builder pins")
+
+
+def _build_environment(repo_root: Path) -> dict[str, object]:
+    lock = repo_root / BUILD_ENVIRONMENT_LOCK
+    pins = {}
+    for line in lock.read_text(encoding="utf-8").splitlines():
+        requirement = line.split("--hash", 1)[0].strip()
+        if requirement and not requirement.startswith("#"):
+            name, _, version = requirement.partition("==")
+            pins[name] = version
+    installed = {
+        str(distribution.metadata["Name"]).replace("_", "-").lower(): distribution.version
+        for distribution in importlib.metadata.distributions()
+    }
+    if installed != pins:
+        extra = sorted(set(installed) - set(pins))
+        missing = sorted(set(pins) - set(installed))
+        changed = sorted(name for name in set(pins) & set(installed) if pins[name] != installed[name])
+        raise PortableBuildError(
+            f"builder environment must be exactly {BUILD_ENVIRONMENT_LOCK}: "
+            f"extra={extra} missing={missing} changed={changed}"
+        )
+    for name, (version, _packages) in THIRD_PARTY.items():
+        if pins.get(name.replace("_", "-").lower()) != version:
+            raise PortableBuildError(f"THIRD_PARTY {name} is not in {BUILD_ENVIRONMENT_LOCK}")
+    return {
+        "build_python_sha256": _sha256(Path(getattr(sys, "_base_executable", sys.executable))),
+        "build_venv_python_sha256": _sha256(Path(sys.executable)),
+        "build_requirements_lock": BUILD_ENVIRONMENT_LOCK,
+        "build_requirements_lock_sha256": _sha256(lock),
+        "build_distribution_count": len(installed),
+        "native_allowlist_source_sha256": NATIVE_ALLOWLIST_SOURCE_SHA256,
+    }
+
+
+def _git_bytes(repo_root: Path, *arguments: str) -> bytes:
+    completed = subprocess.run(
+        ["git", "-c", "core.autocrlf=false", *arguments], cwd=repo_root,
+        capture_output=True, timeout=30, check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if completed.returncode:
+        raise PortableBuildError("committed shell source is unavailable")
+    return completed.stdout
+
+
+def _assert_screen_bundle(repo_root: Path, app_root: Path) -> dict[str, object]:
+    ready_path = "shell/SHELL-READY-v3.16.json"
+    ready_bytes = (app_root / ready_path).read_bytes()
+    if hashlib.sha256(ready_bytes).hexdigest() != SHELL_KIT_READY_SHA256:
+        raise PortableBuildError("packet shell READY differs from the v3.16 pin")
+    ready = json.loads(ready_bytes)
+    if ready.get("version") != SHELL_KIT_READY_VERSION:
+        raise PortableBuildError("packet shell version differs from the v3.16 pin")
+    committed = _git_bytes(repo_root, "ls-tree", "-r", "--name-only", SHELL_BRIDGE_SOURCE_COMMIT, "--", "shell").decode().splitlines()
+    expected = {row["path"] for row in ready["files"]} | {ready_path}
+    actual = {path.relative_to(app_root).as_posix() for path in (app_root / "shell").rglob("*") if path.is_file()}
+    if set(committed) != expected or actual != expected:
+        raise PortableBuildError("packet shell file set differs from the accepted bridge")
+    for row in ready["files"]:
+        path = app_root / row["path"]
+        if path.stat().st_size != row["bytes"] or _sha256(path) != row["sha256"]:
+            raise PortableBuildError("packet shell file differs from READY: " + row["path"])
+    for name in committed:
+        if (app_root / name).read_bytes() != _git_bytes(repo_root, "show", SHELL_BRIDGE_SOURCE_COMMIT + ":" + name):
+            raise PortableBuildError("packet shell differs from the accepted bridge: " + name)
+    ui_manifest_path = app_root / "ui/MANIFEST.json"
+    if ui_manifest_path.read_bytes() != (repo_root / "ui/MANIFEST.json").read_bytes():
+        raise PortableBuildError("packet UI manifest differs from source")
+    ui_manifest = json.loads(ui_manifest_path.read_bytes())
+    if ui_manifest.get("app") != "ca" or ui_manifest.get("commit") != "3962eda542c23de5d3759ef844104fba459006bf":
+        raise PortableBuildError("packet UI differs from the accepted export")
+    for row in ui_manifest["files"]:
+        name = Path(row["path"])
+        if name.is_absolute() or ".." in name.parts:
+            raise PortableBuildError("UI manifest path is outside its bundle")
+        path = app_root / "ui" / name
+        if path.stat().st_size != row["bytes"] or _sha256(path) != row["sha256"]:
+            raise PortableBuildError("packet UI file differs from manifest: " + name.as_posix())
+    return {
+        "shell_kit_ready_version": SHELL_KIT_READY_VERSION,
+        "shell_kit_ready_sha256": SHELL_KIT_READY_SHA256,
+        "shell_bridge_source_commit": SHELL_BRIDGE_SOURCE_COMMIT,
+        "shell_file_count": len(committed),
+        "shell_ready_match": "PASS",
+        "ui_source_commit": ui_manifest["commit"],
+        "ui_manifest_sha256": _sha256(ui_manifest_path),
+        "ui_manifest_file_count": len(ui_manifest["files"]),
+    }
 
 
 def _forbidden_dependency_paths(root: Path) -> list[str]:
@@ -470,11 +626,7 @@ def _forbidden_dependency_paths(root: Path) -> list[str]:
     for path in root.rglob("*"):
         relative = path.relative_to(root)
         components = {part.casefold() for part in relative.parts}
-        name = path.name.casefold()
-        if (
-            components & {item.casefold() for item in FORBIDDEN_PACKAGE_NAMES}
-            or name.startswith("_cffi_backend")
-        ):
+        if components & {item.casefold() for item in FORBIDDEN_PACKAGE_NAMES}:
             forbidden.append(relative.as_posix())
     return sorted(forbidden)
 
@@ -535,7 +687,7 @@ def _write_runtime_file_inventory(output: Path) -> dict:
 
 def _git_value(repo_root: Path, expression: str) -> str:
     completed = subprocess.run(
-        ["git", "rev-parse", "--verify", expression],
+        ["git", "-c", "core.autocrlf=false", "rev-parse", "--verify", expression],
         cwd=repo_root,
         capture_output=True,
         text=True,
@@ -665,12 +817,14 @@ def build(
     writer_inventory = _assert_writer_sink_inventory(repo_root)
     from auto_update import source_version_literal
     version = source_version_literal((repo_root / 'Container_Audit.py').read_bytes())
+    build_environment = _build_environment(repo_root)
     if output.exists():
         raise PortableBuildError(f"portable output already exists: {output}")
     output.mkdir(parents=True)
     _runtime_source(python_home, output / "runtime")
     app_root = output / "app"
     tool_sources = _copy_application(repo_root, app_root)
+    screen_bundle = _assert_screen_bundle(repo_root, app_root)
     if source_version_literal((app_root / 'Container_Audit.py').read_bytes()) != version:
         raise PortableBuildError('copied application version differs from source literal')
     update_key_config_sha256 = _write_update_key_config(
@@ -698,6 +852,7 @@ def build(
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
     native = _app_native_inventory(app_root)
+    _assert_installer_unsigned_pins(output, app_root)
     forbidden_paths = _forbidden_dependency_paths(output)
     if forbidden_paths:
         raise PortableBuildError(
@@ -750,7 +905,9 @@ def build(
             "inventory_sha256"
         ],
         "third_party_versions": versions,
-        "allowed_unsigned_app_pe": native,
+        "build_environment": build_environment,
+        **screen_bundle,
+        "allowed_unsigned_app_pe": [path for path in native if path in APP_NATIVE_UNSIGNED],
         "update_key_config_sha256": update_key_config_sha256,
         "forbidden_dependency_paths": forbidden_paths,
         "file_count_before_manifest": file_count,
