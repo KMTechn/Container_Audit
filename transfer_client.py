@@ -275,19 +275,22 @@ class LogisticsTransferClient:
                 retryable=True,
                 committed=None,
             ) from exc
-        if allow_not_found and status_code == 404:
+        error = body.get("error") if isinstance(body, dict) else {}
+        error = error if isinstance(error, dict) else {}
+        residual_rejected = error.get("code") == "RESIDUAL_TAG_NOT_ALLOWED"
+        if residual_rejected:
+            self._wait_limit.unanswered = False
+        if allow_not_found and status_code == 404 and not residual_rejected:
             self._observe_connection(request_sequence)
             return None
         if not 200 <= status_code < 300 or not isinstance(body, dict) or body.get("ok") is not True:
             self._observe_connection(request_sequence)
-            error = body.get("error") if isinstance(body, dict) else {}
-            error = error if isinstance(error, dict) else {}
             raise TransferSealError(
                 str(error.get("code") or "LOGISTICS_SERVER_REJECTED"),
                 str(error.get("message") or "물류 서버 요청이 거부되었습니다."),
                 status_code=status_code,
-                retryable=body.get("retryable") is True if isinstance(body, dict) else False,
-                committed=body.get("committed") if isinstance(body, dict) else None,
+                retryable=False if residual_rejected else (body.get("retryable") is True if isinstance(body, dict) else False),
+                committed=False if residual_rejected else (body.get("committed") if isinstance(body, dict) else None),
                 details=error.get("details") if isinstance(error.get("details"), dict) else {},
             )
         data = body.get("data")

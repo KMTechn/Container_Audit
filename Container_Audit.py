@@ -120,6 +120,9 @@ from label_qr import (
     is_new_system_label_pair,
     normalize_master_label_input,
     parse_label_fields_leniently,
+    is_residual_tag,
+    RESIDUAL_TAG_NOT_ALLOWED,
+    RESIDUAL_TAG_REJECTION,
     parse_new_format_qr,
     parse_positive_quantity,
     transition_reason_code,
@@ -2256,6 +2259,11 @@ class ContainerAudit:
                 if identity:
                     store = self._preflight_hold_store(preflight_id=identity[1])
             snapshot = PreflightScanHoldStore.load_path(path if original_present else store.path)
+            if self._reject_residual_tag(snapshot.master_raw):
+                return False
+            if snapshot.error_code == RESIDUAL_TAG_NOT_ALLOWED:
+                self._refuse_entry_scan(RESIDUAL_TAG_REJECTION)
+                return False
             store = self._preflight_hold_store(owner_worker=snapshot.worker)
             digest = file_sha256(path if original_present else store.path)
             pin_store = self._admin_pin_store()
@@ -2791,6 +2799,14 @@ class ContainerAudit:
             # central answer takes it to a seal command or the ledger.
             return fixed_class, reasons
         return None if label_class == TRANSITION_PHS2_CENTRAL else (label_class, reasons)
+
+    def _reject_residual_tag(self, raw_value: str) -> bool:
+        if not is_residual_tag(raw_value):
+            rejected = getattr(self, "_residual_rejected_labels", ())
+            if not rejected or canonical_master_label_key(raw_value) not in rejected:
+                return False
+        self._refuse_entry_scan(RESIDUAL_TAG_REJECTION)
+        return True
 
     def _reject_legacy_master_label(self, qr_data: Optional[Mapping[str, Any]]) -> bool:
         """Outside transition mode, stop a pre-PHS2 or damaged new label at tray start."""
@@ -4936,6 +4952,14 @@ class ContainerAudit:
         if not os.path.exists(state_path): return
         try:
             state_read = read_recovery_file(Path(state_path), "current", tray_size=self.TRAY_SIZE)
+            residual_state = state_read.value
+            if residual_state is None:
+                try:
+                    residual_state = json.loads(state_read.raw or b"")
+                except (ValueError, UnicodeDecodeError):
+                    pass
+            if isinstance(residual_state, dict) and self._reject_residual_tag(residual_state.get("master_label_code", "")):
+                return
             if not state_read.verified:
                 raise TrayStateValidationError(state_read.reason)
             saved_state = state_read.value
@@ -5232,6 +5256,8 @@ class ContainerAudit:
             )
 
     def _restore_tray_from_state(self, state: Dict[str, Any], *, preserve_held_scans: bool = False):
+        if self._reject_residual_tag(state.get("master_label_code", "")):
+            return False
         self.current_tray = tray_session_from_state(
             state,
             session_factory=TraySession,
@@ -12718,6 +12744,8 @@ class ContainerAudit:
         transition_reasons: Sequence[str] = (),
         transition_class: str = "",
     ) -> bool:
+        if self._reject_residual_tag(barcode):
+            return False
         if self._paired_preflight_blocks_label(barcode):
             self.show_fullscreen_warning(
                 "관리자 보류 현품표",
@@ -12810,6 +12838,14 @@ class ContainerAudit:
         offline_retry: bool = False,
         transition_requery: bool = False,
     ) -> bool:
+        if self._reject_residual_tag(barcode):
+            return False
+        rejected = getattr(self, "_preflight_hold_snapshot", None)
+        if (isinstance(rejected, PreflightHoldSnapshot)
+                and rejected.error_code == RESIDUAL_TAG_NOT_ALLOWED
+                and canonical_master_label_key(rejected.master_raw) == canonical_master_label_key(barcode)):
+            self._refuse_entry_scan(RESIDUAL_TAG_REJECTION)
+            return False
         if not transition_requery:
             self._transition_preflight_requeried = ""
             self._transition_preflight_unused_lease = ""
@@ -12876,6 +12912,8 @@ class ContainerAudit:
                     raise PreflightHoldConflict(
                         "another preflight hold is already active"
                     )
+                if existing.error_code == RESIDUAL_TAG_NOT_ALLOWED:
+                    raise TransferSealError(RESIDUAL_TAG_NOT_ALLOWED, RESIDUAL_TAG_REJECTION)
                 if existing.state == HOLD_LOOKUP_FAILED:
                     snapshot = hold_store.resume(
                         master_raw=barcode,
@@ -13218,6 +13256,15 @@ class ContainerAudit:
                 "PHS2_PREFLIGHT_FAILED",
                 "중앙 PHS=2 확인에 실패했습니다.",
             )
+            if failure.code == RESIDUAL_TAG_NOT_ALLOWED:
+                if operation_lease_id:
+                    self._request_operation_lease_release(operation_lease_id)
+                self._residual_rejected_labels = getattr(self, "_residual_rejected_labels", set())
+                self._residual_rejected_labels.add(canonical_master_label_key(barcode))
+                self._cancel_master_preflight()
+                self._refuse_entry_scan(RESIDUAL_TAG_REJECTION)
+                self._mark_preflight_hold_failed(failure.code)
+                return
             # A server that cannot be reached is not a verdict on this label:
             # keep the same durable hold open and look it up again later.
             offline = bool(
@@ -13370,6 +13417,14 @@ class ContainerAudit:
     ) -> None:
         """Transition mode: a PHS=2 label the central check refused or could not reach
         starts a local tray (no lease, no ledger) and takes over its held scans."""
+        if failure.code == RESIDUAL_TAG_NOT_ALLOWED:
+            self._residual_rejected_labels = getattr(self, "_residual_rejected_labels", set())
+            self._residual_rejected_labels.add(canonical_master_label_key(barcode))
+            self._cancel_master_preflight()
+            self._mark_preflight_hold_failed(failure.code)
+            return
+        if self._reject_residual_tag(barcode):
+            return
         reason = transition_reason_code(failure.code)
         try:
             self._log_event(
@@ -13416,6 +13471,8 @@ class ContainerAudit:
     def _preflight_failure_guidance(
         error_code: str, *, held_retry: bool,
     ) -> tuple[str, str]:
+        if error_code == RESIDUAL_TAG_NOT_ALLOWED:
+            return "잔량표 이적 거절", RESIDUAL_TAG_REJECTION
         retry = (
             "확인을 누르면 보관한 같은 현품표로 자동 재조회합니다. "
             "현품표를 다시 스캔하지 마세요. 다른 작업이 급하면 "
@@ -13588,6 +13645,8 @@ class ContainerAudit:
         store = self._preflight_hold_store()
         if not store.exists():
             self._master_preflight_pending = False
+            if error_code == RESIDUAL_TAG_NOT_ALLOWED:
+                self._refuse_entry_scan(RESIDUAL_TAG_REJECTION)
             return
 
         def finish(snapshot: PreflightHoldSnapshot) -> None:
@@ -13596,6 +13655,9 @@ class ContainerAudit:
             self._set_preflight_scan_input_locked(True)
             self._update_action_button_states()
             self._update_current_item_label()
+            if error_code == RESIDUAL_TAG_NOT_ALLOWED:
+                self._refuse_entry_scan(RESIDUAL_TAG_REJECTION)
+                return
             self.show_status_message(
                 f"회사 서버 조회 실패 · 보류 {len(snapshot.items)}건 (삭제되지 않음)",
                 self.COLOR_DANGER,
@@ -13993,6 +14055,8 @@ class ContainerAudit:
         clear_entry_after_ack: bool = False,
     ) -> bool:
         raw = str(raw_barcode or "").strip()
+        if self._reject_residual_tag(raw):
+            return False
         if not raw:
             return False
         # In transition mode a 13-character input is a pre-PHS2 label, never a product.
@@ -14173,6 +14237,16 @@ class ContainerAudit:
                 "사전조회 보류 파일을 읽지 못했습니다. 파일을 보존하고 관리자에게 문의하세요.",
             )
             return False
+        if self._reject_residual_tag(snapshot.master_raw):
+            return False
+        if snapshot.error_code == RESIDUAL_TAG_NOT_ALLOWED:
+            self._residual_rejected_labels = getattr(self, "_residual_rejected_labels", set())
+            self._residual_rejected_labels.add(canonical_master_label_key(snapshot.master_raw))
+            self._preflight_hold_snapshot = snapshot
+            self._master_preflight_pending = False
+            self._set_preflight_scan_input_locked(True)
+            self._refuse_entry_scan(RESIDUAL_TAG_REJECTION)
+            return True
         if self._paired_preflight_blocks_label(snapshot.master_raw):
             self._preflight_hold_snapshot = None
             self._set_preflight_scan_input_locked(True)
@@ -14725,6 +14799,9 @@ class ContainerAudit:
             self._refuse_entry_scan("프로그램 준비 중입니다. 잠시 뒤 다시 스캔하세요.")
             return
         raw_barcode = self.scan_entry.get().strip()
+        if self._reject_residual_tag(raw_barcode):
+            self._clear_consumed_scan_entry(raw_barcode)
+            return
         if raw_barcode and getattr(self, "_progress_visible", False):
             self._hide_logistics_progress(raw_barcode)
         if not raw_barcode:
@@ -14780,6 +14857,10 @@ class ContainerAudit:
 
     def _process_barcode_if_current(self, raw_barcode: str, scan_epoch: int) -> None:
         self._scan_callback_pending = False
+        if self._reject_residual_tag(raw_barcode):
+            self._clear_consumed_scan_entry(raw_barcode)
+            self._set_scan_callback_pending(False)
+            return
         try:
             if scan_epoch != getattr(self, "_scan_callback_epoch", 0):
                 return
@@ -14859,6 +14940,8 @@ class ContainerAudit:
         _durable_scan_id: str = "", _catalog_decision=None,
         _defer_persistence: bool = False, _offline_hold_switch: Optional[PreflightHoldSnapshot] = None,
     ):
+        if self._reject_residual_tag(raw_barcode):
+            return False
         # Earlier actions retain their durable checkpoint/outbox originals.
         # Wake the log writer; a new scan only waits for its own tray save.
         log_thread = getattr(self, 'log_thread', None)
@@ -14983,6 +15066,8 @@ class ContainerAudit:
         _offline_hold_switch: Optional[PreflightHoldSnapshot] = None,
     ):
         """바코드 데이터를 받아 실제 처리 로직을 수행합니다."""
+        if self._reject_residual_tag(raw_barcode):
+            return False
         if not raw_barcode: return
         if raw_barcode.startswith("KMCMD:"):
             self._process_barcode_logic(raw_barcode)
@@ -16520,6 +16605,9 @@ class ContainerAudit:
         self._update_center_display()
         if not presenter.state.is_blocking:
             snapshot = getattr(self, "_preflight_hold_snapshot", None)
+            if isinstance(snapshot, PreflightHoldSnapshot) and snapshot.error_code == RESIDUAL_TAG_NOT_ALLOWED:
+                self._refuse_entry_scan(RESIDUAL_TAG_REJECTION)
+                return
             if (
                 isinstance(snapshot, PreflightHoldSnapshot)
                 and snapshot.state == HOLD_DRAINING
@@ -20848,6 +20936,8 @@ class ContainerAudit:
             str(paired_candidate.get("master_label_code") or "")
             if isinstance(paired_candidate, dict) else ""
         )
+        if self._reject_residual_tag(paired_master_label):
+            return
         if paired_master_label and self._paired_preflight_blocks_label(paired_master_label):
             self._show_field_notice(
                 "보류 작업 복원 차단",

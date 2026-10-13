@@ -224,13 +224,13 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 
 <a id="ca-legacy-transition"></a>
 **과도기 모드(`KMTECH_LEGACY_LABEL_TRANSITION`):** 앱 시작 때 HKLM Session Manager Environment 값만 읽어 앞뒤 공백을 뺀 값이 `1`이면 켠다. 프로세스·사용자 범위 값은 보지 않고, 읽기 오류는 끔이며 자동 만료는 없다.
-켜짐이면 모든 현품표를 받고, 완료마다 `TRAY_COMPLETE` detail에 분류(`transition_class`)·사유 코드(`transition_reasons`)·중복(`transition_duplicate`)·`source_computer_id`·`source_host_name`·`app_version`을 남긴다. 분류 이름과 공통 사유 코드는 LM과 같고(`PARTIAL_TRANSFER`는 CA만 쓴다), 사유 코드는 대문자 코드 모양(A-Z·0-9·`_`)만 쓴다. 서버가 준 오류 코드는 그 모양으로 바꿔 넣고(예 `temporary-unavailable` → `TEMPORARY_UNAVAILABLE`, 남는 글자가 없으면 `UNKNOWN`), 이전 판이 트레이 상태에 저장한 사유도 첫 완료 때 바꾼다(이미 시도한 완료 contract의 행은 다시 쓰지 않는다).
+켜짐이면 검사실 잔량표를 제외한 현품표를 받고, 완료마다 `TRAY_COMPLETE` detail에 분류(`transition_class`)·사유 코드(`transition_reasons`)·중복(`transition_duplicate`)·`source_computer_id`·`source_host_name`·`app_version`을 남긴다. 분류 이름과 공통 사유 코드는 LM과 같고(`PARTIAL_TRANSFER`는 CA만 쓴다), 사유 코드는 대문자 코드 모양(A-Z·0-9·`_`)만 쓴다. 서버가 준 오류 코드는 그 모양으로 바꿔 넣고(예 `temporary-unavailable` → `TEMPORARY_UNAVAILABLE`, 남는 글자가 없으면 `UNKNOWN`), 이전 판이 트레이 상태에 저장한 사유도 첫 완료 때 바꾼다(이미 시도한 완료 contract의 행은 다시 쓰지 않는다).
 
 | 분류 | 뜻 | 사유 코드 예 | `transfer_seal_status` |
 |---|---|---|---|
 | `LEGACY` | 13자리 품목코드, 옛 QR(v2.0.9 `PHS=1\|CLC\|WID…`처럼 새 시스템 표식 없음, 또는 계보 키 없이 옛 QR 판독기가 읽는 `CLC`·`SPC`·`PHS` 단계 QR — `PHS=2`·`LBL` 값이 있어도) | `ITEM_UNCONFIRMED`, `DUPLICATE_LABEL`, 옛 QR 결함(`DUPLICATE_KEY`·`QT_INVALID`·`FORMAT_INVALID`) | `LEGACY_LOCAL_ONLY` |
 | `PHS2_CENTRAL` | 정상 PHS=2가 중앙 사전조회·lease·봉인 흐름으로 완료(기존 그대로) | 없음 | 기존 값(`ACKED` 등) |
-| `PHS2_LOCAL` | 정상 PHS=2인데 중앙·엄격 검사가 막음 | 사전조회 실패 코드(끊김 `PHS2_PREFLIGHT_UNAVAILABLE` 포함), 명령 전 봉인 검사 거절 코드(검사 구성원이 아닌 제품 `BARCODE_NOT_IN_SOURCE_BUNDLE` 등), `OPERATION_LEASE_REQUIRED`, `PARTIAL_TRANSFER`, `DUPLICATE_LABEL`, `ITEM_UNCONFIRMED` | `PHS2_LOCAL_ONLY` |
+| `PHS2_LOCAL` | 정상 PHS=2인데 중앙·엄격 검사가 막음(잔량표 확정 거절 제외) | 사전조회 실패 코드(끊김 `PHS2_PREFLIGHT_UNAVAILABLE` 포함), 명령 전 봉인 검사 거절 코드(검사 구성원이 아닌 제품 `BARCODE_NOT_IN_SOURCE_BUNDLE` 등), `OPERATION_LEASE_REQUIRED`, `PARTIAL_TRANSFER`, `DUPLICATE_LABEL`, `ITEM_UNCONFIRMED` | `PHS2_LOCAL_ONLY` |
 | `PHS2_MALFORMED` | 새 시스템 표식(`PHS=2`, `SRC=KMTECH_INPUT_TAG`, 계보 키 TRF·BND·ITG — 빈 값이어도, `LBL`·`HSH`·`HSH_CORE`·`HSH_LABEL`·`BUNDLE_ID`·`SOURCE_BUNDLE_ID` 값)이 어느 자리에든 있는데(중복 키의 앞 값 포함) 정확한 compact 라벨이 아님 | 결함마다 한 번씩 이 순서로 모두: `DUPLICATE_KEY`, `PHS_EMPTY`, `PHS_MISSING`, `PHS_NOT_2`, `LINEAGE_MISSING`, `QT_INVALID`, `FORMAT_INVALID`, `ITEM_UNCONFIRMED` | `PHS2_MALFORMED_LOCAL_ONLY` |
 
 분류·사유는 Label_Match 와 같은 표를 쓴다(w9transitalign: `label_qr.py`의 공유 블록 — LM `label_transition.py`와 글자까지 같음, 벡터 `tests/transition_label_vectors.json` — LM 저장소에 같은 사본). 키는 대문자로 비교하고 빈 조각(`…|`, `||`)은 버리며, 반복 키는 모든 키(수량 키 QT·QTY·QUANTITY 둘 이상 포함)를 본다. `PHS_EMPTY`는 PHS 빈 값만, `LINEAGE_MISSING`은 SRC·ITG·LBL·HSH 중 하나라도 없음이며, 계보·품목이 다 있는데 정확한 compact 모양(`PHS=2|SRC=KMTECH_INPUT_TAG|ITG|CLC|LBL|HSH` 순서·키 대문자·HSH 16자리 16진수)이 아니면 `FORMAT_INVALID`다(다른 결함이 있으면 따로 세지 않음). 예전의 compact 세부 코드(`PHS2_COMPACT_FORMAT_REQUIRED`·`PHS2_CENTRAL_SOURCE_REQUIRED`·`PHS2_IDENTITY_INVALID`·`PHS2_HASH_PREFIX_INVALID`)는 분류 사유로 쓰지 않는다(중앙 흐름이 돌려주는 `PHS2_LOCAL` 사유는 그대로). 켜짐에서 엄격 해독이 풀지 못한 스캐너 Base64(URL-safe, 엄격 파서가 거절하는 라벨)는 LM 처럼 풀어 읽는다. LM 과 일부러 다른 것: 표식 없는 라벨의 옛 판독 범위(CA 는 CLC 만, JSON 포함), 품목 코드 없는 새 모양(CA 는 제품 품목 검사에 품목 코드가 필요해 그 현품표만 거절, LM 은 받음), 중앙 흐름의 막은 사유.
@@ -423,6 +423,8 @@ live/reused owner·살아 있는 session authority·기록 불일치로 잔류 f
 
 <a id="ca-c02"></a>
 ## CA-C02 검사 완료 구성원 → CA preflight·lease
+
+`SRC=KMTECH_RESIDUAL_TAG`인 검사실 잔량표는 일반 판독·스캔 보관·트레이 활성화보다 먼저 거절한다. 인코딩된 입력, 과도기, 끊김 재조회, 현재 상태·보류·사전조회 보류 복원에도 같은 판정을 적용하며 기존 복원 원본은 보존한다. 서버의 `RESIDUAL_TAG_NOT_ALLOWED`(`retryable=false`)는 확정 거절이다. 과도기 로컬 시작과 자동 재조회로 전환하지 않고, 이미 보관한 스캔은 삭제하지 않는다. 봉인·제품 교환의 기존 거절 목록에도 이 코드를 포함하여 자동 재전송하지 않는다. 일반 현품표의 수량·멤버십·내구 저장 계약은 유지한다.
 
 **방향:** Inspection → Web canonical GOOD/NG → CA 조회. 생산자는 [Inspection _complete_linked_normal_session](../../../Inspection_worker/core/business_logic.py) 및 [complete_session](../../../Inspection_worker/core/direct_sync_runtime.py), 조회자는 [LogisticsTransferClient / TransferSourcePreflight](../../transfer_seal.py), 서버는 [logistics API](../../../WorkerAnalysisGUI-web/blueprints/logistics/api.py)다.
 

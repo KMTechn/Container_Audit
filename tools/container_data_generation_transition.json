@@ -428,7 +428,7 @@
     {
       "path": "app/label_qr.py",
       "before": "e2deeacc666ac90d626ce56e078f6f15056f18334f0c082773afe690abf3caa9",
-      "after": "a12c788ba47d646ef083eaa50fa1e743159c17dcec14252f8be535a8766e63ce"
+      "after": "e8fd25b06c8d1df78c8275a6b0cd44f5367bcd30669bd0be93fc7a717cac88e9"
     },
     {
       "path": "app/legacy_state_migration.py",
@@ -1363,7 +1363,7 @@
     {
       "path": "app/transfer_client.py",
       "before": "579b2450bd19777a349331ec3315ff6314151b1a85e812f95346db646f1833bb",
-      "after": "8b9716390db44e94e60a69b3850cfb507e6eeaef1c9dfc1a4241fd693d8e072c"
+      "after": "cf9c36821e3813a5f3d88fa4f20610abe02eee2150c40fe26a56cd26a5b1c333"
     },
     {
       "path": "app/transfer_common.py",
@@ -1373,17 +1373,17 @@
     {
       "path": "app/transfer_member_exchange.py",
       "before": "fe2bacec7449e9c1249c71b4f1f5736af31fae6c9a5396d5927deb6111c62c20",
-      "after": "594a6e36d4d64cd87bbdace3969c53a05126c2e9e5157690a0c0f1dc529613c1"
+      "after": "87552d3481e556a6fd90a16bf792ec97ea723ec382045ba72d32ac3fbee73b44"
     },
     {
       "path": "app/transfer_seal.py",
       "before": "627c28c4b90a503d19fe47f3f70484b362aa39a072cedfd05fc7a255b92924cd",
-      "after": "fee8e458980c0a5452e0aca6b11d33711e8a375dcf97628ed4ebd86ca9302c1b"
+      "after": "be8f7f3411aedfecf00d068bf8a0bdd2d23fee7d5e15cad282a88f597fc12994"
     },
     {
       "path": "app/transfer_store.py",
       "before": "277c178299c365026623e995df144897ae49588d5ec0aa7d7e1ce5d46524a2e7",
-      "after": "56e10caa353a2fdcfa6b85b43b2f86fa2ba3b8165e75177bec1e1948f373f7fc"
+      "after": "962812cf96be7b3e09e8d6ca8fc6dc9a6e2d3d87db5b700649c2c29998fb23ef"
     },
     {
       "path": "app/tray_completion.py",
@@ -4685,7 +4685,7 @@
     {
       "path": "transfer_client.py",
       "before": "ff697029a137b55506b05683216cf5c7a2034df683b2e186407991d3bd27332b",
-      "after": "8b9716390db44e94e60a69b3850cfb507e6eeaef1c9dfc1a4241fd693d8e072c"
+      "after": "cf9c36821e3813a5f3d88fa4f20610abe02eee2150c40fe26a56cd26a5b1c333"
     },
     {
       "path": "user_relay.py",
