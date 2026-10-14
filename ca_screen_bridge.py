@@ -1128,16 +1128,16 @@ def admission_write_guard(op: str, path: Path, kind: str) -> Any:
 def _check_screen_ready() -> None:
     try:
         raw = (APP_DIR / "shell" / "SHELL-READY-v3.16.json").read_bytes()
-        if hashlib.sha256(raw).hexdigest() != "8c3b35d4740a86481e2d011630bf78271316c38ca5f1e137de8109f320e1eb88":
+        if hashlib.sha256(raw).hexdigest() != "a8183b660932778c08ebdf1ee24f137b4c2540a66207850afeff9990bbfb3198":
             raise ValueError("shell ready differs")
         ready = json.loads(raw)
-        if ready["version"] != "v3.16.2":
+        if ready["version"] != "v3.16.3":
             raise ValueError("shell ready version differs")
         for row in ready["files"]:
             relative = Path(row["path"])
-            if relative.is_absolute() or ".." in relative.parts or relative.parts[0] != "shell":
+            if relative.is_absolute() or ".." in relative.parts or relative.parts[0] != "shell-v3.16.3":
                 raise ValueError("shell ready path differs")
-            data = (APP_DIR / relative).read_bytes()
+            data = (APP_DIR / "shell" / Path(*relative.parts[1:])).read_bytes()
             if len(data) != row["bytes"] or hashlib.sha256(data).hexdigest() != row["sha256"]:
                 raise ValueError("shell ready payload differs")
     except (OSError, ValueError, KeyError, TypeError) as error:

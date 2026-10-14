@@ -140,7 +140,7 @@ def actual_shell(entry, visible, monkeypatch, tmp_path):
         visible.web = 0  # The replacement models all surfaces dying at exit.
         state.process_exited.set()
 
-    def notice(title):
+    def notice(title, count=2):
         state.order.append("notice")
         state.notice_titles.append(title)
         assert visible.tk + visible.web <= 1
@@ -156,6 +156,7 @@ def actual_shell(entry, visible, monkeypatch, tmp_path):
     monkeypatch.setattr(host.os, "_exit", exit_process)
     monkeypatch.setattr(host, "show_startup_notice", notice)
     monkeypatch.setattr(screen, "shell_data_dir", lambda: state.data)
+    monkeypatch.setattr(host, "is_interactive_session", lambda: True)
     yield state
     # Startup recovery exits the real process without Bridge.close. The fake
     # exit leaves its in-memory push/pedal threads here, so dispose only those
@@ -174,7 +175,7 @@ def actual_shell(entry, visible, monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("failure", ["start_error", "timeout", "destroy_error"])
-def test_real_shell_failure_exits_then_same_version_manual_start_is_tk(actual_shell, entry, monkeypatch, failure):
+def test_real_shell_first_failure_retries_web_second_failure_uses_tk(actual_shell, entry, monkeypatch, failure):
     state = actual_shell
     state.mode = failure
     if failure == "timeout":
@@ -188,22 +189,57 @@ def test_real_shell_failure_exits_then_same_version_manual_start_is_tk(actual_sh
         return original(deadline)
 
     monkeypatch.setattr(fence, "close_and_wait_writers", before_exit)
-    ca.main([])
-    assert state.exits == [3]
-    assert observed == [120]
-    assert state.notice_titles == ["이적"]
-    assert state.order.index("destroy") < state.order.index("notice") < state.order.index("before_exit") < state.order.index("exit")
+
+    for count in (1, 2):
+        if count == 2:
+            # A new manual process has a fresh admission latch; its persisted marker is
+            # the real shell's marker, and its CA switch/entry path is left intact.
+            monkeypatch.setattr(fence, "_WRITER_EXIT_CLOSED", False)
+
+        ca.main([])
+        assert state.exits == [3] * count
+        assert observed == [120] * count
+        assert state.notice_titles == ["이적"] * count
+        retry = json.loads((state.data / "shell-start-retry.json").read_text(encoding="utf-8"))
+        assert retry["count"] == count and retry["version"] == ca.CURRENT_VERSION
+        assert state.host.web_allowed(state.data, ca.CURRENT_VERSION,
+                                      write_guard=screen.admission_write_guard) is (count == 1)
+        assert not state.visible.tk and not state.visible.web
+        assert state.visible.preparations == [0] * count
     marker = json.loads((state.data / "shell-fallback.json").read_text(encoding="utf-8"))
     assert marker["version"] == ca.CURRENT_VERSION
-    assert marker["code"] == ("SHELL_START_TIMEOUT" if failure == "timeout" else "SHELL_START_FAILED")
-    assert not state.visible.tk and not state.visible.web
-    assert actual_shell.host.web_allowed(state.data, ca.CURRENT_VERSION,
-                                        write_guard=screen.admission_write_guard) is False
+    assert state.order.index("destroy") < state.order.index("notice") < state.order.index("before_exit") < state.order.index("exit")
+
     # A new manual process has a fresh admission latch; its persisted marker is
     # the real shell's marker, and its CA switch/entry path is left intact.
     monkeypatch.setattr(fence, "_WRITER_EXIT_CLOSED", False)
+
     assert ca.main([]) == 0
+    assert state.exits == [3, 3]
+    assert state.visible.preparations == [0, 0, 1]
+    assert state.visible.tk == 1 and state.visible.web == 0
+
+
+def test_real_shell_runtime_missing_next_manual_start_is_tk(actual_shell, entry, monkeypatch):
+    state = actual_shell
+    class WebView2RuntimeNotFoundException(Exception):
+        pass
+    def missing(*_args, **_kwargs):
+        state.visible.web = 1
+        state.windows[-1].events.shown.fire()
+        raise WebView2RuntimeNotFoundException()
+    monkeypatch.setattr(sys.modules["webview"], "start", missing)
+    ca.main([])
     assert state.exits == [3]
+    retry = json.loads((state.data / "shell-start-retry.json").read_text(encoding="utf-8"))
+    assert retry["cause"] == "RUNTIME_MISSING" and retry["count"] == 2
+    assert state.host.web_allowed(state.data, ca.CURRENT_VERSION,
+                                  write_guard=screen.admission_write_guard) is False
+    # A new manual process has a fresh admission latch; its persisted marker is
+    # the real shell's marker, and its CA switch/entry path is left intact.
+    monkeypatch.setattr(fence, "_WRITER_EXIT_CLOSED", False)
+
+    assert ca.main([]) == 0
     assert state.visible.preparations == [0, 1]
     assert state.visible.tk == 1 and state.visible.web == 0
 
@@ -247,11 +283,13 @@ def test_shell_data_namespace_cannot_create_programdata_root(tmp_path, monkeypat
 
 def test_ready_is_exact_accepted_bytes_and_no_relaunch_module():
     payload = (ROOT / "shell/SHELL-READY-v3.16.json").read_bytes()
-    assert hashlib.sha256(payload).hexdigest() == "8c3b35d4740a86481e2d011630bf78271316c38ca5f1e137de8109f320e1eb88"
+    assert hashlib.sha256(payload).hexdigest() == "a8183b660932778c08ebdf1ee24f137b4c2540a66207850afeff9990bbfb3198"
     ready = json.loads(payload)
-    assert ready["version"] == "v3.16.2" and len(ready["files"]) == 19
+    assert ready["version"] == "v3.16.3" and len(ready["files"]) == 19
     for row in ready["files"]:
-        source = (ROOT / row["path"]).read_bytes()
+        relative = Path(row["path"])
+        assert relative.parts[0] == "shell-v3.16.3"
+        source = (ROOT / "shell" / Path(*relative.parts[1:])).read_bytes()
         assert len(source) == row["bytes"]
         assert hashlib.sha256(source).hexdigest() == row["sha256"]
     assert not (ROOT / "relaunch_wait.py").exists()

@@ -5925,11 +5925,11 @@
       "direct_callers": [],
       "file": "shell/shell_fileio.py",
       "kind": "function",
-      "line": 76,
+      "line": 77,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 78,
+          "line": 79,
           "operation": "mkdir",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -5952,11 +5952,11 @@
       "direct_callers": [],
       "file": "shell/shell_fileio.py",
       "kind": "function",
-      "line": 81,
+      "line": 82,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 93,
+          "line": 94,
           "operation": "open",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -5979,11 +5979,11 @@
       "direct_callers": [],
       "file": "shell/shell_fileio.py",
       "kind": "function",
-      "line": 98,
+      "line": 99,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 100,
+          "line": 101,
           "operation": "open",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -6006,11 +6006,11 @@
       "direct_callers": [],
       "file": "shell/shell_fileio.py",
       "kind": "function",
-      "line": 106,
+      "line": 107,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 109,
+          "line": 110,
           "operation": "open",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -6033,11 +6033,11 @@
       "direct_callers": [],
       "file": "shell/shell_fileio.py",
       "kind": "function",
-      "line": 113,
+      "line": 114,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 115,
+          "line": 116,
           "operation": "open",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -6062,11 +6062,11 @@
       ],
       "file": "shell/shell_fileio.py",
       "kind": "function",
-      "line": 119,
+      "line": 120,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 121,
+          "line": 122,
           "operation": "unlink",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -6089,11 +6089,11 @@
       "direct_callers": [],
       "file": "shell/shell_fileio.py",
       "kind": "function",
-      "line": 124,
+      "line": 125,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 129,
+          "line": 130,
           "operation": "open",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -6101,7 +6101,7 @@
         },
         {
           "category": "filesystem",
-          "line": 133,
+          "line": 138,
           "operation": "os.replace",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -10770,7 +10770,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "18ec7cfdd10ca24472eac73c446e13b43759fe37fa81c1384d0c3465a9f7c365",
+  "inventory_sha256": "13903715feb1b1e0ef017b289f5dcceca5d3059d5c1576c8cf1284702c416508",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -23441,7 +23441,7 @@
       },
       {
         "path": "shell/host.py",
-        "sha256": "d9181dc40e2f54a548d88f45b069a0b59b74ff7cfd01101577e9b2b395b8def9"
+        "sha256": "1e3029ce38a7faad952aa56431076bf4d51c0d626f072968f1f07d73768f54b1"
       },
       {
         "path": "shell/journal.py",
@@ -23457,15 +23457,15 @@
       },
       {
         "path": "shell/shell_fileio.py",
-        "sha256": "d6a97d78927be4be7312105507a46adf26d1ad2520c86bd81139683403a68266"
+        "sha256": "b1d993c466d1df5161330c25389c35bd295b7f02a6c566b544bdac3072968101"
       },
       {
         "path": "shell/sound.py",
         "sha256": "a007064433046d9b1debfb183d1db28fb88f585230dcaa2937d175993f308504"
       }
     ],
-    "ready_sha256": "8c3b35d4740a86481e2d011630bf78271316c38ca5f1e137de8109f320e1eb88",
-    "ready_version": "v3.16.2",
+    "ready_sha256": "a8183b660932778c08ebdf1ee24f137b4c2540a66207850afeff9990bbfb3198",
+    "ready_version": "v3.16.3",
     "reason": "Container_Audit --new-screen installs ca_screen_bridge.admission_write_guard through run_app; each shell_fileio write acquires and releases the existing CA writer_admission; shell/host.py standalone kit mode has no product shortcut or installer route",
     "write_module": "shell.shell_fileio",
     "write_sites": [
@@ -25041,7 +25041,7 @@
       "direct_mutation_site_count": 1,
       "file": "shell/shell_fileio.py",
       "function": "shell.shell_fileio.append_bytes",
-      "line": 98,
+      "line": 99,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },
@@ -25049,7 +25049,7 @@
       "direct_mutation_site_count": 1,
       "file": "shell/shell_fileio.py",
       "function": "shell.shell_fileio.create_new",
-      "line": 106,
+      "line": 107,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },
@@ -25057,7 +25057,7 @@
       "direct_mutation_site_count": 1,
       "file": "shell/shell_fileio.py",
       "function": "shell.shell_fileio.make_dirs",
-      "line": 76,
+      "line": 77,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },
@@ -25065,7 +25065,7 @@
       "direct_mutation_site_count": 1,
       "file": "shell/shell_fileio.py",
       "function": "shell.shell_fileio.probe_writable",
-      "line": 81,
+      "line": 82,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },
@@ -25073,7 +25073,7 @@
       "direct_mutation_site_count": 1,
       "file": "shell/shell_fileio.py",
       "function": "shell.shell_fileio.remove",
-      "line": 119,
+      "line": 120,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },
@@ -25081,7 +25081,7 @@
       "direct_mutation_site_count": 2,
       "file": "shell/shell_fileio.py",
       "function": "shell.shell_fileio.replace_atomic",
-      "line": 124,
+      "line": 125,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },
@@ -25089,7 +25089,7 @@
       "direct_mutation_site_count": 1,
       "file": "shell/shell_fileio.py",
       "function": "shell.shell_fileio.truncate",
-      "line": 113,
+      "line": 114,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },

@@ -27,7 +27,7 @@ def visible(entry, monkeypatch):
 
 
 @pytest.mark.parametrize('failure', ('SHELL_START_FAILED', 'SHELL_START_TIMEOUT'))
-def test_created_web_failure_exits_without_restart_then_manual_start_opens_one_tk(entry, visible, monkeypatch, failure):
+def test_created_web_failure_with_fallback_marker_exits_then_manual_start_opens_one_tk(entry, visible, monkeypatch, failure):
     marker, order = [], []
     entry.bridge._startup_failure = failure
     entry.bridge.pump = lambda: False

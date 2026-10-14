@@ -18,7 +18,7 @@ PINNED_EXCLUSIONS = {
     "kmtech_shared/powershell/data_generation.ps1": ("b809e49985c73e0b1aedbe9dd3a8050177939f6fb088087e6d3e4c9bc05b5c96", "바이트 고정 정본 — 정본 주인 후속"),
     "kmtech_shared/raster.py": ("17c3d10498f9f5b845858861e671fff4715820b0e48719864d8dec4b9743f244", "바이트 고정 정본 — 정본 주인 후속"),
     "kmtech_shared/diagnostic_log.py": ("085c47ad7cf42130de74240a6e3dccefc2502d844591f775d46fedaabc6ad36b", "바이트 고정 정본 — 정본 주인 후속"),
-    "shell/shell_fileio.py": ("d6a97d78927be4be7312105507a46adf26d1ad2520c86bd81139683403a68266", "바이트 고정 정본 — 정본 주인 후속"),
+    "shell/shell_fileio.py": ("b1d993c466d1df5161330c25389c35bd295b7f02a6c566b544bdac3072968101", "바이트 고정 정본 — 정본 주인 후속"),
 }
 TEST_REPLACEMENT_DOUBLES = {
     ("tests/test_event_log_projection.py", "interleave"),
