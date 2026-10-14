@@ -2559,14 +2559,36 @@ function Invoke-InstallationEvidenceChild([string]$Name,[string]$Executable,[str
     $failureDiagnostic=$null
     foreach($line in @($texts.stdout -split '\r?\n')){
         if($line.StartsWith('installation_failure_summary=',[StringComparison]::Ordinal)){
+            $knownDiagnostic=$false;$diagnostic=$null
             try{
-                if([Text.Encoding]::UTF8.GetByteCount($line) -gt 65536){throw 'Helper failure JSON exceeded the 64 KiB bound; full stream evidence remains authoritative.'}
-                $diagnostic=$line.Substring('installation_failure_summary='.Length) | ConvertFrom-Json
-                if([string]$diagnostic.schema -ceq 'container-audit-installation-fallback-v1' -and [int]$diagnostic.exit_code -in @(71,72,73)){
-                    Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_FAILURE_FALLBACK';stage=$Name;pid=$result.pid;child_exit_code=$result.exit_code;diagnostic=$diagnostic})
-                    if($null -eq $failureDiagnostic -and [int]$diagnostic.exit_code -eq [int]$result.exit_code){$failureDiagnostic=$diagnostic}
+                if([Text.Encoding]::UTF8.GetByteCount($line) -le 65536){
+                    $json=$line.Substring('installation_failure_summary='.Length).Trim()
+                    # PS5 unrolls arrays: check the JSON envelope before conversion.
+                    if($json.StartsWith('{',[StringComparison]::Ordinal)){
+                        $diagnostic=$json | ConvertFrom-Json -ErrorAction Stop
+                        if($null -ne $diagnostic -and $diagnostic -is [pscustomobject]){
+                            $schema=$diagnostic.PSObject.Properties['schema']
+                            $exit=$diagnostic.PSObject.Properties['exit_code']
+                            $knownDiagnostic=($null -ne $schema -and $schema.Value -is [string] -and
+                                $schema.Value -ceq 'container-audit-installation-fallback-v1' -and
+                                $null -ne $exit -and ($exit.Value -is [int] -or $exit.Value -is [long]) -and
+                                $exit.Value -in @(71,72,73))
+                        }
+                    }
                 }
-            }catch{Write-InstallationCaughtFailure $_}
+            }catch{
+                # Diagnostic parsing is secondary to the captured child failure.
+                # Never let its exception publish/replace original_failure.
+                $knownDiagnostic=$false
+            }
+            if($knownDiagnostic){
+                Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_FAILURE_FALLBACK';stage=$Name;pid=$result.pid;child_exit_code=$result.exit_code;diagnostic=$diagnostic})
+                if($null -eq $failureDiagnostic -and $exit.Value -eq $result.exit_code){$failureDiagnostic=$diagnostic}
+            }else{
+                # Evidence writer failures still propagate; do not treat them as
+                # an unknown diagnostic or admit a failed install as success.
+                Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_FAILURE_DIAGNOSTIC_UNKNOWN';stage=$Name;pid=$result.pid;child_exit_code=$result.exit_code;message='진단 형식 모름'})
+            }
         }
     }
     return [pscustomobject]@{ExitCode=$result.exit_code;ProcessId=$result.pid;Stdout=$texts.stdout;Stderr=$texts.stderr;Streams=$streams;EvidenceFailure=$evidenceFailure;FailureDiagnostic=$failureDiagnostic}

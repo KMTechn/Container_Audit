@@ -2,6 +2,8 @@
 
 자동 업데이트 출발판은 v2.0.104 이상이다. 업데이트 후보는 설치된 판의 `tools/apply_prepared_update.ps1`이 판정한다. v2.0.103처럼 unsigned 목록이 빈 판만 받는 옛 helper가 깔린 PC는 v2.0.104 이후 자동 업데이트를 `STARTUP_UPDATE_PORTABLE_MANIFEST_DIFFERS`로 거절하며 업무를 멈추지 않는다. 그런 PC는 정식 제거 뒤 새로 설치한다. 자료꼴 호환 하한 v2.0.103은 업데이트 출발판을 뜻하지 않는다.
 
+설치 자식의 fallback 진단은 객체·schema·정수 exit_code를 확인한 뒤 읽는다. 누락·null·배열·손상·64 KiB 초과·미지 형식은 「진단 형식 모름」으로 따로 기록한다. 자식의 원 종료값·출력·이유·최초 실패 참조는 유지하며, 진단 parser 예외가 original_failure를 선점하지 않는다. 정상 옛 fallback은 자식 종료값이 일치할 때만 선택한다. 증거 writer 실패와 task 부재·UNKNOWN 거절은 그대로다.
+
 v2.0.108 기본은 web이며 --new-screen·--ui web도 같은 뜻이다. --old-screen·--ui tk는 그 실행만 Tk를 고른다. 모르는 --ui 값은 기본 길이다. M84 진입에는 PID 대기나 자동 재실행이 없다.
 웹 생성 뒤 시작 실패는 셸의 쓰기 문 닫음·판 표지·destroy·before_exit·끝 한 길이다. 같은 프로세스 Tk 전환·자동 재실행은 없다. 표지 저장 실패도 끝내고 되풀이하지 않는다. 사람이 다음에 켜면 같은 판 web_allowed=False로 Tk를 연다. before_exit 빔은 writer 허가·mutex가 비고 모든 lane worker 실이 죽은 것(BROKEN 포함)이며 다른 정리는 없다. 120초·5초 확인, False면 끝내기를 미룬다. 셸 import try 실패는 SHELL_IMPORT_FAILED→Tk, 비상 Tk 셸 import0. 생성 전·시작 거절·업무 gate는 유지한다.
 M86: 셸 OS 실패 안내의 제목은 `title="이적"`이다. mainloop 전 초기화 실패와 lane pump 생성 실패도 기존 owner 정리/close_idle로 worker를 멈춘다. before_exit의 닫힘 표시와 lane 시작은 같은 잠금으로 줄 세워 늦은 시작을 거절한다. 기존 receipt/위임/authority 검증을 통과한 위임·유지보수 허가는 normal 허가 없이 worker 실제 종료만 확인한다. portable 선행 admission의 abandoned 거절도 한 번 더 열기 안내·기존 지원 기록·종료 1을 유지한다. 셸 사본 통합 전 OS 안내 실물은 미검증이다.
