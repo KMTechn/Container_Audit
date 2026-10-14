@@ -325,7 +325,13 @@ def test_actual_common_shortcut_target_is_rejected_by_legacy_candidate_reader(tm
     # Reader from the reviewed kit v251106 Legacy-Survey.ps1, SHA256
     # 46a96899996a27875391b65b9257837a352269f8aff7a9ac054c098139a0762e.
     # Only this exact EXE-name admission is frozen; no host discovery runs.
-    driver = r'''
+    driver = r"""# This test covers the worker shortcut target and the legacy reader refusal.
+# Emergency shortcut installation has its own PS5/7 native-boundary tests.
+function Install-BootstrapEmergencyShortcut([string]$InstallRoot) {
+    if ([string]::IsNullOrWhiteSpace($InstallRoot)) { throw 'Emergency shortcut root is missing.' }
+    return [pscustomobject]@{status='FIXTURE_BOUNDARY'}
+}
+
 function Resolve-KmtechLegacyPath([string]$Path) {return [IO.Path]::GetFullPath($Path)}
 function Read-KmtechLegacySurveyCandidate([string]$Path,[string]$Source) {
     $path=Resolve-KmtechLegacyPath $Path
@@ -377,7 +383,7 @@ $rejected=$false
 try{[void](Read-KmtechLegacySurveyCandidate $script:link.TargetPath 'shortcut')}catch{$rejected=$true}
 if(-not $rejected){throw 'new shortcut became a legacy candidate'}
 'COMMON_SHORTCUT_LEGACY_EXCLUSION_PASS'
-'''
+"""
     result = run_functions(tmp_path, INSTALLER, ["Full", "Same", "Get-CanonicalMachineShortcutArguments", "New-CanonicalMachineShortcut"], driver,
                            engine=engine, values={"CA_EXISTING_SHORTCUT": existing})
     assert result.returncode == 0, result.stderr
