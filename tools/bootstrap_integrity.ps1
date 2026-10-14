@@ -328,12 +328,17 @@ function Install-BootstrapWorkerShortcuts([string]$InstallRoot,[string]$RecordPa
     return [pscustomobject]@{status='PASS';scope=$Scope;record_path=$RecordPath;changed_count=$candidates.Count}
 }
 
-function Restore-BootstrapWorkerShortcuts([string]$InstallRoot,[string]$RecordPath,[string]$Scope='All') {
+function Restore-BootstrapWorkerShortcuts([string]$InstallRoot,[string]$RecordPath,[string]$Scope='All',[switch]$DeferEmergencyCleanup) {
     $record=Read-BootstrapWorkerShortcutRecord $InstallRoot $RecordPath $Scope
     $launcher=Join-Path $InstallRoot 'launch-container-audit.cmd'
     # A restored portable version still uses the same entrypoint and keeps links.
     if([IO.File]::Exists($launcher)){return [pscustomobject]@{status='PORTABLE_ENTRYPOINT_RETAINED';scope=$Scope}}
-    Remove-BootstrapEmergencyShortcut $InstallRoot
+    $emergencyFailure=$null
+    if(-not $DeferEmergencyCleanup){
+        try{Remove-BootstrapEmergencyShortcut $InstallRoot}
+        catch [IO.IOException]{$emergencyFailure=$_}
+        catch [UnauthorizedAccessException]{$emergencyFailure=$_}
+    }
     $shell=New-Object -ComObject WScript.Shell
     try{
         foreach($entry in @($record.entries)){
@@ -352,6 +357,7 @@ function Restore-BootstrapWorkerShortcuts([string]$InstallRoot,[string]$RecordPa
             }
         }
     }finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}
+    if($null -ne $emergencyFailure){throw $emergencyFailure}
     return [pscustomobject]@{status='PASS_RESTORED';scope=$Scope;record_path=$RecordPath}
 }
 

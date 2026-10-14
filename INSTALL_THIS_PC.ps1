@@ -2218,7 +2218,10 @@ if ($Uninstall.IsPresent) {
         if ($UninstallAuditPath) { Write-ContainerSupportedRemovalJournal $excluded }
         $removed = Invoke-ContainerConvergentRemoval -InstallRoot $installRootFull -TaskFolder $folder -ExcludeProcessIds $excluded -OnlyUncommittedCurrent:$RemoveUncommittedPlacement
         $shortcutRecord=Get-BootstrapWorkerShortcutCommonRecordPath $installRootFull
-        [void](Restore-BootstrapWorkerShortcuts $installRootFull $shortcutRecord 'Common')
+        # Only the already verified machine controller owns the independent emergency stage.
+        $deferEmergencyCleanup=([bool]$MachineControlRoot -and -not $RemoveUncommittedPlacement -and
+            [bool]$UninstallAuditPath -and $excluded -contains $RemovalControllerProcessId)
+        [void](Restore-BootstrapWorkerShortcuts $installRootFull $shortcutRecord 'Common' -DeferEmergencyCleanup:$deferEmergencyCleanup)
         'uninstall_status=PASS_KNOWN_FILES_REMOVED_STATE_PRESERVED'
         'lifecycle_state=REMOVED'
         ConvertTo-KmtechRedactedSinkText -Text ('removal_evidence_root='+[string]$removed.evidence_root)

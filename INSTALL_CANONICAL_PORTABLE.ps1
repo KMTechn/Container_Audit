@@ -71,7 +71,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '17763753d9f24f6aa72633a1897fdfda7f2079bfd6391c1a2e862b40c3723bf4'
+$ExpectedBootstrapIntegritySha256 = '923d867256fdc543e4fd98babbadc5028d70f6a976904e3a42b46a3c692c758e'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -3704,6 +3704,12 @@ function Test-CanonicalMachineCodePrestate([string]$Root,[string]$ManifestSha256
 }
 function Remove-CanonicalMachineArtifacts([string]$Root,$Worker,[string[]]$Paths) {
     $pending=$Paths[0];$shortcut=$Paths[1]
+    $emergencyFailure=$null
+    if(-not [IO.File]::Exists((Join-Path $Root 'launch-container-audit.cmd'))){
+        try{Remove-BootstrapEmergencyShortcut $Root}
+        catch [IO.IOException]{$emergencyFailure=$_}
+        catch [UnauthorizedAccessException]{$emergencyFailure=$_}
+    }
     if (Test-Path -LiteralPath $pending) {
         Assert-BootstrapNoReparsePoint $pending 'machine pending removal' -PathOnly
         $marker=Get-Content -LiteralPath $pending -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -3725,9 +3731,7 @@ function Remove-CanonicalMachineArtifacts([string]$Root,$Worker,[string[]]$Paths
         } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) }
     }
     if (Test-Path -LiteralPath $pending) { Remove-Item -LiteralPath $pending -ErrorAction Stop }
-    if(-not [IO.File]::Exists((Join-Path $Root 'launch-container-audit.cmd'))){
-        Remove-BootstrapEmergencyShortcut $Root
-    }
+    if($null -ne $emergencyFailure){throw $emergencyFailure}
 }
 function New-CanonicalMachineShortcut([string]$Root,[string]$Directory='') {
     if (-not $Directory) { $Directory=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms) }
