@@ -528,7 +528,11 @@ class PreflightScanHoldWriter:
         )
         from writer_session_fence import start_lane_worker
         start_lane_worker(self.thread)
-        self._schedule_pump()
+        try:
+            self._schedule_pump()
+        except BaseException:
+            self.close_idle()
+            raise
 
     def _assert_owner(self) -> None:
         if threading.get_ident() != self.owner_thread_id:

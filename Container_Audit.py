@@ -23211,6 +23211,21 @@ def _run_application_main(arguments):
     return _run_gui_application(arguments)
 
 
+def _cleanup_startup_app(app):
+    """Use the existing owner cleanup when startup ends before mainloop."""
+    if app is None or getattr(app, "_loop_cleanup_attempted", False) or getattr(app, "_loop_cleanup_finished", False):
+        return
+    cleanup = getattr(app, "_cleanup_after_mainloop", None)
+    if callable(cleanup):
+        failed = sys.exc_info()[0] is not None
+        try:
+            cleanup()
+        except BaseException as error:
+            print(f"화면 종료 정리 오류: {error.__class__.__name__}")
+            if not failed:
+                raise
+
+
 def _run_gui_application(arguments):
     from auto_update import trial_context, publish_gui_ready, trial_stop_requested
 
@@ -23232,52 +23247,55 @@ def _run_gui_application(arguments):
     if not isinstance(startup, tuple):
         return startup
     app, instance_lease = startup
-    gui_identity = _startup_check_observe("gui_identity", CURRENT_VERSION) or (CURRENT_VERSION, "")
-    _startup_check_observe("finish")
-
-    def report_gui_ready():
-        try:
-            _startup_check_observe("gui_ready", *gui_identity)
-        except Exception:
-            pass
-
-    if trial_context(application_code_root) is not None:
-        app.root.withdraw()
-        def await_update_readiness():
-            if trial_stop_requested(application_code_root):
-                # The hidden trial accepts no scans. Flush its existing queue
-                # without prompting to discard an operator's unfinished tray.
-                app._finalize_application_close()
-                return
-            context = trial_context(application_code_root)
-            if context is None:
-                app._startup_update_pending = False
-                app.root.deiconify()
-                report_gui_ready()
-                return
-            try:
-                if publish_gui_ready(application_code_root):
-                    report_gui_ready()
-            except (OSError, ValueError):
-                pass  # A readback failure remains unconfirmed; data is preserved.
-            app.root.after(250, await_update_readiness)
-        app.root.after(0, await_update_readiness)
-    else:
-        try:
-            app.root.after(0, report_gui_ready)
-        except Exception:
-            pass  # The optional marker cannot prevent the resident UI from starting.
     try:
+        gui_identity = _startup_check_observe("gui_identity", CURRENT_VERSION) or (CURRENT_VERSION, "")
+        _startup_check_observe("finish")
+
+        def report_gui_ready():
+            try:
+                _startup_check_observe("gui_ready", *gui_identity)
+            except Exception:
+                pass
+
+        if trial_context(application_code_root) is not None:
+            app.root.withdraw()
+            def await_update_readiness():
+                if trial_stop_requested(application_code_root):
+                    # The hidden trial accepts no scans. Flush its existing queue
+                    # without prompting to discard an operator's unfinished tray.
+                    app._finalize_application_close()
+                    return
+                context = trial_context(application_code_root)
+                if context is None:
+                    app._startup_update_pending = False
+                    app.root.deiconify()
+                    report_gui_ready()
+                    return
+                try:
+                    if publish_gui_ready(application_code_root):
+                        report_gui_ready()
+                except (OSError, ValueError):
+                    pass  # A readback failure remains unconfirmed; data is preserved.
+                app.root.after(250, await_update_readiness)
+            app.root.after(0, await_update_readiness)
+        else:
+            try:
+                app.root.after(0, report_gui_ready)
+            except Exception:
+                pass  # The optional marker cannot prevent the resident UI from starting.
         # The resident UI must let the relay and background writers acquire
         # admission between their own guarded mutations.
         CA_SCREEN_HOST["run"](app) if CA_SCREEN_HOST["active"] else app.run()
         return 0
     finally:
-        if getattr(app, "_loop_cleanup_finished", True):
-            instance_lease.release()
-            attempt = CA_SCREEN_HOST.get("attempt")
-            if attempt is not None:
-                attempt.release_instance()
+        try:
+            _cleanup_startup_app(app)
+        finally:
+            if getattr(app, "_loop_cleanup_finished", True):
+                instance_lease.release()
+                attempt = CA_SCREEN_HOST.get("attempt")
+                if attempt is not None:
+                    attempt.release_instance()
 
 
 def _consume_startup_app_stop_request(direct_sync_root) -> bool:
@@ -23337,6 +23355,7 @@ def _prepare_gui_startup(*, data_root=None):
         show_notice(title, message)
         return
     startup_complete = False
+    app = None
     try:
         if _consume_startup_app_stop_request(storage_paths.direct_sync_root):
             return 0
@@ -23490,7 +23509,11 @@ def _prepare_gui_startup(*, data_root=None):
         return app, instance_lease
     finally:
         if not startup_complete:
-            instance_lease.release()
+            try:
+                _cleanup_startup_app(app)
+            finally:
+                if app is None or getattr(app, "_loop_cleanup_finished", True):
+                    instance_lease.release()
 
 
 if __name__ == "__main__":

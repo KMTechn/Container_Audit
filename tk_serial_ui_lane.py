@@ -176,9 +176,13 @@ class TkSerialUiLane:
             daemon=False,
         )
         start_lane_worker(self.worker_thread)
-        if not self._worker_started.wait(timeout=2.0):
-            raise RuntimeError("Tk UI lane worker did not start")
-        self._schedule_pump()
+        try:
+            if not self._worker_started.wait(timeout=2.0):
+                raise RuntimeError("Tk UI lane worker did not start")
+            self._schedule_pump()
+        except BaseException:
+            self.close_idle()
+            raise
 
     @property
     def state(self) -> str:

@@ -54,6 +54,8 @@ EXIT_POLL_S = 5
 def start_lane_worker(worker: threading.Thread) -> None:
     """Track every lane worker, including one whose lane later becomes BROKEN."""
     with _WRITER_EXIT_CONDITION:
+        if _WRITER_EXIT_CLOSED:
+            raise WriterFencedError("WRITER_EXIT_CLOSED", "lane worker admission is closed for exit")
         _LANE_WORKERS.add(worker)
         worker.start()
 
@@ -64,11 +66,25 @@ def close_and_wait_writers(timeout_seconds: float) -> bool:
     deadline = time.monotonic() + max(0.0, timeout_seconds)
     with _WRITER_EXIT_CONDITION:
         _WRITER_EXIT_CLOSED = True
-        while _WRITER_EXIT_COUNT or any(worker.is_alive() for worker in tuple(_LANE_WORKERS)):
+    # A receipt-bound delegation/maintenance session has no normal admission
+    # token to drain. Reuse the existing capability validation, not env presence.
+    delegated = False
+    try:
+        active = active_fence(canonical_control_root())
+        delegated = active is not None and any(
+            _delegation_matches(active, source=source, environ=os.environ)
+            for source in active["delegated_sources"]
+        )
+    except WriterFenceError:
+        pass  # Unproven delegation retains the normal exit criterion.
+    with _WRITER_EXIT_CONDITION:
+        while (not delegated and _WRITER_EXIT_COUNT) or any(worker.is_alive() for worker in tuple(_LANE_WORKERS)):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return False
             _WRITER_EXIT_CONDITION.wait(min(EXIT_POLL_S, remaining))
+    if delegated:
+        return True
     try:
         lease = _acquire_named_mutex(
             writer_admission_mutex_name(canonical_control_root()),
@@ -85,7 +101,7 @@ def close_and_wait_writers(timeout_seconds: float) -> bool:
 
 # This pin is generated and checked by tools/derive_container_writer_sinks.py.
 # It is updated together with the inventory after all sink markers are placed.
-WRITER_INVENTORY_SHA256 = "db1ba120b3e923fe6efd2b743c7ba432b09471031acedd72df954b4e346c1ac0"
+WRITER_INVENTORY_SHA256 = "a1721dd990cd9285e02d9272294d44fec6ecea3e36aad33c8975541be518f1b0"
 
 DELEGATION_TOKEN_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN"
 DELEGATION_SESSION_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID"

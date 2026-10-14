@@ -17,7 +17,7 @@ if str(APP_ROOT) not in sys.path:
 if str(SITE_PACKAGES) not in sys.path:
     sys.path.insert(1, str(SITE_PACKAGES))
 
-from writer_session_fence import writer_sink  # noqa: E402
+from writer_session_fence import WriterFenceError, writer_sink  # noqa: E402
 
 
 @writer_sink("portable_smoke_marker")
@@ -70,6 +70,7 @@ def main() -> int:
     if "--zero-pe-portable-smoke" in sys.argv[1:]:
         return _portable_smoke()
     arguments = list(sys.argv[1:])
+    application_main_started = False
     try:
         if arguments[:1] == ["--container-audit-user-relay"] and "--request-app-stop" in arguments:
             from user_relay import main as relay_main
@@ -103,6 +104,7 @@ def main() -> int:
 
         # Requests during entrypoint imports/onboarding belong to this launch.
         application._APP_PROCESS_STARTED_AT = _APP_PROCESS_STARTED_AT
+        application_main_started = True
         result = application.main()
         return 0 if result is None else int(result)
     except Exception as error:
@@ -110,6 +112,14 @@ def main() -> int:
                                   ["--restore-current-user-lifecycle-after-replacement"]):
             from auto_update import emit_support_record
             emit_support_record(stage='portable_entrypoint', error=error, file=sys.stderr)
+            if not application_main_started and isinstance(error, WriterFenceError) and error.code == "WRITER_GATE_ABANDONED":
+                from container_audit_product_host import PRODUCT_MODES
+                if not any(argument in PRODUCT_MODES or argument in {"--help", "-h"} for argument in arguments):
+                    try:
+                        from Container_Audit import _show_startup_unavailable
+                        _show_startup_unavailable("이적 다시 열기 — 한 번 더 여세요")
+                    except Exception:
+                        pass  # The optional notice cannot change support evidence or exit.
             return 1
         from current_user_onboarding import emit_installer_failure
         return emit_installer_failure(error, "installer_entrypoint")

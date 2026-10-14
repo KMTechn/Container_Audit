@@ -60,6 +60,7 @@ G0: 기존 거부의 종료 코드만 유지한다. 원자 저장 후 한 줄을
 「이 PC 는 지금 새 프로그램을 열 수 없습니다. 관리자에게 알렸습니다. 다른 작업대로 옮겨 주세요.」
 버려진 쓰기 허가 mutex(`WRITER_GATE_ABANDONED`)만 「이적 다시 열기 — 한 번 더 여세요」로 안내한다.
 이 시작은 기존 fence대로 거절하고 mutex를 놓는다. 자동 재실행은 없으며 다른 까닭의 안내·기록·종료는 그대로다.
+portable의 application.main 앞 request_bootstrap admission도 이 까닭이면 같은 안내를 표시하고 기존 지원 기록·종료 1을 유지한다. application.main에서 이미 처리한 안내는 반복하지 않는다. 다른 까닭과 비GUI 제품 모드는 기존 흐름을 유지한다.
 경고 후 계속, bootstrap 복구 인계, 이미 실행 중인 경우의 기존 흐름을 따른다.
 새 관찰이 실패해 UNKNOWN이면 기존 시작 흐름을 계속하고 기존 관문이 최종 판정한다.
 품목 목록 거부는 ITEM_CATALOG_UNAVAILABLE에 고정 세부 코드 하나를 더한다. 403은
