@@ -131,6 +131,11 @@ def _isolate_environment(root, patch):
         path = root / directory
         path.mkdir(parents=True, exist_ok=True)
         patch.setenv(name, str(path))
+    import runtime_instance_win32 as instance_native
+    @functools.wraps(instance_native.known_program_data)
+    def isolated_program_data():
+        return Path(os.environ["PROGRAMDATA"])
+    patch.setattr(instance_native, "known_program_data", isolated_program_data)
     patch.delenv("CONTAINER_AUDIT_DATA_ROOT", raising=False)
     for name in ("CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH", "KM_LOGISTICS_PROFILE_PATH"):
         patch.delenv(name, raising=False)

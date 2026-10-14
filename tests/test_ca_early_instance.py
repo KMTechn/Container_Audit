@@ -197,6 +197,7 @@ def test_actual_cold_second_entry_exits_before_heavy_imports(user_root, tmp_path
 repo, source, receipt, root, arguments = sys.argv[1:]
 sys.path.insert(0, repo)
 import runtime_instance_win32 as native
+native.known_program_data = lambda: pathlib.Path(__import__("os").environ["PROGRAMDATA"])
 import storage_policy
 storage_policy._persisted_data_root = lambda: None
 events = {"acquired": 0, "heavy": [], "notice": 0, "exit": None}

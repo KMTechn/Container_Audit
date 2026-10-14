@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
+from uuid import UUID
 
 ERROR_ALREADY_EXISTS = 183
 SYNCHRONIZE = 0x00100000
@@ -155,3 +156,29 @@ def timed_notice(text: str, title: str, flags: int = MB_OK, timeout_ms: int = NO
     notice.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT, wintypes.WORD, wintypes.DWORD]
     notice.restype = ctypes.c_int
     notice(None, text, title, flags, 0, timeout_ms)
+
+
+def known_program_data() -> Path | None:
+    """Resolve the OS machine folder independently of caller environment values."""
+    if os.name != "nt":
+        return None
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                    ("Data3", wintypes.WORD), ("Data4", wintypes.BYTE * 8)]
+    identifier = GUID.from_buffer_copy(UUID("62ab5d82-fdc1-4dc3-a9dd-070d1d495d97").bytes_le)
+    api = ctypes.WinDLL("shell32", use_last_error=True)
+    api.SHGetKnownFolderPath.argtypes = [ctypes.POINTER(GUID), wintypes.DWORD,
+                                       wintypes.HANDLE, ctypes.POINTER(ctypes.c_void_p)]
+    api.SHGetKnownFolderPath.restype = ctypes.c_long
+    free = ctypes.WinDLL("ole32", use_last_error=True).CoTaskMemFree
+    free.argtypes = [ctypes.c_void_p]
+    free.restype = None
+    output = ctypes.c_void_p()
+    status = api.SHGetKnownFolderPath(ctypes.byref(identifier), 0, None, ctypes.byref(output))
+    try:
+        if status != 0 or not output.value:
+            raise OSError("ProgramData known folder could not be resolved")
+        return Path(ctypes.wstring_at(output))
+    finally:
+        if output.value:
+            free(output)

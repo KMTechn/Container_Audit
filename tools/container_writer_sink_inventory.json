@@ -25,24 +25,24 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 3994,
+      "line": 3995,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 3999,
+          "line": 4000,
           "operation": "temporary.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 4005,
+          "line": 4006,
           "operation": "temporary.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 3996,
+          "line": 3997,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -91,11 +91,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 4012,
+      "line": 4013,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 4027,
+          "line": 4028,
           "operation": "os.replace",
           "writer_admission_sources": []
         }
@@ -147,11 +147,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 5565,
+      "line": 5566,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 5569,
+          "line": 5570,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -6059,11 +6059,11 @@
       ],
       "file": "storage_policy.py",
       "kind": "function",
-      "line": 205,
+      "line": 221,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 213,
+          "line": 229,
           "operation": "probe.open",
           "writer_admission_sources": [
             "persistent_relay_status"
@@ -6071,7 +6071,7 @@
         },
         {
           "category": "filesystem",
-          "line": 215,
+          "line": 231,
           "operation": "probe.unlink",
           "writer_admission_sources": [
             "persistent_relay_status"
@@ -9333,6 +9333,7 @@
     "storage_utils.py",
     "style_tokens.py",
     "terminal_operation_lease.py",
+    "tk_callback_result.py",
     "tk_serial_ui_lane.py",
     "tools/active_work_probe.py",
     "tools/check_logistics_runtime_profile.py",
@@ -9369,7 +9370,7 @@
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
     "closure_direct_mutation_function_count": 183,
-    "closure_module_count": 123,
+    "closure_module_count": 124,
     "external_process_mutation_site_count": 19,
     "powershell_direct_mutation_site_count": 115,
     "powershell_execution_site_count": 101,
@@ -9410,7 +9411,7 @@
       "argument_ast_sha256": "d8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81",
       "caller": "Container_Audit.ContainerAudit._prepare_tray_state_snapshot",
       "classification": "probe_only",
-      "line": 3996,
+      "line": 3997,
       "probe_only": true,
       "report_only": false,
       "source": "gui_tray_state_save",
@@ -9636,7 +9637,7 @@
       "argument_ast_sha256": "87f9ed34d31694cef448ad430f4bf2d47211409a8649376df30813e5b8d1bd2f",
       "caller": "storage_policy.ensure_container_audit_storage_dirs",
       "classification": "pre_admission_directory_preparation",
-      "line": 352,
+      "line": 368,
       "probe_only": false,
       "report_only": false,
       "source": "",
@@ -9850,6 +9851,7 @@
     "storage_utils.py",
     "style_tokens.py",
     "terminal_operation_lease.py",
+    "tk_callback_result.py",
     "tk_serial_ui_lane.py",
     "tools/active_work_probe.py",
     "tools/check_logistics_runtime_profile.py",
@@ -9931,6 +9933,7 @@
       "storage_utils",
       "style_tokens",
       "terminal_operation_lease",
+      "tk_callback_result",
       "tk_serial_ui_lane",
       "transfer_member_exchange",
       "transfer_seal",
@@ -9968,6 +9971,7 @@
       "scan_display",
       "screen_startup_fallback",
       "storage_policy",
+      "tk_callback_result",
       "warning_presenter",
       "writer_session_fence"
     ],
@@ -10313,6 +10317,7 @@
       "writer_session_fence"
     ],
     "storage_policy": [
+      "runtime_instance_win32",
       "writer_session_fence"
     ],
     "storage_utils": [
@@ -10324,6 +10329,7 @@
       "vendor.kmtech_zero_pe",
       "writer_session_fence"
     ],
+    "tk_callback_result": [],
     "tk_serial_ui_lane": [
       "writer_session_fence"
     ],
@@ -10507,7 +10513,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "97f1668c152da140544895f76588756d6cc79e2e36b2919322b62ee1d606c527",
+  "inventory_sha256": "daced0c577fe56622132a3bb3d07dd968c19fdf7e5437d5c29f21e7da43fb8be",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -22964,6 +22970,7 @@
     "storage_utils.__file_entry__",
     "style_tokens.__file_entry__",
     "terminal_operation_lease.__file_entry__",
+    "tk_callback_result.__file_entry__",
     "tk_serial_ui_lane.__file_entry__",
     "tools.active_work_probe.__file_entry__",
     "tools.check_logistics_runtime_profile.__file_entry__",
@@ -23740,7 +23747,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1549,
+      "line": 1550,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -23748,7 +23755,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 23333,
+      "line": 23341,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -23756,7 +23763,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 5565,
+      "line": 5566,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -23764,7 +23771,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._clear_projected_checkpoint_audits",
-      "line": 4145,
+      "line": 4146,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -23772,7 +23779,7 @@
       "direct_mutation_site_count": 3,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._prepare_tray_state_snapshot",
-      "line": 3994,
+      "line": 3995,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -23780,7 +23787,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._publish_tray_state_snapshot",
-      "line": 4012,
+      "line": 4013,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -23788,7 +23795,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._recover_checkpoint_audit_events",
-      "line": 4113,
+      "line": 4114,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -23796,7 +23803,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot_admitted",
-      "line": 4036,
+      "line": 4037,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -23804,7 +23811,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 4622,
+      "line": 4623,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },
@@ -24092,7 +24099,7 @@
       "direct_mutation_site_count": 2,
       "file": "storage_policy.py",
       "function": "storage_policy.validate_existing_data_root",
-      "line": 205,
+      "line": 221,
       "marker_kind": "writer_admission",
       "source": "persistent_relay_status"
     },

@@ -30,6 +30,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import Container_Audit as ca
 from screen_startup_fallback import ScreenLaunchAttempt, ScreenStartupUnavailable
+from tk_callback_result import invoke_button_callback
 from writer_session_fence import writer_admission
 from scan_display import compact_scan_value
 from warning_presenter import CompletionOutcome, NoticeSeverity
@@ -863,7 +864,7 @@ class CaProcessor:
         widget = _attr(self.app, widget_name)
         if widget is None or _widget_enabled(self.app, widget_name) is False:
             return {"ok": False, "result": {"kind": "warn", "text": "지금은 누를 수 없습니다"}}
-        return self._run_menu_action(widget.invoke)
+        return self._run_menu_action(lambda: invoke_button_callback(widget))
 
     def _menu(self, name: str) -> Dict[str, Any]:
         enabled, command = operations_menu(self.app).get(name, (False, None))

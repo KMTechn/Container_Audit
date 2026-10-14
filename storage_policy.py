@@ -42,16 +42,32 @@ MACHINE_DIRECTORY_ERROR_MESSAGE = (
 )
 
 
+def _canonical_runtime_path(path: Path) -> str:
+    # Path.resolve uses the existing parents' Win32 final paths, including
+    # junction destinations and 8.3 aliases, even when the leaf is absent.
+    value = str(path.resolve(strict=False))
+    if value.lower().startswith("\\\\?\\unc\\"):
+        value = "\\\\" + value[8:]
+    elif value.startswith("\\\\?\\"):
+        value = value[4:]
+    return os.path.normcase(os.path.normpath(value))
+
+
 def _is_machine_runtime_directory(directory: Path, environ: Mapping[str, str]) -> bool:
-    roots = [Path("C:/ProgramData") / DEFAULT_VENDOR_DIR]
+    from runtime_instance_win32 import known_program_data
+    try:
+        known_root = known_program_data()
+    except OSError as error:
+        raise DataRootUnavailableError(MACHINE_DIRECTORY_ERROR_MESSAGE) from error
+    roots = [known_root] if known_root is not None else []
     program_data = str(environ.get("PROGRAMDATA") or "").strip()
-    if program_data:
-        roots.append(Path(program_data) / DEFAULT_VENDOR_DIR)
-    # Compare path components without probing the real machine directory when
-    # the caller is using a separate per-user or test root.
-    candidate = os.path.normcase(os.path.abspath(directory))
+    # An explicit environment mapping can add a resolved deny boundary; it
+    # cannot replace or narrow the authoritative OS known-folder boundary.
+    if program_data and Path(program_data).is_absolute():
+        roots.append(Path(program_data))
+    candidate = _canonical_runtime_path(directory)
     for root in roots:
-        selected = os.path.normcase(os.path.abspath(root))
+        selected = _canonical_runtime_path(root)
         try:
             if os.path.commonpath((candidate, selected)) == selected:
                 return True

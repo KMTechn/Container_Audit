@@ -26,8 +26,13 @@ def test_app_return_is_not_implicitly_success(flow, monkeypatch, route, outcome)
         reply = processor.command("reset", {"id": "confirmed"}) if route == "menu" else processor.command("resend_completion")
     elif route == "button":
         class Button(dict):
-            invoke = action
+            def configure(self, **options):
+                self.update(options)
+            def invoke(self):
+                return self["command"]()
         app.park_button = Button(state=ca.tk.NORMAL)
+        from tk_callback_result import bind_button_callback
+        bind_button_callback(app.park_button, action)
         reply = processor.command("park")
     elif route == "handler":
         processor._cmd_synthetic = action

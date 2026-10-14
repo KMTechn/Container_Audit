@@ -395,11 +395,17 @@ def test_f8_reprint_confirms_the_existing_variable_and_invokes_only_an_enabled_b
     app.phs_label_reprint_confirm_var = SimpleNamespace(set=confirmed.append)
 
     class Button(dict):
+        def configure(self, **options):
+            self.update(options)
         def invoke(self):
-            calls.append(list(confirmed))
-            return True
+            return self["command"]()
 
     app.phs_label_exchange_execute_button = Button(state=ca.tk.NORMAL if enabled else ca.tk.DISABLED)
+    def callback():
+        calls.append(list(confirmed))
+        return True
+    from tk_callback_result import bind_button_callback
+    bind_button_callback(app.phs_label_exchange_execute_button, callback)
     reply = CaProcessor(app).command("f8_reprint")
     assert confirmed == [True] and reply["ok"] is enabled
     assert calls == ([[True]] if enabled else [])

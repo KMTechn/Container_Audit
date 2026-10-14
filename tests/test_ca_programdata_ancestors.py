@@ -167,11 +167,12 @@ def test_prepared_machine_directory_is_used_without_mkdir(fake_machine, monkeypa
     assert prepared.is_dir()
 
 
-def test_machine_guard_does_not_match_a_sibling_name(fake_machine):
+def test_machine_guard_refuses_every_programdata_sibling(fake_machine):
     machine, _ = fake_machine
     sibling = machine.parent / "KMTech-other/data"
-    storage_policy.ensure_user_runtime_directory(sibling)
-    assert sibling.is_dir()
+    with pytest.raises(ValueError, match="MACHINE_RUNTIME_DIRECTORY_NOT_PREPARED"):
+        storage_policy.ensure_user_runtime_directory(sibling)
+    assert not sibling.exists()
     assert not machine.exists()
 
 
@@ -183,3 +184,105 @@ def test_missing_onboarding_machine_profile_is_rejected_before_state_write(fake_
     with pytest.raises(ValueError, match="MACHINE_RUNTIME_DIRECTORY_NOT_PREPARED"):
         onboarding.resolve_current_user_onboarding_paths(tmp_path / "app", environ=environ)
     assert not machine.exists()
+
+
+@pytest.mark.parametrize("target_kind", ["root", "sibling", "explicit_relay"])
+def test_entire_machine_folder_refusal_never_calls_mkdir_or_relay_owner(
+    fake_machine, tmp_path, monkeypatch, target_kind,
+):
+    machine, _ = fake_machine
+    root = machine.parent
+    target = root if target_kind == "root" else root / "OtherProduct/relay"
+    original_mkdir = Path.mkdir
+    def guarded_mkdir(path, *args, **kwargs):
+        if path == root or root in path.parents:
+            pytest.fail("user context attempted machine-directory creation")
+        return original_mkdir(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "mkdir", guarded_mkdir)
+    if target_kind != "explicit_relay":
+        with pytest.raises(ValueError, match="MACHINE_RUNTIME_DIRECTORY_NOT_PREPARED"):
+            storage_policy.ensure_user_runtime_directory(target)
+    else:
+        notices = []
+        monkeypatch.setattr(auto_update, "startup_gate", lambda *_a, **_k: None)
+        import data_generation_guard
+        monkeypatch.setattr(data_generation_guard, "probe_before_owner_paths",
+                            lambda *_a, **_k: pytest.fail("relay owner was reached"))
+        monkeypatch.setattr(user_relay, "_notify_data_root_error", lambda: notices.append(True))
+        assert user_relay.main(["--app-root", str(tmp_path / "app"), "--direct-sync-root",
+                                str(target), "--once"]) == 1
+        assert notices == [True]
+    assert not root.exists()
+
+
+def test_os_known_folder_boundary_survives_spoofed_environment(fake_machine, tmp_path, monkeypatch):
+    import runtime_instance_win32 as native
+    machine, _ = fake_machine
+    monkeypatch.setattr(native, "known_program_data", lambda: machine.parent)
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "spoofed"))
+    with pytest.raises(ValueError, match="MACHINE_RUNTIME_DIRECTORY_NOT_PREPARED"):
+        storage_policy.ensure_user_runtime_directory(machine.parent / "OtherProduct/data")
+    assert not machine.parent.exists()
+
+
+def test_known_folder_lookup_failure_refuses_before_user_mkdir(tmp_path, monkeypatch):
+    import runtime_instance_win32 as native
+    def unavailable():
+        raise OSError("known-folder lookup unavailable")
+    monkeypatch.setattr(native, "known_program_data", unavailable)
+    monkeypatch.setattr(Path, "mkdir", lambda *_a, **_k: pytest.fail("unresolved machine boundary mkdir"))
+    with pytest.raises(ValueError, match="MACHINE_RUNTIME_DIRECTORY_NOT_PREPARED"):
+        storage_policy.ensure_user_runtime_directory(tmp_path / "unprepared")
+
+
+@pytest.mark.parametrize("alias", ["short_name", "junction", "extended_prefix", "case"])
+def test_resolved_machine_aliases_are_refused_before_directory_creation(fake_machine, tmp_path, monkeypatch, alias):
+    machine, _ = fake_machine
+    resolved = machine.parent / "OtherProduct/data"
+    selected = tmp_path / alias / "data"
+    original = Path.resolve
+    def resolve(path, *args, **kwargs):
+        if path == selected:
+            value = str(resolved)
+            if alias == "extended_prefix":
+                value = "\\\\?\\" + value
+            elif alias == "case":
+                value = value.swapcase()
+            return Path(value)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "resolve", resolve)
+    with pytest.raises(ValueError, match="MACHINE_RUNTIME_DIRECTORY_NOT_PREPARED"):
+        storage_policy.ensure_user_runtime_directory(selected)
+    assert not selected.exists() and not machine.parent.exists()
+
+
+def test_prepared_programdata_sibling_is_used_without_mkdir_or_owner_change(fake_machine, monkeypatch):
+    machine, _ = fake_machine
+    prepared = machine.parent / "OtherProduct/relay"
+    prepared.mkdir(parents=True)
+    before = prepared.stat()
+    monkeypatch.setattr(Path, "mkdir", lambda *_a, **_k: pytest.fail("prepared machine directory mkdir"))
+    storage_policy.ensure_user_runtime_directory(prepared)
+    after = prepared.stat()
+    assert (before.st_mode, before.st_uid, before.st_gid) == (after.st_mode, after.st_uid, after.st_gid)
+
+
+def test_known_folder_api_frees_its_result_and_uses_programdata_identifier(tmp_path, monkeypatch):
+    import ctypes
+    import inspect
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from uuid import UUID
+    import runtime_instance_win32 as native
+    buffer = ctypes.create_unicode_buffer(str(tmp_path / "machine"))
+    def resolve(identifier, flags, owner, output):
+        assert ctypes.string_at(identifier, 16) == UUID("62ab5d82-fdc1-4dc3-a9dd-070d1d495d97").bytes_le
+        assert flags == 0 and owner is None
+        ctypes.cast(output, ctypes.POINTER(ctypes.c_void_p))[0] = ctypes.addressof(buffer)
+        return 0
+    free = Mock()
+    shell = SimpleNamespace(SHGetKnownFolderPath=Mock(side_effect=resolve))
+    ole = SimpleNamespace(CoTaskMemFree=free)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda name, **_k: shell if name == "shell32" else ole)
+    assert inspect.unwrap(native.known_program_data)() == tmp_path / "machine"
+    assert free.call_count == 1

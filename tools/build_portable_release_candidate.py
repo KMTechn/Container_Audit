@@ -103,6 +103,7 @@ APP_ROOT_FILES = (
     "runtime_instance.py",
     "runtime_entry.py",
     "runtime_instance_win32.py",
+    "tk_callback_result.py",
     "scan_display.py",
     "session_history.py",
     "storage_policy.py",

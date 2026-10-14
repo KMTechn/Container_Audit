@@ -218,6 +218,7 @@ from session_history import (
     transition_summary_text,
 )
 from style_tokens import StyleProfile, build_style_tokens
+from tk_callback_result import bind_button_callback, wrap_button_callback
 from storage_policy import (
     DATA_ROOT_ENV,
     DataRootUnavailableError,
@@ -6284,6 +6285,8 @@ class ContainerAudit:
     def _configure_widget_options(self, widget, **kwargs) -> None:
         if widget is None:
             return
+        if callable(kwargs.get("command")):
+            kwargs["command"] = wrap_button_callback(widget, kwargs["command"])
         try:
             widget.configure(**kwargs)
             return
@@ -11861,6 +11864,7 @@ class ContainerAudit:
             takefocus=False,
             style='Secondary.TButton',
         )
+        bind_button_callback(self.change_worker_button, self.change_worker)
         self.change_worker_button.pack(fill=tk.X)
 
         current_work_frame = ttk.Frame(top_frame, style='Card.TFrame', padding=12)
@@ -12261,6 +12265,7 @@ class ContainerAudit:
             command=self._execute_selected_phs_label_exchange,
             style="Success.TButton",
         )
+        bind_button_callback(self.phs_label_exchange_execute_button, self._execute_selected_phs_label_exchange)
         self.phs_label_exchange_execute_button.grid(
             row=0, column=4, sticky="e"
         )
@@ -12346,6 +12351,9 @@ class ContainerAudit:
         self.submit_tray_button = ttk.Button(button_frame, text="트레이 제출", command=self.submit_current_tray, style='Success.TButton', width=0)
         self.undo_button = ttk.Button(button_frame, text="마지막 스캔 취소", command=self.undo_last_scan, state=tk.DISABLED, style='Secondary.TButton', width=0)
         self.park_button = ttk.Button(button_frame, text="트레이 보류", command=self.park_current_tray, style='Warning.TButton', width=0)
+        bind_button_callback(self.submit_tray_button, self.submit_current_tray)
+        bind_button_callback(self.undo_button, self.undo_last_scan)
+        bind_button_callback(self.park_button, self.park_current_tray)
         self.operations_button = ttk.Button(button_frame, text="운영 작업 ▾", command=self._show_operations_menu, takefocus=False, style='Secondary.TButton', width=0)
         # Secondary actions are created on demand in the operations menu.
         self._center_action_buttons = [
