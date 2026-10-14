@@ -1173,6 +1173,25 @@ def _can_fall_back(attempt: ScreenLaunchAttempt) -> bool:
         return False  # Unknown cleanup never grants permission to open another UI.
 
 
+def _prepare_screen_backend(module: Any) -> None:
+    """Check native dependencies before starting an owner or creating a form."""
+    from writer_session_fence import WriterFenceError
+    intentional = (WriterFenceError, module.DataGenerationBlocked, module.DataRootUnavailableError)
+    try:
+        import webview
+        from webview.guilib import initialize
+        backend = initialize("edgechromium")
+        if backend.renderer != "edgechromium":
+            raise RuntimeError("WEBVIEW2_UNAVAILABLE")
+        from Microsoft.Web.WebView2.Core import CoreWebView2Environment
+        if not CoreWebView2Environment.GetAvailableBrowserVersionString(webview.settings["WEBVIEW2_RUNTIME_PATH"]):
+            raise RuntimeError("WEBVIEW2_UNAVAILABLE")
+    except intentional:
+        raise
+    except Exception as error:
+        raise ScreenStartupUnavailable("WEBVIEW2_MISSING") from error
+
+
 def screen_runner(module: Any) -> Callable[[List[str]], Any]:
     def run(arguments: List[str]) -> Any:
         shell_dir = str(APP_DIR / "shell")
@@ -1207,6 +1226,7 @@ def screen_runner(module: Any) -> Callable[[List[str]], Any]:
                     host["requested"] = False
                     return module._run_gui_application(arguments)
 
+            _prepare_screen_backend(module)
             with attempt.observe_host(shell_host):
                 result = run_app("rw", data, udf=data / "webview2", root=APP_DIR / "ui", page=PAGE,
                                  title="이적", owner_main=owner_main_for(module, arguments, attempt=attempt),

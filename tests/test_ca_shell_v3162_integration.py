@@ -180,6 +180,7 @@ def test_real_shell_first_failure_retries_web_second_failure_uses_tk(actual_shel
     state.mode = failure
     if failure == "timeout":
         monkeypatch.setattr(state.host, "READY_TIMEOUT_S", 0.05)
+        monkeypatch.setattr(state.host, "FIRST_RUN_READY_TIMEOUT_S", 0.05)
     original = fence.close_and_wait_writers
     observed = []
 

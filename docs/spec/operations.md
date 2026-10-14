@@ -6,7 +6,7 @@
 
 v2.0.108 기본은 web이며 --new-screen·--ui web도 같은 뜻이다. --old-screen·--ui tk는 그 실행만 Tk를 고른다. 모르는 --ui 값은 기본 길이다. M84 진입에는 PID 대기나 자동 재실행이 없다.
 기계 설치의 New-CanonicalMachineShortcut도 앱 폴더\관리용의 「이적 옛 화면 (비상)」 링크를 생성·유지한다. current launcher·작업 폴더·아이콘에 --ui tk를 붙이며 code inventory 밖에 둔다. 소유한 링크만 보상 preimage에 포함하고 다른 파일이 있는 폴더는 건드리거나 recovery journal에 복사하지 않는다. 실제 코드 제거 뒤 machine artifact 제거가 링크와 빈 관리용 폴더도 지우며, 앞 current로 복원한 경우에는 링크를 유지한다. 일반 바로 가기에는 화면 인수가 없어 앱의 web 기본을 따른다.
-웹 생성 뒤 시작 실패는 셸의 쓰기 문 닫음·판 표지·destroy·before_exit·끝 한 길이다. 같은 프로세스 Tk 전환·자동 재실행은 없다. 표지 저장 실패도 끝내고 되풀이하지 않는다. 사람이 다음에 켜면 같은 판 web_allowed=False로 Tk를 연다. before_exit 빔은 writer 허가·mutex가 비고 모든 lane worker 실이 죽은 것(BROKEN 포함)이며 다른 정리는 없다. 120초·5초 확인, False면 끝내기를 미룬다. 셸 import try 실패는 SHELL_IMPORT_FAILED→Tk, 비상 Tk 셸 import0. 생성 전·시작 거절·업무 gate는 유지한다.
+웹 생성 뒤 시작 실패는 셸의 쓰기 문 닫음·판 표지·destroy·before_exit·끝 한 길이다. 같은 프로세스 Tk 전환·자동 재실행은 없다. 표지 저장 실패도 끝내고 되풀이하지 않는다. 일반 첫 실패 뒤 다음 손 실행은 웹을 다시 열고, 같은 판 두 번째 실패나 RUNTIME_MISSING 뒤에는 web_allowed=False로 Tk를 연다. before_exit 빔은 writer 허가·mutex가 비고 모든 lane worker 실이 죽은 것(BROKEN 포함)이며 다른 정리는 없다. 120초·5초 확인, False면 끝내기를 미룬다. 셸 import try 실패는 SHELL_IMPORT_FAILED→Tk, 비상 Tk 셸 import0. 생성 전·시작 거절·업무 gate는 유지한다.
 M86: 셸 OS 실패 안내의 제목은 `title="이적"`이다. mainloop 전 초기화 실패와 lane pump 생성 실패도 기존 owner 정리/close_idle로 worker를 멈춘다. before_exit의 닫힘 표시와 lane 시작은 같은 잠금으로 줄 세워 늦은 시작을 거절한다. 기존 receipt/위임/authority 검증을 통과한 위임·유지보수 허가는 normal 허가 없이 worker 실제 종료만 확인한다. portable 선행 admission의 abandoned 거절도 한 번 더 열기 안내·기존 지원 기록·종료 1을 유지한다. 셸 사본 통합 전 OS 안내 실물은 미검증이다.
 
 단일 실행은 source·portable 진입에서 무거운 import나 시작 gate보다 먼저 기존 data_root Global mutex를 잡는다. 소유자는 사용자 자료 자리의 data_root 해시별 JSON에 PID·실행 파일·프로세스 생성 시각·starting/running/closing을 원자적으로 남기고 끝에 지운다. 이 두 표지 함수만 업무 admission과 분리한 report-only metadata로 선언한다. 두 번째는 PID·실행 파일·생성 시각이 모두 맞는 표지만 믿고 그 PID의 보이는 최상위 창을 앞으로 가져온다(웹 우선). 최소화는 복원하고 전경 거절은 작업 표시줄을 깜박인다. 창이 없으면 상태별 안내 하나가 5초 뒤 닫히며 rc0이다. 두 번째 길에는 Tk·셸·업무 core import가 없다. 실제 OS 창 동작은 현장 확인 범위다.
@@ -1691,3 +1691,5 @@ Rollback continuation의 기록된 owner PID가 현재 프로세스에 있어도
 원 authority(버려진 mutex 포함), audit의 자식 PID·생성 시각과 같은 run ID의 살아 있는 프로세스 0을 먼저 확인한다. PID 미기록도 run ID 프로세스가 0이면 복구하며, 살아 있는 자식/손자·관측 실패는 담장과 원본을 유지한다. 명령줄 출력·부팅 시각 사용·대기 반복은 없다. 담장을 직접 지우거나 자식을 종료하지 않는다. audit를 모르면 active fence의 replacement_transaction_id로 install-audit/canonical-portable-<run>.json을 찾는다([지원 입구](admin-installation.md#기계-배치-실패의-지원-재개)).
 
 셸 v3.16.3 수동 복구(M121): 일반 웹 시작 실패 첫 회에는 다음 수동 실행도 웹, 같은 판 두 번째 실패에는 다음 수동 실행이 Tk다. RUNTIME_MISSING이면 다음 수동 실행부터 Tk다. 앱은 web_allowed와 before_exit에 위임하며 표지를 따로 해석하거나 다시 띄우지 않는다. 이는 옛 M84 S1①의 첫 실패 뒤 Tk 기대를 대체한다.
+
+이적 native 준비 확인은 web_allowed=True 뒤 run_app 앞에서 edgechromium backend와 WebView2 runtime만 읽는다. 이 준비 실패만 창/owner 생성 전 Tk로 복구하며 셸 표지를 만들지 않는다. 설치·자료·writer admission 거부는 그대로 전파한다. run_app에는 셸 기본값과 같은 data/webview2를 udf로 명시하며 EBWebView가 없으면 실제 watchdog 90초, 있으면 30초다.
