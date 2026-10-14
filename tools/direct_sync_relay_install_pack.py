@@ -39,6 +39,7 @@ from storage_policy import (  # noqa: E402
     is_legacy_syncthing_path,
 )
 from tools import register_container_audit_worker_pc as worker_pc_registration  # noqa: E402
+from storage_policy import ensure_user_runtime_directory
 
 
 DEFAULT_TASK_NAME = "direct-sync-relay-container-audit"
@@ -300,14 +301,14 @@ def _write_scheduled_task_wrapper(
     runtime_temp_dir: str | os.PathLike[str] | None = None,
     launcher_status_path: str | os.PathLike[str] | None = None,
 ) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(path.parent)
     working_path = Path(working_directory or path.parent).expanduser().resolve()
     temp_dir = Path(runtime_temp_dir or (path.parent / "temp")).expanduser().resolve()
     status_path = Path(
         launcher_status_path or path.with_name(f"{path.stem}.launcher.log")
     ).expanduser().resolve()
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    status_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(temp_dir)
+    ensure_user_runtime_directory(status_path.parent)
     command = _quote_cmd(runner_parts)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     task_environment = {
@@ -389,7 +390,7 @@ def _write_json(path: Path, payload: dict) -> None:
     # This plan is a diagnostic sink, not an authenticated product record.
     # Apply the existing whole-field credential rule before atomic publication.
     encoded = serialize_json_for_sink(mixed_status_record(payload))
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(path.parent)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
         with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
@@ -580,9 +581,16 @@ def _apply_task_runtime_acl(plan: dict) -> dict:
             "command_results": [],
         }
     paths = [str(path) for path in plan.get("paths") or []]
+    from storage_policy import require_prepared_machine_directory
+    try:
+        for path in paths:
+            require_prepared_machine_directory(path)
+    except ValueError as exc:
+        return {"status": "FAIL", "blocked_reason": str(exc),
+                "created_paths": [], "command_results": []}
     created_paths: list[str] = []
     for path in paths:
-        Path(path).mkdir(parents=True, exist_ok=True)
+        ensure_user_runtime_directory(Path(path))
         created_paths.append(path)
     if not plan.get("enabled"):
         return {

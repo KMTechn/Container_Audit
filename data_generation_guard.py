@@ -440,8 +440,9 @@ def record_before_data_open(data_root, *, probe_only=False):
             raise DataGenerationBlocked(decision)
         if probe_only:
             return decision
+        from storage_policy import ensure_user_runtime_directory
         for path in paths:
-            path.parent.mkdir(parents=True, exist_ok=True)
+            ensure_user_runtime_directory(path.parent)
             generation.record_generation(path, app_id="container_audit", subject_sid=sid, **release)
         return decision
     except DataGenerationBlocked:

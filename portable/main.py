@@ -18,6 +18,7 @@ if str(SITE_PACKAGES) not in sys.path:
     sys.path.insert(1, str(SITE_PACKAGES))
 
 from writer_session_fence import WriterFenceError, writer_sink  # noqa: E402
+from storage_policy import ensure_user_runtime_directory
 
 
 @writer_sink("portable_smoke_marker")
@@ -57,7 +58,7 @@ def _portable_smoke() -> int:
         "forbidden_modules_loaded": loaded,
     }
     marker = Path(marker_text).expanduser().resolve()
-    marker.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(marker.parent)
     marker.write_text(
         json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

@@ -16,6 +16,7 @@ import uuid
 
 from storage_policy import path_is_within
 from writer_session_fence import writer_sink
+from storage_policy import ensure_user_runtime_directory
 
 
 DEFAULT_TASK_NAME = "direct-sync-relay-container-audit"
@@ -45,7 +46,7 @@ def _now() -> str:
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     from auto_update import mixed_status_record, serialize_mixed_status_record
     safe_text = serialize_mixed_status_record(mixed_status_record(payload))
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(path.parent)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         with temporary.open("w", encoding="utf-8", newline="\n") as handle:
@@ -95,6 +96,8 @@ def assert_runtime_state_outside_code_root(
         resolved = candidate.resolve(strict=False)
         if path_is_within(resolved, code_root) or path_is_within(code_root, resolved):
             raise ValueError("DirectSync runtime state must be disjoint from the code root")
+        from storage_policy import require_prepared_machine_directory
+        require_prepared_machine_directory(resolved)
 
 
 def build_session_direct_sync_command(

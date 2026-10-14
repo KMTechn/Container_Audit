@@ -13,6 +13,7 @@ from typing import Iterator, Sequence
 import uuid
 
 from writer_session_fence import writer_sink
+from storage_policy import ensure_user_runtime_directory
 
 DIRECT_SYNC_RELAY_MODE = "--container-audit-direct-sync-relay"
 USER_RELAY_MODE = "--container-audit-user-relay"
@@ -48,7 +49,7 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
     from auto_update import assert_machine_metadata_no_secrets
     encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     assert_machine_metadata_no_secrets(encoded)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(path.parent)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
         with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
@@ -66,7 +67,7 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
 
 @writer_sink("hosted_relay_jsonl")
 def _append_jsonl(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(path.parent)
     with path.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         handle.write("\n")

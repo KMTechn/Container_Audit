@@ -27,6 +27,7 @@ from storage_policy import (
 )
 from writer_session_fence import WriterFenceError, writer_admission, writer_sink
 from kmtech_shared import data_generation as generation
+from storage_policy import ensure_user_runtime_directory
 
 
 USER_RELAY_MODE = "--container-audit-user-relay"
@@ -53,7 +54,7 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     from auto_update import assert_machine_metadata_no_secrets
     encoded = json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     assert_machine_metadata_no_secrets(encoded)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(path.parent)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         with temporary.open("w", encoding="utf-8", newline="\n") as handle:
@@ -830,6 +831,13 @@ def main(argv: list[str] | None = None) -> int:
     from logistics_runtime_profile import resolve_logistics_profile_path
     direct_sync_root = resolve_owner_path(args.direct_sync_root) if args.direct_sync_root else storage.direct_sync_root
     scan_source_dir = resolve_owner_path(args.scan_source_dir) if args.scan_source_dir else storage.events_dir
+    from storage_policy import DataRootUnavailableError, require_prepared_machine_directory
+    try:
+        for directory in (direct_sync_root, scan_source_dir):
+            require_prepared_machine_directory(directory)
+    except DataRootUnavailableError as exc:
+        print(str(exc), file=sys.stderr)
+        return _data_root_unavailable(args.request_app_stop)
     if args.request_app_stop:
         try:
             if custom_root:
@@ -880,9 +888,13 @@ def main(argv: list[str] | None = None) -> int:
                 direct_sync_root=direct_sync_root,
                 scan_source_dir=scan_source_dir,
             )
-            direct_sync_root.mkdir(parents=True, exist_ok=True)
-            scan_source_dir.mkdir(parents=True, exist_ok=True)
-    except (OSError, ValueError):
+            ensure_user_runtime_directory(direct_sync_root)
+            ensure_user_runtime_directory(scan_source_dir)
+    except (OSError, ValueError) as exc:
+        from storage_policy import DataRootUnavailableError
+        if isinstance(exc, DataRootUnavailableError):
+            print(str(exc), file=sys.stderr)
+            return _data_root_unavailable(args.request_app_stop)
         if not custom_root:
             raise
         _notify_data_root_error()

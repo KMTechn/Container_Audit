@@ -29,6 +29,7 @@ from direct_sync_runtime import (  # noqa: E402
 )
 from writer_session_fence import writer_sink  # noqa: E402
 from data_generation_guard import DataGenerationBlocked, probe_before_owner_paths, record_before_owner_paths  # noqa: E402
+from storage_policy import ensure_user_runtime_directory
 
 
 ALLOWED_SOURCE_PREFIX = "이적작업이벤트로그_"
@@ -104,7 +105,7 @@ def _file_prefix_sha256(path: Path, byte_count: int) -> str:
 @writer_sink("raw_relay_storage")
 def _scan_state_connect(db_path: str | Path) -> sqlite3.Connection:
     target = Path(db_path)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(target.parent)
     conn = sqlite3.connect(str(target))
     conn.row_factory = sqlite3.Row
     conn.execute(
@@ -644,7 +645,7 @@ def _build_delta_source_file(config: DirectSyncRuntimeConfig, source_file: Path)
         / _source_delta_key(source_file)
         / f"bytes-{start_byte}-{end_byte}-sha256-{delta_hash[:16]}.csv"
     )
-    delta_source.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(delta_source.parent)
     delta_source.write_bytes(delta_content)
     return delta_source, _delta_relative_path(source_file, start_byte, end_byte, delta_hash), end_byte, sent_prefix_sha256
 

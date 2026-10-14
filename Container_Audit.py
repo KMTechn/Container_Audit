@@ -318,6 +318,7 @@ from warning_presenter import (
     WarningPresenter,
     notice_for_completion,
 )
+from storage_policy import ensure_user_runtime_directory
 
 
 FACTORY_CONTRACT_APP_ID = "container_audit"
@@ -3980,7 +3981,7 @@ class ContainerAudit:
     @writer_sink("gui_tray_state_save", probe_only=True)
     def _prepare_tray_state_snapshot(self, path: Path, state: Dict[str, Any]) -> Path:
         serialized = json.dumps(state, indent=4)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_user_runtime_directory(path.parent)
         temporary = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         try:
             with temporary.open("w", encoding="utf-8") as handle:

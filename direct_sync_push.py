@@ -45,6 +45,7 @@ from producer_runtime_client import (
     scrub_terminal_runtime_metadata,
 )
 from writer_session_fence import _WRITER_LOCAL, writer_admission, writer_sink
+from storage_policy import ensure_user_runtime_directory
 
 
 CONTRACT_VERSION = "producer-ingest-source-file-v1"
@@ -870,7 +871,7 @@ def restore_raw_artifact_to_file(
     byte_count = 0
     try:
         with writer_admission("relay_spool_storage"):
-            destination.parent.mkdir(parents=True, exist_ok=True)
+            ensure_user_runtime_directory(destination.parent)
             # Unbuffered writes keep close() from flushing outside admission.
             handle = temp_path.open("wb", buffering=0)
         with handle:
@@ -950,7 +951,7 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     payload = mixed_status_record(payload)
     encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     assert_machine_metadata_no_secrets(encoded)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(path.parent)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
         with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
@@ -971,7 +972,7 @@ def _prepare_status_temp(path: Path, payload: Mapping[str, Any]) -> Path:
     from auto_update import assert_machine_metadata_no_secrets, mixed_status_record
     encoded = json.dumps(mixed_status_record(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     assert_machine_metadata_no_secrets(encoded)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(path.parent)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
         with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
@@ -1611,7 +1612,7 @@ def _execute_with_busy_retry(
 
 @writer_sink("relay_spool_storage")
 def _connect_relay_db(db_path: str | os.PathLike[str]) -> sqlite3.Connection:
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(Path(db_path).parent)
     conn = sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
     conn.row_factory = sqlite3.Row
     conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
@@ -2043,7 +2044,7 @@ def acked_relay_retention_candidates(
 
 @writer_sink("relay_spool_storage")
 def _copy_file_atomic(source: Path, destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(destination.parent)
     temp_path = destination.with_name(f"{destination.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
         with source.open("rb") as src, temp_path.open("wb") as dst:

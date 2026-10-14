@@ -60,6 +60,7 @@ from vendor.kmtech_zero_pe import (
     PersistentPossessionKey,
     SCOPE_CURRENT_USER,
 )
+from storage_policy import ensure_user_runtime_directory
 
 DEFAULT_SERVER_BASE_URL = "https://worker.kmtecherp.com"
 DEFAULT_ENDPOINT_PATH = "/api/producer-ingest/v1/source-file"
@@ -243,6 +244,9 @@ def resolve_current_user_onboarding_paths(
         logistics_profile,
         bootstrap_tls_ca_bundle,
     )
+    from storage_policy import require_prepared_machine_directory
+    for directory in (logistics_profile.parent, bootstrap_tls_ca_bundle.parent):
+        require_prepared_machine_directory(directory, environ=values)
     if any(
         path_is_within(candidate, selected_app_root)
         or path_is_within(selected_app_root, candidate)
@@ -427,7 +431,7 @@ def _atomic_report_reference(path: Path, expected: bytes) -> dict[str, str]:
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> dict[str, str]:
     from auto_update import serialize_machine_metadata
     safe_text = serialize_machine_metadata(payload)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(path.parent)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         with temporary.open("w", encoding="utf-8", newline="\n") as handle:
@@ -447,7 +451,7 @@ def _write_json_atomic_create_new(path: Path, payload: Mapping[str, Any]) -> dic
 
     from auto_update import serialize_machine_metadata
     safe_text = serialize_machine_metadata(payload)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(path.parent)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         with temporary.open("x", encoding="utf-8", newline="\n") as handle:
@@ -2154,7 +2158,7 @@ def onboard_current_user(
                 paths.queue_dir, paths.spool_dir, paths.status_dir, paths.logs_dir,
                 paths.logistics_profile_path.parent,
             ):
-                directory.mkdir(parents=True, exist_ok=True)
+                ensure_user_runtime_directory(directory)
             state = inspect_current_user_state(
                 paths,
                 profile_loader=profile_loader,
@@ -2364,7 +2368,7 @@ def remove_current_user_setup(
             exc.user_message, report_path=paths.removal_report_path, status="FAILED",
         ) from exc
     with writer_admission("current_user_setup_removal"):
-        status_dir.mkdir(parents=True, exist_ok=True)
+        ensure_user_runtime_directory(status_dir)
     report: dict[str, Any] = {
         "report_version": REMOVAL_REPORT_VERSION,
         "status": "UNKNOWN",

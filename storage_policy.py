@@ -37,6 +37,51 @@ class DataRootUnavailableError(ValueError):
     """The selected dataset cannot be safely reopened."""
 
 
+MACHINE_DIRECTORY_ERROR_MESSAGE = (
+    "MACHINE_RUNTIME_DIRECTORY_NOT_PREPARED: 기계 폴더가 준비되지 않았습니다. "
+    "관리자 설치를 먼저 완료한 뒤 다시 여세요."
+)
+
+
+def _is_machine_runtime_directory(directory: Path, environ: Mapping[str, str]) -> bool:
+    roots = [Path("C:/ProgramData") / DEFAULT_VENDOR_DIR]
+    program_data = str(environ.get("PROGRAMDATA") or "").strip()
+    if program_data:
+        roots.append(Path(program_data) / DEFAULT_VENDOR_DIR)
+    # Compare path components without probing the real machine directory when
+    # the caller is using a separate per-user or test root.
+    candidate = os.path.normcase(os.path.abspath(directory))
+    for root in roots:
+        selected = os.path.normcase(os.path.abspath(root))
+        try:
+            if os.path.commonpath((candidate, selected)) == selected:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def require_prepared_machine_directory(
+    directory: Path | str, *, environ: Mapping[str, str] | None = None,
+) -> None:
+    """Machine directories and their ACLs belong to the elevated installer."""
+    values = os.environ if environ is None else environ
+    path = Path(directory)
+    if _is_machine_runtime_directory(path, values) and not path.is_dir():
+        raise DataRootUnavailableError(MACHINE_DIRECTORY_ERROR_MESSAGE)
+
+
+def ensure_user_runtime_directory(
+    directory: Path | str, *, environ: Mapping[str, str] | None = None,
+) -> None:
+    values = os.environ if environ is None else environ
+    path = Path(directory)
+    if _is_machine_runtime_directory(path, values):
+        require_prepared_machine_directory(path, environ=values)
+        return
+    path.mkdir(parents=True, exist_ok=True)
+
+
 @dataclass(frozen=True)
 class ContainerAuditStoragePaths:
     data_root: Path
@@ -255,6 +300,11 @@ def build_container_audit_storage_paths(
             )
     status_dir = direct_sync_root / "status"
 
+    # Before any owner-state admission can create a directory, refuse missing
+    # machine roots. Existing directories retain the installer's owner and ACL.
+    for directory in (root, direct_sync_root):
+        require_prepared_machine_directory(directory, environ=values)
+
     if persisted:
         try:
             with os.scandir(root) as entries:
@@ -299,4 +349,4 @@ def ensure_container_audit_storage_dirs(paths: ContainerAuditStoragePaths) -> No
         paths.status_dir,
         paths.logs_dir,
     ):
-        directory.mkdir(parents=True, exist_ok=True)
+        ensure_user_runtime_directory(directory)

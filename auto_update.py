@@ -25,6 +25,7 @@ if __name__ == "__main__":
 
 from writer_session_fence import WriterFencedError, writer_sink, _assert_no_reparse_components
 from producer_runtime_client import DEFAULT_PRODUCER_USER_AGENT
+from storage_policy import ensure_user_runtime_directory
 
 
 SCHEMA = "container-audit-startup-update-v1"
@@ -2328,7 +2329,7 @@ def prepare_feed_packet(app_root: Path) -> dict[str, Any]:
 @writer_sink("auto_update_control")
 def create_download_stage(path: Path) -> None:
     _assert_no_reparse_components(path)
-    path.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(path)
 
 
 @writer_sink("auto_update_control", probe_only=True)

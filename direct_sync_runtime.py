@@ -51,6 +51,7 @@ from direct_sync_operator import read_operator_pause
 from producer_runtime_client import ensure_runtime_authority
 from storage_policy import current_user_data_home, is_legacy_syncthing_path
 from writer_session_fence import writer_admission, writer_sink
+from storage_policy import ensure_user_runtime_directory
 
 
 DEFAULT_WORKER_ID = "direct-sync-relay-container-audit"
@@ -195,7 +196,7 @@ def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any])
     encoded = json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     assert_machine_metadata_no_secrets(encoded)
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(target.parent)
     temp_path = target.with_name(f"{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
         with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
@@ -216,7 +217,7 @@ def _append_jsonl(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> N
     from auto_update import support_record
     payload = support_record(payload, stage='relay_runtime')
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(target.parent)
     with target.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(dict(payload), ensure_ascii=False, sort_keys=True))
         handle.write("\n")
@@ -618,7 +619,7 @@ def _disk_pressure_report(config: DirectSyncRuntimeConfig) -> dict[str, Any]:
     spool_dir = Path(config.spool_dir)
     min_free = max(0, int(config.min_free_bytes or 0))
     try:
-        spool_dir.mkdir(parents=True, exist_ok=True)
+        ensure_user_runtime_directory(spool_dir)
         usage = shutil.disk_usage(spool_dir)
     except OSError as exc:
         return {

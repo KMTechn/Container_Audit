@@ -29,6 +29,7 @@ from direct_sync_push import (
     restore_raw_artifact_to_file,
     utc_now_text,
 )
+from storage_policy import ensure_user_runtime_directory
 
 
 PAUSE_SCHEMA_VERSION = "direct-sync-relay-operator-pause-v1"
@@ -71,7 +72,7 @@ def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any])
     encoded = json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     assert_machine_metadata_no_secrets(encoded)
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(target.parent)
     temp_path = target.with_name(f"{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(encoded)
@@ -83,7 +84,7 @@ def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any])
 @writer_sink("operator_evidence")
 def _append_jsonl(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(target.parent)
     with target.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(dict(payload), ensure_ascii=False, sort_keys=True))
         handle.write("\n")

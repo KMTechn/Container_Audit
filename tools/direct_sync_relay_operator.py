@@ -28,6 +28,7 @@ from direct_sync_operator import (  # noqa: E402
     retry_dead_relay_batch,
 )
 from direct_sync_runtime import load_credentials_from_json, prepare_credential_config  # noqa: E402
+from storage_policy import ensure_user_runtime_directory
 
 
 @writer_sink("relay_operator_report")
@@ -36,7 +37,7 @@ def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any])
     encoded = json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     assert_machine_metadata_no_secrets(encoded)
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    ensure_user_runtime_directory(target.parent)
     temp_path = target.with_name(f"{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(encoded)
