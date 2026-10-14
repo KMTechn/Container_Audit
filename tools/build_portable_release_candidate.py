@@ -199,7 +199,7 @@ THIRD_PARTY_EXCLUDED_PATHS = frozenset({
     "webview/lib/runtimes/win-arm64/native/WebView2Loader.dll",
     "webview/lib/runtimes/win-x86/native/WebView2Loader.dll",
 })
-SHELL_BRIDGE_SOURCE_COMMIT = "94778c1719960966477664032ed6ae3869944c78"
+SHELL_BRIDGE_SOURCE_COMMIT = "94ef0f4f873cd7d9db5cbc898420aaed71eda7ce"
 FORBIDDEN_PACKAGE_NAMES = frozenset(
     {"PIL", "charset_normalizer", "cryptography", "pygame"}
 )
@@ -582,10 +582,10 @@ def _assert_screen_bundle(repo_root: Path, app_root: Path) -> dict[str, object]:
     ready_path = "shell/SHELL-READY-v3.16.json"
     ready_bytes = (app_root / ready_path).read_bytes()
     if hashlib.sha256(ready_bytes).hexdigest() != SHELL_KIT_READY_SHA256:
-        raise PortableBuildError("packet shell READY differs from the v3.16 pin")
+        raise PortableBuildError("packet shell READY differs from the v3.16.2 pin")
     ready = json.loads(ready_bytes)
     if ready.get("version") != SHELL_KIT_READY_VERSION:
-        raise PortableBuildError("packet shell version differs from the v3.16 pin")
+        raise PortableBuildError("packet shell version differs from the v3.16.2 pin")
     committed = _git_bytes(repo_root, "ls-tree", "-r", "--name-only", SHELL_BRIDGE_SOURCE_COMMIT, "--", "shell").decode().splitlines()
     expected = {row["path"] for row in ready["files"]} | {ready_path}
     actual = {path.relative_to(app_root).as_posix() for path in (app_root / "shell").rglob("*") if path.is_file()}
