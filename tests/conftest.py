@@ -1,5 +1,6 @@
 import functools
 import builtins
+import ctypes
 import importlib
 import hashlib
 import json
@@ -172,6 +173,42 @@ def native_e_path(request, tmp_path):
     import tempfile
     with tempfile.TemporaryDirectory(prefix="native-", dir=root) as temporary:
         yield Path(temporary)
+
+
+@pytest.fixture(autouse=True)
+def native_window_calls(monkeypatch):
+    """Record application window requests; native window actions always fail closed."""
+    import runtime_instance_win32 as native
+    records = []
+    returns = {"visible_top_level_windows": [], "activate_window": None,
+               "timed_notice": None, "position_window_absolute": None,
+               "window_work_area": None, "restore_capture_window": False,
+               "invoke_capture_window_api": False}
+    for name, value in returns.items():
+        original = getattr(native, name)
+        def record(*args, _name=name, _value=value, **kwargs):
+            records.append((_name, args, kwargs))
+            return list(_value) if isinstance(_value, list) else _value
+        monkeypatch.setattr(native, name, functools.wraps(original)(record))
+
+    blocked = {"MessageBoxTimeoutW", "MessageBoxW", "MessageBoxA", "SetForegroundWindow",
+               "FlashWindowEx", "ShowWindow", "SetWindowPos", "SetFocus", "BringWindowToTop"}
+    class ForbiddenWindowCall:
+        def __call__(self, *args, **kwargs):
+            raise AssertionError("real user32 window action escaped the native test seam")
+    class GuardedUser32:
+        def __init__(self, library):
+            self.library = library
+        def __getattr__(self, name):
+            return ForbiddenWindowCall() if name in blocked else getattr(self.library, name)
+    original_dll = ctypes.WinDLL
+    def guarded_dll(name, *args, **kwargs):
+        library = original_dll(name, *args, **kwargs)
+        leaf = Path(str(name)).name.casefold()
+        return GuardedUser32(library) if leaf in {"user32", "user32.dll"} else library
+    monkeypatch.setattr(ctypes, "WinDLL", guarded_dll)
+    monkeypatch.setattr(ctypes.windll, "user32", GuardedUser32(ctypes.windll.user32))
+    return records
 
 
 @pytest.fixture(autouse=True)

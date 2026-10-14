@@ -8,7 +8,7 @@ import Container_Audit as ca
 from ca_screen_bridge import CaProcessor
 from tk_callback_result import bind_button_callback
 
-pytestmark = pytest.mark.real_gui
+pytestmark = [pytest.mark.real_gui, pytest.mark.iwrun_real_window("Tk.withdraw")]
 
 
 @pytest.fixture(scope="module")

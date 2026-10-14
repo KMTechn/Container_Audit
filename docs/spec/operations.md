@@ -8,13 +8,14 @@ M86: 셸 OS 실패 안내의 제목은 `title="이적"`이다. mainloop 전 초�
 
 단일 실행은 source·portable 진입에서 무거운 import나 시작 gate보다 먼저 기존 data_root Global mutex를 잡는다. 소유자는 사용자 자료 자리의 data_root 해시별 JSON에 PID·실행 파일·프로세스 생성 시각·starting/running/closing을 원자적으로 남기고 끝에 지운다. 이 두 표지 함수만 업무 admission과 분리한 report-only metadata로 선언한다. 두 번째는 PID·실행 파일·생성 시각이 모두 맞는 표지만 믿고 그 PID의 보이는 최상위 창을 앞으로 가져온다(웹 우선). 최소화는 복원하고 전경 거절은 작업 표시줄을 깜박인다. 창이 없으면 상태별 안내 하나가 5초 뒤 닫히며 rc0이다. 두 번째 길에는 Tk·셸·업무 core import가 없다. 실제 OS 창 동작은 현장 확인 범위다.
 표지 PID의 실제 실행 파일은 JSON 값 대신 두 번째 프로세스 자신의 실제 실행 파일과 대조한다. 같은 앱 실행 파일을 사용하는 서로 다른 프로세스의 data_root/mutex 소유권까지는 이 검사만으로 구분하지 못한다.
+ctypes의 창 활성화·안내·위치 보정은 runtime_instance_win32 한 모듈을 거친다. 호스트 시험은 autouse 기록 대역과 user32 호출 거절 막이를 함께 쓰며, 실제 전경·초점 동작은 A9 회차 몫이다. 수동 현장 qualification의 pywin32 driver는 호스트에서 실행하지 않는다.
 
 비상 바로 가기는 InstallRoot(current)의 부모인 앱 폴더의 `관리용\이적 옛 화면 (비상).lnk`에 둔다. 기존 작업자 바로 가기와 대상·작업 폴더·아이콘이 같고 인수는 `--ui tk`이다. 설치·재설치·업데이트의 기존 바로 가기 흐름에서 생성 또는 readback 확인하며, 제거 때 소유 링크와 빈 관리용 폴더만 지운다. 같은 이름의 남의 링크나 다른 파일이 있는 관리용 폴더는 손대지 않고 경고 한 줄을 남긴다. current의 코드 목록·무결성 범위와 예외 규칙은 바뀌지 않는다.
 
 업무·사용자 relay·업데이트 내려받기의 기본 자료 자리는 LOCALAPPDATA다. 사용자 실행은 ProgramData 전체(뿌리·KMTech·다른 형제·명시 relay 경로)에 디렉터리나 조상을 만들지 않는다. OS known folder를 기준으로 기존 부모의 최종 경로를 해석해 대소문자·8.3·정션·확장 경로 접두사를 정규화한다. 환경 매핑은 해석된 거절 경계를 더할 수 있을 뿐 OS 경계를 좁히지 않는다. 필요한 디렉터리가 없거나 known folder를 확인하지 못하면 `MACHINE_RUNTIME_DIRECTORY_NOT_PREPARED`와 관리자 설치를 먼저 완료하라는 안내로 거절한다. 기계 설치기가 owner·ACL을 정해 준비한 디렉터리는 mkdir·owner·ACL 변경 없이 사용한다. 이미 잘못된 owner·ACL의 회복은 이 거절 길이 맡지 않으며 기존 설치 보호 검사는 유지한다.
 
 
-현재 사본은 승인된 검사 `2371be9d`의 v3.16.2이며 19파일과 READY의 바이트를 대조한다. 어댑터는 `web_allowed`에도 쓰기 guard를 명시하며 셸의 private FileIO가 각 쓰기에 같은 허가를 얻는다. 실제 셸 코드의 시작 실패·수동 재시작·worker 종료 대기는 창과 OS 경계만 대체해 시험한다. 실제 창 하나·설치·현장 확인은 별도다. 최종 UI 97efc8e7을 적용했다. v2.0.106은 writer inventory 검사 실패로 소모했고 v2.0.107을 한 번 빌드한다. 실패 뒤 같은 번호로 다시 빌드하지 않는다.
+현재 사본은 승인된 검사 `2371be9d`의 v3.16.2이며 19파일과 READY의 바이트를 대조한다. 어댑터는 `web_allowed`에도 쓰기 guard를 명시하며 셸의 private FileIO가 각 쓰기에 같은 허가를 얻는다. 실제 셸 코드의 시작 실패·수동 재시작·worker 종료 대기는 창과 OS 경계만 대체해 시험한다. 실제 창 하나·설치·현장 확인은 별도다. 최종 UI 97efc8e7을 적용했다. v2.0.106은 writer inventory 검사 실패로 소모했고 v2.0.107은 한 번 빌드해 수용되었다. v2.0.108은 A9 결과와 별도 지시 전까지 빌드하지 않는다. 실패 뒤 같은 번호로 다시 빌드하지 않는다.
 
 디렉터리 준비 helper는 바탕 b82의 mkdir 33자리를 그대로 대신한다. inventory는 helper의 디렉터리 전용 AST와 정확한 호출자·인수·admission/probe 분류를 검증하고 각 준비 효과를 호출자에게 돌린다. 부트스트랩 전 준비 1자리는 새 writer admission 없이 유지하며 업무 파일 쓰기에는 이 분류를 적용하지 않는다. release의 실제 writer inventory 검사를 빌드 전에 별도로 통과시킨다.
 

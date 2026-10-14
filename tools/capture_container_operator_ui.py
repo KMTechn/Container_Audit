@@ -4,6 +4,7 @@ import argparse
 import ast
 import base64
 import ctypes
+import runtime_instance_win32 as instance_native
 import datetime as dt
 import functools
 import hashlib
@@ -2162,7 +2163,7 @@ def _attempt_foreground_acquisition(
     try:
         # ShowWindow reports the window's *previous* visibility, not success.
         show_window["previously_visible"] = bool(
-            user32.ShowWindow(int(target_hwnd), SW_RESTORE)
+            instance_native.restore_capture_window(int(target_hwnd), user32)
         )
         show_window["call_completed"] = True
     except Exception as exc:
@@ -2174,7 +2175,7 @@ def _attempt_foreground_acquisition(
         ("SetForegroundWindow", (int(target_hwnd),)),
     ):
         try:
-            api_results[name] = bool(getattr(user32, name)(*args))
+            api_results[name] = instance_native.invoke_capture_window_api(user32, name, *args)
         except Exception as exc:
             api_results[name] = False
             api_errors[name] = f"{type(exc).__name__}: {exc}"

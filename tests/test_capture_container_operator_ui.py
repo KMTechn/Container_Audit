@@ -4,6 +4,7 @@ import argparse
 import copy
 import hashlib
 import io
+import inspect
 import json
 import os
 import re
@@ -16,6 +17,15 @@ import pytest
 from PIL import Image
 from scan_display import compact_scan_value, format_scan_list_row
 import tools.capture_container_operator_ui as capture_tool
+import runtime_instance_win32 as instance_native
+
+
+@pytest.fixture(autouse=True)
+def fake_capture_native_boundary(request, monkeypatch, native_window_calls):
+    # These named unit tests supply a fake user32 object. The real DLL guard remains.
+    if request.node.name.startswith("test_win32_foreground_"):
+        for name in ("restore_capture_window", "invoke_capture_window_api"):
+            monkeypatch.setattr(instance_native, name, inspect.unwrap(getattr(instance_native, name)))
 
 from tools.capture_container_operator_ui import (
     CAPTURE_EXACT_SIX_PHS2,

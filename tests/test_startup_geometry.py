@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ctypes
+import inspect
+import runtime_instance_win32 as instance_native
 from ctypes import wintypes
 from types import SimpleNamespace
 
@@ -67,6 +69,9 @@ class GeometryConfigured(Exception):
 
 
 class StartupRoot(FakeRoot):
+    def bind(self, *_args, **_kwargs):
+        pass
+
     def __init__(self, *, zoom_supported=True):
         super().__init__()
         self.minimum = (1, 1)
@@ -160,6 +165,7 @@ def test_explicit_startup_geometry_bypasses_ordinary_work_area_fit(monkeypatch):
 
 
 def test_work_area_reader_uses_root_window_and_monitor_work_rect(monkeypatch):
+    monkeypatch.setattr(instance_native, "window_work_area", inspect.unwrap(instance_native.window_work_area))
     child, wrapper, monitor = 0x100000001, 0x100000002, 0x100000003
     monkeypatch.setattr(container_audit_module, "os", SimpleNamespace(name="nt"))
 

@@ -2,6 +2,7 @@
 import ctypes
 from ctypes import wintypes
 import json
+import inspect
 import os
 from pathlib import Path
 import subprocess
@@ -167,7 +168,7 @@ def test_native_window_enumeration_uses_pid_visibility_and_class_without_titles(
         IsWindowVisible=_Function(lambda hwnd: hwnd != 13),
         GetClassNameW=_Function(window_class))
     monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **kw: api)
-    assert native.visible_top_level_windows(123) == [(11, "tk"), (14, "web"), (15, "other")]
+    assert inspect.unwrap(native.visible_top_level_windows)(123) == [(11, "tk"), (14, "web"), (15, "other")]
 
 
 @pytest.mark.parametrize("live", [True, False])
@@ -197,7 +198,7 @@ def test_native_restore_foreground_and_flash_boundary(monkeypatch, minimized, fo
         SetForegroundWindow=_Function(lambda hwnd: events.append(("foreground", hwnd)) or foreground),
         FlashWindowEx=_Function(lambda info: events.append(("flash", ctypes.cast(info, ctypes.POINTER(wintypes.UINT))[0]))))
     monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **kw: api)
-    native.activate_window(99)
+    inspect.unwrap(native.activate_window)(99)
     assert events[0] == (("restore", 99, 9) if minimized else ("foreground", 99))
     assert any(event[0] == "flash" for event in events) is (not foreground)
 
