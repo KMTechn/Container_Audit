@@ -1694,3 +1694,5 @@ Rollback continuation의 기록된 owner PID가 현재 프로세스에 있어도
 
 
 앱 소유 screen-startup.jsonl은 webview.start 진입/반환/예외 종류·경과 ms와 owner 예외 종류를 구분한다. before_exit에는 host 오류 종류·page READY·고정 code/cause를 기록한다. 메시지·stack·입력값·경로는 기록하지 않는다. 기존 screen_shell_fileio writer admission을 대기0으로 시도하고 바쁨/거절/기록 실패는 복구를 막지 않으며 루트 생성이나 report-only 예외를 추가하지 않는다. 로그는 256 KiB에서 더 기록하지 않는다.
+
+run_app에는 셸 기본값과 같은 data/webview2를 udf로 명시한다. EBWebView가 없으면 실제 watchdog 90초, 있으면 30초다. native 시작 판정은 셸 run_app에 위임한다.
