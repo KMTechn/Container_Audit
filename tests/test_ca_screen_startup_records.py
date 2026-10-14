@@ -105,12 +105,12 @@ def test_telemetry_uses_existing_ordinary_writer_source_and_bounded_file(tmp_pat
     from contextlib import contextmanager
     calls = []
     @contextmanager
-    def admission(source):
-        calls.append(source)
+    def admission(source, *, timeout_seconds):
+        calls.append((source, timeout_seconds))
         yield
-    monkeypatch.setattr(fence, "writer_admission", admission)
+    monkeypatch.setattr(screen, "writer_admission", admission)
     screen._record_screen_startup(tmp_path, "WEBVIEW_START_ENTER")
-    assert calls == ["screen_shell_fileio"]
+    assert calls == [("screen_shell_fileio", 0.0)]
     path = tmp_path / "screen-startup.jsonl"
     path.write_bytes(b"x" * (256 * 1024))
     screen._record_screen_startup(tmp_path, "WEBVIEW_START_ENTER")

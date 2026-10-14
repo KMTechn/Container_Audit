@@ -89,11 +89,14 @@ def test_hung_exit_defers_until_writer_mutex_is_released(entry, visible, monkeyp
     monkeypatch.setattr(fence, '_WRITER_EXIT_CLOSED', False)
     @contextmanager
     def admitted(*args, **kwargs):
-        entered.set()
+        business_writer = threading.current_thread() is thread
+        if business_writer:
+            entered.set()
         try:
             yield
         finally:
-            released.set()
+            if business_writer:
+                released.set()
     monkeypatch.setattr(fence, '_writer_admission', admitted)
     def writing():
         with fence.writer_admission('synthetic'):

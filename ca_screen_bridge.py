@@ -33,7 +33,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import Container_Audit as ca
 from screen_startup_fallback import ScreenLaunchAttempt, ScreenStartupUnavailable
 from tk_callback_result import invoke_button_callback
-from writer_session_fence import writer_admission, writer_sink
+from writer_session_fence import writer_admission
 from scan_display import compact_scan_value
 from warning_presenter import CompletionOutcome, NoticeSeverity
 
@@ -1175,14 +1175,14 @@ def _can_fall_back(attempt: ScreenLaunchAttempt) -> bool:
         return False  # Unknown cleanup never grants permission to open another UI.
 
 
-@writer_sink("screen_shell_fileio")
 def _write_screen_startup_record(data: Path, record: Dict[str, Any]) -> None:
     # The shell has prepared this user directory. Telemetry never creates roots.
     path = data / "screen-startup.jsonl"
     if path.is_symlink() or (path.exists() and path.stat().st_size >= 256 * 1024):
         return
-    with path.open("ab") as stream:
-        stream.write((json.dumps(record, ensure_ascii=True, separators=(",", ":")) + "\n").encode("utf-8"))
+    with writer_admission("screen_shell_fileio", timeout_seconds=0.0):
+        with path.open("ab") as stream:
+            stream.write((json.dumps(record, ensure_ascii=True, separators=(",", ":")) + "\n").encode("utf-8"))
 
 
 def _record_screen_startup(data: Optional[Path], event: str, *, error: Any = None,
