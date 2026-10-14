@@ -62,7 +62,7 @@ def _scan_tail():
                          and call.func.attr == "_save_tray_state_snapshot" for call in ast.walk(node)))
     function = ast.parse(
         "def scan_tail(self, tray, epoch, state, raw_barcode, now, interval, "
-        "_durable_scan_id, _durable_scan_log, held_audit): pass"
+        "_durable_scan_id, _durable_scan_log, held_audit, _lease_hold_replay=False): pass"
     ).body[0]
     function.body = method.body[save_index:]
     module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
