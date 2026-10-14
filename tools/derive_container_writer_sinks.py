@@ -187,6 +187,7 @@ DIRECTORY_PREPARATION_CALLS = {
     ('direct_sync_runtime._disk_pressure_report', '4e7f6fa8c515ed6b491f1a84f8f664a79648d680b6eefe8318d738cac1d00dd1'): ('relay_runtime_storage', (), False, False),
     ('direct_sync_runtime._write_json_atomic', 'b762147a0575a9c219141d905cb359521ef4b0ae6053a719380332f546acf71a'): ('relay_runtime_storage', (), False, False),
     ('portable.main._portable_smoke', '2124167f079b9b08eae07cba3fe97b52c2aec8f42806ef3394c2e69ab4eeca18'): ('portable_smoke_marker', (), False, False),
+    ('runtime_instance._write_entry_marker', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('runtime_instance_marker', (), False, True),
     ('storage_policy.ensure_container_audit_storage_dirs', '87f9ed34d31694cef448ad430f4bf2d47211409a8649376df30813e5b8d1bd2f'): ('', (), False, False),
     ('tools.direct_sync_relay_install_pack._apply_task_runtime_acl', 'ac4ab861b2316abcfe9281f7dce3de82d63d5ff49ee532f00ed01e5ffa940529'): ('direct_sync_install_pack', (), False, False),
     ('tools.direct_sync_relay_install_pack._write_json', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('direct_sync_install_pack', (), False, False),
@@ -1499,6 +1500,7 @@ def _forward_directory_preparations(
             seen.add(key)
             classification = (
                 "writer_admission" if admissions else
+                "report_only_metadata" if report_only else
                 "probe_only" if probe_only else
                 "decorator" if source else
                 "pre_admission_directory_preparation"
@@ -1517,7 +1519,7 @@ def _forward_directory_preparations(
                     "directory_preparation_helper": DIRECTORY_PREPARATION_HELPER,
                 })
     if seen != set(DIRECTORY_PREPARATION_CALLS):
-        raise InventoryError("directory preparation coverage must preserve all 33 b82 sites")
+        raise InventoryError("directory preparation coverage must preserve the 33 b82 sites and exact instance report preparation")
     helper_details["mutation_sites"] = []
     helper_details["directory_preparation_forwarding"] = forwarded
 

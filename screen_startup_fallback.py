@@ -77,6 +77,8 @@ class ScreenLaunchAttempt:
                 window = original(*args, **kwargs)
                 self.windows.append(window)
                 window.events.shown += self.shown_once.set
+                from runtime_entry import set_gui_state
+                window.events.shown += lambda: set_gui_state("running")
                 return window
             return create
 

@@ -44,12 +44,15 @@ def _function(tree, name):
 def test_all_33_replaced_mkdir_sites_retain_the_old_argument_and_classification(closure):
     parsed, analysis, *_ = _analyze(closure)
     rows = analysis[inventory.DIRECTORY_PREPARATION_HELPER]["directory_preparation_forwarding"]
-    assert len(rows) == len(inventory.DIRECTORY_PREPARATION_CALLS) == 33
+    assert len(rows) == len(inventory.DIRECTORY_PREPARATION_CALLS) == 34
     assert Counter(row["classification"] for row in rows) == {
         "decorator": 25, "writer_admission": 5, "probe_only": 2,
         "pre_admission_directory_preparation": 1,
+        "report_only_metadata": 1,
     }
-    expected = set(inventory.DIRECTORY_PREPARATION_CALLS)
+    expected = {key for key in inventory.DIRECTORY_PREPARATION_CALLS
+                if key[0] != "runtime_instance._write_entry_marker"}
+    assert len(expected) == 33
     matched = set()
     for module in sorted({caller.rsplit(".", 1)[0] for caller, _ in expected}):
         # The class method belongs to the Container_Audit module.
@@ -80,7 +83,7 @@ def test_all_33_replaced_mkdir_sites_retain_the_old_argument_and_classification(
         capture_output=True, check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout)
     current_inventory = json.loads((ROOT / "tools/container_writer_sink_inventory.json").read_bytes())
-    assert current_inventory["writer_sink_sources"] == old_inventory["writer_sink_sources"]
+    assert set(current_inventory["writer_sink_sources"]) - {"runtime_instance_marker"} == set(old_inventory["writer_sink_sources"])
 
 
 @pytest.mark.parametrize("drift", ["body", "caller", "argument", "admission", "probe", "callback"])

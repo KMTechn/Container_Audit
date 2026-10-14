@@ -1186,6 +1186,8 @@ def screen_runner(module: Any) -> Callable[[List[str]], Any]:
         importing_shell = True
 
         def before_exit(_code: str, deadline_s: float) -> bool:
+            from runtime_entry import set_gui_state
+            set_gui_state("closing")
             from writer_session_fence import close_and_wait_writers
             return close_and_wait_writers(deadline_s)
 

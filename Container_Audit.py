@@ -1,3 +1,10 @@
+import sys as _entry_sys
+from pathlib import Path as _EntryPath
+if __name__ == "__main__":
+    from runtime_entry import begin_gui_entry as _begin_gui_entry
+    if not _begin_gui_entry(_entry_sys.argv[1:], application_path=str(_EntryPath(__file__).resolve().parent)):
+        raise SystemExit(0)
+
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from tkinter import font as tkfont
@@ -200,7 +207,11 @@ from responsive_layout import (
     worker_login_layout_metrics as calculate_worker_login_layout_metrics,
 )
 from runtime_instance import (
-    acquire_runtime_instance, clear_shutdown_stall, shutdown_stall_is_live, write_shutdown_stall,
+    clear_shutdown_stall, shutdown_stall_is_live, write_shutdown_stall,
+)
+from runtime_entry import (
+    begin_gui_entry, end_gui_entry, set_gui_state,
+    entry_runtime_instance as acquire_runtime_instance, activate_existing_instance,
 )
 from session_history import (
     SHIPPING_SUPPLEMENT_NOTICE, completed_label_round, load_session_history,
@@ -1162,6 +1173,7 @@ class ContainerAudit:
         self.legacy_label_transition = legacy_label_transition_enabled()
         self._transfer_coordinator_ui_owner_thread_id = threading.get_ident()
         self.root = tk.Tk()
+        self.root.bind("<Map>", lambda event: set_gui_state("running") if event.widget is self.root else None, add="+")
         from auto_update import trial_context
 
         self._startup_update_pending = trial_context(Path(__file__).resolve().parent) is not None
@@ -17105,6 +17117,7 @@ class ContainerAudit:
                     print(f"앱 멈춤 요청 정리 실패: {type(exc).__name__}")
 
     def on_closing(self, *, _confirmed: bool = False):
+        set_gui_state("closing")
         if getattr(self, "_admin_pin_ui_pending", False):
             self._ui_close_requested = True
             self._admin_pin_close_silent = True
@@ -23146,6 +23159,8 @@ def _item_catalog_cache_time_for_display(value: object) -> str:
 
 def main(argv: list[str] | None = None):
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if not begin_gui_entry(arguments, application_path=str(Path(__file__).resolve().parent)):
+        return 0
     from container_audit_product_host import PRODUCT_MODES
     from writer_session_fence import WriterFenceError
     enabled = not any(argument in PRODUCT_MODES or argument in {"--help", "-h"} for argument in arguments)
@@ -23168,6 +23183,7 @@ def main(argv: list[str] | None = None):
         raise
     finally:
         _startup_check_observe("finish")
+        end_gui_entry()
 
 
 def _old_screen_requested(arguments) -> bool:
@@ -23341,16 +23357,7 @@ def _prepare_gui_startup(*, data_root=None):
     else:
         if instance_lease is None:
             _startup_check_observe("note", "ALREADY_RUNNING")
-            stalled = shutdown_stall_is_live(storage_paths.data_root)
-            startup_notice = (
-                messagebox.showwarning,
-                "프로그램이 이미 실행 중입니다",
-                ("이전 프로그램의 종료 정리가 아직 끝나지 않았습니다. "
-                 "잠시 기다린 뒤 다시 실행하세요. 앱이 닫히고 다시 안 켜지면 PC를 재시작하세요.")
-                if stalled else
-                ("같은 PC에서 이적 검사 프로그램을 두 번 실행할 수 없습니다. "
-                 "열려 있는 창을 사용해 주세요."),
-            )
+            return activate_existing_instance(storage_paths.data_root)
     if startup_notice is not None:
         show_notice, title, message = startup_notice
         show_notice(title, message)

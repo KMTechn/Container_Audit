@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
 
-from writer_session_fence import writer_sink
 
 
 DATA_ROOT_ENV = "CONTAINER_AUDIT_DATA_ROOT"
@@ -203,18 +202,19 @@ def notify_data_root_error() -> None:
         messagebox.showerror("이적 검사 데이터 폴더 오류", DATA_ROOT_ERROR_MESSAGE)
 
 
-@writer_sink("persistent_relay_status")
 def validate_existing_data_root(root: Path) -> None:
     """Never recreate a lost dataset; prove read/write access before startup."""
-    try:
-        with os.scandir(root) as entries:
-            next(entries, None)
-        probe = root / f".data-root-access-{uuid.uuid4().hex}.tmp"
-        with probe.open("xb"):
-            pass
-        probe.unlink()
-    except OSError as exc:
-        raise DataRootUnavailableError("selected data root is unavailable") from exc
+    from writer_session_fence import writer_admission
+    with writer_admission("persistent_relay_status"):
+        try:
+            with os.scandir(root) as entries:
+                next(entries, None)
+            probe = root / f".data-root-access-{uuid.uuid4().hex}.tmp"
+            with probe.open("xb"):
+                pass
+            probe.unlink()
+        except OSError as exc:
+            raise DataRootUnavailableError("selected data root is unavailable") from exc
 
 
 def _default_direct_sync_root(

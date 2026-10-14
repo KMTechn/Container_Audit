@@ -17,6 +17,11 @@ if str(APP_ROOT) not in sys.path:
 if str(SITE_PACKAGES) not in sys.path:
     sys.path.insert(1, str(SITE_PACKAGES))
 
+from runtime_entry import begin_gui_entry, end_gui_entry
+
+if __name__ == "__main__" and not begin_gui_entry(sys.argv[1:], application_path=str(APP_ROOT)):
+    raise SystemExit(0)
+
 from writer_session_fence import WriterFenceError, writer_sink  # noqa: E402
 from storage_policy import ensure_user_runtime_directory
 
@@ -68,6 +73,8 @@ def _portable_smoke() -> int:
 
 
 def main() -> int:
+    if not begin_gui_entry(sys.argv[1:], application_path=str(APP_ROOT)):
+        return 0
     if "--zero-pe-portable-smoke" in sys.argv[1:]:
         return _portable_smoke()
     arguments = list(sys.argv[1:])
@@ -124,6 +131,8 @@ def main() -> int:
             return 1
         from current_user_onboarding import emit_installer_failure
         return emit_installer_failure(error, "installer_entrypoint")
+    finally:
+        end_gui_entry()
 
 
 if __name__ == "__main__":
