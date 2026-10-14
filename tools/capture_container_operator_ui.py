@@ -4,7 +4,6 @@ import argparse
 import ast
 import base64
 import ctypes
-import runtime_instance_win32 as instance_native
 import datetime as dt
 import functools
 import hashlib
@@ -33,6 +32,7 @@ REPO_TMP_ROOT = ROOT / "tmp"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import runtime_instance_win32 as instance_native
 from scan_display import compact_scan_value, format_scan_list_row
 from preflight_scan_hold import HeldScan
 from tools.capture_quality import (

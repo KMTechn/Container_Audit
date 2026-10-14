@@ -192,7 +192,7 @@ def native_window_calls(monkeypatch):
         monkeypatch.setattr(native, name, functools.wraps(original)(record))
 
     blocked = {"MessageBoxTimeoutW", "MessageBoxW", "MessageBoxA", "SetForegroundWindow",
-               "FlashWindowEx", "ShowWindow", "SetWindowPos", "SetFocus", "BringWindowToTop"}
+               "FlashWindowEx", "ShowWindow", "SetWindowPos", "SetFocus", "BringWindowToTop", "EnumWindows"}
     class ForbiddenWindowCall:
         def __call__(self, *args, **kwargs):
             raise AssertionError("real user32 window action escaped the native test seam")

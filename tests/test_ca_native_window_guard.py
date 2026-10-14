@@ -34,9 +34,30 @@ def test_removing_default_stub_still_cannot_display_notice():
         inspect.unwrap(native.timed_notice)("isolated notice", "이적")
 
 
+def test_window_search_default_records_without_enumwindows(native_window_calls, monkeypatch):
+    def forbidden_loader(*args, **kwargs):
+        raise AssertionError('window search loaded user32')
+    monkeypatch.setattr(ctypes, 'WinDLL', forbidden_loader)
+    assert native.visible_top_level_windows(4242) == []
+    assert native_window_calls == [('visible_top_level_windows', (4242,), {})]
+
+
+@pytest.mark.parametrize('loader', ('WinDLL', 'windll', 'absolute'))
+def test_direct_enumwindows_is_blocked(loader):
+    library = (ctypes.windll.user32 if loader == 'windll' else
+               ctypes.WinDLL('C:/Windows/System32/user32.dll' if loader == 'absolute' else 'user32'))
+    with pytest.raises(AssertionError):
+        library.EnumWindows(None, 0)
+
+
+def test_unwrapped_window_search_cannot_reach_enumwindows():
+    with pytest.raises(AssertionError):
+        inspect.unwrap(native.visible_top_level_windows)(4242)
+
+
 def test_window_actions_have_no_direct_ctypes_call_outside_native_seam():
     actions = {"MessageBoxTimeoutW", "MessageBoxW", "SetForegroundWindow", "FlashWindowEx",
-               "ShowWindow", "SetWindowPos", "SetFocus", "BringWindowToTop"}
+               "ShowWindow", "SetWindowPos", "SetFocus", "BringWindowToTop", "EnumWindows"}
     excluded = {"runtime_instance_win32.py"}
     violations = []
     for path in [*ROOT.glob("*.py"), *ROOT.joinpath("tools").glob("*.py")]:

@@ -38,6 +38,17 @@ def install_write_boundary() -> None:
     if not configured or getattr(sys, "_kmtech_ca_write_boundary", False):
         return
     root = _resolved_path(configured)
+    # iwrun2 owns separate run/evidence directories. Admit only the evidence
+    # directory bound by its config inside the already admitted run root.
+    evidence_root = None
+    evidence = os.environ.get("KMTECH_TEST_CA_EVIDENCE_ROOT")
+    runner_config = os.environ.get("IWRUN_CONFIG")
+    if evidence and runner_config:
+        config_path = _resolved_path(runner_config)
+        if config_path.is_relative_to(root):
+            bound = json.loads(config_path.read_text(encoding="utf-8"))
+            if _resolved_path(bound["evidence"]) == _resolved_path(evidence):
+                evidence_root = _resolved_path(evidence)
     null_device = _resolved_path(os.devnull)
     log = root / "boundary-violations.jsonl"
     single_path = {"os.mkdir", "os.remove", "os.rmdir", "os.chmod", "os.utime",
@@ -74,7 +85,8 @@ def install_write_boundary() -> None:
             if os.path.normcase(value) == os.path.normcase(os.devnull):
                 continue
             resolved = _resolved_path(value)
-            if resolved == null_device or resolved.is_relative_to(root):
+            if (resolved == null_device or resolved.is_relative_to(root) or
+                    (evidence_root is not None and resolved.is_relative_to(evidence_root))):
                 continue
             with log.open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps({"event": event, "path": str(resolved), "pid": os.getpid()}) + "\n")
