@@ -1695,6 +1695,9 @@ function Assert-CanonicalRuntimePreimage(
     }
 }
 function Product([string]$Root,[string]$Mode,[string]$AppRoot='') {
+    if ($Mode -ceq '--onboard-current-user' -and [Diagnostics.Process]::GetCurrentProcess().SessionId -le 0) {
+        throw '작업자 첫 설정은 대화형 사용자 세션에서 실행하세요.'
+    }
     if (-not $AppRoot) { $AppRoot=Join-Path $Root 'app' }
     $args = @('-I','-B',(Join-Path $Root 'app\main.py'),$Mode,'--app-root',$AppRoot)
     if ($Mode -ceq '--onboard-current-user' -and $onboardingServerBaseUrl) {
@@ -4100,9 +4103,7 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         }
     }
     $workerPreparation=$null
-    if ([bool]$Worker.same_caller -and -not $Uninstall -and -not $RestoreVerifiedReplacement) {
-        $workerPreparation=Get-CanonicalWorkerPreparationPaths $Worker
-    }
+    # User directories and HKCU Run belong to the ordinary worker first run.
     if ($PlanOnly) { Write-Output 'install_status=PLAN_ONLY'; return }
     $Script:ContainerMachineInstallControlRoot=$control
     $Script:ContainerWriterFenceAdmissionProductionRoot=$control
@@ -4253,11 +4254,7 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
                 (Sha (Join-Path $Root 'portable-manifest.json')) -cne (Sha (Join-Path $Source 'portable-manifest.json'))) {
                 throw 'Machine installed identity differs.'
             }
-            if ($null -ne $workerPreparation) {
-                Initialize-CanonicalSameWorkerScope $Root $workerPreparation
-                $audit.after.observation_status='PREPARED'
-                $audit.worker_setup='USER_SCOPE_PREPARED_INTERACTIVE_PENDING'
-            }
+            # Finish machine code/control and shortcuts; relay and GUI stay pending.
             $marker=[ordered]@{schema='container-audit-machine-pending-v1';status='PENDING';install_id=$run;
                 target_sid=[string]$Worker.sid;version=[string]$Manifest.version;source_commit=[string]$Manifest.source_commit;
                 install_root=$Root;survey_sha256=[string]$Worker.survey_sha256;installed_at_utc=$started;
@@ -4316,7 +4313,15 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
     }
 }
 
+function Assert-CanonicalOperatingWorkerAccount {
+    param([string]$Account,[bool]$TestMode,[bool]$Removing,[bool]$Planning)
+    if (-not $TestMode -and -not $Removing -and -not $Planning -and [string]::IsNullOrWhiteSpace($Account)) {
+        throw '설치 인수 WorkerAccount에 실제 로컬 작업자 계정 하나를 명시하세요.'
+    }
+}
+
 # Admit the worker before any installation evidence, authority or profile writer.
+Assert-CanonicalOperatingWorkerAccount $WorkerAccount $testMode ([bool]$Uninstall) ([bool]$PlanOnly)
 try { $machineWorker=Resolve-CanonicalMachineWorker $WorkerAccount $WorkerSurveyInventory (Get-CanonicalInstallationCallerSecurity) }
 catch {
     $code=if($_.Exception.Message -ceq 'MACHINE_WORKER_ARGUMENTS_REQUIRE_ADMINISTRATOR'){$_.Exception.Message}else{'PENDING_TARGET_AMBIGUOUS'}

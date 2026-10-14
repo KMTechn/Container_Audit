@@ -1213,6 +1213,46 @@ def _inspect_current_process_execution_context() -> dict[str, Any]:
     }
 
 
+
+def _current_process_session_id() -> int:
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetCurrentProcessId.restype = wintypes.DWORD
+    kernel.ProcessIdToSessionId.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    kernel.ProcessIdToSessionId.restype = wintypes.BOOL
+    session = wintypes.DWORD()
+    if not kernel.ProcessIdToSessionId(kernel.GetCurrentProcessId(), ctypes.byref(session)):
+        raise OSError(ctypes.get_last_error(), "process session could not be observed")
+    return int(session.value)
+
+
+def _machine_worker_context(app_root, environ=None, *, target_sid=None):
+    """Check the actual ordinary interactive worker before setup or relay launch."""
+    from auto_update import current_process_sid, installation_root, read_json
+    root = installation_root(_resolved(app_root))
+    policy = root / "update-control/policy.json" if root is not None else None
+    if target_sid is None and (policy is None or not policy.exists()):
+        return None  # Existing/source recovery keeps its original lifecycle.
+    if policy is not None and policy.exists():
+        record = read_json(policy)
+        operator_sid = record.get("operator_sid")
+        if (not isinstance(operator_sid, str)
+                or re.fullmatch(r"S-1-\d+(?:-\d+)+", operator_sid) is None):
+            raise ValueError("installed worker identity is invalid")
+        if target_sid is not None and target_sid != operator_sid:
+            raise ValueError("pending worker and installed worker differ")
+        target_sid = operator_sid
+    context = _inspect_current_process_execution_context()
+    session = _current_process_session_id()
+    if (context.get("status") != "PASS" or context.get("token_elevated") is not False
+            or context.get("integrity_level") != "MEDIUM"
+            or type(session) is not int or session <= 0):
+        raise ValueError("지정 작업자 계정의 대화형 세션에서 일반 권한으로 실행하세요.")
+    sid = current_process_sid()
+    if target_sid is not None and sid != target_sid:
+        raise ValueError("지정 작업자 계정에서 실행하세요. 두 번째 Windows 작업자 계정은 지원하지 않습니다.")
+    return {"sid": sid, "session_id": session, "token_elevated": False}
+
 @writer_sink("current_user_onboarding_storage")
 def _install_replacement_user_relay_autostart(
     app_root: Path, *, environ: Mapping[str, str] | None = None,
@@ -2007,6 +2047,7 @@ def consume_pending_machine_onboarding(
                 "자료를 보존하고 관리자 지원 복구를 요청하세요.",
                 report_path=marker_path, status="PENDING_WORKER_SID_MISMATCH",
             )
+        _machine_worker_context(app_root, environ=environ, target_sid=marker["target_sid"])
         install_id = marker.get("install_id")
         if not isinstance(install_id, str) or re.fullmatch(r"[0-9a-f]{32}", install_id) is None:
             raise ValueError("machine onboarding installation id is invalid")
@@ -2076,6 +2117,7 @@ def onboard_current_user(
     expected_input_binding: str = "",
     startup: bool = False,
 ) -> dict[str, Any]:
+    _machine_worker_context(app_root, environ=environ)
     from data_generation_guard import warm_runtime_release
     warm_runtime_release()
     from auto_update import installation_root, resolve_lifecycle_context
