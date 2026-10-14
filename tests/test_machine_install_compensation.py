@@ -82,7 +82,7 @@ if((Sha $prior) -cne $sha -or (Get-BootstrapAclComparisonKey ((Get-Acl -LiteralP
 @pytest.mark.parametrize("state", ("owned", "changed_shortcut", "other_pending"))
 def test_machine_removal_only_removes_bound_pending_and_owned_direct_shortcut(tmp_path, engine, state):
     result = run_functions(tmp_path, INSTALLER,
-        ["Full", "Same", "Sha", "Get-CanonicalMachineShortcutArguments", "Remove-CanonicalMachineArtifacts"], r'''
+        ["Full", "Same", "Sha", "Get-CanonicalMachineShortcutArguments", "Remove-CanonicalMachineArtifacts"], _emergency_runtime_prelude() + r'''
 function ConvertTo-ProcessArgument([string]$Value){return '"'+$Value+'"'}
 $root=Join-Path $env:CA_CONTRACT_ROOT 'current'
 $pending=Join-Path $env:CA_CONTRACT_ROOT 'pending.json'
@@ -114,3 +114,9 @@ if($env:CA_PUBLICATION_STATE -ceq 'other_pending'){
 ''', engine=engine, values={"CA_PUBLICATION_STATE": state})
     assert result.returncode == 0, result.stderr
     assert "PASS" in result.stdout
+
+
+def _emergency_runtime_prelude():
+    bootstrap = str(INSTALLER.parent / 'tools/bootstrap_integrity.ps1').replace("'", "''")
+    return (". '" + bootstrap + "'\n"
+            "$env:KMTECH_TEST_CA_WORKER_SHORTCUT_ROOT=Join-Path $env:CA_CONTRACT_ROOT 'known-folders'\n")

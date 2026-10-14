@@ -3579,10 +3579,24 @@ function Write-CanonicalMachinePublicRecord([string]$Code,[string]$Status='FAILE
     Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+($public|ConvertTo-Json -Depth 4 -Compress))
 }
 
-function Get-CanonicalMachineArtifactPaths([string]$State) {
+function Get-CanonicalMachineArtifactPaths([string]$State,[string]$Root='') {
     $directory=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)
     if (-not $directory) { throw 'Machine start menu is unavailable.' }
-    return @((Join-Path $State 'pending-onboarding.json'),(Join-Path $directory 'KMTech 이적 검사.lnk'))
+    $paths=@((Join-Path $State 'pending-onboarding.json'),(Join-Path $directory 'KMTech 이적 검사.lnk'))
+    if($Root){
+        $emergency=Get-BootstrapEmergencyShortcutPath $Root
+        $owned=Test-BootstrapEmergencyShortcutDirectory $emergency
+        if($owned -and (Test-Path -LiteralPath $emergency)){
+            $shell=New-Object -ComObject WScript.Shell
+            try{
+                try{$owned=Test-BootstrapEmergencyShortcutOwner ($shell.CreateShortcut($emergency)) (Join-Path $Root 'launch-container-audit.cmd')}
+                catch{$owned=$false}
+            }finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}
+        }
+        # Foreign data is neither changed nor copied into our recovery journal.
+        if($owned){$paths+=@($emergency)}
+    }
+    return $paths
 }
 function Get-CanonicalMachineShortcutArguments([string]$Root) {
     $entry=Join-Path $Root 'app\main.py'
@@ -3673,6 +3687,9 @@ function Remove-CanonicalMachineArtifacts([string]$Root,$Worker,[string[]]$Paths
         } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) }
     }
     if (Test-Path -LiteralPath $pending) { Remove-Item -LiteralPath $pending -ErrorAction Stop }
+    if(-not [IO.File]::Exists((Join-Path $Root 'launch-container-audit.cmd'))){
+        Remove-BootstrapEmergencyShortcut $Root
+    }
 }
 function New-CanonicalMachineShortcut([string]$Root,[string]$Directory='') {
     if (-not $Directory) { $Directory=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms) }
@@ -3690,6 +3707,7 @@ function New-CanonicalMachineShortcut([string]$Root,[string]$Directory='') {
         if ($existing) {
             if (-not (Same ([string]$link.TargetPath) $target) -or [string]$link.Arguments -cne $arguments -or
                 -not (Same ([string]$link.WorkingDirectory) $workingDirectory)) { throw 'Machine shortcut prestate is unknown.' }
+            [void](Install-BootstrapEmergencyShortcut $Root)
             return
         }
         $link.TargetPath=$target
@@ -3698,6 +3716,7 @@ function New-CanonicalMachineShortcut([string]$Root,[string]$Directory='') {
         $link.Save()
     } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) }
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Machine shortcut readback failed.' }
+    [void](Install-BootstrapEmergencyShortcut $Root)
 }
 
 function Get-CanonicalWorkerPreparationPaths($Worker) {
@@ -4059,7 +4078,7 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         preimage=@{scope='MACHINE_CODE_ONLY';observation_status='NOT_OBSERVED'};
         after=@{scope='WORKER_HKCU';observation_status='NOT_CHANGED'};
         code_replacement=@{transaction_id=$run;receipt_path=$receipt};created_at=$started;secret_values_recorded=$false}
-    $artifactPaths=Get-CanonicalMachineArtifactPaths $state
+    $artifactPaths=Get-CanonicalMachineArtifactPaths $state $Root
     $workerRunBefore=$null
     if ($null -ne $workerPreparation) {
         $artifactPaths+=@($workerPreparation.shortcuts)
