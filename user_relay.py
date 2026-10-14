@@ -227,8 +227,6 @@ def install_user_relay_autostart(
     setter: Callable[[str], None] | None = None,
     getter: Callable[[], str] | None = None,
 ) -> dict[str, Any]:
-    from current_user_onboarding import _machine_worker_context
-    _machine_worker_context(app_root, environ=environ)
     command_line = user_relay_command_line(app_root, environ=environ)
     (setter or _registry_set)(command_line)
     readback = (getter or _registry_get)()
@@ -269,8 +267,6 @@ def start_user_relay_process(
     environ: Mapping[str, str] | None = None,
     launcher: Callable[[Sequence[str]], Any] | None = None,
 ) -> dict[str, Any]:
-    from current_user_onboarding import _machine_worker_context
-    _machine_worker_context(app_root, environ=environ)
     if installation_relay_start_deferred():
         return {"status": "DEFERRED_CANONICAL_RELEASE", "process_id": 0}
     command = build_user_relay_command(app_root, environ=environ)

@@ -46,23 +46,13 @@ def test_real_onboarding_defers_relay_under_valid_installation_delegation(monkey
     app.mkdir(parents=True)
     control = app.parent.parent / "update-control"
     control.mkdir()
-    monkeypatch.setattr(onboarding, '_current_process_session_id', lambda: 1)
-    monkeypatch.setattr(onboarding, '_inspect_current_process_execution_context',
-        lambda: {'status':'PASS','token_elevated':False,'integrity_level':'MEDIUM'})
     (control / "policy.json").write_text(json.dumps({"operator_sid": "S-1-5-21-111-222-333-1001"}), encoding="utf-8")
     (control / "active.json").write_text(json.dumps({"sha": SHA}), encoding="utf-8")
     (app.parent / "portable-manifest.json").write_text(json.dumps({"source_commit": SHA}), encoding="utf-8")
     environment = {"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "state")}
     paths = onboarding.resolve_current_user_onboarding_paths(app, environ=environment)
-    policy = json.loads((control / 'policy.json').read_text())
-    policy['operator_sid'] = auto_update.current_process_sid()
-    (control / 'policy.json').write_text(json.dumps(policy),encoding='utf-8')
     _ready_state(paths)
     monkeypatch.setattr(auto_update, "ordinary_user_context", lambda *args: False)
-    import data_generation_guard
-    from tests.candidate_source_snapshot import candidate_source_snapshot
-    metadata_root=candidate_source_snapshot(ROOT,tmp_path/'candidate-source')
-    monkeypatch.setattr(data_generation_guard,'__file__',str(metadata_root/'data_generation_guard.py'))
     launches = []
     # Relay interception must not replace the G adapter's exact read-only
     # source-identity probes with a relay-shaped fake process.
@@ -73,8 +63,8 @@ def test_real_onboarding_defers_relay_under_valid_installation_delegation(monkey
     ):
         monkeypatch.delenv(name, raising=False)
     metadata_commands = (
-        ["git", "--no-optional-locks", "-C", str(metadata_root), "status", "--porcelain"],
-        ["git", "--no-optional-locks", "-C", str(metadata_root), "rev-parse", "HEAD^{commit}"],
+        ["git", "--no-optional-locks", "-C", str(ROOT), "status", "--porcelain"],
+        ["git", "--no-optional-locks", "-C", str(ROOT), "rev-parse", "HEAD^{commit}"],
     )
 
     def launch(command, **kwargs):
