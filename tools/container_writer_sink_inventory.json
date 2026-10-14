@@ -5172,11 +5172,11 @@
       "direct_callers": [],
       "file": "shell/shell_fileio.py",
       "kind": "function",
-      "line": 28,
+      "line": 76,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 30,
+          "line": 78,
           "operation": "mkdir",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -5199,11 +5199,38 @@
       "direct_callers": [],
       "file": "shell/shell_fileio.py",
       "kind": "function",
-      "line": 33,
+      "line": 81,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 35,
+          "line": 93,
+          "operation": "open",
+          "writer_admission_sources": [
+            "screen_shell_fileio"
+          ]
+        }
+      ],
+      "node": "shell.shell_fileio.probe_writable",
+      "reachable_entrypoints": [],
+      "reachable_from_product_entrypoint": false,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
+      "covered_entrypoints": [],
+      "decorated_source": "screen_shell_fileio",
+      "direct_callers": [],
+      "file": "shell/shell_fileio.py",
+      "kind": "function",
+      "line": 98,
+      "mutation_sites": [
+        {
+          "category": "filesystem",
+          "line": 100,
           "operation": "open",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -5226,11 +5253,11 @@
       "direct_callers": [],
       "file": "shell/shell_fileio.py",
       "kind": "function",
-      "line": 41,
+      "line": 106,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 44,
+          "line": 109,
           "operation": "open",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -5253,11 +5280,11 @@
       "direct_callers": [],
       "file": "shell/shell_fileio.py",
       "kind": "function",
-      "line": 48,
+      "line": 113,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 50,
+          "line": 115,
           "operation": "open",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -5277,14 +5304,43 @@
       "coverage_status": "covered",
       "covered_entrypoints": [],
       "decorated_source": "screen_shell_fileio",
-      "direct_callers": [],
+      "direct_callers": [
+        "shell.shell_fileio.probe_writable"
+      ],
       "file": "shell/shell_fileio.py",
       "kind": "function",
-      "line": 54,
+      "line": 119,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 59,
+          "line": 121,
+          "operation": "unlink",
+          "writer_admission_sources": [
+            "screen_shell_fileio"
+          ]
+        }
+      ],
+      "node": "shell.shell_fileio.remove",
+      "reachable_entrypoints": [],
+      "reachable_from_product_entrypoint": false,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
+      "covered_entrypoints": [],
+      "decorated_source": "screen_shell_fileio",
+      "direct_callers": [],
+      "file": "shell/shell_fileio.py",
+      "kind": "function",
+      "line": 124,
+      "mutation_sites": [
+        {
+          "category": "filesystem",
+          "line": 129,
           "operation": "open",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -5292,7 +5348,7 @@
         },
         {
           "category": "filesystem",
-          "line": 61,
+          "line": 133,
           "operation": "os.replace",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -8885,7 +8941,7 @@
   ],
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
-    "closure_direct_mutation_function_count": 173,
+    "closure_direct_mutation_function_count": 175,
     "closure_module_count": 121,
     "external_process_mutation_site_count": 19,
     "powershell_direct_mutation_site_count": 115,
@@ -8905,8 +8961,8 @@
     "powershell_sink_count": 2,
     "python_external_control_literal_site_count": 5,
     "scheduled_task_mutation_site_count": 12,
-    "sink_function_count": 255,
-    "total_cross_language_sink_count": 257,
+    "sink_function_count": 257,
+    "total_cross_language_sink_count": 259,
     "trusted_control_plane_mutation_count": 0,
     "uncovered_mutation_function_count": 1
   },
@@ -9128,6 +9184,7 @@
       "Container_Audit",
       "scan_display",
       "screen_startup_fallback",
+      "storage_policy",
       "warning_presenter",
       "writer_session_fence"
     ],
@@ -9655,7 +9712,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "49ac46503dad0e859bb184ed51f4c83fce3d37ea4a242d2e8499d6b749802095",
+  "inventory_sha256": "3397214bcb6ed0d472a61caf39d51c7700903d40d50d1368f52758a54f2bb8b5",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -22186,7 +22243,7 @@
     "python_files": [
       {
         "path": "shell/bridge.py",
-        "sha256": "215365456cd3a49dd2ec9ae903140f61cadaedd23eaefbbcebfc73decbf3da5c"
+        "sha256": "61654de8e21ba4652e2b56ca9eb4a8e0881bfff6f20c6bb1c6d2325ebaafcd29"
       },
       {
         "path": "shell/event_order.py",
@@ -22194,11 +22251,11 @@
       },
       {
         "path": "shell/host.py",
-        "sha256": "5655118f2855310dffa6d6d9f299b5287dfc18ae27e686d7337c8c9a39dbb909"
+        "sha256": "d9181dc40e2f54a548d88f45b069a0b59b74ff7cfd01101577e9b2b395b8def9"
       },
       {
         "path": "shell/journal.py",
-        "sha256": "714947eb6685032c896f601ef85fec9eaf7cb2c39b36ed7a8a30f0c86198b7e7"
+        "sha256": "5d486cde397f93d1b8d651fec273e667399c5860d1481cc86232341bb1a0aa4d"
       },
       {
         "path": "shell/pedal.py",
@@ -22210,21 +22267,23 @@
       },
       {
         "path": "shell/shell_fileio.py",
-        "sha256": "4c550a6e00e506503ee2d202183b1aa15c2be157c3b92d08f8597f8516cdf295"
+        "sha256": "d6a97d78927be4be7312105507a46adf26d1ad2520c86bd81139683403a68266"
       },
       {
         "path": "shell/sound.py",
-        "sha256": "808771ebea0eaff17619505984a0364a19e07a11ddc824298f5feeb90bb585a1"
+        "sha256": "a007064433046d9b1debfb183d1db28fb88f585230dcaa2937d175993f308504"
       }
     ],
-    "ready_sha256": "0c3d7524e8c989b61f5f8da698847e6b5b61fc0939e6fd0fb8bd7faa51efeec8",
-    "ready_version": "v3.16",
+    "ready_sha256": "8c3b35d4740a86481e2d011630bf78271316c38ca5f1e137de8109f320e1eb88",
+    "ready_version": "v3.16.2",
     "reason": "Container_Audit --new-screen installs ca_screen_bridge.admission_write_guard through run_app; each shell_fileio write acquires and releases the existing CA writer_admission; shell/host.py standalone kit mode has no product shortcut or installer route",
     "write_module": "shell.shell_fileio",
     "write_sites": [
       "append_bytes",
       "create_new",
       "make_dirs",
+      "probe_writable",
+      "remove",
       "replace_atomic",
       "truncate"
     ],
@@ -24028,7 +24087,7 @@
       "direct_mutation_site_count": 1,
       "file": "shell/shell_fileio.py",
       "function": "shell.shell_fileio.append_bytes",
-      "line": 33,
+      "line": 98,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },
@@ -24036,7 +24095,7 @@
       "direct_mutation_site_count": 1,
       "file": "shell/shell_fileio.py",
       "function": "shell.shell_fileio.create_new",
-      "line": 41,
+      "line": 106,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },
@@ -24044,7 +24103,23 @@
       "direct_mutation_site_count": 1,
       "file": "shell/shell_fileio.py",
       "function": "shell.shell_fileio.make_dirs",
-      "line": 28,
+      "line": 76,
+      "marker_kind": "writer_admission",
+      "source": "screen_shell_fileio"
+    },
+    {
+      "direct_mutation_site_count": 1,
+      "file": "shell/shell_fileio.py",
+      "function": "shell.shell_fileio.probe_writable",
+      "line": 81,
+      "marker_kind": "writer_admission",
+      "source": "screen_shell_fileio"
+    },
+    {
+      "direct_mutation_site_count": 1,
+      "file": "shell/shell_fileio.py",
+      "function": "shell.shell_fileio.remove",
+      "line": 119,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },
@@ -24052,7 +24127,7 @@
       "direct_mutation_site_count": 2,
       "file": "shell/shell_fileio.py",
       "function": "shell.shell_fileio.replace_atomic",
-      "line": 54,
+      "line": 124,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },
@@ -24060,7 +24135,7 @@
       "direct_mutation_site_count": 1,
       "file": "shell/shell_fileio.py",
       "function": "shell.shell_fileio.truncate",
-      "line": 48,
+      "line": 113,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },

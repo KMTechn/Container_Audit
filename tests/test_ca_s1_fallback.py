@@ -7,6 +7,7 @@ from types import MethodType, SimpleNamespace
 
 import pytest
 import Container_Audit as ca
+import ca_screen_bridge as screen
 import writer_session_fence as fence
 from tests.test_ca_new_screen_entry import entry, _SurfaceEvent
 
@@ -65,7 +66,10 @@ def test_created_web_failure_exits_without_restart_then_manual_start_opens_one_t
         order.append('exit_3')
         assert visible.tk + visible.web == 0
         raise SystemExit(3)
-    fake = SimpleNamespace(run_app=run_app, web_allowed=lambda data, version: version not in marker)
+    def web_allowed(data, version, *, write_guard):
+        assert write_guard is screen.admission_write_guard
+        return version not in marker
+    fake = SimpleNamespace(run_app=run_app, web_allowed=web_allowed)
     monkeypatch.setitem(sys.modules, 'host', fake)
     with pytest.raises(SystemExit) as ended:
         ca.main([])

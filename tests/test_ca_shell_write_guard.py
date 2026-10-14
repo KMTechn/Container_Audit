@@ -23,9 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def fileio(monkeypatch):
     monkeypatch.syspath_prepend(str(ROOT / "shell"))
     module = importlib.import_module("shell_fileio")
-    previous = module._guard_factory
-    yield module
-    module.set_write_guard(previous)
+    return module.FileIO(screen.admission_write_guard)
 
 
 def test_app_installs_the_shell_guard_at_the_existing_entry(entry, monkeypatch, tmp_path):
@@ -40,7 +38,7 @@ def test_app_installs_the_shell_guard_at_the_existing_entry(entry, monkeypatch, 
     assert received == [screen.admission_write_guard]
 
 
-@pytest.mark.parametrize("operation", ["make_dirs", "append_bytes", "create_new", "truncate", "replace_atomic"])
+@pytest.mark.parametrize("operation", ["make_dirs", "append_bytes", "create_new", "truncate", "replace_atomic", "probe_writable", "remove"])
 def test_each_shell_write_enters_and_releases_ca_admission(fileio, monkeypatch, tmp_path, operation):
     calls = []
 
@@ -53,7 +51,6 @@ def test_each_shell_write_enters_and_releases_ca_admission(fileio, monkeypatch, 
             calls.append(("exit", source))
 
     monkeypatch.setattr(screen, "writer_admission", admission)
-    fileio.set_write_guard(screen.admission_write_guard)
     target = tmp_path / "receipt"
     if operation == "make_dirs":
         fileio.make_dirs(target, "udf")
@@ -68,10 +65,21 @@ def test_each_shell_write_enters_and_releases_ca_admission(fileio, monkeypatch, 
         target.write_bytes(b"accepted-tail")
         fileio.truncate(target, 8, "journal")
         assert target.read_bytes() == b"accepted"
+    elif operation == "probe_writable":
+        fileio.probe_writable(target, "udf")
+        assert not target.exists()
+    elif operation == "remove":
+        target.write_bytes(b"accepted")
+        fileio.remove(target, "udf")
+        assert not target.exists()
     else:
         fileio.replace_atomic(target, b"accepted", "test_control")
         assert target.read_bytes() == b"accepted"
-    assert calls == [("enter", "screen_shell_fileio"), ("exit", "screen_shell_fileio")]
+    if operation == "probe_writable":
+        assert calls == [("enter", "screen_shell_fileio"), ("enter", "screen_shell_fileio"),
+                         ("exit", "screen_shell_fileio"), ("exit", "screen_shell_fileio")]
+    else:
+        assert calls == [("enter", "screen_shell_fileio"), ("exit", "screen_shell_fileio")]
 
 
 def test_refused_shell_writes_preserve_the_file(fileio, monkeypatch, tmp_path):
@@ -81,7 +89,6 @@ def test_refused_shell_writes_preserve_the_file(fileio, monkeypatch, tmp_path):
         yield
 
     monkeypatch.setattr(screen, "writer_admission", refused)
-    fileio.set_write_guard(screen.admission_write_guard)
     target = tmp_path / "receipt"
     target.write_bytes(b"original")
     with pytest.raises(WriterFencedError):
@@ -100,8 +107,7 @@ def test_raw_shell_io_runs_inside_the_real_ca_admission(fileio, monkeypatch, tmp
         assert observed[-1] > 0
         return builtins.open(*args, **kwargs)
 
-    monkeypatch.setattr(fileio, "open", admitted_open, raising=False)
-    fileio.set_write_guard(screen.admission_write_guard)
+    monkeypatch.setattr(importlib.import_module("shell_fileio"), "open", admitted_open, raising=False)
     fileio.append_bytes(tmp_path / "receipt", b"accepted", "journal", fsync=True)
     assert observed == [1]
     assert getattr(fence._WRITER_LOCAL, "depth", 0) == 0
@@ -132,10 +138,10 @@ def test_refused_diagnostics_and_receipt_writes_keep_scans_and_state_running(fil
             return {"accepted": True, "verdict": "ok", "sound": None}
 
     monkeypatch.setattr(screen, "writer_admission", admission)
-    fileio.set_write_guard(screen.admission_write_guard)
     processor = Processor()
     bridge = Bridge(tmp_path, "rw", pedal=_Pedal(), sound=_Sound(),
-                    processor_factory=lambda: processor)
+                    processor_factory=lambda: processor,
+                    write_guard=screen.admission_write_guard)
     try:
         allowed[0] = False
         assert bridge.scan("first", _meta(1))["accepted"] is True
@@ -151,11 +157,11 @@ def test_refused_diagnostics_and_receipt_writes_keep_scans_and_state_running(fil
         bridge.close()
 
 
-def test_shell_copy_matches_the_ready_v316_manifest():
+def test_shell_copy_matches_the_ready_v3162_manifest():
     ready_path = ROOT / "shell" / "SHELL-READY-v3.16.json"
     assert ready_path.is_file()
     ready = json.loads(ready_path.read_text(encoding="utf-8"))
-    assert ready["version"] == "v3.16"
+    assert ready["version"] == "v3.16.2"
     for row in ready["files"]:
         path = ROOT / row["path"]
         assert path.stat().st_size == row["bytes"]

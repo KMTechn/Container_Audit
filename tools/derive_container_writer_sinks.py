@@ -19,20 +19,20 @@ SNAPSHOT_PATH = ROOT / SNAPSHOT_RELATIVE_PATH
 SHIPPED_PACKAGE_DIRS = ("kmtech_factory_contracts", "kmtech_shared", "vendor")
 # The new-screen bridge's pinned companion kit is analysed even before portable assembly.
 SCREEN_SHELL_DIR = "shell"
-SHELL_KIT_READY_VERSION = "v3.16"
-SHELL_KIT_READY_SHA256 = "0c3d7524e8c989b61f5f8da698847e6b5b61fc0939e6fd0fb8bd7faa51efeec8"
+SHELL_KIT_READY_VERSION = "v3.16.2"
+SHELL_KIT_READY_SHA256 = "8c3b35d4740a86481e2d011630bf78271316c38ca5f1e137de8109f320e1eb88"
 SHELL_KIT_PYTHON_SHA256 = {
-    "shell/bridge.py": "215365456cd3a49dd2ec9ae903140f61cadaedd23eaefbbcebfc73decbf3da5c",
+    "shell/bridge.py": "61654de8e21ba4652e2b56ca9eb4a8e0881bfff6f20c6bb1c6d2325ebaafcd29",
     "shell/event_order.py": "48075f599c33bef1b9a3a283717d31f50f00ac2e71b1ebeb6970620b2275c146",
-    "shell/host.py": "5655118f2855310dffa6d6d9f299b5287dfc18ae27e686d7337c8c9a39dbb909",
-    "shell/journal.py": "714947eb6685032c896f601ef85fec9eaf7cb2c39b36ed7a8a30f0c86198b7e7",
+    "shell/host.py": "d9181dc40e2f54a548d88f45b069a0b59b74ff7cfd01101577e9b2b395b8def9",
+    "shell/journal.py": "5d486cde397f93d1b8d651fec273e667399c5860d1481cc86232341bb1a0aa4d",
     "shell/pedal.py": "fe19337649eddcc804398f410e022fce91bead708159ae3f82ae01dc790312f9",
     "shell/scan_rules.py": "a07e19eaac003b775adbe93fac86ce1536cf1e83729f7c654279e5f0c09f1504",
-    "shell/shell_fileio.py": "4c550a6e00e506503ee2d202183b1aa15c2be157c3b92d08f8597f8516cdf295",
-    "shell/sound.py": "808771ebea0eaff17619505984a0364a19e07a11ddc824298f5feeb90bb585a1",
+    "shell/shell_fileio.py": "d6a97d78927be4be7312105507a46adf26d1ad2520c86bd81139683403a68266",
+    "shell/sound.py": "a007064433046d9b1debfb183d1db28fb88f585230dcaa2937d175993f308504",
 }
 SHELL_KIT_WRITE_MODULE = "shell.shell_fileio"
-SHELL_KIT_WRITE_SITES = ("append_bytes", "create_new", "truncate", "replace_atomic", "make_dirs")
+SHELL_KIT_WRITE_SITES = ("append_bytes", "create_new", "truncate", "replace_atomic", "make_dirs", "probe_writable", "remove")
 SHELL_KIT_WRITER_SOURCE = "screen_shell_fileio"
 SHARED_UNUSED_DIAGNOSTIC_SHA256 = "085c47ad7cf42130de74240a6e3dccefc2502d844591f775d46fedaabc6ad36b"
 PS_MODULE_PROLOGUE = (
@@ -2999,7 +2999,7 @@ def _shell_kit_delegated_fence(
         or not ready_path.is_file()
         or hashlib.sha256(ready_path.read_bytes()).hexdigest() != SHELL_KIT_READY_SHA256
     ):
-        raise InventoryError("screen shell kit must match the pinned SHELL-READY v3.16")
+        raise InventoryError("screen shell kit must match the pinned SHELL-READY v3.16.2")
     tree = parsed_modules[SHELL_KIT_WRITE_MODULE]["tree"]
     sites = next((ast.literal_eval(node.value) for node in tree.body
                   if isinstance(node, ast.Assign) and len(node.targets) == 1
@@ -3033,7 +3033,13 @@ def _shell_kit_delegated_fence(
                 and keyword.value.id == "admission_write_guard" for keyword in node.keywords)
         for node in ast.walk(runner)
     )
-    if not real_guard or not installs_guard:
+    installs_marker_guard = runner is not None and any(
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "allowed"
+        and any(keyword.arg == "write_guard" and isinstance(keyword.value, ast.Name)
+                and keyword.value.id == "admission_write_guard" for keyword in node.keywords)
+        for node in ast.walk(runner)
+    )
+    if not real_guard or not installs_guard or not installs_marker_guard:
         raise InventoryError("CA screen entry must install the existing writer admission as the shell write guard")
     return {
         "ready_version": SHELL_KIT_READY_VERSION,

@@ -69,10 +69,20 @@ def assert_packet_screen_entry(app):
     assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                and isinstance(node.func.value, ast.Name) and node.func.value.id == "os"
                and node.func.attr == "_exit" for node in ast.walk(run_app))
-    forced = next(node for node in ast.walk(run_app) if isinstance(node, ast.If)
-                  and isinstance(node.test, ast.Attribute) and node.test.attr == "forced")
+    watcher = _function(host, "watch_force_exit")
+    forced = next(node for node in ast.walk(watcher) if isinstance(node, ast.If)
+                  and any(isinstance(item, ast.Attribute) and item.attr == "forced"
+                          for item in ast.walk(node.test)))
+    forced_call = next(node for node in ast.walk(forced) if isinstance(node, ast.Call)
+                       and isinstance(node.func, ast.Name) and node.func.id == "force_exit")
+    assert [node for node in ast.walk(run_app) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name) and node.func.id == "force_exit"] == [forced_call]
+    force_exit = _function(host, "force_exit")
     assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "on_force_exit"
-               for node in ast.walk(forced))
+                for node in ast.walk(force_exit))
+    assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+               and isinstance(node.func.value, ast.Name) and node.func.value.id == "os"
+               and node.func.attr == "_exit" for node in ast.walk(force_exit))
     choose = _function(host, "choose")
     assert any(isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) and node.value.value is True
                and any(isinstance(target, ast.Attribute) and target.attr == "forced" for target in node.targets)

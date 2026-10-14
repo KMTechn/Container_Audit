@@ -2,13 +2,13 @@
 
 - 바탕: `firstupd-ca-cut-1013` **4fb02da**(v2.0.103 — w9firstupd 10/12 23:58). 가지 `ca-newui-bridge-1013`(E: worktree, push 0). 기준일 조립(10/23–25)에 ACCEPT 고침 머리로 한 번 다시 얹음(주인 레인).
 - 화면 원천: 웹 committed `c706dbb2f7f0e62430da4a26f24ac515ab432283`의 `static/ui/` → `ui/`(72파일). 70파일은 원천 바이트와 같고 앱 계약의 기존 `events_dropped`·보류 `kind`에 `overflow`를 더하며 ca.js의 건수·넘침 안내를 고친다. MANIFEST의 원천 SHA·`dirty=true`·파일 해시·부품 지문을 함께 갱신한다.
-- 셸: `shell/` = 셸 v3.16 고정판(`shell/SHELL-READY-v3.16.json`의 19개 파일 SHA256·크기와 같음). kit 전용 `tk_ab.py`는 앱 사본에서 제외한다. 사본 바이트를 유지하도록 `shell/** -text`를 적용한다.
+- 셸: `shell/` = 승인된 검사 `2371be9d`의 셸 v3.16.2 고정판(`shell/SHELL-READY-v3.16.json`의 19개 파일 SHA256·크기와 같음). READY 이름은 유지하고 v3.16.2 승인 바이트를 그대로 싣는다. kit 전용 `tk_ab.py`는 앱 사본에서 제외한다. 사본 바이트를 유지하도록 `shell/** -text`를 적용한다.
 
 ## 1. 시작과 셸 끝내기 어댑터 (M84)
 기본·`--new-screen`·`--ui web`·모르는 `--ui` 값은 web, `--old-screen`·`--ui tk`는 그 실행만 Tk다. 비상 Tk의 셸 import는 0이다. 다른 셸 import는 try 안에서 처리하며 실패하면 `SHELL_IMPORT_FAILED` 한 줄 뒤 Tk로 간다. 같은 판의 `web_allowed=False`도 Tk를 고른다. 진입에 별도 PID 대기나 자동 재실행은 없다.
 웹 창 생성 뒤 실패는 셸이 쓰기 문 닫음·판 표지·destroy·before_exit·끝을 맡는다. 앱의 같은 프로세스 Tk 전환은 없다. 표지 저장 실패도 끝내며 되풀이하지 않는다. 다음에 사람이 켜면 같은 판의 표지로 Tk를 연다. 생성 전 안전한 Tk 길·시작 거절·업무 gate는 유지한다.
 `before_exit`는 같은 잠금으로 writer admission과 새 lane 시작을 닫는다. 보통 허가는 writer 허가·mutex가 비고 UI/중앙 전송/보류 쓰기 worker가 실제 죽어야 완료다. 기존 receipt·위임 신원·살아 있는 authority 검증을 통과한 위임/유지보수 허가는 worker 실제 종료만 확인한다. BROKEN도 살아 있으면 미완료다. 이 callback에서 lane 닫기·Tk/owner/lease 정리는 하지 않는다. 120초 상한·5초 확인이며 False면 셸이 `SHELL_EXIT_DEFERRED`로 끝내기를 미룬다. worker 종료는 기존 owner 정리가 맡으며 mainloop 전 초기화 실패에도 실행한다. lane 생성 중 pump 초기화가 실패하면 그 생성자가 기존 close_idle로 멈춘다. 일반 닫기의 bridge.request_exit에는 force 인수가 없다.
-셸의 OS 실패 안내에는 `title="이적"`을 넘긴다. 셸 사본 통합 전에는 API 전달만 monkeypatch로 확인한다. portable 선행 request_bootstrap admission의 WRITER_GATE_ABANDONED도 「이적 다시 열기 — 한 번 더 여세요」로 안내하며 기존 지원 기록·종료 1을 유지한다. application.main 안에서 처리한 안내는 중복하지 않는다.
+셸의 OS 실패 안내에는 `title="이적"`을 넘긴다. 승인된 셸 코드와 앱 진입을 함께 실행하되 WebView·OS 안내·프로세스 끝 경계를 대체해 확인한다. `web_allowed`의 표지 제거에도 `admission_write_guard`를 명시한다. 각 셸의 private FileIO에는 같은 guard를 넘기며 새 probe·remove 쓰기도 허가 안에서 실행한다. 실제 OS 창과 WebView2는 이 시험 범위 밖이다. portable 선행 request_bootstrap admission의 WRITER_GATE_ABANDONED도 「이적 다시 열기 — 한 번 더 여세요」로 안내하며 기존 지원 기록·종료 1을 유지한다. application.main 안에서 처리한 안내는 중복하지 않는다.
 보류는 전체 건수와 `overflow`를 유지하고 표시 줄만 50개로 제한한다. 격리·서버 확인 대기에 자리를 먼저 주며, 그 종류만 50개를 넘으면 두 종류가 각각 보이도록 한다. 넘친 목록은 옛 화면에서 확인한다.
 
 ## 2. 불변식 1 의 손질 자리 — 파일 대신 다리가 이 인스턴스 · 모듈 이름 자리에서 바꿈

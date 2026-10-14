@@ -24,7 +24,7 @@ def test_pinned_shell_mutations_are_all_in_one_admitted_module(shell_inventory_r
     module, root = shell_inventory_root
     payload = module.derive_inventory(root)
     descriptor = payload["shell_kit_delegated_fence"]
-    assert descriptor["ready_version"] == "v3.16"
+    assert descriptor["ready_version"] == "v3.16.2"
     assert descriptor["writer_source"] == "screen_shell_fileio"
     mutations = [row for row in payload["closure_direct_mutation_functions"] if row["file"].startswith("shell/")]
     assert mutations
@@ -34,7 +34,7 @@ def test_pinned_shell_mutations_are_all_in_one_admitted_module(shell_inventory_r
     assert {row["node"].rsplit(".", 1)[1] for row in mutations} == set(module.SHELL_KIT_WRITE_SITES)
 
 
-@pytest.mark.parametrize("drift", ["bytes", "extra", "missing", "installation", "admission", "ready"])
+@pytest.mark.parametrize("drift", ["bytes", "extra", "missing", "installation", "admission", "ready", "marker_guard"])
 def test_shell_delegation_rejects_kit_and_app_fence_drift(shell_inventory_root, drift):
     module, root = shell_inventory_root
     if drift == "bytes":
@@ -52,6 +52,9 @@ def test_shell_delegation_rejects_kit_and_app_fence_drift(shell_inventory_root, 
         source = path.read_text(encoding="utf-8")
         if drift == "installation":
             changed = source.replace("write_guard=admission_write_guard", "write_guard=None")
+        elif drift == "marker_guard":
+            changed = source.replace("write_guard=admission_write_guard)\n                if not use_web:",
+                                     "write_guard=None)\n                if not use_web:")
         else:
             changed = source.replace('return writer_admission("screen_shell_fileio")', "return None")
         assert changed != source

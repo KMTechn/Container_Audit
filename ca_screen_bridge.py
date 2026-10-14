@@ -1106,7 +1106,10 @@ def shell_data_dir() -> Path:
     if not local:
         raise RuntimeError("SHELL_DATA_UNAVAILABLE")
     base = Path(local)
-    return base / "KMTech" / "ContainerAudit" / "screen"
+    data = base / "KMTech" / "ContainerAudit" / "screen"
+    from storage_policy import require_prepared_machine_directory
+    require_prepared_machine_directory(data)
+    return data
 
 
 def admission_write_guard(op: str, path: Path, kind: str) -> Any:
@@ -1117,10 +1120,10 @@ def admission_write_guard(op: str, path: Path, kind: str) -> Any:
 def _check_screen_ready() -> None:
     try:
         raw = (APP_DIR / "shell" / "SHELL-READY-v3.16.json").read_bytes()
-        if hashlib.sha256(raw).hexdigest() != "0c3d7524e8c989b61f5f8da698847e6b5b61fc0939e6fd0fb8bd7faa51efeec8":
+        if hashlib.sha256(raw).hexdigest() != "8c3b35d4740a86481e2d011630bf78271316c38ca5f1e137de8109f320e1eb88":
             raise ValueError("shell ready differs")
         ready = json.loads(raw)
-        if ready["version"] != "v3.16":
+        if ready["version"] != "v3.16.2":
             raise ValueError("shell ready version differs")
         for row in ready["files"]:
             relative = Path(row["path"])
@@ -1188,7 +1191,8 @@ def screen_runner(module: Any) -> Callable[[List[str]], Any]:
             allowed = getattr(shell_host, "web_allowed", None)
             if allowed is not None:
                 with admission_write_guard("web_allowed", data, "udf"):
-                    use_web = allowed(data, module.CURRENT_VERSION)
+                    use_web = allowed(data, module.CURRENT_VERSION,
+                                      write_guard=admission_write_guard)
                 if not use_web:
                     host["requested"] = False
                     return module._run_gui_application(arguments)
