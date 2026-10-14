@@ -182,7 +182,7 @@
       return li;
     }));
     if (s.overflow) {
-      $('[data-park]').append(el('li', 'ca-park__meta', `전체 ${s.held_count}건 중 ${s.park.length}건 표시 · 나머지는 옛 화면에서 확인하세요`));
+      $('[data-park]').append(el('li', 'ca-park__meta', `보류 ${s.held_count}건 중 ${s.park.length}건만 보입니다. 나머지는 옛 화면에서 보세요.`));
     }
     const today = s.today;
     $('[data-today-title]').textContent = `오늘 작업 현황 · 완료 ${today.total_trays} 트레이`;

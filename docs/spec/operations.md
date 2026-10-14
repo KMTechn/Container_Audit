@@ -11,12 +11,12 @@ M86: 셸 OS 실패 안내의 제목은 `title="이적"`이다. mainloop 전 초�
 업무·사용자 relay·업데이트 내려받기의 기본 자료 자리는 LOCALAPPDATA다. 명시 경로가 ProgramData\KMTech 안을 가리키더라도 사용자 실행은 그곳의 디렉터리나 조상을 만들지 않는다. 필요한 디렉터리가 없으면 `MACHINE_RUNTIME_DIRECTORY_NOT_PREPARED`와 관리자 설치를 먼저 완료하라는 안내로 거절한다. 기계 설치기가 owner·ACL을 정해 준비한 디렉터리는 그대로 사용하며 사용자 실행에서 owner·ACL을 바꾸지 않는다. 이미 잘못된 owner·ACL의 회복은 이 거절 길이 맡지 않으며 기존 설치 보호 검사는 유지한다.
 
 
-현재 사본은 승인된 검사 `2371be9d`의 v3.16.2이며 19파일과 READY의 바이트를 대조한다. 어댑터는 `web_allowed`에도 쓰기 guard를 명시하며 셸의 private FileIO가 각 쓰기에 같은 허가를 얻는다. 실제 셸 코드의 시작 실패·수동 재시작·worker 종료 대기는 창과 OS 경계만 대체해 시험한다. 실제 창 하나·설치·현장 확인은 별도다. UI 최종 SHA 적용과 재개 지시 뒤 v2.0.106을 한 번 빌드한다.
+현재 사본은 승인된 검사 `2371be9d`의 v3.16.2이며 19파일과 READY의 바이트를 대조한다. 어댑터는 `web_allowed`에도 쓰기 guard를 명시하며 셸의 private FileIO가 각 쓰기에 같은 허가를 얻는다. 실제 셸 코드의 시작 실패·수동 재시작·worker 종료 대기는 창과 OS 경계만 대체해 시험한다. 실제 창 하나·설치·현장 확인은 별도다. 최종 UI 97efc8e7을 적용했다. v2.0.106을 한 번 빌드하며 실패 뒤 같은 번호로 다시 빌드하지 않는다.
 
 
 새 화면 보류 목록은 기존 작업자 신원 규칙으로 일반 보류와 사전조회 격리·서버 확인 대기를 읽는다. 격리·대기는 `kind`, `restorable:false`, 품목·현품표 번호·수량의 `label`, 고정 안내의 `note`를 전달하며 복원 명령을 받아도 일반 복원으로 넘기지 않는다. held_count는 실제 전체 건수이고 목록만 50줄로 제한한다. overflow로 넘침을 표시하고 격리·대기 줄에 먼저 자리를 주며 각 종류가 전부 빠지지 않게 한다. 넘친 일반 목록은 옛 화면에서 확인한다. 등록 때 동명이 있으면 현재 명단의 UUID·표시 이름을 후보로 보내고, 선택 직전에 다시 대조해 기존 등록 함수를 부른다. 다른 사람은 구분 이름으로 새로 등록한다. 명단 저장·승인·전송 계약은 그대로다.
 
-새 화면 portable 패킷은 `ca_screen_bridge.py`, `shell/`, `ui/`와 검사 앱 `dceb851d`의 같은 pywebview 6.2.1 의존성을 싣는다. 빌드는 `requirements-portable-build-win-py312.lock`의 정확한 15분포 환경을 요구한다. 셸 v3.16.2 READY SHA256은 `8c3b35d4740a86481e2d011630bf78271316c38ca5f1e137de8109f320e1eb88`이다. 배포 경로 이름 `SHELL-READY-v3.16.json`은 유지하고 승인된 v3.16.2 READY를 그대로 담는다. UI `c706dbb2`의 72파일 중 70개는 committed 바이트와 같다. 앱 계약의 기존 `events_dropped`·보류 `kind`에 `overflow`를 더하고 ca.js의 전체 건수·넘침 안내를 고쳐 `dirty=true`로 기록하며, 매니페스트 72파일의 바이트·해시와 부품 지문을 대조한다. 최종 UI 입력을 적용하기 전에는 이 두 파일을 더 고치지 않는다.
+새 화면 portable 패킷은 `ca_screen_bridge.py`, `shell/`, `ui/`와 검사 앱 `dceb851d`의 같은 pywebview 6.2.1 의존성을 싣는다. 빌드는 `requirements-portable-build-win-py312.lock`의 정확한 15분포 환경을 요구한다. 셸 v3.16.2 READY SHA256은 `8c3b35d4740a86481e2d011630bf78271316c38ca5f1e137de8109f320e1eb88`이다. 배포 경로 이름 `SHELL-READY-v3.16.json`은 유지하고 승인된 v3.16.2 READY를 그대로 담는다. UI는 4차 바탕 최종 `97efc8e733ba8d73c3d4c8d8a486cad5c3d8d531`의 공용10·이적62 파일을 다시 내보냈다. 72파일 모두 committed 바이트와 같고 로컬 P2 두 파일도 이 사본으로 대체했다. 매니페스트 원천 SHA·`dirty=false`·파일별 해시·부품 지문을 대조한다. 이 UI 사본에는 별도 로컬 수정을 하지 않는다.
 
 앱 native는 검사와 바이트가 같은 여섯 파일만 허용한다. unsigned 예외는 `_cffi_backend.cp312-win_amd64.pyd`, amd64 `ClrLoader.dll`, `Python.Runtime.dll` 세 개이며 WebView2 Core·WinForms·x64 Loader DLL은 서명 검증 대상이다. 두 설치기의 패킷·설치본 및 자동 업데이트 helper의 manifest 판독은 unsigned 목록이 빈 옛 판 또는 정확히 이 세 경로·SHA인 경우만 받는다. 빌더는 앱 PE 전체 크기·SHA·파일 집합과 설치기·업데이트 helper/빌더/실제 패킷 unsigned pin을 대조하며 빠짐·추가·바이트 변경을 거절한다. 다른 아키텍처 및 WebBrowserInterop 변형은 복사하지 않는다. 패킷의 `--new-screen`, writer guard, 「그래도 닫기」와 기본 `on_force_exit=None` 연결은 AST/바이트로 확인한다. 호스트에서는 실제 창을 띄우지 않고 현장 PC에서 창 동작을 확인한다.
 

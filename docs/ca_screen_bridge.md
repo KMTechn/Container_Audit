@@ -1,7 +1,7 @@
 # 이적 새 화면 이음 — 노트 (w9uiflow1014, APP-SCREENS-1013 ③)
 
 - 바탕: `firstupd-ca-cut-1013` **4fb02da**(v2.0.103 — w9firstupd 10/12 23:58). 가지 `ca-newui-bridge-1013`(E: worktree, push 0). 기준일 조립(10/23–25)에 ACCEPT 고침 머리로 한 번 다시 얹음(주인 레인).
-- 화면 원천: 웹 committed `c706dbb2f7f0e62430da4a26f24ac515ab432283`의 `static/ui/` → `ui/`(72파일). 70파일은 원천 바이트와 같고 앱 계약의 기존 `events_dropped`·보류 `kind`에 `overflow`를 더하며 ca.js의 건수·넘침 안내를 고친다. MANIFEST의 원천 SHA·`dirty=true`·파일 해시·부품 지문을 함께 갱신한다.
+- 화면 원천: 웹 4차 바탕 최종 committed `97efc8e733ba8d73c3d4c8d8a486cad5c3d8d531`의 `static/ui/` → `ui/`(공용 10·이적 62, 총 72파일). 모두 원천 바이트와 같으며 로컬 P2 두 파일은 이 판으로 대체했다. MANIFEST의 원천 SHA·`dirty=false`·파일 해시·부품 지문을 함께 갱신한다. PIN 판 스캔 막이와 보류 전체 수·넘침 안내도 이 사본을 그대로 사용한다.
 - 셸: `shell/` = 승인된 검사 `2371be9d`의 셸 v3.16.2 고정판(`shell/SHELL-READY-v3.16.json`의 19개 파일 SHA256·크기와 같음). READY 이름은 유지하고 v3.16.2 승인 바이트를 그대로 싣는다. kit 전용 `tk_ab.py`는 앱 사본에서 제외한다. 사본 바이트를 유지하도록 `shell/** -text`를 적용한다.
 
 ## 1. 시작과 셸 끝내기 어댑터 (M84)
