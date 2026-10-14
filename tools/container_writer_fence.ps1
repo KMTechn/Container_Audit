@@ -1,7 +1,7 @@
 ﻿Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
 Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 Set-StrictMode -Version Latest
-$Script:ContainerAtomicBootstrapSha256 = '202d8c42e8f0994a2a8144b1b9a5a2f108da63c74ccc69a35abe3b9d385d1c17'
+$Script:ContainerAtomicBootstrapSha256 = '0b820b19786f52d0ea973723c5f54b9ee9ac46f10abc9c6078863bf6ecbfb799'
 if (-not (Get-Command 'Invoke-ContainerAtomicReplace' -CommandType Function -ErrorAction SilentlyContinue)) {
     # Preserve a caller's already verified/in-memory bootstrap library. Cold imports
     # evaluate precisely the pinned bytes, not a second path read after verification.
@@ -26,7 +26,7 @@ $Script:ContainerWriterFenceTupleVersion = 'container-audit-deployment-session-a
 $Script:ContainerWriterFenceSessionMutexPrefix = 'Local\KMTech.ContainerAudit.DeploymentSession.'
 $Script:ContainerWriterFenceAdmissionMutexName = 'Local\KMTech.ContainerAudit.WriterAdmission.v1'
 $Script:ContainerWriterFenceAdmissionProductionRoot = ''
-$Script:ContainerWriterFenceInventorySha256 = '2fe44631e9ce802400981fe1a3705ac059e948b1153b97bf384047e50f028d69'
+$Script:ContainerWriterFenceInventorySha256 = 'abcf27b5343f51eac512b49d5bbdc5d382b7079dc7a5ac065f0fe83d55f2aefb'
 $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''
 $Script:ContainerWriterFenceMaximumBytes = 262144
 $Script:ContainerWriterFenceActiveFields = @(

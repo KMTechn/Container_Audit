@@ -406,11 +406,31 @@ function ConvertTo-KmtechPublicRecord {
 function ConvertTo-BootstrapPrincipalSid([string]$Identity) {
     try {
         if ([string]::IsNullOrWhiteSpace($Identity)) { throw 'Empty task identity.' }
-        if ($Identity.StartsWith('S-', [StringComparison]::Ordinal)) {
-            return [Security.Principal.SecurityIdentifier]::new($Identity).Value
+        if ($Identity.StartsWith('S-', [StringComparison]::OrdinalIgnoreCase)) {
+            return [Security.Principal.SecurityIdentifier]::new(('S-'+$Identity.Substring(2))).Value
         }
         return [Security.Principal.NTAccount]::new($Identity).Translate([Security.Principal.SecurityIdentifier]).Value
     } catch { throw [InvalidOperationException]::new('Task user SID cannot be resolved.', $_.Exception) }
+}
+
+function Get-BootstrapTaskTriggerIdentityStatus([xml]$Task,[string]$OperatorSid) {
+    $names=[Xml.XmlNamespaceManager]::new($Task.NameTable)
+    $names.AddNamespace('t','http://schemas.microsoft.com/windows/2004/02/mit/task')
+    $triggers=$Task.SelectNodes('/t:Task/t:Triggers/t:LogonTrigger',$names)
+    $users=$Task.SelectNodes('/t:Task/t:Triggers/t:LogonTrigger/t:UserId',$names)
+    if($triggers.Count -ne 1 -or $users.Count -ne 1){return 'INVALID'}
+    $node=$users[0]
+    if($node.ChildNodes.Count -ne 1 -or $node.ChildNodes[0].NodeType -notin @([Xml.XmlNodeType]::Text,[Xml.XmlNodeType]::CDATA)) {return 'INVALID'}
+    $identity=[string]$node.InnerText
+    if([string]::IsNullOrWhiteSpace($identity) -or $identity -cne $identity.Trim()){return 'INVALID'}
+    if($OperatorSid -cnotmatch '^S-\d+(?:-\d+)+$'){return 'INVALID'}
+    try{$wanted=[Security.Principal.SecurityIdentifier]::new($OperatorSid).Value}catch{return 'INVALID'}
+    $isSid=$identity.StartsWith('S-',[StringComparison]::OrdinalIgnoreCase)
+    if($isSid){try{[void][Security.Principal.SecurityIdentifier]::new(('S-'+$identity.Substring(2)))}catch{return 'INVALID'}}
+    try{$actual=ConvertTo-BootstrapPrincipalSid $identity}
+    catch{if($isSid){return 'INVALID'};return 'UNKNOWN'}
+    if($actual -ceq $wanted){return 'MATCHED'}
+    return 'DIFFERS'
 }
 
 function Test-BootstrapPrivilegedOwnerSid([string]$Sid) {
@@ -3884,7 +3904,17 @@ function Get-BootstrapSupportedLifecycleContext([string]$Root,[string]$Operation
                 '/t:Task/t:Settings/t:AllowHardTerminate'='false'
                 '/t:Task/t:Settings/t:Hidden'='true'
             }
-            foreach($field in $wanted.Keys){$node=$taskXml.SelectSingleNode($field,$names);if($null -ne $node -and $field -ceq '/t:Task/t:Actions/t:Exec/t:Arguments' -and $node.InnerText -ceq $previousArguments){continue};if($null -eq $node -or $node.InnerText -cne $wanted[$field]){throw 'lifecycle_task_absence_or_unknown'}}
+            foreach($field in $wanted.Keys){
+                if($field -ceq '/t:Task/t:Triggers/t:LogonTrigger/t:UserId'){
+                    if((Get-BootstrapTaskTriggerIdentityStatus $taskXml $sid) -cne 'MATCHED'){throw 'lifecycle_task_absence_or_unknown'}
+                    continue
+                }
+                $nodes=$taskXml.SelectNodes($field,$names)
+                if($nodes.Count -ne 1){throw 'lifecycle_task_absence_or_unknown'}
+                $node=$nodes[0]
+                if($field -ceq '/t:Task/t:Actions/t:Exec/t:Arguments' -and $node.InnerText -ceq $previousArguments){continue}
+                if($node.InnerText -cne $wanted[$field]){throw 'lifecycle_task_absence_or_unknown'}
+            }
             $after=@($records|ForEach-Object {Read-BootstrapLifecycleJson $_})
             for($index=0;$index -lt 3;$index++){
                 if(-not(Test-BootstrapLifecycleJsonEqual $after[$index] @($policy,$pointer,$state)[$index])){throw 'lifecycle_state_changed_during_verification'}

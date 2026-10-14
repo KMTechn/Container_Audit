@@ -1287,6 +1287,76 @@ def supported_tasks_absent(fixed: Path, *, operation: str = "inspect") -> bool:
     return result.returncode == 0
 
 
+def _resolve_task_principal_sid(identity: str) -> str:
+    """Resolve one SID/account through Windows; never compare account spelling."""
+    import ctypes
+    from ctypes import wintypes
+    if os.name != 'nt':
+        raise OSError('task principal resolution unavailable')
+    advapi = ctypes.WinDLL('advapi32', use_last_error=True)
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.LocalFree.argtypes = [wintypes.HLOCAL]
+    kernel.LocalFree.restype = wintypes.HLOCAL
+    advapi.ConvertStringSidToSidW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.LPVOID)]
+    advapi.ConvertStringSidToSidW.restype = wintypes.BOOL
+    advapi.ConvertSidToStringSidW.argtypes = [wintypes.LPVOID, ctypes.POINTER(wintypes.LPWSTR)]
+    advapi.ConvertSidToStringSidW.restype = wintypes.BOOL
+    sid_pointer = wintypes.LPVOID()
+    allocated = False
+    if identity[:2].upper() == 'S-':
+        if not advapi.ConvertStringSidToSidW('S-' + identity[2:], ctypes.byref(sid_pointer)):
+            raise ValueError('task SID invalid')
+        allocated = True
+    else:
+        advapi.LookupAccountNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPVOID,
+            ctypes.POINTER(wintypes.DWORD), wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD)]
+        advapi.LookupAccountNameW.restype = wintypes.BOOL
+        size, domain_size, use = wintypes.DWORD(), wintypes.DWORD(), wintypes.DWORD()
+        advapi.LookupAccountNameW(None, identity, None, ctypes.byref(size), None, ctypes.byref(domain_size), ctypes.byref(use))
+        if ctypes.get_last_error() != 122 or not 0 < size.value <= 65536 or domain_size.value > 65536:
+            raise OSError('task account SID unknown')
+        buffer = ctypes.create_string_buffer(size.value)
+        domain = ctypes.create_unicode_buffer(max(1, domain_size.value))
+        if not advapi.LookupAccountNameW(None, identity, buffer, ctypes.byref(size), domain, ctypes.byref(domain_size), ctypes.byref(use)):
+            raise OSError('task account SID unknown')
+        sid_pointer = ctypes.cast(buffer, wintypes.LPVOID)
+    text = wintypes.LPWSTR()
+    try:
+        if not advapi.ConvertSidToStringSidW(sid_pointer, ctypes.byref(text)):
+            raise OSError('task principal SID unknown')
+        return text.value
+    finally:
+        if text:
+            kernel.LocalFree(ctypes.cast(text, wintypes.HLOCAL))
+        if allocated:
+            kernel.LocalFree(sid_pointer)
+
+
+def task_trigger_identity_status(task, operator_sid: str) -> str:
+    ns = {'t': 'http://schemas.microsoft.com/windows/2004/02/mit/task'}
+    triggers = task.findall('t:Triggers/t:LogonTrigger', ns)
+    users = task.findall('t:Triggers/t:LogonTrigger/t:UserId', ns)
+    if len(triggers) != 1 or len(users) != 1 or len(users[0]):
+        return 'INVALID'
+    identity = users[0].text
+    if not isinstance(identity, str) or not identity.strip() or identity != identity.strip():
+        return 'INVALID'
+    if not isinstance(operator_sid, str) or re.fullmatch(r'S-\d+(?:-\d+)+', operator_sid) is None:
+        return 'INVALID'
+    try:
+        wanted = _resolve_task_principal_sid(operator_sid)
+    except (ValueError, OSError):
+        return 'INVALID'
+    is_sid = identity[:2].upper() == 'S-'
+    try:
+        actual = _resolve_task_principal_sid(identity)
+    except ValueError:
+        return 'INVALID' if is_sid else 'UNKNOWN'
+    except OSError:
+        return 'UNKNOWN'
+    return 'MATCHED' if actual == wanted else 'DIFFERS'
+
+
 @writer_sink("auto_update_control")
 def supported_task_present(fixed: Path, sid: str) -> bool:
     """Read the actual derived task without executing installed support code."""
@@ -1311,12 +1381,13 @@ Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Mi
         return (len(actual.findall('t:Actions/t:Exec', ns)) == 1
                 and len(actual.findall('t:Triggers/t:LogonTrigger', ns)) == 1
                 and len(actual.findall('t:Principals/t:Principal', ns)) == 1
-                and all(actual.findtext(path, namespaces=ns) in (
+                and task_trigger_identity_status(actual, sid) == 'MATCHED'
+                and all(len(actual.findall(path, ns)) == 1 and (actual.findtext(path, namespaces=ns) in (
                     expected.findtext(path, namespaces=ns),
                     expected.findtext(path, namespaces=ns).replace(' -ExecutionPolicy Bypass -File ', ' -File ', 1),
                 ) if path == 't:Actions/t:Exec/t:Arguments' else
-                    actual.findtext(path, namespaces=ns) == expected.findtext(path, namespaces=ns)
-                    for path in paths))
+                    actual.findtext(path, namespaces=ns) == expected.findtext(path, namespaces=ns))
+                    for path in paths if path != 't:Triggers/t:LogonTrigger/t:UserId'))
     except (ValueError, xml.ParseError):
         return False
 
