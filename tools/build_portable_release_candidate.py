@@ -53,6 +53,7 @@ RUNTIME_ROOT_FILES = (
 # consumers. Add new runtime modules here explicitly; unrelated root scripts
 # must not enter the packet or seed its tools import closure.
 APP_ROOT_FILES = (
+    "atomic_replace.py",
     "worker_roster.py",
     "auto_update.py",
     "startup_check.py",
@@ -450,6 +451,10 @@ def _assert_portable_import_closure(
     python_executable: Path | None = None,
 ) -> None:
     modules = [
+        "atomic_replace",
+        "runtime_entry",
+        "runtime_instance_win32",
+        "tk_callback_result",
         "Container_Audit",
         "container_audit_product_host",
         "current_user_onboarding",

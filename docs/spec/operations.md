@@ -15,6 +15,7 @@ ctypes의 창 활성화·안내·위치 보정은 runtime_instance_win32 한 모
 
 앱 소유 Python 원자 바꿈은 atomic_replace 한 모듈에서 WinError 5/32만 총 1.5초 안에 다시 시도한다. 지속 거절은 첫 예외를 그대로 전파하며 준비 파일·읽는 쪽·호출자의 writer admission은 유지한다. C1 제어 JSON은 write-through(REPLACE_EXISTING|WRITE_THROUGH)를 유지하고 C2 준비 파일도 같은 경계를 쓴다. PowerShell의 대응 경계는 bootstrap_integrity의 Invoke-ContainerAtomicReplace이며 Replace backup·CreateNew의 덮어쓰기 거절·write-through 의미를 유지한다. fence의 cold import는 고정 SHA와 확인한 bootstrap 바이트만 평가하며 이미 검증된 함수는 재적재하지 않는다.
 바이트 고정 공용·셸의 기존 원자 바꿈은 정본 주인 후속이다. 지킴 시험은 data_generation.py·powershell/data_generation.ps1·raster.py·diagnostic_log.py·shell_fileio.py 다섯 정확한 경로와 SHA만 제외하며 새 직접 바꿈이나 제외 파일 변경을 거절한다. 공용 바이트 일치·writer gate·consumer 단언과 버전 디렉터리 rename은 그대로 유지한다.
+첫 거절 뒤에는 native 호출 전에 기한을 다시 확인하며, relay/app 종료의 게시와 대기는 한 기한을 공유한다. PS는 native HRESULT 5/32만 다시 시도한다. 배포 사본의 새 시작·게시 모듈과 `-I` 자식을 집중 시험으로 확인한다.
 
 비상 바로 가기는 InstallRoot(current)의 부모인 앱 폴더의 `관리용\이적 옛 화면 (비상).lnk`에 둔다. 기존 작업자 바로 가기와 대상·작업 폴더·아이콘이 같고 인수는 `--ui tk`이다. 설치·재설치·업데이트의 기존 바로 가기 흐름에서 생성 또는 readback 확인하며, 제거 때 소유 링크와 빈 관리용 폴더만 지운다. 같은 이름의 남의 링크나 다른 파일이 있는 관리용 폴더는 손대지 않고 경고 한 줄을 남긴다. current의 코드 목록·무결성 범위와 예외 규칙은 바뀌지 않는다.
 

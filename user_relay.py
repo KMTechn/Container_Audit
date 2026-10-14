@@ -50,7 +50,7 @@ def _now() -> str:
 
 
 @writer_sink("persistent_relay_status")
-def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+def _write_json_atomic(path: Path, payload: Mapping[str, Any], *, deadline: float | None = None) -> None:
     from atomic_replace import atomic_replace
     from auto_update import assert_machine_metadata_no_secrets
     encoded = json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
@@ -62,7 +62,7 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
-        atomic_replace(temporary, path)
+        atomic_replace(temporary, path, deadline=deadline)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -521,7 +521,10 @@ def request_user_relay_stop(
     timeout_seconds: float = 10.0,
     wait: Callable[[float], None] = time.sleep,
     lease_factory: Callable[[str | os.PathLike[str]], Any] = acquire_runtime_instance,
+    publication_deadline: float | None = None,
 ) -> dict[str, Any]:
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    write_deadline = deadline if publication_deadline is None else min(time.monotonic() + 1.5, publication_deadline)
     root = Path(direct_sync_root).expanduser().resolve()
     stop_path = user_relay_stop_path(root)
     request_id = uuid.uuid4().hex
@@ -532,8 +535,8 @@ def request_user_relay_stop(
             "request_id": request_id,
             "requested_at": _now(),
         },
+        deadline=write_deadline,
     )
-    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
     lease_key = root / "user-relay-instance"
     while True:
         lease = lease_factory(lease_key)
@@ -551,7 +554,7 @@ def request_user_relay_stop(
                 "stop_request_path": str(stop_path),
                 "reason": "relay process absence was not proven before timeout",
             }
-        wait(0.25)
+        wait(min(0.25, max(0.0, deadline - time.monotonic())))
 
 
 def _windows_command_arguments(command: str) -> list[str]:
@@ -714,8 +717,8 @@ def request_app_stop(
         "schema_version": APP_STOP_SCHEMA,
         "request_id": request_id,
         "requested_at": datetime.now(timezone.utc).isoformat(),
-    })
-    relay = request_user_relay_stop(root, timeout_seconds=0)
+    }, deadline=deadline)
+    relay = request_user_relay_stop(root, timeout_seconds=0, publication_deadline=deadline)
     result = {
         "status": "REQUESTED",
         "request_id": request_id,

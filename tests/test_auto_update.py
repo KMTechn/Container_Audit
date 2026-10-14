@@ -5,6 +5,7 @@ import auto_update as updates
 
 
 def test_installer_logon_task_child_runs_as_an_isolated_script(tmp_path):
+    import os
     import json
     import re
     import subprocess
@@ -12,9 +13,9 @@ def test_installer_logon_task_child_runs_as_an_isolated_script(tmp_path):
     import xml.etree.ElementTree as ET
 
     sid = "S-1-5-21-101-202-303-1001"
-    install_root = tmp_path / "installed"
+    install_root = Path(os.environ["IWRUN_CONFIG"]).resolve().parent / "task-spec-root"
     result = subprocess.run(
-        [sys.executable, "-B", str(Path(updates.__file__).resolve()),
+        [sys.executable, "-I", "-B", str(Path(updates.__file__).resolve()),
          "--print-logon-task", "--install-root", str(install_root), "--operator-sid", sid],
         capture_output=True, text=True, check=False,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),

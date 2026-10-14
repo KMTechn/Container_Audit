@@ -40,6 +40,7 @@ function Invoke-ContainerAtomicReplace {
     $atomicClock=[Diagnostics.Stopwatch]::StartNew()
     $atomicFirstError=$null
     while ($true) {
+        if($null -ne $atomicFirstError -and $atomicClock.Elapsed.TotalMilliseconds -ge 1500){$PSCmdlet.ThrowTerminatingError($atomicFirstError)}
         try {
             Invoke-ContainerAtomicReplaceOnce $Source $Destination $Mode $Backup
             return
@@ -2955,7 +2956,7 @@ function Write-Utf8Json([string]$Path, $Payload) {
     $json = (($Payload | ConvertTo-Json -Depth 40).Replace("`r`n","`n")) + "`n"
     Assert-InstallationMachineMetadataNoSecrets $json
     [IO.File]::WriteAllText($temporary, $json, (New-Object Text.UTF8Encoding($false)))
-    Move-Item -LiteralPath $temporary -Destination $Path -Force
+    Invoke-ContainerAtomicReplace $temporary $Path -Mode WriteThrough
 }
 
 function Write-BootstrapIntegrityRecord(

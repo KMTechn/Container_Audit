@@ -21,12 +21,15 @@ def _replace_once(source, destination, write_through: bool) -> None:
         os.replace(source, destination)
 
 
-def atomic_replace(source, destination, *, write_through: bool = False) -> None:
+def atomic_replace(source, destination, *, write_through: bool = False, deadline: float | None = None) -> None:
     """Replace one prepared file; this function never acquires or bypasses admission."""
-    deadline = monotonic() + RETRY_SECONDS
+    local_deadline = monotonic() + RETRY_SECONDS
+    deadline = local_deadline if deadline is None else min(local_deadline, deadline)
     first_error = None
     first_traceback = None
     while True:
+        if first_error is not None and monotonic() >= deadline:
+            raise first_error.with_traceback(first_traceback) from None
         try:
             _replace_once(source, destination, write_through)
             return

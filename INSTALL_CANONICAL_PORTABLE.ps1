@@ -71,7 +71,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = 'fa005d4aee874858b3697abe08524425030f2a9eb936cce08e38823de2628d95'
+$ExpectedBootstrapIntegritySha256 = '17763753d9f24f6aa72633a1897fdfda7f2079bfd6391c1a2e862b40c3723bf4'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -1164,7 +1164,7 @@ function Write-CanonicalInstallReentryRecord([string]$Phase) {
     $stream=[IO.FileStream]::new($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
     try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
     Set-InstallationEvidenceAcl $temporary $operatorSid
-    Move-Item -LiteralPath $temporary -Destination $path -Force
+    Invoke-ContainerAtomicReplace $temporary $path -Mode WriteThrough
     $readback=Get-Content -LiteralPath $path -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
     if([string]$readback.phase -cne $Phase -or [string]$readback.run_id -cne $runId){throw 'Reentry record readback differs.'}
     Write-InstallationEvidenceEvent ([ordered]@{event='REENTRY_RECORD';phase=$Phase;path=$path;sha256=Sha $path;secret_values_recorded=$false})
@@ -1332,7 +1332,7 @@ function Save([string]$Path, $Value, [bool]$SanitizeDiagnostics=$false) {
         finally { $stream.Dispose() }
     }
     else { [IO.File]::WriteAllText($temp,$json,(New-Object Text.UTF8Encoding($false))) }
-    Move-Item $temp $Path -Force
+    Invoke-ContainerAtomicReplace $temp $Path -Mode WriteThrough
 }
 function New-CanonicalWriterFencePreparedReceipt(
     [string]$Path,
@@ -2924,7 +2924,7 @@ function Save-CanonicalOfficialLegacyRelayTransitionPointer($Binding,[switch]$Re
             if((Sha $onboardingPath) -cne $priorSha){throw 'OFFICIAL_LEGACY_INSTALL_RECORD_CHANGED'}
             $stream=[IO.FileStream]::new($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
             try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
-            try{Move-Item -LiteralPath $temporary -Destination $onboardingPath -Force}
+            try{Invoke-ContainerAtomicReplace $temporary $onboardingPath -Mode WriteThrough}
             finally{if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary}}
         })
     $readback=Read-CanonicalOfficialLegacyRelayTransitionPointer

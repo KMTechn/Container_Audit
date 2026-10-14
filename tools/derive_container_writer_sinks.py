@@ -166,8 +166,8 @@ POWERSHELL_NATIVE_PROCESS_APIS = (
 
 # Fold only the 33 pre-existing b82 directory preparations into their unchanged callers.
 ATOMIC_REPLACEMENT_HELPER = "atomic_replace.atomic_replace"
-ATOMIC_REPLACEMENT_MODULE_AST_SHA256 = "1aafda27cdbf87f4a3c157422910fa25a16738131a9fd28ecc1b4a2151baa397"
-POWERSHELL_ATOMIC_HELPERS_SHA256 = "da9aa438788a603e4611e02f4108fe0a02f09a4d90d12863d9a4a410b7d6bcd9"
+ATOMIC_REPLACEMENT_MODULE_AST_SHA256 = "f08ed945568b506d845c5d13d6dd99bca1976d66ae5dfb9d35705679913bbf6a"
+POWERSHELL_ATOMIC_HELPERS_SHA256 = "9ca4943f643b639cfa68a5787e12be99409e06474d444ceae6d81e468fd7139c"
 POWERSHELL_ATOMIC_FUNCTIONS = frozenset({"Invoke-ContainerAtomicReplace", "Invoke-ContainerAtomicReplaceOnce"})
 DIRECTORY_PREPARATION_HELPER = "storage_policy.ensure_user_runtime_directory"
 DIRECTORY_PREPARATION_HELPER_AST_SHA256 = '0dbccb4e84da1737ae39f266bab8727b5d7836768211e32b38d7432bf206b7a0'
@@ -1302,9 +1302,15 @@ class _NodeVisitor(ast.NodeVisitor):
     def _classify_mutation(self, node: ast.Call) -> dict[str, Any] | None:
         resolved = self._resolve_callable(node.func)
         if resolved == ATOMIC_REPLACEMENT_HELPER:
-            if (len(node.args) != 2 or any(keyword.arg != "write_through"
-                    or not isinstance(keyword.value, ast.Constant) or type(keyword.value.value) is not bool
-                    for keyword in node.keywords)):
+            def approved_keyword(keyword):
+                if keyword.arg == "write_through":
+                    return isinstance(keyword.value, ast.Constant) and type(keyword.value.value) is bool
+                # The same relay sink may supply its caller's bounded budget.
+                # No other caller, option or destination shape is admitted.
+                return (self.current_qualname == "user_relay._write_json_atomic"
+                        and keyword.arg == "deadline" and isinstance(keyword.value, ast.Name)
+                        and keyword.value.id == "deadline")
+            if len(node.args) != 2 or any(not approved_keyword(keyword) for keyword in node.keywords):
                 raise InventoryError("atomic replacement call shape changed")
             return self._mutation_record(node, resolved, "filesystem")
         if resolved in EXTERNAL_PROCESS_CALLS:

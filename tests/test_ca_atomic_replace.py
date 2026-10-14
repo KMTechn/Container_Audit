@@ -29,6 +29,9 @@ TEST_REPLACEMENT_DOUBLES = {
 }
 
 
+MOVEMENT_EXCLUSIONS = {('INSTALL_THIS_PC.ps1', 'Restore-ContainerStartupUpdatePreimage', '01732e3a2f354425721a765af5d4acd15f194801276c8368ab46a04ff59819c8'): 'guarded quarantine or version directory move; no file publication', ('INSTALL_THIS_PC.ps1', 'Invoke-ContainerConvergentRemoval', 'bb0fcc5b04d60c75b98418b0386d81b785ccc86186b0f2bfd1215deabec33b38'): 'guarded quarantine or version directory move; no file publication', ('INSTALL_THIS_PC.ps1', '<module>', '8becac505a03d2f48be68878e420a1990318b3cbd009d15ae93200902bb2824b'): 'guarded quarantine or version directory move; no file publication', ('INSTALL_THIS_PC.ps1', '<module>', '929439eadd1356766f52333644e3ba6898bc71f60c2f58ef8eef8f7bb5f7121f'): 'guarded quarantine or version directory move; no file publication', ('INSTALL_THIS_PC.ps1', '<module>', 'a0898bfdf0d2b7414073c852daff544aeee76e3045a90b01f2bf714d090aa6cd'): 'guarded quarantine or version directory move; no file publication', ('INSTALL_THIS_PC.ps1', '<module>', '4ccfa4fb5b4b733240046536856ea650da76fc768e15ed7d925144a5d6ed2c87'): 'guarded quarantine or version directory move; no file publication', ('INSTALL_THIS_PC.ps1', '<module>', 'b5956526cc6d6a68b9a8c26c82f3a7b905b3fe9274ca0adf9ac06c26b5a52f0f'): 'guarded quarantine or version directory move; no file publication', ('INSTALL_THIS_PC.ps1', '<module>', '560e01bae1147700e870caa8f44ace81e6cccbc274539bd24cc1e62470a2c8ac'): 'guarded quarantine or version directory move; no file publication', ('tools/bootstrap_integrity.ps1', 'Invoke-BootstrapVerifiedReplacementRestore', '04f07000709349c4620ee0492bf5bb5b424b5a42d22c08eb8ed81a34cab2963c'): 'guarded quarantine or version directory move; no file publication', ('tools/bootstrap_integrity.ps1', 'Invoke-BootstrapVerifiedReplacementRestore', 'ba30833e116cc4a8c7a59819e551e8224b063cd4a0f341d438216a08c0681c42'): 'guarded quarantine or version directory move; no file publication', ('tools/bootstrap_integrity.ps1', 'Invoke-BootstrapVerifiedReplacementRestore', '347d6e1c77eea361c7bdeb27e6221c9f39f3ab9d4f824971f62abbe317b3e695'): 'guarded quarantine or version directory move; no file publication', ('tools/bootstrap_integrity.ps1', 'Invoke-BootstrapVerifiedReplacementRestore', '1f0294214766f50cf7e4ec91b12c1949c99c16f831a2908516040eb71dc92a5e'): 'guarded quarantine or version directory move; no file publication', ('tools/bootstrap_integrity.ps1', 'Invoke-BootstrapVerifiedReplacementRestore', '4439e03dbbad17adadfbf6f394a6b0a31c70403c39d143bb061c5b162d0971a0'): 'guarded quarantine or version directory move; no file publication'}
+
+
 def _direct_replacements(root):
     """Scan owned source and named test doubles; exclude generated/dependency trees."""
     import re
@@ -37,8 +40,8 @@ def _direct_replacements(root):
     violations = []
     for folder, directories, names in os.walk(root):
         directories[:] = [name for name in directories if name not in {
-            ".git", "__pycache__", ".pytest_cache", ".venv", "vendor", "node_modules",
-            "runtime", "build", "dist", "ui", "assets"}]
+            ".git", "__pycache__", ".pytest_cache", ".venv", "node_modules",
+            "runtime", "build", "dist", "assets"}]
         for name in names:
             path = Path(folder) / name
             relative = path.relative_to(root).as_posix()
@@ -80,15 +83,32 @@ def _direct_replacements(root):
                     if (relative, function) == ("atomic_replace.py", "_replace_once") or (relative, function) in TEST_REPLACEMENT_DOUBLES:
                         continue
                     violations.append((relative, function, node.lineno))
-            else:
-                lines = text.splitlines()
-                ranges = inventory._powershell_function_ranges(lines)
-                for number, line in enumerate(lines, 1):
-                    if re.search(r"\b(?:MoveFileExW|ReplaceFileW)\b|\[(?:System\.)?(?:IO\.)?File\]\s*::\s*(?:Replace|Move)\s*\(", line):
-                        owner = inventory._powershell_function_at_line(ranges, number)
-                        function = "module" if owner is None else owner["name"]
-                        if (relative, function) != ("tools/bootstrap_integrity.ps1", "Invoke-ContainerAtomicReplaceOnce"):
-                            violations.append((relative, function, number))
+    violations.extend(_powershell_replacements(root))
+    return violations
+
+
+def _powershell_replacements(root):
+    import shutil
+    from tests.powershell_contracts import run_powershell
+    executable = shutil.which("pwsh") or shutil.which("powershell")
+    assert executable is not None
+    result = run_powershell([executable, "-NoProfile", "-File",
+        str(ROOT / "tests/ca_atomic_ast_probe.ps1"), "-Root", str(root)],
+        capture_output=True, text=True)
+    assert result.returncode == 0
+    rows = json.loads(result.stdout)
+    violations = []
+    for row in rows:
+        relative = row["path"]
+        if relative in PINNED_EXCLUSIONS:
+            expected, _ = PINNED_EXCLUSIONS[relative]
+            if hashlib.sha256((root / relative).read_bytes()).hexdigest() != expected:
+                violations.append((relative, "changed pinned source"))
+            continue
+        if (relative, row["function"]) == ("tools/bootstrap_integrity.ps1", "Invoke-ContainerAtomicReplaceOnce"):
+            continue
+        if (relative, row["function"], row["sha256"]) not in MOVEMENT_EXCLUSIONS:
+            violations.append((relative, row["function"], row["line"]))
     return violations
 
 
@@ -305,3 +325,47 @@ def test_transfer_keeps_original_arguments_callers_and_fence_classifications():
                 and node.func.value.id == "os" and node.func.attr == "rename"]
             assert rename(before) == rename(after)
     assert old_count == new_count == 36
+
+
+@pytest.mark.parametrize("directory", ["vendor", "ui"])
+def test_guard_scans_owned_subdirectories(tmp_path, directory):
+    target=tmp_path/directory/"publication.py"
+    target.parent.mkdir()
+    target.write_text("import os; os.replace('a','b')\n", encoding="utf-8")
+    assert _direct_replacements(tmp_path)
+
+
+@pytest.mark.parametrize("source", [
+    "Microsoft.PowerShell.Management\\Move-Item -LiteralPath $a -Destination $b",
+    "Rename-Item -LiteralPath $a -NewName $b",
+    "[System.IO.File]::Replace(\n$a,\n$b,\n$c\n)",
+])
+def test_guard_parses_powershell_commands_and_multiline_calls(tmp_path, source):
+    (tmp_path/"publication.ps1").write_text(source,encoding="utf-8")
+    assert _powershell_replacements(tmp_path)
+
+
+def test_retry_sleep_past_deadline_prevents_later_native_call(monkeypatch):
+    now=[0.0];attempts=[];first=ctypes.WinError(5)
+    def replace(*args):
+        attempts.append(now[0])
+        if len(attempts)==1: raise first
+    monkeypatch.setattr(publication,"_replace_once",replace)
+    monkeypatch.setattr(publication,"monotonic",lambda:now[0])
+    monkeypatch.setattr(publication,"sleep",lambda _:now.__setitem__(0,2.0))
+    with pytest.raises(OSError) as failure:
+        publication.atomic_replace("prepared","target")
+    assert failure.value is first and attempts==[0.0]
+
+
+@pytest.mark.parametrize("deadline",[0.0,0.1])
+def test_explicit_publication_budget_preserves_first_error(monkeypatch,deadline):
+    now=[0.0];attempts=[];first=ctypes.WinError(32)
+    def replace(*args):
+        attempts.append(now[0]);raise first
+    monkeypatch.setattr(publication,"_replace_once",replace)
+    monkeypatch.setattr(publication,"monotonic",lambda:now[0])
+    monkeypatch.setattr(publication,"sleep",lambda _:now.__setitem__(0,deadline+0.01))
+    with pytest.raises(OSError) as failure:
+        publication.atomic_replace("prepared","target",deadline=deadline)
+    assert failure.value is first and attempts==[0.0]
