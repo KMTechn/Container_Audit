@@ -71,6 +71,7 @@ def shutdown_stall_is_live(data_root: str | os.PathLike[str]) -> bool:
 @writer_sink("runtime_instance_marker", report_only=True)
 def _write_entry_marker(entry) -> None:
     """Only this owner mutex's bounded, per-user PID/state report."""
+    from atomic_replace import atomic_replace
     from runtime_entry import instance_marker_path
     if entry.lease._released or entry.lease.mutex_name != runtime_mutex_name(entry.root):
         raise ValueError("instance marker requires the live owner lease")
@@ -88,7 +89,7 @@ def _write_entry_marker(entry) -> None:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        atomic_replace(temporary, path)
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)

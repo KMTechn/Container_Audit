@@ -3,6 +3,62 @@ Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Mi
 $BootstrapIntegrityFileName = "bootstrap-integrity.json"
 $BootstrapIntegritySchema = "container-audit-bootstrap-integrity-v1"
 
+function Invoke-ContainerAtomicReplaceOnce([string]$Source,[string]$Destination,[string]$Mode,[string]$Backup) {
+    switch -CaseSensitive ($Mode) {
+        'Replace' {
+            $atomicBackup=if([string]::IsNullOrEmpty($Backup)){[System.Management.Automation.Language.NullString]::Value}else{$Backup}
+            [IO.File]::Replace($Source,$Destination,$atomicBackup)
+        }
+        'CreateNew' { [IO.File]::Move($Source,$Destination) }
+        'WriteThrough' {
+            if (-not ('KMTechContainerAtomicFile' -as [type])) {
+                Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public static class KMTechContainerAtomicFile {
+ [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+ public static extern bool MoveFileExW(string source, string target, uint flags);
+}
+'@
+            }
+            if (-not [KMTechContainerAtomicFile]::MoveFileExW($Source,$Destination,9)) {
+                throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error(),'STARTUP_UPDATE_DURABLE_RECORD_FAILED')
+            }
+        }
+        default { throw 'Unsupported atomic publication mode.' }
+    }
+}
+
+function Invoke-ContainerAtomicReplace {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)][string]$Source,
+        [Parameter(Mandatory=$true)][string]$Destination,
+        [ValidateSet('Replace','CreateNew','WriteThrough')][string]$Mode='Replace',
+        [AllowNull()][AllowEmptyString()][string]$Backup=$null
+    )
+    # Admission, reparse/ACL checks and prepared bytes remain the caller's responsibility.
+    $atomicClock=[Diagnostics.Stopwatch]::StartNew()
+    $atomicFirstError=$null
+    while ($true) {
+        try {
+            Invoke-ContainerAtomicReplaceOnce $Source $Destination $Mode $Backup
+            return
+        }
+        catch {
+            $atomicCause=$_.Exception
+            while ($atomicCause.InnerException) { $atomicCause=$atomicCause.InnerException }
+            $atomicCode=-1
+            if ($atomicCause -is [ComponentModel.Win32Exception]) { $atomicCode=$atomicCause.NativeErrorCode }
+            elseif (($atomicCause.HResult -band -65536) -eq -2147024896) { $atomicCode=$atomicCause.HResult -band 65535 }
+            if ($atomicCode -notin @(5,32)) { throw }
+            if ($null -eq $atomicFirstError) { $atomicFirstError=$_ }
+            $atomicRemaining=1500-$atomicClock.Elapsed.TotalMilliseconds
+            if ($atomicRemaining -le 0) { $PSCmdlet.ThrowTerminatingError($atomicFirstError) }
+            Start-Sleep -Milliseconds ([int][Math]::Min(50,[Math]::Ceiling($atomicRemaining)))
+        }
+    }
+}
+
 function Get-BootstrapWorkerShortcutFolders([string]$Scope='All') {
     if($Scope -cnotin @('All','User','Common')){throw 'Worker shortcut scope is invalid.'}
     foreach($name in @('DesktopDirectory','Programs','CommonDesktopDirectory','CommonPrograms')){
@@ -56,8 +112,8 @@ function Write-BootstrapWorkerShortcutRecord([string]$Path,$Record) {
     if([Text.Encoding]::UTF8.GetByteCount($json) -gt 131072){throw 'Worker shortcut record exceeds its bound.'}
     $temporary=$Path+'.tmp.'+[Guid]::NewGuid().ToString('N')
     [IO.File]::WriteAllText($temporary,$json,[Text.UTF8Encoding]::new($false))
-    if([IO.File]::Exists($Path)){[IO.File]::Replace($temporary,$Path,[System.Management.Automation.Language.NullString]::Value)}
-    else{[IO.File]::Move($temporary,$Path)}
+    if([IO.File]::Exists($Path)){Invoke-ContainerAtomicReplace $temporary $Path -Mode Replace}
+    else{Invoke-ContainerAtomicReplace $temporary $Path -Mode CreateNew}
 }
 
 function Read-BootstrapWorkerShortcutRecord([string]$InstallRoot,[string]$RecordPath,[string]$Scope) {
@@ -1477,7 +1533,7 @@ function Write-InstallationTransactionFile([string]$Path,[byte[]]$Bytes,[string]
     $stream=[IO.File]::Open($temporary,'CreateNew','Write','None')
     try{$stream.Write($Bytes,0,$Bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
     Set-InstallationEvidenceAcl $temporary $Sid
-    [IO.File]::Move($temporary,$Path)
+    Invoke-ContainerAtomicReplace $temporary $Path -Mode CreateNew
     if((Get-FileSha256 $Path) -cne (Get-InstallationTransactionDigest $Bytes)){throw 'Installation transaction publication SHA differs.'}
 }
 
@@ -2341,7 +2397,7 @@ function Write-InstallationOriginalFailure($Failure) {
         try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
         Set-InstallationEvidenceAcl $temporary $Script:InstallationEvidenceSid
         if(Test-InstallationEvidencePrivileged){Assert-InstallationEvidenceProtectedPath $temporary}
-        [IO.File]::Move($temporary,$path)
+        Invoke-ContainerAtomicReplace $temporary $path -Mode CreateNew
         if(Test-InstallationEvidencePrivileged){Assert-InstallationEvidenceProtectedPath $path}
         $hasher=[Security.Cryptography.SHA256]::Create()
         try{$expectedDigest=[BitConverter]::ToString($hasher.ComputeHash($bytes)).Replace('-','').ToLowerInvariant()}finally{$hasher.Dispose()}

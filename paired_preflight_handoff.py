@@ -379,6 +379,7 @@ class PairedPreflightHandoffStore:
     @writer_sink("paired_preflight_original_move")
     def move_original(self, path: Path, name: str, *, expected_sha256: str | None = None,
                       move=None) -> None:
+        from atomic_replace import atomic_replace
         record = self.read(path)
         part = record[name]
         source = Path(part["path"])
@@ -394,7 +395,7 @@ class PairedPreflightHandoffStore:
         else:
             if read_recovery_file(source, name).raw != expected:
                 raise PairedHandoffError("active original differs from paired record")
-            os.replace(source, target)
+            atomic_replace(source, target)
         if read_recovery_file(target, name).raw != expected:
             raise PairedHandoffError("moved original readback differs")
 

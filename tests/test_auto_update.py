@@ -14,7 +14,7 @@ def test_installer_logon_task_child_runs_as_an_isolated_script(tmp_path):
     sid = "S-1-5-21-101-202-303-1001"
     install_root = tmp_path / "installed"
     result = subprocess.run(
-        [sys.executable, "-I", "-B", str(Path(updates.__file__).resolve()),
+        [sys.executable, "-B", str(Path(updates.__file__).resolve()),
          "--print-logon-task", "--install-root", str(install_root), "--operator-sid", sid],
         capture_output=True, text=True, check=False,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),

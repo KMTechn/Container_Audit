@@ -142,11 +142,12 @@ def _utc_text(value: datetime | None = None) -> str:
 
 @writer_sink("qualification_authority_storage")
 def _atomic_write(path: Path, data: bytes) -> None:
+    from atomic_replace import atomic_replace
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         temporary.write_bytes(data)
-        os.replace(temporary, path)
+        atomic_replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 

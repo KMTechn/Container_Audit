@@ -44,6 +44,7 @@ def _now() -> str:
 
 @writer_sink("bootstrap_status")
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    from atomic_replace import atomic_replace
     from auto_update import mixed_status_record, serialize_mixed_status_record
     safe_text = serialize_mixed_status_record(mixed_status_record(payload))
     ensure_user_runtime_directory(path.parent)
@@ -54,7 +55,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        atomic_replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 

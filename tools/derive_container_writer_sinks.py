@@ -106,8 +106,10 @@ POWERSHELL_APPROVED_DOT_SOURCE_SYMBOLS: dict[Path, frozenset[str]] = {
     Path("tools/container_writer_session.ps1"): frozenset(
         {"$Script:IntegrityHelperPath", "$Script:WriterFenceHelperPath"}
     ),
+    Path("tools/container_writer_fence.ps1"): frozenset({"$ContainerAtomicLibrary"}),
 }
 POWERSHELL_FILESYSTEM_MUTATION_COMMANDS = (
+    "Invoke-ContainerAtomicReplace",
     "Add-Content",
     "Clear-Content",
     "Copy-Item",
@@ -163,6 +165,10 @@ POWERSHELL_NATIVE_PROCESS_APIS = (
 )
 
 # Fold only the 33 pre-existing b82 directory preparations into their unchanged callers.
+ATOMIC_REPLACEMENT_HELPER = "atomic_replace.atomic_replace"
+ATOMIC_REPLACEMENT_MODULE_AST_SHA256 = "1aafda27cdbf87f4a3c157422910fa25a16738131a9fd28ecc1b4a2151baa397"
+POWERSHELL_ATOMIC_HELPERS_SHA256 = "da9aa438788a603e4611e02f4108fe0a02f09a4d90d12863d9a4a410b7d6bcd9"
+POWERSHELL_ATOMIC_FUNCTIONS = frozenset({"Invoke-ContainerAtomicReplace", "Invoke-ContainerAtomicReplaceOnce"})
 DIRECTORY_PREPARATION_HELPER = "storage_policy.ensure_user_runtime_directory"
 DIRECTORY_PREPARATION_HELPER_AST_SHA256 = '0dbccb4e84da1737ae39f266bab8727b5d7836768211e32b38d7432bf206b7a0'
 DIRECTORY_PREPARATION_CALLS = {
@@ -1067,6 +1073,7 @@ class _NodeVisitor(ast.NodeVisitor):
         self.mutation_sites: list[dict[str, Any]] = []
         self.directory_preparations: list[dict[str, Any]] = []
         self.directory_helper_references: list[int] = []
+        self.atomic_helper_references: list[int] = []
         self.pathlike_refs: set[str] = set(
             self.current_function_info.get("pathlike_params", ())
         )
@@ -1161,10 +1168,21 @@ class _NodeVisitor(ast.NodeVisitor):
     def visit_Name(self, node: ast.Name) -> None:
         if isinstance(node.ctx, ast.Load) and self._resolve_callable(node) == DIRECTORY_PREPARATION_HELPER:
             self.directory_helper_references.append(node.lineno)
+        if isinstance(node.ctx, ast.Load):
+            resolved = self._resolve_callable(node)
+            if resolved == ATOMIC_REPLACEMENT_HELPER:
+                self.atomic_helper_references.append(node.lineno)
+            elif resolved == "atomic_replace._replace_once" and self.current_qualname != ATOMIC_REPLACEMENT_HELPER:
+                raise InventoryError("atomic replacement private backend reference escaped its facade")
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         if isinstance(node.ctx, ast.Load) and self._resolve_callable(node) == DIRECTORY_PREPARATION_HELPER:
             self.directory_helper_references.append(node.lineno)
+        if isinstance(node.ctx, ast.Load) and self._resolve_callable(node) == ATOMIC_REPLACEMENT_HELPER:
+            self.atomic_helper_references.append(node.lineno)
+        if (isinstance(node.ctx, ast.Load) and self._resolve_callable(node) == "atomic_replace._replace_once"
+                and self.current_qualname != ATOMIC_REPLACEMENT_HELPER):
+            raise InventoryError("atomic replacement private backend reference escaped its facade")
         self.generic_visit(node)
 
     def _scope_chain(self) -> list[str]:
@@ -1283,6 +1301,12 @@ class _NodeVisitor(ast.NodeVisitor):
 
     def _classify_mutation(self, node: ast.Call) -> dict[str, Any] | None:
         resolved = self._resolve_callable(node.func)
+        if resolved == ATOMIC_REPLACEMENT_HELPER:
+            if (len(node.args) != 2 or any(keyword.arg != "write_through"
+                    or not isinstance(keyword.value, ast.Constant) or type(keyword.value.value) is not bool
+                    for keyword in node.keywords)):
+                raise InventoryError("atomic replacement call shape changed")
+            return self._mutation_record(node, resolved, "filesystem")
         if resolved in EXTERNAL_PROCESS_CALLS:
             return self._mutation_record(
                 node,
@@ -1435,18 +1459,43 @@ def _analyze_module_node(
             "mutation_sites": module_visitor.mutation_sites,
             "directory_preparations": module_visitor.directory_preparations,
             "directory_helper_references": module_visitor.directory_helper_references,
+            "atomic_helper_references": module_visitor.atomic_helper_references,
         },
         {
             "calls": file_entry_calls,
             "mutation_sites": file_entry_visitor.mutation_sites,
             "directory_preparations": file_entry_visitor.directory_preparations,
             "directory_helper_references": file_entry_visitor.directory_helper_references,
+            "atomic_helper_references": file_entry_visitor.atomic_helper_references,
         },
     )
 
 
 def _ast_sha256(node: ast.AST) -> str:
     return hashlib.sha256(ast.dump(node, include_attributes=False).encode("utf-8")).hexdigest()
+
+
+def _forward_atomic_replacements(parsed_modules, node_analysis):
+    """Keep each publication effect on its original caller/admission, never on a shared sink."""
+    callers = []
+    for caller, details in node_analysis.items():
+        sites = [site for site in details["mutation_sites"] if site["operation"] == ATOMIC_REPLACEMENT_HELPER]
+        if sorted(details["atomic_helper_references"]) != sorted(site["line"] for site in sites):
+            raise InventoryError("atomic replacement non-call reference: " + caller)
+        callers.extend({"caller": caller, **site} for site in sites)
+    helper = parsed_modules.get("atomic_replace")
+    if helper is None:
+        if callers:
+            raise InventoryError("atomic replacement facade is missing")
+        return
+    if _ast_sha256(helper["tree"]) != ATOMIC_REPLACEMENT_MODULE_AST_SHA256:
+        raise InventoryError("atomic replacement facade body changed")
+    # Every facade call remains a directly inventoried filesystem mutation above.
+    # Only the exact backend/module effects are projected; no caller fence is removed.
+    for name, details in node_analysis.items():
+        if name.startswith("atomic_replace."):
+            details["mutation_sites"] = []
+    node_analysis[ATOMIC_REPLACEMENT_HELPER]["atomic_replacement_forwarding"] = sorted(callers, key=lambda row: (row["caller"], row["line"]))
 
 
 def _forward_directory_preparations(
@@ -1585,6 +1634,7 @@ def _analyze_closure(
                 "mutation_sites": visitor.mutation_sites,
                 "directory_preparations": visitor.directory_preparations,
                 "directory_helper_references": visitor.directory_helper_references,
+                "atomic_helper_references": visitor.atomic_helper_references,
             }
         module_node, file_entry_node = _analyze_module_node(
             module_name=module_name,
@@ -1596,6 +1646,7 @@ def _analyze_closure(
         node_analysis[f"{module_name}.__module__"] = module_node
         node_analysis[f"{module_name}.__file_entry__"] = file_entry_node
 
+    _forward_atomic_replacements(parsed_modules, node_analysis)
     _forward_directory_preparations(collectors, node_analysis)
 
     for qualname, details in node_analysis.items():
@@ -2881,6 +2932,13 @@ def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
         lines = source_bytes.decode("utf-8-sig").splitlines()
         module_prologue_lines = _powershell_module_prologue_lines(source_bytes)
         function_ranges = _powershell_function_ranges(lines)
+        atomic_helpers = [row for row in function_ranges if row["name"] in POWERSHELL_ATOMIC_FUNCTIONS]
+        if atomic_helpers:
+            helper_bytes = "\n\n".join("\n".join(row["lines"]) for row in atomic_helpers).encode("utf-8")
+            if (relative_path != Path("tools/bootstrap_integrity.ps1")
+                    or {row["name"] for row in atomic_helpers} != POWERSHELL_ATOMIC_FUNCTIONS
+                    or hashlib.sha256(helper_bytes).hexdigest() != POWERSHELL_ATOMIC_HELPERS_SHA256):
+                raise InventoryError("PowerShell atomic replacement facade body changed")
         entry_guard = _powershell_entry_guard(relative_path, lines, function_ranges)
         function_guards = _powershell_function_guard_proofs(
             relative_path,
@@ -2897,6 +2955,11 @@ def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
         for index in range(1, len(lines) + 1):
             function = _powershell_function_at_line(function_ranges, index)
             function_name = "" if function is None else str(function["name"])
+            if function_name in POWERSHELL_ATOMIC_FUNCTIONS:
+                # Exact leaf effects are inventoried as mutations at every facade caller.
+                continue
+            if _powershell_command_present(_powershell_code_only(lines[index-1]), "Invoke-ContainerAtomicReplaceOnce"):
+                raise InventoryError("PowerShell atomic private backend escaped its facade")
             for discovered in _powershell_line_sites(lines, index):
                 site = {
                     "file": _relative(relative_path),
@@ -3378,6 +3441,9 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
         "directory_preparation_forwarding": node_analysis.get(
             DIRECTORY_PREPARATION_HELPER, {}
         ).get("directory_preparation_forwarding", []),
+        "atomic_replacement_forwarding": node_analysis.get(
+            ATOMIC_REPLACEMENT_HELPER, {}
+        ).get("atomic_replacement_forwarding", []),
         "closure_direct_mutation_functions": mutation_rows,
         "uncovered_direct_mutation_functions": uncovered,
         "caller_fence_reference_failures": caller_fence_failures,
@@ -3488,6 +3554,20 @@ def main(argv: list[str] | None = None) -> int:
             installer.write_bytes(pinned)
         elif args.check:
             raise SystemExit("canonical bootstrap integrity helper pin is stale")
+    fence_path = ROOT / "tools/container_writer_fence.ps1"
+    fence_source = fence_path.read_bytes()
+    if b"ContainerAtomicBootstrapSha256" in fence_source:
+        fence_pinned, fence_count = re.subn(
+            rb"(\$Script:ContainerAtomicBootstrapSha256 = ')[0-9a-f]{64}(')",
+            lambda match: match[1] + bootstrap_sha.encode("ascii") + match[2], fence_source,
+        )
+        if fence_count != 1:
+            raise SystemExit("atomic bootstrap byte pin declaration is missing or ambiguous")
+        if fence_pinned != fence_source:
+            if args.write:
+                fence_path.write_bytes(fence_pinned)
+            elif args.check:
+                raise SystemExit("atomic bootstrap byte pin is stale")
     payload = derive_inventory(ROOT)
     encoded = _canonical_json_bytes(payload)
     if args.check:

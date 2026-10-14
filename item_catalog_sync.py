@@ -517,6 +517,7 @@ def _is_valid_catalog(path: Path) -> bool:
 
 @writer_sink("item_catalog_atomic_write")
 def _atomic_write(path: Path, payload: bytes) -> None:
+    from atomic_replace import atomic_replace
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_file() and path.read_bytes() == payload:
         return
@@ -533,7 +534,7 @@ def _atomic_write(path: Path, payload: bytes) -> None:
             handle.flush()
             os.fsync(handle.fileno())
             temporary_path = Path(handle.name)
-        os.replace(temporary_path, path)
+        atomic_replace(temporary_path, path)
         temporary_path = None
     finally:
         if temporary_path is not None:

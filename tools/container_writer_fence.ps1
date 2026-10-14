@@ -1,6 +1,23 @@
 ﻿Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
 Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 Set-StrictMode -Version Latest
+$Script:ContainerAtomicBootstrapSha256 = '805680706739a144ad2e7ae4e99b80118a203e06f713b33945b460562f33971b'
+if (-not (Get-Command 'Invoke-ContainerAtomicReplace' -CommandType Function -ErrorAction SilentlyContinue)) {
+    # Preserve a caller's already verified/in-memory bootstrap library. Cold imports
+    # evaluate precisely the pinned bytes, not a second path read after verification.
+    $atomicLibraryPath = Join-Path $PSScriptRoot 'bootstrap_integrity.ps1'
+    $atomicLibraryBytes = [IO.File]::ReadAllBytes($atomicLibraryPath)
+    if ($atomicLibraryBytes.Length -le 0 -or $atomicLibraryBytes.Length -gt 4194304) { throw 'Atomic bootstrap library size is invalid.' }
+    $atomicAlgorithm = [Security.Cryptography.SHA256]::Create()
+    try { $atomicLibrarySha = [BitConverter]::ToString($atomicAlgorithm.ComputeHash($atomicLibraryBytes)).Replace('-','').ToLowerInvariant() }
+    finally { $atomicAlgorithm.Dispose() }
+    if ($atomicLibrarySha -cne $Script:ContainerAtomicBootstrapSha256) { throw 'Atomic bootstrap library byte pin differs.' }
+    $atomicLibraryTokens=$null;$atomicLibraryErrors=$null
+    $atomicLibraryAst=[Management.Automation.Language.Parser]::ParseInput([Text.UTF8Encoding]::new($false,$true).GetString($atomicLibraryBytes).TrimStart([char]0xfeff),$atomicLibraryPath,[ref]$atomicLibraryTokens,[ref]$atomicLibraryErrors)
+    if ($atomicLibraryErrors.Count) { throw 'Atomic bootstrap library parse failed.' }
+    $ContainerAtomicLibrary = $atomicLibraryAst.GetScriptBlock()
+    . $ContainerAtomicLibrary
+}
 
 $Script:ContainerWriterFenceActiveSchema = 'container-audit-all-writer-fence-active-v1'
 $Script:ContainerWriterFenceReleaseSchema = 'container-audit-all-writer-fence-release-v1'
@@ -9,7 +26,7 @@ $Script:ContainerWriterFenceTupleVersion = 'container-audit-deployment-session-a
 $Script:ContainerWriterFenceSessionMutexPrefix = 'Local\KMTech.ContainerAudit.DeploymentSession.'
 $Script:ContainerWriterFenceAdmissionMutexName = 'Local\KMTech.ContainerAudit.WriterAdmission.v1'
 $Script:ContainerWriterFenceAdmissionProductionRoot = ''
-$Script:ContainerWriterFenceInventorySha256 = 'd8e81071552c80c3fd8b1591e03ac9261f25d472564fa85a93a8e7c8d2b928cd'
+$Script:ContainerWriterFenceInventorySha256 = '2c099894464613ada20af3e1a7fda265493adb2daea0b54107590ce485fc6508'
 $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''
 $Script:ContainerWriterFenceMaximumBytes = 262144
 $Script:ContainerWriterFenceActiveFields = @(
@@ -567,9 +584,9 @@ function Write-ContainerWriterFenceAtomic([string]$ControlRoot, $Payload) {
         }
         finally { $stream.Dispose() }
         if (Test-Path -LiteralPath $path -PathType Leaf) {
-            [IO.File]::Replace($temporary, $path, $backup)
+            Invoke-ContainerAtomicReplace $temporary $path -Mode Replace -Backup $backup
         }
-        else { [IO.File]::Move($temporary, $path) }
+        else { Invoke-ContainerAtomicReplace $temporary $path -Mode CreateNew }
     }
     finally {
         foreach ($cleanupPath in @($temporary, $backup)) {
@@ -1161,7 +1178,7 @@ function Stop-ContainerWriterFence {
             $temporary = Join-Path $root ('.release.' + [Guid]::NewGuid().ToString('N') + '.tmp')
             try {
                 [IO.File]::WriteAllText($temporary, (($release | ConvertTo-Json -Depth 10) + "`n"), (New-Object Text.UTF8Encoding($false)))
-                [IO.File]::Move($temporary, $releasePath)
+                Invoke-ContainerAtomicReplace $temporary $releasePath -Mode CreateNew
             }
             finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
             $release = Read-ContainerWriterFenceReleaseReceipt $releasePath

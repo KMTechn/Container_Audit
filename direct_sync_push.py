@@ -742,8 +742,9 @@ def _restore_error_result(
 
 @writer_sink("relay_spool_storage")
 def _publish_restored_temp_file(temp_path: Path, destination: Path, *, overwrite: bool) -> str:
+    from atomic_replace import atomic_replace
     if overwrite:
-        os.replace(temp_path, destination)
+        atomic_replace(temp_path, destination)
         return ""
     try:
         os.link(temp_path, destination)
@@ -947,6 +948,7 @@ def restore_raw_artifact_to_file(
 
 @writer_sink("relay_spool_storage")
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    from atomic_replace import atomic_replace
     from auto_update import assert_machine_metadata_no_secrets, mixed_status_record
     payload = mixed_status_record(payload)
     encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
@@ -958,7 +960,7 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_path, path)
+        atomic_replace(temp_path, path)
     except Exception:
         try:
             temp_path.unlink()
@@ -1329,6 +1331,7 @@ def _with_upload_status_artifact(
     *,
     status_context: Mapping[str, Any] | None = None,
 ) -> UploadResult:
+    from atomic_replace import atomic_replace
     if not status_dir:
         return result
     context = dict(status_context or {})
@@ -1382,7 +1385,7 @@ def _with_upload_status_artifact(
                     before_status_write = _UPLOAD_STATUS_CHECK.get()
                     if before_status_write is not None and not before_status_write():
                         return result
-                    os.replace(temporary, status_path)
+                    atomic_replace(temporary, status_path)
             finally:
                 try:
                     temporary.unlink(missing_ok=True)
@@ -2044,6 +2047,7 @@ def acked_relay_retention_candidates(
 
 @writer_sink("relay_spool_storage")
 def _copy_file_atomic(source: Path, destination: Path) -> None:
+    from atomic_replace import atomic_replace
     ensure_user_runtime_directory(destination.parent)
     temp_path = destination.with_name(f"{destination.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
@@ -2052,7 +2056,7 @@ def _copy_file_atomic(source: Path, destination: Path) -> None:
                 dst.write(chunk)
             dst.flush()
             os.fsync(dst.fileno())
-        os.replace(temp_path, destination)
+        atomic_replace(temp_path, destination)
     except Exception:
         try:
             temp_path.unlink()

@@ -27,6 +27,7 @@ def _load_json(path: str | os.PathLike[str]) -> Any:
 
 
 def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
+    from atomic_replace import atomic_replace
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     temp_path = target.with_name(f"{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
@@ -35,10 +36,11 @@ def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any])
         handle.write("\n")
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(temp_path, target)
+    atomic_replace(temp_path, target)
 
 
 def _write_text_atomic(path: str | os.PathLike[str], text: str) -> None:
+    from atomic_replace import atomic_replace
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     temp_path = target.with_name(f"{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
@@ -48,7 +50,7 @@ def _write_text_atomic(path: str | os.PathLike[str], text: str) -> None:
             handle.write("\n")
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(temp_path, target)
+    atomic_replace(temp_path, target)
 
 
 def _json_dict(value: Any) -> dict[str, Any]:

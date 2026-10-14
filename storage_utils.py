@@ -170,6 +170,7 @@ def atomic_write_json(
     ensure_ascii: bool = True,
     trailing_newline: bool = False,
 ) -> None:
+    from atomic_replace import atomic_replace
     serialized = json.dumps(payload, indent=indent, ensure_ascii=ensure_ascii)
     if trailing_newline:
         serialized += "\n"
@@ -183,7 +184,7 @@ def atomic_write_json(
             f.write(serialized)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(temp_path, destination)
+        atomic_replace(temp_path, destination)
     finally:
         if temp_path.exists():
             try:

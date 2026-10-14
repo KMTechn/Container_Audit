@@ -497,9 +497,7 @@ def policy_from_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
 @writer_sink("auto_update_control")
 def write_json_durable(path: Path, payload: Mapping[str, Any]) -> None:
     """Write-through replacement keeps the journal ahead of the active pointer."""
-    import ctypes
-    from ctypes import wintypes
-
+    from atomic_replace import atomic_replace
     _assert_no_reparse_components(path)
     temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
     # Policy/prepared/readiness bytes remain machine metadata. Only the mixed
@@ -512,14 +510,7 @@ def write_json_durable(path: Path, payload: Mapping[str, Any]) -> None:
         output.write(text + "\n")
         output.flush()
         os.fsync(output.fileno())
-    if os.name == "nt":
-        move = ctypes.WinDLL("kernel32", use_last_error=True).MoveFileExW
-        move.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
-        move.restype = wintypes.BOOL
-        if not move(str(temporary), str(path), 0x1 | 0x8):
-            raise OSError(ctypes.get_last_error(), "update write-through replacement failed")
-    else:
-        os.replace(temporary, path)
+    atomic_replace(temporary, path, write_through=True)
 
 
 def control_root(app_root: Path) -> Path | None:
@@ -2389,8 +2380,9 @@ def stage_prepared_copies(attempt: Path, stage: Path) -> dict[str, Path]:
 
 @writer_sink("auto_update_control")
 def publish_download(stage: Path, temporary_paths: Mapping[str, Path]) -> None:
+    from atomic_replace import atomic_replace
     for name in ("manifest.json", "manifest.sig", "packet.zip"):
-        os.replace(temporary_paths[name], stage / name)
+        atomic_replace(temporary_paths[name], stage / name)
 
 
 @writer_sink("auto_update_control", probe_only=True)

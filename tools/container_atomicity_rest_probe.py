@@ -32,6 +32,7 @@ def inside(path: Path, root: Path) -> bool:
 
 
 def durable_json(path: Path, payload: Mapping[str, Any]) -> None:
+    from atomic_replace import atomic_replace
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     with temporary.open("w", encoding="utf-8", newline="\n") as stream:
@@ -39,7 +40,7 @@ def durable_json(path: Path, payload: Mapping[str, Any]) -> None:
         stream.write("\n")
         stream.flush()
         os.fsync(stream.fileno())
-    os.replace(temporary, path)
+    atomic_replace(temporary, path)
     with path.open("r+b") as stream:
         os.fsync(stream.fileno())
 

@@ -433,6 +433,7 @@ class PreflightScanHoldStore:
         expected_sha256: str | None = None,
         move=None,
     ) -> QuarantinedPreflightHold:
+        from atomic_replace import atomic_replace
         with self._lock:
             snapshot = self.load()
             target_root = Path(target_directory)
@@ -456,7 +457,7 @@ class PreflightScanHoldStore:
                 except FileNotFoundError:
                     pass
             else:
-                os.replace(self.path, target)
+                atomic_replace(self.path, target)
             readback = self.load_path(target)
             if self.snapshot_hash(readback) != snapshot_hash:
                 raise PreflightHoldError("preflight quarantine readback mismatch")
@@ -467,6 +468,7 @@ class PreflightScanHoldStore:
         self,
         quarantined_path: str | os.PathLike[str],
     ) -> PreflightHoldSnapshot:
+        from atomic_replace import atomic_replace
         with self._lock:
             source = Path(quarantined_path)
             snapshot = self.load_path(source)
@@ -483,7 +485,7 @@ class PreflightScanHoldStore:
                 except FileNotFoundError:
                     pass
             else:
-                os.replace(source, self.path)
+                atomic_replace(source, self.path)
             readback = self.load()
             if self.snapshot_hash(readback) != snapshot_hash:
                 raise PreflightHoldError("restored preflight hold readback mismatch")

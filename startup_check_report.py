@@ -139,6 +139,7 @@ def observe(action, *args, **kwargs):
 
 @writer_sink("startup_check_report", report_only=True)
 def _write_result(result):
+    from atomic_replace import atomic_replace
     temporary = None
     try:
         program_data = Path(os.environ["PROGRAMDATA"])
@@ -156,7 +157,7 @@ def _write_result(result):
         payload = (json.dumps(result, ensure_ascii=True, separators=(",", ":")) + "\n").encode("ascii")
         with temporary.open("x", encoding="utf-8", newline="\n") as stream:
             stream.write(payload.decode("ascii"))
-        os.replace(temporary, destination)
+        atomic_replace(temporary, destination)
         _assert_no_reparse_components(destination)
         with destination.open("rb") as stream:
             return stream.read(len(payload) + 1) == payload
@@ -172,6 +173,7 @@ def _write_result(result):
 
 @writer_sink("startup_gui_ready", report_only=True)
 def _write_gui_ready(version, build_sha, ready_at):
+    from atomic_replace import atomic_replace
     temporary = None
     try:
         program_data = Path(os.environ["PROGRAMDATA"])
@@ -194,7 +196,7 @@ def _write_gui_ready(version, build_sha, ready_at):
         temporary = folder / ("." + destination.name + "." + uuid.uuid4().hex + ".tmp")
         with temporary.open("x", encoding="utf-8", newline="\n") as stream:
             stream.write(json.dumps(payload, ensure_ascii=True, separators=(",", ":")) + "\n")
-        os.replace(temporary, destination)
+        atomic_replace(temporary, destination)
     except Exception:
         pass
     finally:

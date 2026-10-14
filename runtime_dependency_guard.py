@@ -36,6 +36,7 @@ def install_charset_normalizer_block() -> None:
 
 @writer_sink("runtime_dependency_report")
 def _write_module_report() -> None:
+    from atomic_replace import atomic_replace
     raw_path = os.getenv(_MODULE_REPORT_ENV, "").strip()
     if not raw_path:
         return
@@ -62,7 +63,7 @@ def _write_module_report() -> None:
         json.dumps({"loaded": loaded}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    os.replace(temporary, target)
+    atomic_replace(temporary, target)
 
 
 install_charset_normalizer_block()

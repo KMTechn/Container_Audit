@@ -233,13 +233,14 @@ def finalize_artifact_identity(identity: dict[str, Any]) -> None:
 
 
 def write_identity_evidence(path: Path, identity: dict[str, Any]) -> None:
+    from atomic_replace import atomic_replace
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(
         json.dumps(identity, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    os.replace(temporary, path)
+    atomic_replace(temporary, path)
 
 
 def _stop_untrusted_process(process: Any) -> None:

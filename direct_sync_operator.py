@@ -68,6 +68,7 @@ SENSITIVE_ASSIGNMENT_RE = re.compile(
 
 @writer_sink("operator_evidence")
 def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
+    from atomic_replace import atomic_replace
     from auto_update import assert_machine_metadata_no_secrets
     encoded = json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     assert_machine_metadata_no_secrets(encoded)
@@ -78,7 +79,7 @@ def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any])
         handle.write(encoded)
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(temp_path, target)
+    atomic_replace(temp_path, target)
 
 
 @writer_sink("operator_evidence")

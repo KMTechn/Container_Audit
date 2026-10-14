@@ -51,6 +51,7 @@ def _now() -> str:
 
 @writer_sink("persistent_relay_status")
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    from atomic_replace import atomic_replace
     from auto_update import assert_machine_metadata_no_secrets
     encoded = json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     assert_machine_metadata_no_secrets(encoded)
@@ -61,7 +62,7 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        atomic_replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 

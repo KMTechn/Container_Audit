@@ -10,6 +10,9 @@ M86: 셸 OS 실패 안내의 제목은 `title="이적"`이다. mainloop 전 초�
 표지 PID의 실제 실행 파일은 JSON 값 대신 두 번째 프로세스 자신의 실제 실행 파일과 대조한다. 같은 앱 실행 파일을 사용하는 서로 다른 프로세스의 data_root/mutex 소유권까지는 이 검사만으로 구분하지 못한다.
 ctypes의 창 활성화·안내·위치 보정은 runtime_instance_win32 한 모듈을 거친다. 호스트 시험은 autouse 기록 대역과 user32 호출 거절 막이를 함께 쓰며, 실제 전경·초점 동작은 A9 회차 몫이다. 수동 현장 qualification의 pywin32 driver는 호스트에서 실행하지 않는다.
 
+앱 소유 Python 원자 바꿈은 atomic_replace 한 모듈에서 WinError 5/32만 총 1.5초 안에 다시 시도한다. 지속 거절은 첫 예외를 그대로 전파하며 준비 파일·읽는 쪽·호출자의 writer admission은 유지한다. C1 제어 JSON은 write-through(REPLACE_EXISTING|WRITE_THROUGH)를 유지하고 C2 준비 파일도 같은 경계를 쓴다. PowerShell의 대응 경계는 bootstrap_integrity의 Invoke-ContainerAtomicReplace이며 Replace backup·CreateNew의 덮어쓰기 거절·write-through 의미를 유지한다. fence의 cold import는 고정 SHA와 확인한 bootstrap 바이트만 평가하며 이미 검증된 함수는 재적재하지 않는다.
+바이트 고정 공용·셸의 기존 원자 바꿈은 정본 주인 후속이다. 지킴 시험은 data_generation.py·powershell/data_generation.ps1·raster.py·diagnostic_log.py·shell_fileio.py 다섯 정확한 경로와 SHA만 제외하며 새 직접 바꿈이나 제외 파일 변경을 거절한다. 공용 바이트 일치·writer gate·consumer 단언과 버전 디렉터리 rename은 그대로 유지한다.
+
 비상 바로 가기는 InstallRoot(current)의 부모인 앱 폴더의 `관리용\이적 옛 화면 (비상).lnk`에 둔다. 기존 작업자 바로 가기와 대상·작업 폴더·아이콘이 같고 인수는 `--ui tk`이다. 설치·재설치·업데이트의 기존 바로 가기 흐름에서 생성 또는 readback 확인하며, 제거 때 소유 링크와 빈 관리용 폴더만 지운다. 같은 이름의 남의 링크나 다른 파일이 있는 관리용 폴더는 손대지 않고 경고 한 줄을 남긴다. current의 코드 목록·무결성 범위와 예외 규칙은 바뀌지 않는다.
 
 업무·사용자 relay·업데이트 내려받기의 기본 자료 자리는 LOCALAPPDATA다. 사용자 실행은 ProgramData 전체(뿌리·KMTech·다른 형제·명시 relay 경로)에 디렉터리나 조상을 만들지 않는다. OS known folder를 기준으로 기존 부모의 최종 경로를 해석해 대소문자·8.3·정션·확장 경로 접두사를 정규화한다. 환경 매핑은 해석된 거절 경계를 더할 수 있을 뿐 OS 경계를 좁히지 않는다. 필요한 디렉터리가 없거나 known folder를 확인하지 못하면 `MACHINE_RUNTIME_DIRECTORY_NOT_PREPARED`와 관리자 설치를 먼저 완료하라는 안내로 거절한다. 기계 설치기가 owner·ACL을 정해 준비한 디렉터리는 mkdir·owner·ACL 변경 없이 사용한다. 이미 잘못된 owner·ACL의 회복은 이 거절 길이 맡지 않으며 기존 설치 보호 검사는 유지한다.

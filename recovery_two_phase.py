@@ -114,6 +114,7 @@ def _contains_forbidden_key(value: Any) -> bool:
 
 @writer_sink("recovery_two_phase")
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    from atomic_replace import atomic_replace
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(
         f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
@@ -123,7 +124,7 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        atomic_replace(temporary, path)
     finally:
         try:
             temporary.unlink(missing_ok=True)
@@ -188,6 +189,7 @@ class RecoveryTwoPhaseJournal:
 
     @writer_sink("recovery_two_phase")
     def initialize(self, bindings: Mapping[str, str]) -> dict[str, Any]:
+        from atomic_replace import atomic_replace
         normalized = {str(key): str(value or "").strip() for key, value in bindings.items()}
         if set(normalized) != _REQUIRED_BINDING_FIELDS or not all(
             normalized.values()
@@ -215,7 +217,7 @@ class RecoveryTwoPhaseJournal:
                         raise RecoveryTwoPhaseStateError(
                             "terminal recovery journal archive already exists"
                         )
-                    os.replace(self.path, archive)
+                    atomic_replace(self.path, archive)
                     existing = None
                 else:
                     raise RecoveryTwoPhaseStateError(

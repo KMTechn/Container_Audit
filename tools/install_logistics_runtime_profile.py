@@ -237,6 +237,7 @@ def _secure_profile_directory(path: Path, reader_principal: str) -> None:
 
 @writer_sink("logistics_profile_install")
 def _atomic_write(path: Path, data: bytes) -> None:
+    from atomic_replace import atomic_replace
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(
         f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
@@ -246,7 +247,7 @@ def _atomic_write(path: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        atomic_replace(temporary, path)
     finally:
         try:
             temporary.unlink(missing_ok=True)

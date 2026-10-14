@@ -275,6 +275,7 @@ def _write_and_sync(fd: int, data: bytes) -> None:
 @writer_sink("protected_admin_profile")
 def _atomic_write(path: Path, data: bytes, reader_sid: str) -> None:
     """Replace *path* from an exclusively created, empty, pre-hardened file."""
+    from atomic_replace import atomic_replace
     fd = -1
     temporary = path.parent / ".uncreated-protected-admin-profile.tmp"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
@@ -308,7 +309,7 @@ def _atomic_write(path: Path, data: bytes, reader_sid: str) -> None:
             path,
             label="protected administrator profile",
         )
-        os.replace(temporary, path)
+        atomic_replace(temporary, path)
         assert_path_has_no_reparse_components(
             path,
             label="protected administrator profile",

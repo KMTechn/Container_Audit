@@ -46,6 +46,7 @@ def _option_value(arguments: Sequence[str], option: str) -> str:
 
 @writer_sink("hosted_relay_json")
 def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
+    from atomic_replace import atomic_replace
     from auto_update import assert_machine_metadata_no_secrets
     encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     assert_machine_metadata_no_secrets(encoded)
@@ -56,7 +57,7 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_path, path)
+        atomic_replace(temp_path, path)
     except Exception:
         try:
             temp_path.unlink()

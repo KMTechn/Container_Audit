@@ -429,6 +429,7 @@ def _atomic_report_reference(path: Path, expected: bytes) -> dict[str, str]:
 
 @writer_sink("current_user_onboarding_storage")
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> dict[str, str]:
+    from atomic_replace import atomic_replace
     from auto_update import serialize_machine_metadata
     safe_text = serialize_machine_metadata(payload)
     ensure_user_runtime_directory(path.parent)
@@ -439,7 +440,7 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> dict[str, str]
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        atomic_replace(temporary, path)
         return _atomic_report_reference(path, (safe_text + "\n").encode("utf-8"))
     finally:
         temporary.unlink(missing_ok=True)

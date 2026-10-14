@@ -587,11 +587,11 @@ function Write-JsonAtomic([string]$Path, $Payload, [switch]$AllowReplace) {
         finally { $stream.Dispose() }
         if ($AllowReplace.IsPresent) {
             if (Test-Path -LiteralPath $full -PathType Leaf) {
-                [IO.File]::Replace($temporary, $full, $backup)
+                Invoke-ContainerAtomicReplace $temporary $full -Mode Replace -Backup $backup
             }
-            else { [IO.File]::Move($temporary, $full) }
+            else { Invoke-ContainerAtomicReplace $temporary $full -Mode CreateNew }
         }
-        else { [IO.File]::Move($temporary, $full) }
+        else { Invoke-ContainerAtomicReplace $temporary $full -Mode CreateNew }
     }
     finally {
         foreach ($cleanupPath in @($temporary, $backup)) {

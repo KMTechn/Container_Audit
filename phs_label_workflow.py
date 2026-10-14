@@ -196,6 +196,7 @@ class PHSLabelExchangeJournal:
 
     @writer_sink("phs_label_workflow")
     def save(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        from atomic_replace import atomic_replace
         bounded = dict(state or {})
         bounded["updated_at"] = _utc_now()
         payload = {
@@ -221,7 +222,7 @@ class PHSLabelExchangeJournal:
                     handle.write("\n")
                     handle.flush()
                     os.fsync(handle.fileno())
-                os.replace(temporary, self.path)
+                atomic_replace(temporary, self.path)
             finally:
                 try:
                     if os.path.exists(temporary):

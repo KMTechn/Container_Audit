@@ -3950,6 +3950,7 @@ class ContainerAudit:
     def _publish_tray_state_snapshot(
         self, path: Path, temporary: Path, digest, state: Dict[str, Any], caller_state: Dict[str, Any],
     ) -> bool:
+        from atomic_replace import atomic_replace
         lock = getattr(self, "_tray_state_persist_lock", None)
         if lock is None:
             lock = threading.RLock()
@@ -3962,7 +3963,7 @@ class ContainerAudit:
             current_digest = hashlib.sha256(current_bytes).digest() if current_bytes is not None else None
             if current_digest != digest:
                 return False
-            os.replace(temporary, path)
+            atomic_replace(temporary, path)
             # Keep strict readback/PIN consumers bound to the snapshot we published.
             caller_state.clear()
             caller_state.update(state)

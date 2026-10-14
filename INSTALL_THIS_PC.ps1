@@ -1215,21 +1215,12 @@ function Get-ContainerStartupUpdateTaskPreimage([string]$Root) {
 }
 
 function Write-ContainerStartupUpdateRecord([string]$Path, $Payload) {
-    if (-not ('KMTechStartupUpdateAtomicFile' -as [type])) {
-        Add-Type -TypeDefinition @'
-using System.Runtime.InteropServices;
-public static class KMTechStartupUpdateAtomicFile {
- [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
- public static extern bool MoveFileExW(string source, string target, uint flags);
-}
-'@
-    }
     Assert-NoReparsePoint $Path 'startup update record'
     $temporary = $Path + '.tmp.' + [guid]::NewGuid().ToString('N')
     $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes(($Payload | ConvertTo-Json -Depth 12) + "`n")
     $stream = New-Object IO.FileStream($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough)
     try { $stream.Write($bytes,0,$bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
-    if (-not [KMTechStartupUpdateAtomicFile]::MoveFileExW($temporary,$Path,9)) { throw 'STARTUP_UPDATE_DURABLE_RECORD_FAILED' }
+    Invoke-ContainerAtomicReplace $temporary $Path -Mode WriteThrough
 }
 
 function Save-ContainerStartupUpdatePreimage([string]$Root, [string]$Purpose) {

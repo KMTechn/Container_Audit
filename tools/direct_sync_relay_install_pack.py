@@ -301,6 +301,7 @@ def _write_scheduled_task_wrapper(
     runtime_temp_dir: str | os.PathLike[str] | None = None,
     launcher_status_path: str | os.PathLike[str] | None = None,
 ) -> None:
+    from atomic_replace import atomic_replace
     ensure_user_runtime_directory(path.parent)
     working_path = Path(working_directory or path.parent).expanduser().resolve()
     temp_dir = Path(runtime_temp_dir or (path.parent / "temp")).expanduser().resolve()
@@ -342,7 +343,7 @@ def _write_scheduled_task_wrapper(
     content = "\n".join(content_lines)
     try:
         temp_path.write_text(content, encoding="utf-8", newline="\r\n")
-        os.replace(temp_path, path)
+        atomic_replace(temp_path, path)
     except Exception:
         try:
             temp_path.unlink()
@@ -386,6 +387,7 @@ def _redact_install_diagnostic(value):
 
 @writer_sink("direct_sync_install_pack")
 def _write_json(path: Path, payload: dict) -> None:
+    from atomic_replace import atomic_replace
     from auto_update import mixed_status_record, serialize_json_for_sink
     # This plan is a diagnostic sink, not an authenticated product record.
     # Apply the existing whole-field credential rule before atomic publication.
@@ -398,7 +400,7 @@ def _write_json(path: Path, payload: dict) -> None:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_path, path)
+        atomic_replace(temp_path, path)
     except Exception:
         try:
             temp_path.unlink()

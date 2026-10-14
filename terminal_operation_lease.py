@@ -726,6 +726,7 @@ class PinnedOperationLeaseKeyring:
 
     @writer_sink("terminal_operation_lease")
     def _atomic_write(self, keyring: Mapping[str, Any]) -> None:
+        from atomic_replace import atomic_replace
         document = {
             "contract_version": KEYRING_STORE_CONTRACT_VERSION,
             "program": CONTAINER_PROGRAM,
@@ -760,7 +761,7 @@ class PinnedOperationLeaseKeyring:
                 handle.write(raw)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, self.path)
+            atomic_replace(temporary, self.path)
             temporary = ""
             try:
                 os.chmod(self.path, 0o600)
