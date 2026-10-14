@@ -2,7 +2,7 @@
 
 자동 업데이트 출발판은 v2.0.104 이상이다. 업데이트 후보는 설치된 판의 `tools/apply_prepared_update.ps1`이 판정한다. v2.0.103처럼 unsigned 목록이 빈 판만 받는 옛 helper가 깔린 PC는 v2.0.104 이후 자동 업데이트를 `STARTUP_UPDATE_PORTABLE_MANIFEST_DIFFERS`로 거절하며 업무를 멈추지 않는다. 그런 PC는 정식 제거 뒤 새로 설치한다. 자료꼴 호환 하한 v2.0.103은 업데이트 출발판을 뜻하지 않는다.
 
-v2.0.106 기본은 web이며 --new-screen·--ui web도 같은 뜻이다. --old-screen·--ui tk는 그 실행만 Tk를 고른다. 모르는 --ui 값은 기본 길이다. M84 진입에는 PID 대기나 자동 재실행이 없다.
+v2.0.107 기본은 web이며 --new-screen·--ui web도 같은 뜻이다. --old-screen·--ui tk는 그 실행만 Tk를 고른다. 모르는 --ui 값은 기본 길이다. M84 진입에는 PID 대기나 자동 재실행이 없다.
 웹 생성 뒤 시작 실패는 셸의 쓰기 문 닫음·판 표지·destroy·before_exit·끝 한 길이다. 같은 프로세스 Tk 전환·자동 재실행은 없다. 표지 저장 실패도 끝내고 되풀이하지 않는다. 사람이 다음에 켜면 같은 판 web_allowed=False로 Tk를 연다. before_exit 빔은 writer 허가·mutex가 비고 모든 lane worker 실이 죽은 것(BROKEN 포함)이며 다른 정리는 없다. 120초·5초 확인, False면 끝내기를 미룬다. 셸 import try 실패는 SHELL_IMPORT_FAILED→Tk, 비상 Tk 셸 import0. 생성 전·시작 거절·업무 gate는 유지한다.
 M86: 셸 OS 실패 안내의 제목은 `title="이적"`이다. mainloop 전 초기화 실패와 lane pump 생성 실패도 기존 owner 정리/close_idle로 worker를 멈춘다. before_exit의 닫힘 표시와 lane 시작은 같은 잠금으로 줄 세워 늦은 시작을 거절한다. 기존 receipt/위임/authority 검증을 통과한 위임·유지보수 허가는 normal 허가 없이 worker 실제 종료만 확인한다. portable 선행 admission의 abandoned 거절도 한 번 더 열기 안내·기존 지원 기록·종료 1을 유지한다. 셸 사본 통합 전 OS 안내 실물은 미검증이다.
 
@@ -11,7 +11,11 @@ M86: 셸 OS 실패 안내의 제목은 `title="이적"`이다. mainloop 전 초�
 업무·사용자 relay·업데이트 내려받기의 기본 자료 자리는 LOCALAPPDATA다. 명시 경로가 ProgramData\KMTech 안을 가리키더라도 사용자 실행은 그곳의 디렉터리나 조상을 만들지 않는다. 필요한 디렉터리가 없으면 `MACHINE_RUNTIME_DIRECTORY_NOT_PREPARED`와 관리자 설치를 먼저 완료하라는 안내로 거절한다. 기계 설치기가 owner·ACL을 정해 준비한 디렉터리는 그대로 사용하며 사용자 실행에서 owner·ACL을 바꾸지 않는다. 이미 잘못된 owner·ACL의 회복은 이 거절 길이 맡지 않으며 기존 설치 보호 검사는 유지한다.
 
 
-현재 사본은 승인된 검사 `2371be9d`의 v3.16.2이며 19파일과 READY의 바이트를 대조한다. 어댑터는 `web_allowed`에도 쓰기 guard를 명시하며 셸의 private FileIO가 각 쓰기에 같은 허가를 얻는다. 실제 셸 코드의 시작 실패·수동 재시작·worker 종료 대기는 창과 OS 경계만 대체해 시험한다. 실제 창 하나·설치·현장 확인은 별도다. 최종 UI 97efc8e7을 적용했다. v2.0.106을 한 번 빌드하며 실패 뒤 같은 번호로 다시 빌드하지 않는다.
+현재 사본은 승인된 검사 `2371be9d`의 v3.16.2이며 19파일과 READY의 바이트를 대조한다. 어댑터는 `web_allowed`에도 쓰기 guard를 명시하며 셸의 private FileIO가 각 쓰기에 같은 허가를 얻는다. 실제 셸 코드의 시작 실패·수동 재시작·worker 종료 대기는 창과 OS 경계만 대체해 시험한다. 실제 창 하나·설치·현장 확인은 별도다. 최종 UI 97efc8e7을 적용했다. v2.0.106은 writer inventory 검사 실패로 소모했고 v2.0.107을 한 번 빌드한다. 실패 뒤 같은 번호로 다시 빌드하지 않는다.
+
+디렉터리 준비 helper는 바탕 b82의 mkdir 33자리를 그대로 대신한다. inventory는 helper의 디렉터리 전용 AST와 정확한 호출자·인수·admission/probe 분류를 검증하고 각 준비 효과를 호출자에게 돌린다. 부트스트랩 전 준비 1자리는 새 writer admission 없이 유지하며 업무 파일 쓰기에는 이 분류를 적용하지 않는다. release의 실제 writer inventory 검사를 빌드 전에 별도로 통과시킨다.
+
+새 화면 등록은 원장 등록 함수를 직접 호출하며 기존 Tk 등록 창을 열지 않는다. 관리자 PIN·내부 시험 품목 입력의 기존 Tk 모달은 인스턴스 어댑터가 대체한다. 빈 관리자 ID/PIN은 실행 전에 거절하고 사용한 인증의 재입력이 필요하면 웹 경고로 돌려준다. 앱 동작 결과는 명시 True/ok만 성공이며 False·오류 글·거절 알림은 실패, None은 결과 모름이다. 재전송도 이 결과를 그대로 반환하고 완료로 덮지 않는다. 옛 화면의 Tk 모달 구현은 유지한다.
 
 
 새 화면 보류 목록은 기존 작업자 신원 규칙으로 일반 보류와 사전조회 격리·서버 확인 대기를 읽는다. 격리·대기는 `kind`, `restorable:false`, 품목·현품표 번호·수량의 `label`, 고정 안내의 `note`를 전달하며 복원 명령을 받아도 일반 복원으로 넘기지 않는다. held_count는 실제 전체 건수이고 목록만 50줄로 제한한다. overflow로 넘침을 표시하고 격리·대기 줄에 먼저 자리를 주며 각 종류가 전부 빠지지 않게 한다. 넘친 일반 목록은 옛 화면에서 확인한다. 등록 때 동명이 있으면 현재 명단의 UUID·표시 이름을 후보로 보내고, 선택 직전에 다시 대조해 기존 등록 함수를 부른다. 다른 사람은 구분 이름으로 새로 등록한다. 명단 저장·승인·전송 계약은 그대로다.

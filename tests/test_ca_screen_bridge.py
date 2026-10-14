@@ -146,7 +146,7 @@ def test_admin_pin_replaces_the_modal_once_and_keeps_no_value(flow, monkeypatch)
         reply = processor.admin("defer_unsettled", {"admin_id": "opcheck", "pin": pin})
         handed = seen[0] == ("opcheck", pin)
         assert handed and seen[1] is None, "PIN 은 그 동작에 한 번만 넘어감"
-        assert reply["ok"] is True and reply["result"]["text"].startswith("보류")
+        assert reply["ok"] is False and reply["result"]["text"].startswith("관리자 확인이 다시 필요합니다")
         leaked = pin in json.dumps(processor.state(), ensure_ascii=False) or pin in json.dumps(reply, ensure_ascii=False)
         assert not leaked, "state · 답에 PIN 이 남음"
         assert processor.admin("defer_unsettled", {"admin_id": "opcheck", "pin": "12"})["ok"] is False
@@ -183,6 +183,7 @@ def test_resend_completion_calls_the_recorded_menu_once_and_returns_its_note(flo
     def action():
         called.append(True)
         ca.messagebox.showinfo("완료 작업 확인", "저장된 완료 요청을 다시 보냈습니다")
+        return True
 
     monkeypatch.setattr(screen, "operations_menu", lambda _app: {"resend_completion": (True, action)})
     processor.install()
@@ -288,7 +289,10 @@ def test_reset_only_from_the_confirm_sheet(flow, monkeypatch):
     app = _app(flow)
     processor = CaProcessor(app)
     called = []
-    monkeypatch.setattr(screen, "operations_menu", lambda _app: {"reset": (True, lambda: called.append(1))})
+    def action():
+        called.append(1)
+        return True
+    monkeypatch.setattr(screen, "operations_menu", lambda _app: {"reset": (True, action)})
     assert processor.command("reset", {})["ok"] is False and not called
     assert processor.command("reset", {"id": "confirmed"}) == {"ok": True} and called == [1]
 
@@ -332,7 +336,10 @@ def test_start_pane_lists_the_roster_and_starts_through_the_entry(flow):
     app._worker_roster_notice_text = lambda: "이름을 고르세요. 목록에 없으면 『새 이름 등록』을 누르세요."
     app.worker_registry = SimpleNamespace(recent_worker=lambda: "작업자 05", list_workers=lambda: [])
     started = []
-    app.start_work = lambda *a, **k: started.append(app.worker_entry.get())
+    def start_work(*args, **kwargs):
+        started.append(app.worker_entry.get())
+        return True
+    app.start_work = start_work
     app.worker_entry = ScannerEntry("")
     processor = CaProcessor(app)
     state = processor.state()
@@ -390,6 +397,7 @@ def test_f8_reprint_confirms_the_existing_variable_and_invokes_only_an_enabled_b
     class Button(dict):
         def invoke(self):
             calls.append(list(confirmed))
+            return True
 
     app.phs_label_exchange_execute_button = Button(state=ca.tk.NORMAL if enabled else ca.tk.DISABLED)
     reply = CaProcessor(app).command("f8_reprint")

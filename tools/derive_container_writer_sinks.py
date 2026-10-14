@@ -161,6 +161,46 @@ POWERSHELL_NATIVE_PROCESS_APIS = (
     "ShellExecuteEx",
     "WinExec",
 )
+
+# Fold only the 33 pre-existing b82 directory preparations into their unchanged callers.
+DIRECTORY_PREPARATION_HELPER = "storage_policy.ensure_user_runtime_directory"
+DIRECTORY_PREPARATION_HELPER_AST_SHA256 = '0dbccb4e84da1737ae39f266bab8727b5d7836768211e32b38d7432bf206b7a0'
+DIRECTORY_PREPARATION_CALLS = {
+    ('Container_Audit.ContainerAudit._prepare_tray_state_snapshot', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('gui_tray_state_save', (), True, False),
+    ('auto_update.create_download_stage', 'ff08243590989fdc2c4104ebb0a9e30ebb2840a7352f86651027a50e88181892'): ('auto_update_control', (), False, False),
+    ('container_audit_product_host._append_jsonl', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('hosted_relay_jsonl', (), False, False),
+    ('container_audit_product_host._write_json_atomic', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('hosted_relay_json', (), False, False),
+    ('current_user_onboarding._write_json_atomic', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('current_user_onboarding_storage', (), False, False),
+    ('current_user_onboarding._write_json_atomic_create_new', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('current_user_onboarding_storage', (), False, False),
+    ('current_user_onboarding.onboard_current_user', '87f9ed34d31694cef448ad430f4bf2d47211409a8649376df30813e5b8d1bd2f'): ('current_user_onboarding', ('current_user_onboarding',), True, False),
+    ('current_user_onboarding.remove_current_user_setup', 'baed5eba0765259aa71ca7259034e47e8c4d38ae2520bd286c7010aebaacf367'): ('current_user_setup_removal', ('current_user_setup_removal',), False, False),
+    ('data_generation_guard.record_before_data_open', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('data_generation_marker', (), False, False),
+    ('direct_sync_auto_bootstrap._write_json', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('bootstrap_status', (), False, False),
+    ('direct_sync_operator._append_jsonl', 'b762147a0575a9c219141d905cb359521ef4b0ae6053a719380332f546acf71a'): ('operator_evidence', (), False, False),
+    ('direct_sync_operator._write_json_atomic', 'b762147a0575a9c219141d905cb359521ef4b0ae6053a719380332f546acf71a'): ('operator_evidence', (), False, False),
+    ('direct_sync_push._connect_relay_db', 'd5df6ba5f1a7dc72c635a9e2c7d7432df671867262848001585ebe173c53aa1c'): ('relay_spool_storage', (), False, False),
+    ('direct_sync_push._copy_file_atomic', 'a70fad8c3d201be97fbd6f298609417170004bcba06831df4282efd9f24818b9'): ('relay_spool_storage', (), False, False),
+    ('direct_sync_push._prepare_status_temp', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('relay_upload_status', (), True, False),
+    ('direct_sync_push._write_json_atomic', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('relay_spool_storage', (), False, False),
+    ('direct_sync_push.restore_raw_artifact_to_file', 'a70fad8c3d201be97fbd6f298609417170004bcba06831df4282efd9f24818b9'): ('relay_spool_storage', ('relay_spool_storage',), True, False),
+    ('direct_sync_runtime._append_jsonl', 'b762147a0575a9c219141d905cb359521ef4b0ae6053a719380332f546acf71a'): ('relay_runtime_storage', (), False, False),
+    ('direct_sync_runtime._disk_pressure_report', '4e7f6fa8c515ed6b491f1a84f8f664a79648d680b6eefe8318d738cac1d00dd1'): ('relay_runtime_storage', (), False, False),
+    ('direct_sync_runtime._write_json_atomic', 'b762147a0575a9c219141d905cb359521ef4b0ae6053a719380332f546acf71a'): ('relay_runtime_storage', (), False, False),
+    ('portable.main._portable_smoke', '2124167f079b9b08eae07cba3fe97b52c2aec8f42806ef3394c2e69ab4eeca18'): ('portable_smoke_marker', (), False, False),
+    ('storage_policy.ensure_container_audit_storage_dirs', '87f9ed34d31694cef448ad430f4bf2d47211409a8649376df30813e5b8d1bd2f'): ('', (), False, False),
+    ('tools.direct_sync_relay_install_pack._apply_task_runtime_acl', 'ac4ab861b2316abcfe9281f7dce3de82d63d5ff49ee532f00ed01e5ffa940529'): ('direct_sync_install_pack', (), False, False),
+    ('tools.direct_sync_relay_install_pack._write_json', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('direct_sync_install_pack', (), False, False),
+    ('tools.direct_sync_relay_install_pack._write_scheduled_task_wrapper', '17cf3840661d9e4b4e81f5f205c2826a23c53b6872fbacc60289e695d67fe33c'): ('direct_sync_install_pack', (), False, False),
+    ('tools.direct_sync_relay_install_pack._write_scheduled_task_wrapper', '2634b961cb374edac1c11195c56ca20eef733f270ce64402962057be215527dc'): ('direct_sync_install_pack', (), False, False),
+    ('tools.direct_sync_relay_install_pack._write_scheduled_task_wrapper', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('direct_sync_install_pack', (), False, False),
+    ('tools.direct_sync_relay_operator._write_json_atomic', 'b762147a0575a9c219141d905cb359521ef4b0ae6053a719380332f546acf71a'): ('relay_operator_report', (), False, False),
+    ('tools.direct_sync_relay_runner._build_delta_source_file', '6aad499e83584ad6f1ecebaf7e467534035e33ba928df911209156d0854acbd8'): ('raw_relay_storage', (), False, False),
+    ('tools.direct_sync_relay_runner._scan_state_connect', 'b762147a0575a9c219141d905cb359521ef4b0ae6053a719380332f546acf71a'): ('raw_relay_storage', (), False, False),
+    ('user_relay._write_json_atomic', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('persistent_relay_status', (), False, False),
+    ('user_relay.main', '773e572279ed42d5919b32486aa595bd2d6024a711e73dfc863581f28ecbda6a'): ('persistent_relay_status', ('persistent_relay_status',), True, False),
+    ('user_relay.main', 'c1eed8eb9116f4c6c08f59df6c9e52f9df16e0befeda2b2646e2c7453ebbebc3'): ('persistent_relay_status', ('persistent_relay_status',), True, False),
+}
+
 INVENTORY_ALL_SOURCES_SENTINEL = "__INVENTORY_ALL_SOURCES__"
 TRUSTED_CONTROL_PLANE_MUTATIONS: dict[str, str] = {}
 CALLER_FENCED_MUTATIONS: dict[str, dict[str, tuple[str, ...] | str]] = {
@@ -1024,6 +1064,8 @@ class _NodeVisitor(ast.NodeVisitor):
         self.import_scope_stack: list[str] = [initial_import_scope]
         self.calls: set[str] = set()
         self.mutation_sites: list[dict[str, Any]] = []
+        self.directory_preparations: list[dict[str, Any]] = []
+        self.directory_helper_references: list[int] = []
         self.pathlike_refs: set[str] = set(
             self.current_function_info.get("pathlike_params", ())
         )
@@ -1089,6 +1131,14 @@ class _NodeVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         resolved = self._resolve_callable(node.func)
+        if resolved == DIRECTORY_PREPARATION_HELPER:
+            if len(node.args) != 1 or node.keywords:
+                raise InventoryError("directory preparation call shape changed")
+            self.directory_preparations.append({
+                "line": node.lineno,
+                "argument_ast_sha256": _ast_sha256(node.args[0]),
+                "writer_admission_sources": list(self.writer_admission_stack),
+            })
         if resolved and resolved in self.known_nodes:
             self.calls.add(resolved)
         constructor = self._resolve_constructor(node.func)
@@ -1105,6 +1155,15 @@ class _NodeVisitor(ast.NodeVisitor):
         mutation = self._classify_mutation(node)
         if mutation is not None:
             self.mutation_sites.append(mutation)
+        self.generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, ast.Load) and self._resolve_callable(node) == DIRECTORY_PREPARATION_HELPER:
+            self.directory_helper_references.append(node.lineno)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if isinstance(node.ctx, ast.Load) and self._resolve_callable(node) == DIRECTORY_PREPARATION_HELPER:
+            self.directory_helper_references.append(node.lineno)
         self.generic_visit(node)
 
     def _scope_chain(self) -> list[str]:
@@ -1373,12 +1432,94 @@ def _analyze_module_node(
         {
             "calls": module_calls,
             "mutation_sites": module_visitor.mutation_sites,
+            "directory_preparations": module_visitor.directory_preparations,
+            "directory_helper_references": module_visitor.directory_helper_references,
         },
         {
             "calls": file_entry_calls,
             "mutation_sites": file_entry_visitor.mutation_sites,
+            "directory_preparations": file_entry_visitor.directory_preparations,
+            "directory_helper_references": file_entry_visitor.directory_helper_references,
         },
     )
+
+
+def _ast_sha256(node: ast.AST) -> str:
+    return hashlib.sha256(ast.dump(node, include_attributes=False).encode("utf-8")).hexdigest()
+
+
+def _forward_directory_preparations(
+    collectors: dict[str, FunctionCollector],
+    node_analysis: dict[str, dict[str, Any]],
+) -> None:
+    """Attribute the unchanged directory-only helper to its exact b82 callers.
+
+    This transfers directory effects, not permission to write business files.
+    The one pre-bootstrap preparation remains outside writer admission, as before.
+    """
+    if DIRECTORY_PREPARATION_HELPER not in node_analysis:
+        return
+    helper = collectors["storage_policy"].functions[DIRECTORY_PREPARATION_HELPER]
+    if _ast_sha256(helper["node"]) != DIRECTORY_PREPARATION_HELPER_AST_SHA256:
+        raise InventoryError("directory preparation helper body changed")
+    helper_details = node_analysis[DIRECTORY_PREPARATION_HELPER]
+    if len(helper_details["mutation_sites"]) != 1:
+        raise InventoryError("directory preparation helper must have exactly one mkdir")
+    functions = {name: info for collector in collectors.values() for name, info in collector.functions.items()}
+    seen: set[tuple[str, str]] = set()
+    forwarded: list[dict[str, Any]] = []
+    for caller, details in sorted(node_analysis.items()):
+        calls = details["directory_preparations"]
+        if sorted(details["directory_helper_references"]) != sorted(call["line"] for call in calls):
+            raise InventoryError(f"directory preparation non-call reference: {caller}")
+        for call in calls:
+            key = (caller, call["argument_ast_sha256"])
+            if key not in DIRECTORY_PREPARATION_CALLS or key in seen:
+                raise InventoryError(f"unregistered directory preparation: {caller}")
+            source, admissions, probe_only, report_only = DIRECTORY_PREPARATION_CALLS[key]
+            info = functions[caller]
+            sources = info["decorator_sources"]
+            flags = {"probe_only": False, "report_only": False}
+            for decorator in info["node"].decorator_list:
+                if not isinstance(decorator, ast.Call) or not decorator.args or not sources:
+                    continue
+                if _string_literal(decorator.args[0]) != sources[0]:
+                    continue
+                for keyword in decorator.keywords:
+                    if keyword.arg in flags:
+                        if not isinstance(keyword.value, ast.Constant) or type(keyword.value.value) is not bool:
+                            raise InventoryError(f"directory preparation decorator changed: {caller}")
+                        flags[keyword.arg] = keyword.value.value
+            if (
+                tuple(call["writer_admission_sources"]) != admissions
+                or (sources[0] if sources else (admissions[0] if admissions else "")) != source
+                or (flags["probe_only"], flags["report_only"]) != (probe_only, report_only)
+            ):
+                raise InventoryError(f"directory preparation admission changed: {caller}")
+            seen.add(key)
+            classification = (
+                "writer_admission" if admissions else
+                "probe_only" if probe_only else
+                "decorator" if source else
+                "pre_admission_directory_preparation"
+            )
+            forwarded.append({
+                "caller": caller, **call,
+                "source": source, "classification": classification,
+                "probe_only": probe_only, "report_only": report_only,
+            })
+            if source:
+                # Preserve the old mkdir's caller fence; file mutations stay separate.
+                details["mutation_sites"].append({
+                    **helper_details["mutation_sites"][0],
+                    "line": call["line"],
+                    "writer_admission_sources": list(admissions),
+                    "directory_preparation_helper": DIRECTORY_PREPARATION_HELPER,
+                })
+    if seen != set(DIRECTORY_PREPARATION_CALLS):
+        raise InventoryError("directory preparation coverage must preserve all 33 b82 sites")
+    helper_details["mutation_sites"] = []
+    helper_details["directory_preparation_forwarding"] = forwarded
 
 
 def _analyze_closure(
@@ -1440,6 +1581,8 @@ def _analyze_closure(
             node_analysis[qualname] = {
                 "calls": sorted(visitor.calls),
                 "mutation_sites": visitor.mutation_sites,
+                "directory_preparations": visitor.directory_preparations,
+                "directory_helper_references": visitor.directory_helper_references,
             }
         module_node, file_entry_node = _analyze_module_node(
             module_name=module_name,
@@ -1450,6 +1593,8 @@ def _analyze_closure(
         )
         node_analysis[f"{module_name}.__module__"] = module_node
         node_analysis[f"{module_name}.__file_entry__"] = file_entry_node
+
+    _forward_directory_preparations(collectors, node_analysis)
 
     for qualname, details in node_analysis.items():
         if qualname in sink_sources or not details["mutation_sites"]:
@@ -3228,6 +3373,9 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
         },
         "writer_sink_sources": all_sources,
         "writer_sinks": sink_rows,
+        "directory_preparation_forwarding": node_analysis.get(
+            DIRECTORY_PREPARATION_HELPER, {}
+        ).get("directory_preparation_forwarding", []),
         "closure_direct_mutation_functions": mutation_rows,
         "uncovered_direct_mutation_functions": uncovered,
         "caller_fence_reference_failures": caller_fence_failures,

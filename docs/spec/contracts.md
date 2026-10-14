@@ -1,5 +1,7 @@
 ﻿> 2026-10-01 w9scanonly 현재 계약: 7칸 QT=1–9999 즉시 시작, snapshot 구성원 수 우선, 로컬 intent/checkpoint/TRAY_COMPLETE → 표시 → 독립 배경 교환 ACK/lease/seal. 공통 payload는 scan_payload/local_completion_id/local_completed_at/deferred_reflection/short_confirmed/exchange_idempotency_keys다. short는 전체 topology 증거와 스캔 subset을 보내고 exact 잔량을 검증한다. UPSTREAM_COMPLETION_PENDING 409는 retry, COMPLETION_REVIEW_REQUIRED는 해당 intent review다. 유효 PHS2_LOCAL_ONLY도 같은 대기열로 보내며 옛 13자리 현품표는 기존 과도기 기록만 유지한다.
 
+새 화면의 업무 동작은 명시 True/boolean ok만 성공으로 돌려준다. False·오류 글·거절 안내는 실패, None은 결과 모름(idle·ok=False)이며 재전송이 실패를 성공으로 덮지 않는다. 관리자 ID/PIN 빈 입력은 실행 전에 거절하고 재인증 필요는 웹 결과로 표시한다. 등록은 같은 원장 함수로 직접 가고 PIN·내부 시험 입력은 기존 인스턴스 대체를 사용해 Tk Toplevel·grab·wait_window를 만들지 않는다. 옛 화면 모달과 업무 자료·인증 계약은 유지한다.
+
 제품 교환 전송의 OPERATOR_REVIEW는 같은 현품표의 뒤 교환만 대기시킨다. 다른 현품표의 교환·봉인은 같은 전송 주기에 계속하며, 봉인은 해당 트레이의 모든 교환 ACK를 요구한다. 검토 행·원 명령·키·관리자 처리 계약과 통신 재시도 순서는 유지한다. 로컬 교환 저장 안내는 「제품 교환 저장됨·회사 서버 확인 중」으로 표시한다.
 
 사전조회가 서버 고정 코드 `OPERATION_RESOURCE_ALREADY_LEASED`를 받으면 해당 트레이만 「이 현품표는 다른 이적 PC 가 작업 중입니다 — 한 현품표는 한 PC 에서」로 안내한다. 거절 뒤 받은 제품은 내구 보류하고 수량·완료에 반영하지 않는다. QT 트레이는 `operation_lease_hold`에 원 스캔·수신 시각·재생 위치·확정 스캔의 원 감사행을 보존하며 현재/보류 checkpoint에서 복구한다. QT 없는 트레이는 기존 사전조회 보류 원본을 사용한다. 같은 현품표 재스캔으로 기존 조회를 다시 실행하고, 인증된 임대와 구성원을 저장한 뒤 기존 제품 검증·멱등 감사로 보류 입력을 재생한다. 거절은 자동 재조회하지 않으며 통신 실패의 기존 재예약은 유지한다. 조회 중 이미 보류한 트레이는 현품표·시작 시각이 일치하는 원본에만 거절을 반영한다. 다른 트레이의 조회·교환·봉인은 계속한다.

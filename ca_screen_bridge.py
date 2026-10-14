@@ -728,7 +728,7 @@ class CaProcessor:
         if handler is None:
             return {"ok": False, "result": {"kind": "warn", "text": "이 단추는 아직 처리 층에 없습니다"}}
         out = handler(args.get("id"), args)
-        return out if isinstance(out, dict) and "ok" in out else {"ok": True}
+        return out if isinstance(out, dict) and type(out.get("ok")) is bool else self._action_reply(out, [])
 
     def admin(self, name: str, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         args = dict(args or {})
@@ -750,14 +750,24 @@ class CaProcessor:
         """관리자 메뉴 명령이 내는 안내를 판 결과로 모은다."""
         self._admin_notes = []
         try:
-            command()
+            value = command()
         finally:
             notes, self._admin_notes = self._admin_notes or [], None
-        last = notes[-1] if notes else None
-        if last is None:
-            return {"ok": True, "result": {"kind": "ok", "text": "했습니다", "sub": "관리자 확인 · 기록 남김"}}
-        refused = last["kind"] == "bad"
-        return {"ok": not refused, "result": {"kind": "warn" if refused else "ok" if last["kind"] == "quiet" else "warn", "text": last["text"]}}
+        return self._action_reply(value, notes)
+
+    def _action_reply(self, value: Any, notes: List[Dict[str, Any]]) -> Dict[str, Any]:
+        refusal = next((note for note in reversed(notes) if note["kind"] in {"bad", "warn"}), None)
+        if refusal is not None:
+            return {"ok": False, "result": {"kind": "warn", "text": refusal["text"]}}
+        if isinstance(value, dict) and type(value.get("ok")) is bool:
+            return value
+        if value is True:
+            if notes:
+                return {"ok": True, "result": {"kind": "ok", "text": notes[-1]["text"]}}
+            return {"ok": True}
+        if value is False or (isinstance(value, str) and value):
+            return {"ok": False, "result": {"kind": "warn", "text": "처리하지 못했습니다 — 화면의 상태를 확인하세요"}}
+        return {"ok": False, "result": {"kind": "idle", "text": "처리 결과를 확인하지 못했습니다", "sub": notes[-1]["text"] if notes else "화면의 상태를 확인하세요"}}
 
     def closing(self) -> bool:
         """창 X — 지금 on_closing 규칙(저장 중이면 미룸)을 그대로 묻는다. False = 닫기 막음."""
@@ -830,6 +840,8 @@ class CaProcessor:
 
     def _take_credentials(self, **_kw: Any) -> Optional[Tuple[str, str]]:
         credentials, self._credentials = self._credentials, None  # 한 번만 — 값은 남기지 않음
+        if credentials is None:
+            self.note({"kind": "warn", "text": "관리자 확인이 다시 필요합니다 — 관리자 ID와 PIN을 다시 넣으세요"})
         return credentials
 
     def _no_test_item(self, *_args: Any, **_kw: Any) -> None:
@@ -851,15 +863,13 @@ class CaProcessor:
         widget = _attr(self.app, widget_name)
         if widget is None or _widget_enabled(self.app, widget_name) is False:
             return {"ok": False, "result": {"kind": "warn", "text": "지금은 누를 수 없습니다"}}
-        widget.invoke()
-        return {"ok": True}
+        return self._run_menu_action(widget.invoke)
 
     def _menu(self, name: str) -> Dict[str, Any]:
         enabled, command = operations_menu(self.app).get(name, (False, None))
         if not enabled or command is None:
             return {"ok": False, "result": {"kind": "warn", "text": "지금은 할 수 없습니다"}}
-        command()
-        return {"ok": True}
+        return self._run_menu_action(command)
 
     def _pane_values(self) -> Dict[str, Any]:
         """한 단계 안 화면 값 — 그 화면이 열렸을 때만 읽는다(파일 읽기가 있는 것)."""
@@ -984,8 +994,7 @@ class CaProcessor:
         if not path:
             return {"ok": False, "result": {"kind": "warn", "text": "보류 목록이 바뀌었습니다 — 다시 고르세요"}}
         self.view = None
-        self.app.restore_parked_tray(path)
-        return {"ok": True}
+        return self._run_menu_action(lambda: self.app.restore_parked_tray(path))
 
     def _cmd_reset(self, confirmed: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
         if confirmed != "confirmed":  # 화면 확인 판에서만(지금 코드엔 확인이 없어 새로 생긴 한 번 확인)
@@ -1001,8 +1010,7 @@ class CaProcessor:
         enabled, command = operations_menu(self.app).get("resend_completion", (False, None))
         if not enabled or command is None:
             return {"ok": False, "result": {"kind": "warn", "text": "지금은 할 수 없는 관리자 일입니다", "sub": "화면의 상태를 확인하세요"}}
-        reply = self._run_menu_action(command)
-        return {**reply, "ok": True}
+        return self._run_menu_action(command)
 
     def _cmd_change_worker(self, _id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
         return self._invoke("change_worker_button")
@@ -1057,8 +1065,7 @@ class CaProcessor:
             else:
                 self._registration_name = None
         self.view = None
-        self.app.start_work()
-        return {"ok": True}
+        return self._run_menu_action(self.app.start_work)
 
     def _cmd_register_worker(self, _id: Any, args: Dict[str, Any]) -> Dict[str, Any]:
         name = str(args.get("name") or "").strip()

@@ -55,7 +55,7 @@ def test_registration_selects_existing_identity_and_distinguishes_another_person
     assert state['register']['name'] == '작업자'
     assert state['register']['cands'] == [{'id': existing['worker_id'], 'label': ca.worker_choice_label(existing)}]
     assert _schema_errors(state, screen.json.loads(screen.CONTRACT.read_bytes())['state']) == []
-    app.start_work = lambda: None
+    app.start_work = lambda: True
     assert processor.command('start_work', {'id': existing['worker_id']})['ok']
     assert app.worker_roster.pending_requests()[0]['existing_worker_id'] == existing['worker_id']
     assert processor.command('register_worker', {'name': '작업자B'})['ok']
