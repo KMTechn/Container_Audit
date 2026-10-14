@@ -1202,23 +1202,6 @@ def _record_screen_startup(data: Optional[Path], event: str, *, error: Any = Non
         pass  # Optional telemetry cannot bypass admission or change recovery.
 
 
-def _prepare_screen_backend(module: Any) -> None:
-    """Check native dependencies before starting an owner or creating a form."""
-    from writer_session_fence import WriterFenceError
-    intentional = (WriterFenceError, module.DataGenerationBlocked, module.DataRootUnavailableError)
-    try:
-        import webview
-        from webview.guilib import initialize
-        backend = initialize("edgechromium")
-        if backend.renderer != "edgechromium":
-            raise RuntimeError("WEBVIEW2_UNAVAILABLE")
-        from Microsoft.Web.WebView2.Core import CoreWebView2Environment
-        if not CoreWebView2Environment.GetAvailableBrowserVersionString(webview.settings["WEBVIEW2_RUNTIME_PATH"]):
-            raise RuntimeError("WEBVIEW2_UNAVAILABLE")
-    except intentional:
-        raise
-    except Exception as error:
-        raise ScreenStartupUnavailable("WEBVIEW2_MISSING") from error
 
 
 def screen_runner(module: Any) -> Callable[[List[str]], Any]:
@@ -1263,7 +1246,6 @@ def screen_runner(module: Any) -> Callable[[List[str]], Any]:
                     host["requested"] = False
                     return module._run_gui_application(arguments)
 
-            _prepare_screen_backend(module)
             with attempt.observe_host(shell_host):
                 result = run_app("rw", data, udf=data / "webview2", root=APP_DIR / "ui", page=PAGE,
                                  title="이적", owner_main=owner_main_for(module, arguments, attempt=attempt),

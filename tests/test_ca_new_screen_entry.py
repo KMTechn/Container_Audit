@@ -92,7 +92,6 @@ def entry(monkeypatch):
     monkeypatch.setattr(updates, "trial_stop_requested", lambda _root: False)
     monkeypatch.setitem(sys.modules, "host", SimpleNamespace(run_app=run_app))
     monkeypatch.setitem(sys.modules, "webview", SimpleNamespace(windows=[]))
-    monkeypatch.setattr(screen, "_prepare_screen_backend", lambda _module: None)
     yield state
     assert host == {"requested": False, "active": False, "run": None}
     assert ca.tk.Tk is original_tk and screen.ca is original_module
