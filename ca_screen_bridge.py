@@ -22,6 +22,8 @@ import datetime
 import hashlib
 import json
 import os
+import re
+import time
 import sys
 import threading
 import tkinter as tk
@@ -31,7 +33,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import Container_Audit as ca
 from screen_startup_fallback import ScreenLaunchAttempt, ScreenStartupUnavailable
 from tk_callback_result import invoke_button_callback
-from writer_session_fence import writer_admission
+from writer_session_fence import writer_admission, writer_sink
 from scan_display import compact_scan_value
 from warning_presenter import CompletionOutcome, NoticeSeverity
 
@@ -1173,6 +1175,33 @@ def _can_fall_back(attempt: ScreenLaunchAttempt) -> bool:
         return False  # Unknown cleanup never grants permission to open another UI.
 
 
+@writer_sink("screen_shell_fileio")
+def _write_screen_startup_record(data: Path, record: Dict[str, Any]) -> None:
+    # The shell has prepared this user directory. Telemetry never creates roots.
+    path = data / "screen-startup.jsonl"
+    if path.is_symlink() or (path.exists() and path.stat().st_size >= 256 * 1024):
+        return
+    with path.open("ab") as stream:
+        stream.write((json.dumps(record, ensure_ascii=True, separators=(",", ":")) + "\n").encode("utf-8"))
+
+
+def _record_screen_startup(data: Optional[Path], event: str, *, error: Any = None,
+                           elapsed_ms: int = 0, ready: bool = False,
+                           code: Optional[str] = None, cause: Optional[str] = None) -> None:
+    if data is None or event not in {"WEBVIEW_START_ENTER", "WEBVIEW_START_RETURN", "WEBVIEW_START_ERROR", "OWNER_ERROR", "BEFORE_EXIT"}:
+        return
+    name = type(error).__name__ if error is not None else None
+    if name is not None and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name) is None:
+        name = "Exception"
+    record = {"event": event, "exception": name, "ms": max(0, int(elapsed_ms)), "ready": bool(ready),
+              "code": code if code in {"SHELL_START_FAILED", "SHELL_START_TIMEOUT"} else "OTHER",
+              "cause": cause if cause in {"RUNTIME_MISSING", "WEBVIEW_ENV_FAILED", "WEBVIEW_NO_READY", "READY_TIMEOUT", "OWNER_START_FAILED", "OTHER"} else "OTHER"}
+    try:
+        _write_screen_startup_record(data, record)
+    except Exception:
+        pass  # Optional telemetry cannot bypass admission or change recovery.
+
+
 def _prepare_screen_backend(module: Any) -> None:
     """Check native dependencies before starting an owner or creating a form."""
     from writer_session_fence import WriterFenceError
@@ -1204,8 +1233,16 @@ def screen_runner(module: Any) -> Callable[[List[str]], Any]:
         attempt = ScreenLaunchAttempt()
         fallback_reason = None
         importing_shell = True
+        data = None
+        started_at = time.monotonic()
+        attempt.startup_observer = lambda event, **fields: _record_screen_startup(data, event, **fields)
 
         def before_exit(_code: str, deadline_s: float) -> bool:
+            bridge = attempt.bridge
+            _record_screen_startup(data, "BEFORE_EXIT", error=host.get("error"),
+                                   elapsed_ms=int((time.monotonic() - started_at) * 1000),
+                                   ready=bool(getattr(bridge, "_startup_ready", False)), code=_code,
+                                   cause=getattr(bridge, "_startup_cause", None))
             from runtime_entry import set_gui_state
             set_gui_state("closing")
             from writer_session_fence import close_and_wait_writers
@@ -1272,6 +1309,7 @@ def owner_main_for(module: Any, arguments: List[str], *, attempt: Optional[Scree
         return context.run(run_owner, bridge)
 
     def run_owner(bridge: Any) -> Any:
+        owner_began = time.monotonic()
         if attempt is not None:
             attempt.enter_owner(bridge)
         global ca
@@ -1338,6 +1376,8 @@ def owner_main_for(module: Any, arguments: List[str], *, attempt: Optional[Scree
             return code
         except BaseException as error:
             host["error"] = error
+            if attempt is not None:
+                attempt.record_startup("OWNER_ERROR", error=error, elapsed_ms=int((time.monotonic() - owner_began) * 1000))
             if not started:
                 bridge.fail_owner(error)
             return None  # The main thread raises the original error after run_app.

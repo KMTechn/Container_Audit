@@ -1,6 +1,7 @@
 """Observe one shell attempt and prove that it has released its startup resources."""
 from contextlib import contextmanager
 import threading
+import time
 
 
 class ScreenStartupUnavailable(RuntimeError):
@@ -12,6 +13,7 @@ class ScreenStartupUnavailable(RuntimeError):
 class ScreenLaunchAttempt:
     def __init__(self):
         self.bridge = None
+        self.startup_observer = None
         self.app = None
         self.owner_thread = None
         self.owner_finished = threading.Event()
@@ -29,6 +31,14 @@ class ScreenLaunchAttempt:
         self.server_created = threading.Event()
         self.server_construction_started = False
         self.server_construction_completed = False
+
+    def record_startup(self, event, **fields):
+        observer = self.startup_observer
+        if callable(observer):
+            try:
+                observer(event, **fields)
+            except Exception:
+                pass
 
     def enter_owner(self, bridge):
         self.bridge = bridge
@@ -113,6 +123,24 @@ class ScreenLaunchAttempt:
                 return result
             return create
 
+        def start_factory(original):
+            def start(*args, **kwargs):
+                began = time.monotonic()
+                self.record_startup("WEBVIEW_START_ENTER")
+                try:
+                    result = original(*args, **kwargs)
+                except BaseException as error:
+                    self.record_startup("WEBVIEW_START_ERROR", error=error,
+                                        elapsed_ms=int((time.monotonic() - began) * 1000),
+                                        ready=bool(getattr(self.bridge, "_startup_ready", False)),
+                                        cause=getattr(self.bridge, "_startup_cause", None))
+                    raise
+                self.record_startup("WEBVIEW_START_RETURN", elapsed_ms=int((time.monotonic() - began) * 1000),
+                                    ready=bool(getattr(self.bridge, "_startup_ready", False)),
+                                    cause=getattr(self.bridge, "_startup_cause", None))
+                return result
+            return start
+
         original_threading = getattr(host, 'threading', None)
         if original_threading is not None:
             attempt = self
@@ -130,6 +158,8 @@ class ScreenLaunchAttempt:
         try:
             if hasattr(host, 'Bridge'):
                 replace(host, 'Bridge', bridge_factory)
+            if hasattr(webview, 'start'):
+                replace(webview, 'start', start_factory)
             if hasattr(webview, 'create_window'):
                 replace(webview, 'create_window', window_factory)
             if hasattr(host, 'NativeHost'):

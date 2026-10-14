@@ -157,13 +157,15 @@ def test_refused_diagnostics_and_receipt_writes_keep_scans_and_state_running(fil
         bridge.close()
 
 
-def test_shell_copy_matches_the_ready_v3162_manifest():
+def test_shell_copy_matches_the_ready_v3163_manifest():
     ready_path = ROOT / "shell" / "SHELL-READY-v3.16.json"
     assert ready_path.is_file()
     ready = json.loads(ready_path.read_text(encoding="utf-8"))
-    assert ready["version"] == "v3.16.2"
+    assert ready["version"] == "v3.16.3"
     for row in ready["files"]:
-        path = ROOT / row["path"]
+        relative = Path(row["path"])
+        assert relative.parts[0] == "shell-v3.16.3"
+        path = ROOT / "shell" / Path(*relative.parts[1:])
         assert path.stat().st_size == row["bytes"]
         assert hashlib.sha256(path.read_bytes()).hexdigest() == row["sha256"]
     for row in ready["kit_only_files"]:

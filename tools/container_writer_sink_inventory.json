@@ -1184,6 +1184,33 @@
       "caller_guard_sources": [],
       "coverage_status": "covered",
       "covered_entrypoints": [],
+      "decorated_source": "screen_shell_fileio",
+      "direct_callers": [
+        "ca_screen_bridge._record_screen_startup"
+      ],
+      "file": "ca_screen_bridge.py",
+      "kind": "function",
+      "line": 1179,
+      "mutation_sites": [
+        {
+          "category": "filesystem",
+          "line": 1184,
+          "operation": "path.open",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "ca_screen_bridge._write_screen_startup_record",
+      "reachable_entrypoints": [],
+      "reachable_from_product_entrypoint": false,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
+      "covered_entrypoints": [],
       "decorated_source": "admin_pin_network",
       "direct_callers": [
         "container_admin_pin.AdminPinClient.post",
@@ -9598,7 +9625,7 @@
   ],
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
-    "closure_direct_mutation_function_count": 183,
+    "closure_direct_mutation_function_count": 184,
     "closure_module_count": 125,
     "external_process_mutation_site_count": 19,
     "powershell_direct_mutation_site_count": 116,
@@ -9618,8 +9645,8 @@
     "powershell_sink_count": 2,
     "python_external_control_literal_site_count": 5,
     "scheduled_task_mutation_site_count": 12,
-    "sink_function_count": 260,
-    "total_cross_language_sink_count": 262,
+    "sink_function_count": 261,
+    "total_cross_language_sink_count": 263,
     "trusted_control_plane_mutation_count": 0,
     "uncovered_mutation_function_count": 0
   },
@@ -10770,7 +10797,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "13903715feb1b1e0ef017b289f5dcceca5d3059d5c1576c8cf1284702c416508",
+  "inventory_sha256": "346e2d0f55d735ecd0b6b74daa5a5b50d1b4f958d0ca38f8cf35648d531f5751",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -25036,6 +25063,14 @@
       "line": 24,
       "marker_kind": "decorator",
       "source": "runtime_shutdown_diagnostic"
+    },
+    {
+      "direct_mutation_site_count": 1,
+      "file": "ca_screen_bridge.py",
+      "function": "ca_screen_bridge._write_screen_startup_record",
+      "line": 1179,
+      "marker_kind": "decorator",
+      "source": "screen_shell_fileio"
     },
     {
       "direct_mutation_site_count": 1,

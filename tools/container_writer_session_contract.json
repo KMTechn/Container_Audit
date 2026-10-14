@@ -50,7 +50,7 @@
     "tuple_encoding": "UTF-8 without BOM",
     "tuple_normalization": "Unicode NFC applied to each field before joining",
     "writer_inventory_path": "tools/container_writer_sink_inventory.json",
-    "writer_inventory_sha256": "13903715feb1b1e0ef017b289f5dcceca5d3059d5c1576c8cf1284702c416508",
+    "writer_inventory_sha256": "346e2d0f55d735ecd0b6b74daa5a5b50d1b4f958d0ca38f8cf35648d531f5751",
     "canonical_installer_delegation_source": "writer_sink_sources from the exact pinned code-derived inventory",
     "scheduled_task_mutation_rule": "Every Disable/Enable/Stop/Start/Register/Unregister/Set cmdlet executes only inside an approved container writer wrapper while the admission mutex is held; the exact active fence, live session authority, and immutable prepared-receipt path plus SHA-256 are validated before and after the mutation.",
     "natural_trigger_phase_rule": "After exact enable readback, an immutable authorization receipt releases the fence under admission; a failed natural-trigger proof must reacquire the fence before any safety or containment mutation.",

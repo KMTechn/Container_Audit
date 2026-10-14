@@ -13,6 +13,9 @@ from screen_startup_fallback import ScreenLaunchAttempt, ScreenStartupUnavailabl
 
 @pytest.fixture
 def entry(monkeypatch):
+    import writer_session_fence as fence
+    assert fence._WRITER_EXIT_COUNT == 0
+    monkeypatch.setattr(fence, "_WRITER_EXIT_CLOSED", False)
     events, callbacks, failures, refusals, releases, host_calls = [], [], [], [], [], []
     host = {"requested": False, "active": False, "run": None}
     monkeypatch.setattr(ca, "CA_SCREEN_HOST", host)

@@ -24,7 +24,7 @@ def test_pinned_shell_mutations_are_all_in_one_admitted_module(shell_inventory_r
     module, root = shell_inventory_root
     payload = module.derive_inventory(root)
     descriptor = payload["shell_kit_delegated_fence"]
-    assert descriptor["ready_version"] == "v3.16.2"
+    assert descriptor["ready_version"] == "v3.16.3"
     assert descriptor["writer_source"] == "screen_shell_fileio"
     mutations = [row for row in payload["closure_direct_mutation_functions"] if row["file"].startswith("shell/")]
     assert mutations

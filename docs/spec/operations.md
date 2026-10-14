@@ -1693,3 +1693,5 @@ Rollback continuation의 기록된 owner PID가 현재 프로세스에 있어도
 셸 v3.16.3 수동 복구(M121): 일반 웹 시작 실패 첫 회에는 다음 수동 실행도 웹, 같은 판 두 번째 실패에는 다음 수동 실행이 Tk다. RUNTIME_MISSING이면 다음 수동 실행부터 Tk다. 앱은 web_allowed와 before_exit에 위임하며 표지를 따로 해석하거나 다시 띄우지 않는다. 이는 옛 M84 S1①의 첫 실패 뒤 Tk 기대를 대체한다.
 
 이적 native 준비 확인은 web_allowed=True 뒤 run_app 앞에서 edgechromium backend와 WebView2 runtime만 읽는다. 이 준비 실패만 창/owner 생성 전 Tk로 복구하며 셸 표지를 만들지 않는다. 설치·자료·writer admission 거부는 그대로 전파한다. run_app에는 셸 기본값과 같은 data/webview2를 udf로 명시하며 EBWebView가 없으면 실제 watchdog 90초, 있으면 30초다.
+
+앱 소유 screen-startup.jsonl은 webview.start 진입/반환/예외 종류·경과 ms와 owner 예외 종류를 구분한다. before_exit에는 host 오류 종류·page READY·고정 code/cause를 기록한다. 메시지·stack·입력값·경로는 기록하지 않는다. 기존 screen_shell_fileio writer admission을 쓰고 거절/기록 실패는 복구를 막지 않으며 루트 생성이나 report-only 예외를 추가하지 않는다. 로그는 256 KiB에서 더 기록하지 않는다.
