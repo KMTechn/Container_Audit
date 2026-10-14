@@ -7,7 +7,7 @@
 - 옛 명세(0f82c54 판 README, 기술 이력 포함)는 git 이력에 그대로 있다.
 - 기술 계약은 [contracts.md](contracts.md), 운영은 [operations.md](operations.md), 제품 교환은 [member-exchange-view.md](member-exchange-view.md) 가 정본이다.
 - 설치된 앱의 읽기 전용 확인 계약·실행법은 [startup-check.md](startup-check.md)를 따른다.
-- v2.0.108 어댑터는 기본 web과 비상 `--old-screen`·`--ui tk`를 지원한다. `--new-screen`·`--ui web`과 모르는 `--ui` 값은 기본 길을 고른다. 웹 창 생성 뒤 실패는 셸의 쓰기·lane worker 종료 대기 후 끝내기이며 다음에 사람이 켜면 같은 판 표지로 Tk를 연다. 자동 재실행은 없다. 생성 전 안전한 Tk 길·시작 거절·업무 gate는 유지한다([운영·복구](operations.md)). 승인된 셸 v3.16.2와 UI 최종 `97efc8e7` 사본을 통합했다. v2.0.106은 writer inventory 검사 실패로 소모했고 v2.0.107은 빌드 한 번으로 수용되었다. v2.0.108은 코드 준비 중이며 A9 결과 뒤 별도 지시 전까지 빌드하지 않는다.
+- v2.0.108 어댑터는 기본 web과 비상 `--old-screen`·`--ui tk`를 지원한다. `--new-screen`·`--ui web`과 모르는 `--ui` 값은 기본 길을 고른다. 웹 창 생성 뒤 실패는 셸의 쓰기·lane worker 종료 대기 후 끝내기이며 일반 첫 실패 뒤 다음 수동 실행은 웹, 같은 판 두 번째 실패 또는 RUNTIME_MISSING 뒤 다음 실행은 Tk를 연다. 자동 재실행은 없다. 생성 전 안전한 Tk 길·시작 거절·업무 gate는 유지한다([운영·복구](operations.md)). 승인된 셸 v3.16.3과 UI 최종 `97efc8e7` 사본을 통합했다. v2.0.106은 writer inventory 검사 실패로 소모했고 v2.0.107은 빌드 한 번으로 수용되었다. v2.0.108은 코드 준비 중이며 A9 결과 뒤 별도 지시 전까지 빌드하지 않는다.
 - 근거:
   - 지금 상태 조사표: `D:\KMTech\program-improvement-20260912\work\program\w9archplan\sub-26\INVENTORY.md`(정적, F-01–F-72).
   - 현장 사실: 사용자 확인분. 화면 기준: `specs/UI-AUDIT-1009.md` U7. 허브 결정: `Program_Spec_Hub/DECISIONS.md`.

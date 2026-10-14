@@ -337,3 +337,44 @@ def test_real_os_notice_uses_ca_title_and_bounded_api(actual_shell, monkeypatch)
                         lambda *_args, **_kwargs: SimpleNamespace(MessageBoxTimeoutW=Notice()))
     state.original_notice("이적")
     assert calls == [(None, "이적", 0x00040040, 0, 30000)]
+
+
+@pytest.mark.parametrize("profile_exists,ebwebview_exists,expected", [(False, False, 90), (True, False, 90), (True, True, 30)])
+def test_actual_watchdog_uses_explicit_udf_and_ebwebview(actual_shell, monkeypatch, profile_exists, ebwebview_exists, expected):
+    state = actual_shell
+    state.mode = "ready"
+    profile = state.data / "webview2"
+    if profile_exists:
+        profile.mkdir(parents=True)
+    if ebwebview_exists:
+        (profile / "EBWebView").mkdir()
+    budgets, storage = [], []
+    threading_original = state.host.threading
+    class Threads:
+        def __getattr__(self, name):
+            return getattr(threading_original, name)
+        def Thread(self, *args, **kwargs):
+            if kwargs.get("name") != "shell-start-watch":
+                return threading_original.Thread(*args, **kwargs)
+            target = kwargs["target"]
+            closure = dict(zip(target.__code__.co_freevars, (cell.cell_contents for cell in target.__closure__)))
+            event = closure["watchdog_stop"]
+            original_wait = event.wait
+            event.wait = lambda seconds: budgets.append(seconds) or True
+            class Watch:
+                def start(self):
+                    try:
+                        target()
+                    finally:
+                        event.wait = original_wait
+            return Watch()
+    monkeypatch.setattr(state.host, "threading", Threads())
+    original_start = sys.modules["webview"].start
+    def start(*args, **kwargs):
+        storage.append(kwargs["storage_path"])
+        return original_start(*args, **kwargs)
+    monkeypatch.setattr(sys.modules["webview"], "start", start)
+    assert ca.main([]) == 0
+    assert budgets == [expected]
+    assert storage == [str(profile.resolve())]
+    assert state.exits == [] and state.visible.preparations == [0]

@@ -1208,7 +1208,7 @@ def screen_runner(module: Any) -> Callable[[List[str]], Any]:
                     return module._run_gui_application(arguments)
 
             with attempt.observe_host(shell_host):
-                result = run_app("rw", data, root=APP_DIR / "ui", page=PAGE,
+                result = run_app("rw", data, udf=data / "webview2", root=APP_DIR / "ui", page=PAGE,
                                  title="이적", owner_main=owner_main_for(module, arguments, attempt=attempt),
                                  write_guard=admission_write_guard,
                                  version=module.CURRENT_VERSION, before_exit=before_exit)

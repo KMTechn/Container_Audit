@@ -203,7 +203,7 @@ THIRD_PARTY_EXCLUDED_PATHS = frozenset({
     "webview/lib/runtimes/win-arm64/native/WebView2Loader.dll",
     "webview/lib/runtimes/win-x86/native/WebView2Loader.dll",
 })
-SHELL_BRIDGE_SOURCE_COMMIT = "94ef0f4f873cd7d9db5cbc898420aaed71eda7ce"
+SHELL_BRIDGE_SOURCE_COMMIT = "65003a342d7c79f38ee078edd381a254af38cd07"
 FORBIDDEN_PACKAGE_NAMES = frozenset(
     {"PIL", "charset_normalizer", "cryptography", "pygame"}
 )
@@ -590,17 +590,23 @@ def _assert_screen_bundle(repo_root: Path, app_root: Path) -> dict[str, object]:
     ready_path = "shell/SHELL-READY-v3.16.json"
     ready_bytes = (app_root / ready_path).read_bytes()
     if hashlib.sha256(ready_bytes).hexdigest() != SHELL_KIT_READY_SHA256:
-        raise PortableBuildError("packet shell READY differs from the v3.16.2 pin")
+        raise PortableBuildError("packet shell READY differs from the v3.16.3 pin")
     ready = json.loads(ready_bytes)
     if ready.get("version") != SHELL_KIT_READY_VERSION:
-        raise PortableBuildError("packet shell version differs from the v3.16.2 pin")
+        raise PortableBuildError("packet shell version differs from the v3.16.3 pin")
     committed = _git_bytes(repo_root, "ls-tree", "-r", "--name-only", SHELL_BRIDGE_SOURCE_COMMIT, "--", "shell").decode().splitlines()
-    expected = {row["path"] for row in ready["files"]} | {ready_path}
+    installed_rows = []
+    for row in ready["files"]:
+        relative = Path(row["path"])
+        if relative.is_absolute() or ".." in relative.parts or relative.parts[0] != "shell-v3.16.3":
+            raise PortableBuildError("packet shell READY path is outside its accepted source")
+        installed_rows.append(("shell/" + Path(*relative.parts[1:]).as_posix(), row))
+    expected = {name for name, _ in installed_rows} | {ready_path}
     actual = {path.relative_to(app_root).as_posix() for path in (app_root / "shell").rglob("*") if path.is_file()}
     if set(committed) != expected or actual != expected:
         raise PortableBuildError("packet shell file set differs from the accepted bridge")
-    for row in ready["files"]:
-        path = app_root / row["path"]
+    for name, row in installed_rows:
+        path = app_root / name
         if path.stat().st_size != row["bytes"] or _sha256(path) != row["sha256"]:
             raise PortableBuildError("packet shell file differs from READY: " + row["path"])
     for name in committed:
