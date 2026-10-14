@@ -61,8 +61,10 @@ def trusted_instance_marker(data_root) -> dict | None:
         return None
     try:
         identity = native.process_identity(record["pid"])
-        if (identity is not None and identity["started_at"] == record["started_at"]
-                and os.path.normcase(identity["exe"]) == os.path.normcase(record["exe"])):
+        own_identity = native.process_identity(os.getpid())
+        if (identity is not None and own_identity is not None
+                and identity["started_at"] == record["started_at"]
+                and os.path.normcase(identity["exe"]) == os.path.normcase(own_identity["exe"])):
             return record
     except (OSError, ValueError, TypeError, KeyError):
         pass

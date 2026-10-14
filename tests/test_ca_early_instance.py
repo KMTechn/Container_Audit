@@ -60,6 +60,21 @@ def test_web_window_is_preferred_to_other_visible_windows(user_root, monkeypatch
     assert calls == [3]
 
 
+def test_well_formed_live_foreign_process_marker_cannot_activate_its_window(user_root, monkeypatch):
+    root, own_identity = user_root
+    foreign = {"exe": str(root / "other-app/pythonw.exe"), "started_at": own_identity["started_at"] + 1}
+    _record(root, foreign, "running")
+    monkeypatch.setattr(native, "process_identity",
+                        lambda pid: dict(own_identity if pid == os.getpid() else foreign))
+    activated, notices = [], []
+    monkeypatch.setattr(native, "visible_top_level_windows", lambda pid: [(45, "web")])
+    monkeypatch.setattr(native, "activate_window", activated.append)
+    monkeypatch.setattr(native, "timed_notice", lambda *args: notices.append(args))
+    assert entry.activate_existing_instance(root) == 0
+    assert activated == []
+    assert notices == [(entry.STATE_NOTICES["running"], entry.APP_TITLE, native.MB_OK, 5000)]
+
+
 @pytest.mark.parametrize("state", ["starting", "running", "closing"])
 def test_no_window_has_the_exact_state_notice_title_ok_and_five_seconds(user_root, monkeypatch, state):
     root, identity = user_root
@@ -84,7 +99,7 @@ def test_stale_or_missing_record_is_not_used_to_activate_a_window(user_root, mon
     elif stale in {"exe", "started_at"}:
         other = dict(identity)
         other[stale] = "other.exe" if stale == "exe" else identity[stale] + 1
-        monkeypatch.setattr(native, "process_identity", lambda pid: other)
+        monkeypatch.setattr(native, "process_identity", lambda pid: identity if pid == os.getpid() else other)
     calls = []
     monkeypatch.setattr(native, "visible_top_level_windows", lambda pid: pytest.fail("stale PID was trusted"))
     monkeypatch.setattr(native, "timed_notice", lambda *args: calls.append(args))

@@ -2,11 +2,12 @@
 
 자동 업데이트 출발판은 v2.0.104 이상이다. 업데이트 후보는 설치된 판의 `tools/apply_prepared_update.ps1`이 판정한다. v2.0.103처럼 unsigned 목록이 빈 판만 받는 옛 helper가 깔린 PC는 v2.0.104 이후 자동 업데이트를 `STARTUP_UPDATE_PORTABLE_MANIFEST_DIFFERS`로 거절하며 업무를 멈추지 않는다. 그런 PC는 정식 제거 뒤 새로 설치한다. 자료꼴 호환 하한 v2.0.103은 업데이트 출발판을 뜻하지 않는다.
 
-v2.0.107 기본은 web이며 --new-screen·--ui web도 같은 뜻이다. --old-screen·--ui tk는 그 실행만 Tk를 고른다. 모르는 --ui 값은 기본 길이다. M84 진입에는 PID 대기나 자동 재실행이 없다.
+v2.0.108 기본은 web이며 --new-screen·--ui web도 같은 뜻이다. --old-screen·--ui tk는 그 실행만 Tk를 고른다. 모르는 --ui 값은 기본 길이다. M84 진입에는 PID 대기나 자동 재실행이 없다.
 웹 생성 뒤 시작 실패는 셸의 쓰기 문 닫음·판 표지·destroy·before_exit·끝 한 길이다. 같은 프로세스 Tk 전환·자동 재실행은 없다. 표지 저장 실패도 끝내고 되풀이하지 않는다. 사람이 다음에 켜면 같은 판 web_allowed=False로 Tk를 연다. before_exit 빔은 writer 허가·mutex가 비고 모든 lane worker 실이 죽은 것(BROKEN 포함)이며 다른 정리는 없다. 120초·5초 확인, False면 끝내기를 미룬다. 셸 import try 실패는 SHELL_IMPORT_FAILED→Tk, 비상 Tk 셸 import0. 생성 전·시작 거절·업무 gate는 유지한다.
 M86: 셸 OS 실패 안내의 제목은 `title="이적"`이다. mainloop 전 초기화 실패와 lane pump 생성 실패도 기존 owner 정리/close_idle로 worker를 멈춘다. before_exit의 닫힘 표시와 lane 시작은 같은 잠금으로 줄 세워 늦은 시작을 거절한다. 기존 receipt/위임/authority 검증을 통과한 위임·유지보수 허가는 normal 허가 없이 worker 실제 종료만 확인한다. portable 선행 admission의 abandoned 거절도 한 번 더 열기 안내·기존 지원 기록·종료 1을 유지한다. 셸 사본 통합 전 OS 안내 실물은 미검증이다.
 
 단일 실행은 source·portable 진입에서 무거운 import나 시작 gate보다 먼저 기존 data_root Global mutex를 잡는다. 소유자는 사용자 자료 자리의 data_root 해시별 JSON에 PID·실행 파일·프로세스 생성 시각·starting/running/closing을 원자적으로 남기고 끝에 지운다. 이 두 표지 함수만 업무 admission과 분리한 report-only metadata로 선언한다. 두 번째는 PID·실행 파일·생성 시각이 모두 맞는 표지만 믿고 그 PID의 보이는 최상위 창을 앞으로 가져온다(웹 우선). 최소화는 복원하고 전경 거절은 작업 표시줄을 깜박인다. 창이 없으면 상태별 안내 하나가 5초 뒤 닫히며 rc0이다. 두 번째 길에는 Tk·셸·업무 core import가 없다. 실제 OS 창 동작은 현장 확인 범위다.
+표지 PID의 실제 실행 파일은 JSON 값 대신 두 번째 프로세스 자신의 실제 실행 파일과 대조한다. 같은 앱 실행 파일을 사용하는 서로 다른 프로세스의 data_root/mutex 소유권까지는 이 검사만으로 구분하지 못한다.
 
 비상 바로 가기는 InstallRoot(current)의 부모인 앱 폴더의 `관리용\이적 옛 화면 (비상).lnk`에 둔다. 기존 작업자 바로 가기와 대상·작업 폴더·아이콘이 같고 인수는 `--ui tk`이다. 설치·재설치·업데이트의 기존 바로 가기 흐름에서 생성 또는 readback 확인하며, 제거 때 소유 링크와 빈 관리용 폴더만 지운다. 같은 이름의 남의 링크나 다른 파일이 있는 관리용 폴더는 손대지 않고 경고 한 줄을 남긴다. current의 코드 목록·무결성 범위와 예외 규칙은 바뀌지 않는다.
 
