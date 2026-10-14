@@ -356,7 +356,7 @@ def _ps(path, env, *args):
     return result
 
 
-def _setup(tmp_path, fault='', *, stock_version_identity=False):
+def _setup(tmp_path, fault='', *, stock_version_identity=False, install_directory=None):
     env = native_python_environment()
     for name in ('LOCALAPPDATA', 'APPDATA', 'PROGRAMDATA', 'TEMP', 'TMP'):
         target = tmp_path / name
@@ -473,7 +473,7 @@ def _setup(tmp_path, fault='', *, stock_version_identity=False):
     manifest['file_count_before_manifest'] = len(files)
     manifest['byte_count_before_manifest'] = sum(p.stat().st_size for p in files)
     manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
-    install = tmp_path / 'owned/current'
+    install = tmp_path / (install_directory or 'owned/current')
     shutil.copytree(source, install)
     record = tmp_path / 'record.ps1'
     record.write_text(". '" + str(ROOT / 'tools/bootstrap_integrity.ps1').replace("'", "''") + "'\n"

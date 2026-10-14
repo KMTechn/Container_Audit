@@ -2665,6 +2665,9 @@ try {
             sha256=$replacementReceipt.sha256;old_manifest_sha256=$oldIdentity.manifest_sha256;
             new_manifest_sha256=$newIdentity.manifest_sha256;transaction_id=$ReplacementTransactionId})
     }
+    elseif($bootstrapStatus -ceq 'REUSED' -and $ReplaceExistingVerifiedPortable -and $WriterFencePreparedReceiptPath){
+        [void](Write-BootstrapReusedPlacementEvidence $sourceRootFull $installRootFull $ReplacementTransactionId $OperatorSid $BootstrapScriptPath)
+    }
     if ($RestoreUninstallRecordPath -and
         (Get-FileSha256 (Join-Path $installRootFull $IntegrityFileName)) -cne $ExpectedUninstallRecordSha256) {
         throw 'Uninstall recovery installed record readback failed.'

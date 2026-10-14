@@ -33,6 +33,8 @@ inventory SHA256을 결속한다. 관리자/SYSTEM만 쓰고 사용자는 읽는
 표지 ACL 실패 시 복구 fence를 유지하며 첫 시작 등록을 막는다.
 `PASS_MACHINE_WORKER_PENDING`은 기계 배치 결과이며 설치 완료가 아니다.
 
+동일 코드의 REUSED는 교체 receipt 대신 자식 보호 폴더의 별도 증거를 받는다. 같은 회차·실제 자식 PID·transaction·helper와 원천/설치 manifest·inventory·aggregate를 모두 결속하며 교체나 코드 복원을 주장하지 않는다. 증거 없음·다른 회차·내용 불일치·UNKNOWN은 계속 거절한다.
+
 지정 작업자의 첫 앱 실행은 기존 current-user onboarding의 READY 뒤 HKCU
 `Software\KMTech\ContainerAudit\MachineOnboarding`의 `CompletedInstallId`를 기록한다.
 첫 실행은 current/app 또는 같은 commit의 versions/<commit>/app만 받으며 두 manifest를 함께 확인한다. 같은 id는 다시 등록하지 않고 새 id는 새 설치로 처리한다. 완료한 id의 표지는 이후 판 갱신을

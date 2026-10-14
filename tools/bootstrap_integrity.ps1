@@ -3524,6 +3524,47 @@ function Test-BootstrapReplacementTreeIdentity($Expected, $Actual) {
     return (Test-BootstrapAclIdentity $Expected $Actual 'acl_sddl_sha256' 'acl_sddl')
 }
 
+function Write-BootstrapReusedPlacementEvidence([string]$Source,[string]$Installed,[string]$TransactionId,[string]$OperatorSid,[string]$HelperPath) {
+    $root=Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if(-not $root -or $TransactionId -cnotmatch '^[0-9a-f]{32}$'){throw 'REUSED evidence authority is absent.'}
+    Assert-InstallationEvidenceWriteRoot $root
+    Assert-InstallationEvidenceProtectedPath $root
+    $sourceRoot=Get-StrictFullPath $Source 'REUSED source'
+    $installedRoot=Get-StrictFullPath $Installed 'REUSED installed root'
+    $sourceManifest=Join-Path $sourceRoot 'portable-manifest.json'
+    $installedManifest=Join-Path $installedRoot 'portable-manifest.json'
+    $sourceInventory=Join-Path $sourceRoot 'tools\container_writer_sink_inventory.json'
+    $installedInventory=Join-Path $installedRoot 'tools\container_writer_sink_inventory.json'
+    foreach($file in @($sourceManifest,$installedManifest,$sourceInventory,$installedInventory)){
+        Assert-BootstrapNoReparsePoint $file 'REUSED identity' -PathOnly
+    }
+    $manifest=Get-Content -LiteralPath $sourceManifest -Raw -Encoding UTF8|ConvertFrom-Json
+    $sourceManifestSha=Get-FileSha256 $sourceManifest;$installedManifestSha=Get-FileSha256 $installedManifest
+    $sourceInventorySha=Get-FileSha256 $sourceInventory;$installedInventorySha=Get-FileSha256 $installedInventory
+    $sourceAggregate=Get-InventoryAggregate @(Get-CodeInventory $sourceRoot)
+    $installedAggregate=Get-InventoryAggregate @(Get-CodeInventory $installedRoot)
+    if($sourceManifestSha -cne $installedManifestSha -or $sourceInventorySha -cne $installedInventorySha -or
+        $sourceAggregate -cne $installedAggregate){throw 'REUSED identity differs.'}
+    $record=[ordered]@{schema='container-audit-reused-placement-v1';status='REUSED_VERIFIED';app_id='container_audit';
+        run_id=$TransactionId;transaction_id=$TransactionId;evidence_run_id=[IO.Path]::GetFileName((Split-Path -Parent $root));
+        helper_process_id=$PID;evidence_root=$root;source_root=$sourceRoot;install_root=$installedRoot;
+        source_commit=[string]$manifest.source_commit;helper_sha256=Get-FileSha256 $HelperPath;
+        source_manifest_sha256=$sourceManifestSha;installed_manifest_sha256=$installedManifestSha;
+        source_inventory_sha256=$sourceInventorySha;installed_inventory_sha256=$installedInventorySha;
+        writer_inventory_sha256=[string]$manifest.writer_sink_inventory_sha256;
+        writer_inventory_contract_sha256=[string]$manifest.writer_sink_inventory_contract_sha256;
+        source_aggregate_sha256=$sourceAggregate;installed_aggregate_sha256=$installedAggregate;
+        code_replaced=$false;identity_or_credential_copied=$false}
+    $path=Join-Path $root 'reused-evidence.json'
+    $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($record|ConvertTo-Json -Depth 5 -Compress)+"`n")
+    Write-InstallationTransactionFile $path $bytes $OperatorSid
+    Assert-InstallationEvidenceProtectedPath $path
+    $sha=Get-FileSha256 $path
+    Write-InstallationEvidenceEvent ([ordered]@{event='REUSED_EVIDENCE_READY';path=$path;sha256=$sha;transaction_id=$TransactionId;helper_process_id=$PID})
+    if($Script:InstallationEvidenceFailed){throw 'REUSED evidence was not durably recorded.'}
+    return [pscustomobject]@{path=$path;sha256=$sha}
+}
+
 function Write-BootstrapReplacementReceipt(
     [string]$Path,
     $Payload,

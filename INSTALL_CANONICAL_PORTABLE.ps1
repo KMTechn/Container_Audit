@@ -71,7 +71,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '0b820b19786f52d0ea973723c5f54b9ee9ac46f10abc9c6078863bf6ecbfb799'
+$ExpectedBootstrapIntegritySha256 = 'fa005d4aee874858b3697abe08524425030f2a9eb936cce08e38823de2628d95'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -2248,7 +2248,7 @@ function StartRaw([string]$Line) {
 }
 function Read-CanonicalHelperArtifact($Binding,[string]$Leaf,[string]$Event) {
     if ([string]$Binding.status -cnotin @('BOUND_DIRECT_CHILD','BOUND_ELEVATED_CHILD') -or
-        [string]$Leaf -cnotin @('replacement-receipt.json','restore-evidence.json')) {
+        [string]$Leaf -cnotin @('replacement-receipt.json','restore-evidence.json','reused-evidence.json')) {
         throw 'Canonical helper artifact binding is absent.'
     }
     $root=Full ([string]$Binding.stage_evidence_root) 'bound helper evidence root'
@@ -2274,6 +2274,44 @@ function Read-CanonicalHelperArtifact($Binding,[string]$Leaf,[string]$Event) {
         throw 'Canonical helper artifact journal/hash differs.'
     }
     return $path
+}
+
+function Read-CanonicalReusedPlacementEvidence($Binding,[string]$Source,[string]$Root,$Manifest,[string]$TransactionId) {
+    $path=Read-CanonicalHelperArtifact $Binding 'reused-evidence.json' 'REUSED_EVIDENCE_READY'
+    $record=Get-Content -LiteralPath $path -Raw -Encoding UTF8|ConvertFrom-Json
+    $fields=@('schema','status','app_id','run_id','transaction_id','evidence_run_id','helper_process_id','evidence_root',
+        'source_root','install_root','source_commit','helper_sha256','source_manifest_sha256','installed_manifest_sha256',
+        'source_inventory_sha256','installed_inventory_sha256','writer_inventory_sha256','writer_inventory_contract_sha256',
+        'source_aggregate_sha256','installed_aggregate_sha256','code_replaced','identity_or_credential_copied')
+    if(-not(Test-WriterSessionContractExactPropertySet $record $fields) -or
+        -not(Test-WriterSessionContractExactStringProperties $record @($fields|Where-Object {$_ -cnotin @('helper_process_id','code_replaced','identity_or_credential_copied')})) -or
+        -not(Test-BootstrapJsonInteger $record.helper_process_id) -or $record.helper_process_id -le 0 -or
+        $record.helper_process_id -ne $Binding.helper_process_id -or $TransactionId -cnotmatch '^[0-9a-f]{32}$' -or
+        [string]$record.schema -cne 'container-audit-reused-placement-v1' -or [string]$record.status -cne 'REUSED_VERIFIED' -or
+        [string]$record.app_id -cne 'container_audit' -or [string]$record.run_id -cne $TransactionId -or
+        [string]$record.transaction_id -cne $TransactionId -or
+        [string]$record.evidence_run_id -cne [IO.Path]::GetFileName((Split-Path -Parent ([string]$Binding.stage_evidence_root))) -or
+        -not(Same ([string]$record.evidence_root) ([string]$Binding.stage_evidence_root)) -or
+        -not(Same ([string]$record.source_root) $Source) -or -not(Same ([string]$record.install_root) $Root) -or
+        [string]$record.source_commit -cne [string]$Manifest.source_commit -or
+        [string]$record.helper_sha256 -cne [string]$Manifest.helper_sha256 -or
+        [string]$record.writer_inventory_sha256 -cne [string]$Manifest.writer_sink_inventory_sha256 -or
+        [string]$record.writer_inventory_contract_sha256 -cne [string]$Manifest.writer_sink_inventory_contract_sha256 -or
+        $record.code_replaced -isnot [bool] -or $record.code_replaced -or
+        $record.identity_or_credential_copied -isnot [bool] -or $record.identity_or_credential_copied){throw 'REUSED evidence binding differs.'}
+    $expected=@{source_manifest_sha256=Sha (Join-Path $Source 'portable-manifest.json');installed_manifest_sha256=Sha (Join-Path $Root 'portable-manifest.json');
+        source_inventory_sha256=Sha (Join-Path $Source 'tools\container_writer_sink_inventory.json');
+        installed_inventory_sha256=Sha (Join-Path $Root 'tools\container_writer_sink_inventory.json');
+        source_aggregate_sha256=Get-InventoryAggregate @(Get-CodeInventory $Source);
+        installed_aggregate_sha256=Get-InventoryAggregate @(Get-CodeInventory $Root)}
+    foreach($field in $expected.Keys){
+        if($record.$field -isnot [string] -or $record.$field -cnotmatch '^[0-9a-f]{64}$' -or $record.$field -cne $expected[$field]){throw 'REUSED evidence identity differs.'}
+    }
+    if($record.source_manifest_sha256 -cne $record.installed_manifest_sha256 -or
+        $record.source_inventory_sha256 -cne $record.installed_inventory_sha256 -or
+        $record.source_aggregate_sha256 -cne $record.installed_aggregate_sha256 -or
+        (Test-Path -LiteralPath (Join-Path ([string]$Binding.stage_evidence_root) 'replacement-receipt.json'))){throw 'REUSED evidence is not a no-op.'}
+    return [pscustomobject]@{path=$path;sha256=Sha $path;record=$record}
 }
 
 function Read-CanonicalRollbackContinuation([string]$InstallRoot,[string]$LocalAppDataRoot,[string]$Sid) {
@@ -4168,7 +4206,11 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         $child=Invoke-InstallationEvidenceChild 'machine-placement-helper' $engine $arguments -OnStarted $placementStarted
         $audit.placement_child.status='EXITED';$audit.placement_child.exit_code=[int]$child.ExitCode
         if ($child.ExitCode -ne 0) { $helperReason=Get-CanonicalMachineHelperReason ([string]$child.Stdout) }
-        if (-not $testMode) {
+        $placementStatus=@($child.Stdout -split '\r?\n'|Where-Object {$_ -cmatch '^bootstrap_status='})
+        $reusedPlacement=($arguments -ccontains '-ReplaceExistingVerifiedPortable' -and
+            $placementStatus.Count -eq 1 -and $placementStatus[0] -ceq 'bootstrap_status=REUSED')
+        # The new no-op contract is checked even in an isolated test layout.
+        if (-not $testMode -or $reusedPlacement) {
             $binding=Read-InstallationHelperEvidenceBinding @($child.Stdout -split "`r?`n") `
                 (Join-Path $state ('install-audit\placement-'+$run+'.jsonl')) $child.ProcessId ([string]$Manifest.helper_sha256)
             Register-InstallationChildEvidenceSummary $binding.child_stage_evidence_summary
@@ -4176,9 +4218,18 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
                 throw 'Unbound caller replacement receipt was published.'
             }
             if ($arguments -ccontains '-ReplaceExistingVerifiedPortable') {
-                $receipt=Read-CanonicalHelperArtifact $binding 'replacement-receipt.json' 'REPLACEMENT_RECEIPT_READY'
-                $audit.code_replacement.receipt_path=$receipt
-                $audit.code_replacement.receipt_sha256=Sha $receipt
+                $placementStatus=@($child.Stdout -split '\r?\n'|Where-Object {$_ -cmatch '^bootstrap_status='})
+                if($placementStatus.Count -eq 1 -and $placementStatus[0] -ceq 'bootstrap_status=REUSED'){
+                    $reused=Read-CanonicalReusedPlacementEvidence $binding $Source $Root $Manifest $run
+                    $audit.code_replacement.disposition='REUSED_VERIFIED'
+                    $audit.code_replacement.receipt_path=''
+                    $audit.code_replacement.reused_evidence_path=$reused.path
+                    $audit.code_replacement.reused_evidence_sha256=$reused.sha256
+                }else{
+                    $receipt=Read-CanonicalHelperArtifact $binding 'replacement-receipt.json' 'REPLACEMENT_RECEIPT_READY'
+                    $audit.code_replacement.receipt_path=$receipt
+                    $audit.code_replacement.receipt_sha256=Sha $receipt
+                }
             }
         }
         if ($child.ExitCode -ne 0) { throw 'MACHINE_INSTALL_FAILED' }

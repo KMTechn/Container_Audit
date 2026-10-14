@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import shutil
+import os
 import json
 import re
 
@@ -401,7 +402,7 @@ def _mark_hidden_fixture_directory(path):
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 @pytest.mark.parametrize("first_start", (False, True, "pending_acl_failure", "shortcut_failure", "audit_failure", "same_sid", "same_sid_failure", "pending_reinstall_failure", "pending_reinstall_restore_failure", "console_worker", "placement_child_failure_new", "placement_child_failure_reinstall", "placement_child_exit_unproven", "pending_reinstall_compensation_child_unproven", "prestate_capture_failure", "fence_publication_failure"))
-def test_machine_placement_existing_restore_and_removal_preserve_profiles(tmp_path, engine, first_start):
+def test_machine_placement_existing_restore_and_removal_preserve_profiles(tmp_path, engine, first_start, proof_fault=None):
     from tests.test_canonical_portable_uninstall import _setup, _tree, _sha, OS_BOUNDARIES, HELPER_OS
     from tests.test_canonical_installation_callers import _distinct_replacement, _bind_packet
     from current_user_onboarding import consume_pending_machine_onboarding
@@ -409,7 +410,7 @@ def test_machine_placement_existing_restore_and_removal_preserve_profiles(tmp_pa
     executable = shutil.which(engine)
     if not executable:
         pytest.skip(f"{engine} is required")
-    env, source, installed, protected = _setup(tmp_path, stock_version_identity=True)
+    env, source, installed, protected = _setup(tmp_path, stock_version_identity=True, install_directory="current" if first_start == "reused" else None)
     # Exercise the audit runner's minimal Windows environment, including Core's
     # ProgramW6432 fallback, without bypassing signed controller verification.
     for name in ("ProgramFiles", "ProgramW6432"):
@@ -421,7 +422,8 @@ def test_machine_placement_existing_restore_and_removal_preserve_profiles(tmp_pa
         assert installed.resolve().is_relative_to(tmp_path.resolve())
         assert not installed.is_symlink() and not installed.is_junction()
         shutil.rmtree(installed)  # Only the explicitly owned fixture code root.
-    _distinct_replacement(source)  # Preserve actual placement/delegation validation.
+    if first_start != 'reused':
+        _distinct_replacement(source)  # Preserve actual placement/delegation validation.
     worker = tmp_path / "worker-profile"
     worker.mkdir()
     _mark_hidden_fixture_directory(worker / "AppData")
@@ -529,10 +531,6 @@ function Invoke-InstallationEvidenceChild([string]$Stage,[string]$File,[string[]
     admission = "# Admit the worker before any installation evidence, authority or profile writer."
     assert text.count(admission) == 1
     canonical.write_text(text.replace(admission, injected + "\n" + admission), encoding="utf-8-sig")
-    text = canonical.read_text(encoding="utf-8-sig")
-    diagnostic = "[IO.File]::WriteAllText((Join-Path $env:CA_UNINSTALL_ROOT 'machine-error.json'),(@{details=(Get-CanonicalFailureDetails $_ 'MACHINE_FIXTURE');stack=$_.ScriptStackTrace}|ConvertTo-Json -Depth 8));"
-    text = text.replace("Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED';", diagnostic + "Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED';")
-    canonical.write_text(text, encoding="utf-8-sig")
     same_caller = first_start in ("same_sid", "same_sid_failure")
     if same_caller:
         sid = sid.rsplit("-", 1)[0] + "-1000"
@@ -544,7 +542,82 @@ function Invoke-InstallationEvidenceChild([string]$Stage,[string]$File,[string[]
     env["CA_MACHINE_PROFILE"] = str(worker)
     env["CA_MACHINE_SID"] = sid
     env["CA_MACHINE_FAILURE"] = str(first_start)
+    if first_start == 'reused':
+        env.pop("ProgramData", None)
+        env["PROGRAMDATA"] = str(tmp_path / "ProgramData")
+        Path(env["PROGRAMDATA"]).mkdir(exist_ok=True)
+        # Library functions keep their script's session state. Install the same
+        # existing ACL/privilege OS doubles in that copied library as well.
+        import hashlib
+        helper = source / "INSTALL_THIS_PC.ps1"
+        library = source / 'tools/bootstrap_integrity.ps1'
+        root_boundaries = HELPER_OS[HELPER_OS.index("function Test-UninstallFixtureRootPath"):HELPER_OS.index("function Protect-KmtechCodeAncestors")]
+        machine_acl_boundary = r'''
+function Test-UninstallFixtureRootPath([string]$Path) {
+    if(-not $Path){return $false}
+    $full=[IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $temporary=[IO.Path]::GetFullPath((Split-Path -Parent $env:IWRUN_CONFIG)).TrimEnd('\')
+    return ($temporary.StartsWith('E:\','OrdinalIgnoreCase') -and
+        ($full.Equals($temporary,'OrdinalIgnoreCase') -or $full.StartsWith($temporary+'\','OrdinalIgnoreCase')))
+}
+function Test-UninstallFixtureProtectedPath([string]$Path) {
+    return (Test-UninstallFixtureRootPath $Path)
+}
+function New-InstallationProtectedDirectory([string]$Path,[string]$Sid,[switch]$RecoverAbandoned) {
+    $full=[IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $temporary=[IO.Path]::GetFullPath((Split-Path -Parent $env:IWRUN_CONFIG)).TrimEnd('\')
+    if(-not $temporary.StartsWith('E:\','OrdinalIgnoreCase') -or
+        -not ($full.Equals($temporary,'OrdinalIgnoreCase') -or $full.StartsWith($temporary+'\','OrdinalIgnoreCase'))){throw 'Fixture directory escaped its own temporary tree.'}
+    $ancestor=$full
+    while(-not(Test-Path -LiteralPath $ancestor)){$ancestor=Split-Path -Parent $ancestor}
+    Assert-BootstrapNoReparsePoint $ancestor 'fixture machine directory ancestor' -PathOnly
+    [void][IO.Directory]::CreateDirectory($full)
+    Assert-BootstrapNoReparsePoint $full 'fixture machine directory' -PathOnly
+}
+
+'''
+        helper_text = helper.read_text(encoding="utf-8-sig")
+        fixture_run_root = str(Path(os.environ['IWRUN_CONFIG']).resolve().parent).replace("'", "''")
+        machine_acl_boundary = machine_acl_boundary.replace("(Split-Path -Parent $env:IWRUN_CONFIG)", "'" + fixture_run_root + "'")
+        fixture_control_root = str(installed.parent / 'update-control').replace("'", "''")
+        machine_acl_boundary += "\nfunction Test-InstallationEvidencePrivileged{return $true}\nfunction Get-InstallationEvidenceControlRoot{return '" + fixture_control_root + "'}\n"
+        assert helper_text.count(HELPER_OS) == 1
+        helper.write_text(helper_text.replace(HELPER_OS,HELPER_OS+"\n"+machine_acl_boundary),encoding="utf-8-sig",newline="\n")
+        library.write_text(library.read_text(encoding='utf-8-sig') + '\n' + root_boundaries + protection + machine_acl_boundary,
+                           encoding='utf-8-sig', newline='')
+        from tests.test_ca_reused_public_machine import prepare_managed_reused_task
+        prepare_managed_reused_task(source, installed, sid, library, helper)
+        digest = hashlib.sha256(library.read_bytes()).hexdigest()
+        packet_manifest = source / "portable-manifest.json"
+        manifest = json.loads(packet_manifest.read_text(encoding="utf-8"))
+        manifest["integrity_helper_sha256"] = digest
+        packet_manifest.write_text(json.dumps(manifest), encoding="utf-8")
+        canonical_text = canonical.read_text(encoding='utf-8-sig')
+        canonical_text, count = re.subn(r"(?m)^\$ExpectedBootstrapIntegritySha256 = '[0-9a-f]{64}'$",
+            "$ExpectedBootstrapIntegritySha256 = '" + digest + "'", canonical_text)
+        assert count == 1
+        canonical.write_text(canonical_text, encoding='utf-8-sig', newline='')
+    if first_start == "reused":
+        canonical_text = canonical.read_text(encoding="utf-8-sig")
+        canonical_text = canonical_text.replace("# Admit the worker before any installation evidence, authority or profile writer.",machine_acl_boundary+"\n# Admit the worker before any installation evidence, authority or profile writer.",1)
+        canonical.write_text(canonical_text,encoding='utf-8',newline='\n')
+    if first_start == 'reused' and proof_fault:
+        from tests.test_ca_reused_public_machine import inject_evidence_fault
+        inject_evidence_fault(canonical,proof_fault)
     _bind_packet(source)
+    if first_start == 'reused':
+        # Final test copies must have the same verified bytes; the OS-boundary
+        # fixture injection above changes canonical code after _setup cloned it.
+        assert installed.resolve().is_relative_to(tmp_path.resolve())
+        assert not installed.is_symlink() and not installed.is_junction()
+        shutil.rmtree(installed)
+        shutil.copytree(source, installed)
+        record = next(path for path in tmp_path.glob('*.ps1')
+                      if 'Write-BootstrapIntegrityRecord' in path.read_text(encoding='utf-8-sig'))
+        from tests.test_canonical_portable_uninstall import _ps
+        assert _ps(record, env).returncode == 0
+        from tests.test_ca_reused_public_machine import materialize_active_version
+        materialize_active_version(installed)
     prior_pending = prior_active = None
     if first_start in ("pending_reinstall_failure", "pending_reinstall_restore_failure", "pending_reinstall_compensation_child_unproven"):
         state = Path(env["PROGRAMDATA"]) / "KMTech/ContainerAudit/machine-install"
@@ -716,7 +789,30 @@ function Invoke-InstallationEvidenceChild([string]$Stage,[string]$File,[string[]
             assert failure["artifact_restore"] == "PASS"
             assert failure["code_replacement"]["status"] == "RESTORED_AFTER_FAILURE"
         return
+    if first_start == 'reused' and proof_fault:
+        rejected = run("machine-install", expected_exit=4)
+        assert 'PASS_MACHINE_WORKER_PENDING' not in rejected.stdout
+        state = Path(env['PROGRAMDATA']) / 'KMTech/ContainerAudit/machine-install'
+        assert not (state/'pending-onboarding.json').exists()
+        assert json.loads((installed/'portable-manifest.json').read_text())['source_commit'] == old_commit
+        assert not list(installed.parent.glob('.current.rollback.*'))
+        return
     audit = run("machine-install")
+    if first_start == 'reused':
+        assert audit['status'] == 'PASS_MACHINE_WORKER_PENDING'
+        assert audit['code_replacement']['disposition'] == 'REUSED_VERIFIED'
+        assert audit['code_replacement']['receipt_path'] == ''
+        proof_path = Path(audit['code_replacement']['reused_evidence_path'])
+        proof = json.loads(proof_path.read_text(encoding='utf-8-sig'))
+        assert proof['run_id'] == audit['run_id'] == proof['transaction_id']
+        assert proof['helper_process_id'] == audit['placement_child']['process_id']
+        assert proof['source_manifest_sha256'] == proof['installed_manifest_sha256']
+        assert proof['source_inventory_sha256'] == proof['installed_inventory_sha256']
+        assert proof['source_aggregate_sha256'] == proof['installed_aggregate_sha256']
+        assert proof['code_replaced'] is False
+        assert not list(installed.parent.glob('.current.rollback.*'))
+        assert json.loads((installed / 'portable-manifest.json').read_text())['source_commit'] == old_commit
+        return
     assert audit["status"] == "PASS_MACHINE_WORKER_PENDING"
     assert audit["placement_child"]["process_id"] > 0
     assert audit["placement_child"]["started_at_utc"].endswith("Z")
