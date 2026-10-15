@@ -1,6 +1,7 @@
 ﻿$ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 trap {
+
     $frames=@([regex]::Matches($_.ScriptStackTrace,'at ([\w-]+), .*?: line (\d+)') | ForEach-Object {@{function=$_.Groups[1].Value;line=[int]$_.Groups[2].Value}})
     $meta=@{type=$_.Exception.GetType().Name;error_id=$_.FullyQualifiedErrorId;frames=$frames}
     [IO.File]::WriteAllText((Join-Path $env:CA_CONTRACT_ROOT 'machine-probe-failure.json'),($meta|ConvertTo-Json -Depth 6))
@@ -35,13 +36,13 @@ try{
     if($paths.Count -ne 3 -or $paths[2] -ine $emergency){throw 'emergency preimage route missing'}
     $before=@(Get-CanonicalMachineArtifactPreimage @($emergency))
     if($before.Count -ne 1 -or $before[0].exists){throw 'fresh emergency preimage differs'}
-    New-CanonicalMachineShortcut $root $programs
+    $null=New-CanonicalMachineShortcut $root $programs
     Restore-CanonicalMachineArtifacts $before
     if(Test-Path -LiteralPath $emergency){throw 'failed fresh installation retained emergency link'}
     # Fresh machine install, same-current reinstall, then changed current bytes.
     foreach($phase in @('fresh','reinstall','update')){
         if($phase -eq 'update'){[IO.File]::WriteAllText($launcher,'exit /b 1')}
-        New-CanonicalMachineShortcut $root $programs
+        $null=New-CanonicalMachineShortcut $root $programs
         if(-not [IO.File]::Exists($emergency)){throw 'machine emergency link absent'}
         $link=$shell.CreateShortcut($emergency)
         if($link.TargetPath -ine $launcher -or $link.Arguments -cne '--ui tk' -or
@@ -54,7 +55,7 @@ try{
     $normal=Join-Path $programs 'KMTech 이적 검사.lnk'
     Remove-CanonicalMachineArtifacts $root ([pscustomobject]@{sid='unused'}) @($pending,$normal)
     if(-not [IO.File]::Exists($emergency)){throw 'restore removed emergency link'}
-    New-CanonicalMachineShortcut $root $programs
+    $null=New-CanonicalMachineShortcut $root $programs
     # Actual code removal has already made current's launcher absent.
     Remove-Item -LiteralPath $launcher
     Remove-CanonicalMachineArtifacts $root ([pscustomobject]@{sid='unused'}) @($pending,$normal)
@@ -69,11 +70,8 @@ try{
     $paths=@(Get-CanonicalMachineArtifactPaths $env:CA_CONTRACT_ROOT $root)
     if($paths.Count -ne 2){throw 'foreign directory entered recovery journal'}
 $foreignPublicationRefused=$false
-try {     New-CanonicalMachineShortcut $root $programs -WarningAction SilentlyContinue } catch {
-    if($_.Exception.Message -cne 'EMERGENCY_SHORTCUT_PUBLICATION_BLOCKED'){throw}
-    $foreignPublicationRefused=$true
-}
-if(-not $foreignPublicationRefused){throw 'Foreign emergency publication was accepted.'}
+$preservedResult=New-CanonicalMachineShortcut $root $programs
+if($preservedResult.status -cne 'PASS' -or @($preservedResult.published|Where-Object location -eq 'emergency').Count){throw 'Foreign emergency was published or failed installation.'}
     if(Test-Path -LiteralPath $emergency){throw 'foreign directory changed'}
     if([IO.File]::ReadAllText($foreign) -cne 'foreign'){throw 'foreign data changed'}
 }finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}

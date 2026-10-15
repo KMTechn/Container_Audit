@@ -126,3 +126,5 @@ Win32_Process 조회와 각 PID 생성 시각 읽기는 각각 5초 상한이며
 TLS CA와 staging 파일, 바로 가기 원본 복원은 준비 사본을 검증한 뒤 원자 게시한다.
 
 일반 작업자 설치는 기존 relay의 PID·생성 시각·명령·실행 파일·SID·비상승 Medium·같은 세션을 확인하고, 다른 제품 writer를 거절한 뒤 정식 정지 요청을 보낸다. 정지 전 preimage를 감사에 보존하고 fence 게시 전에 실제 프로세스 종료를 확인한다. 성공 및 복구 뒤에는 native identity와 새 runtime 상태를 기한 안에 되읽는다. 관리자 SSH/Session 0 machine-worker 길은 다른 작업자 세션의 relay를 실행하지 않으며, 자동 복원 사실·미증명 상태와 첫 일반 실행 안내를 남긴다(관리자 12:39 예외).
+
+`audit.shortcuts.published`에는 이번 설치가 실제 게시한 링크의 Save 뒤 readback만 넣는다. 기존 링크를 그대로 둔 경우는 `preserved`에 기록하며 무관한 표준 이름·사라진 대상 링크·관리용 폴더의 다른 파일은 보존하고 설치 실패로 세지 않는다. 표준 이름을 남이 쓰면 빈 대체 이름으로 우리 링크를 CreateNew 게시한다. 우리 링크의 Save·게시·readback 실패는 설치 실패다.

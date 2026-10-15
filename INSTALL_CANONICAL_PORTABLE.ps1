@@ -71,7 +71,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = 'cb4c9e945c8762c1798ad33cfdf9390f92172005e305b887c7d3b42deddee0a2'
+$ExpectedBootstrapIntegritySha256 = '71aa7a6033018ce67b8e1b620b2c6fac835129b5d0bf54738da7d5a1c23c1d3d'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -3693,7 +3693,8 @@ function Write-CanonicalMachinePublicRecord([string]$Code,[string]$Status='FAILE
 function Get-CanonicalMachineArtifactPaths([string]$State,[string]$Root='') {
     $directory=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)
     if (-not $directory) { throw 'Machine start menu is unavailable.' }
-    $paths=@((Join-Path $State 'pending-onboarding.json'),(Join-Path $directory 'KMTech 이적 검사.lnk'))
+    $shortcutPath=if($Root){(Get-CanonicalMachineShortcutPlacement $Root $directory).path}else{Join-Path $directory 'KMTech 이적 검사.lnk'}
+    $paths=@((Join-Path $State 'pending-onboarding.json'),$shortcutPath)
     if($Root){
         $emergency=Get-BootstrapEmergencyShortcutPath $Root
         $owned=Test-BootstrapEmergencyShortcutDirectory $emergency
@@ -3813,9 +3814,35 @@ function Remove-CanonicalMachineArtifacts([string]$Root,$Worker,[string[]]$Paths
     } catch { $followingFailure=$_ }
     Complete-BootstrapEmergencyCleanup $Root $emergencyFailure $followingFailure
 }
-function New-CanonicalMachineShortcut([string]$Root,[string]$Directory='') {
+function Get-CanonicalMachineShortcutPlacement([string]$Root,[string]$Directory='') {
     if(-not $Directory){$Directory=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)}
     $path=Join-Path $Directory 'KMTech 이적 검사.lnk'
+    $target=Join-Path $Root 'runtime\pythonw.exe'
+    $arguments=Get-CanonicalMachineShortcutArguments $Root
+    $working=Join-Path $Root 'app'
+    $preserved=@();$suffix=0
+    $shell=New-Object -ComObject WScript.Shell
+    try{
+        while(Test-Path -LiteralPath $path){
+            Assert-BootstrapWorkerShortcutPath $path
+            $owned=$false
+            try{
+                $existing=Get-BootstrapPublishedShortcut $shell $path 'start_menu'
+                $owned=([string]$existing.target_path -ieq $target -and $existing.arguments -ceq $arguments -and
+                    [string]$existing.working_directory -ieq $working)
+            }catch{}
+            if($owned){return [pscustomobject]@{path=$path;owned=$true;preserved=@($preserved)+@([pscustomobject]@{shortcut_path=$path;status='OWNED_LINK_RETAINED'})}}
+            $preserved+=@([pscustomobject]@{shortcut_path=$path;status='UNRELATED_LINK_PRESERVED'})
+            $suffix++;$path=Join-Path $Directory ('KMTech 이적 검사 (새 프로그램 '+$suffix+').lnk')
+        }
+        return [pscustomobject]@{path=$path;owned=$false;preserved=@($preserved)}
+    }finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}
+}
+function New-CanonicalMachineShortcut([string]$Root,[string]$Directory='',[string]$ExpectedPath='') {
+    if(-not $Directory){$Directory=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)}
+    $placement=Get-CanonicalMachineShortcutPlacement $Root $Directory
+    $path=[string]$placement.path
+    if($ExpectedPath -and -not(Same $ExpectedPath $path)){throw 'MACHINE_SHORTCUT_PLACEMENT_CHANGED'}
     Assert-BootstrapWorkerShortcutPath $path
     [void][IO.Directory]::CreateDirectory($Directory)
     $target=Join-Path $Root 'runtime\pythonw.exe'
@@ -3825,15 +3852,10 @@ function New-CanonicalMachineShortcut([string]$Root,[string]$Directory='') {
     foreach($folder in @(Get-BootstrapWorkerShortcutFolders)){
         if(Same $Directory ([string]$folder.path)){$location=[string]$folder.location}
     }
-    if([IO.File]::Exists($path)){
-        $shell=New-Object -ComObject WScript.Shell
-        try{$published=Get-BootstrapPublishedShortcut $shell $path $location}
-        finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}
-        if(-not(Same $published.target_path $target) -or $published.arguments -cne $arguments -or
-            -not(Same $published.working_directory $working)){throw 'Machine shortcut prestate is unknown.'}
-    }else{$published=Write-BootstrapShortcut $path $target $arguments $working '이적 검사' '' $location}
+    $published=@()
+    if(-not $placement.owned){$published=@(Write-BootstrapShortcut $path $target $arguments $working '이적 검사' '' $location -CreateNew)}
     $emergency=Install-BootstrapEmergencyShortcut $Root
-    return [pscustomobject]@{status='PASS';published=@($published)+@($emergency.published)}
+    return [pscustomobject]@{status='PASS';published=@($published)+@($emergency.published);preserved=@($placement.preserved)+@($emergency.preserved)}
 }
 
 function Set-CanonicalPublishedShortcuts($Audit,[object[]]$Results) {
@@ -3856,7 +3878,13 @@ function Set-CanonicalPublishedShortcuts($Audit,[object[]]$Results) {
             }
         }
     }finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}
-    if($published.Count -eq 0){throw 'SHORTCUT_PUBLICATION_READBACK_REQUIRED'}
+    if($published.Count -eq 0){
+        $preserved=@($Results|Where-Object {
+            $null -ne $_.PSObject.Properties['status'] -and [string]$_.status -cin @('PASS','RETAINED','PRESERVED_FOREIGN') -and
+            $null -ne $_.PSObject.Properties['preserved']
+        }|ForEach-Object {$_.preserved})
+        if($preserved.Count -eq 0){throw 'SHORTCUT_PUBLICATION_READBACK_REQUIRED'}
+    }
     if(-not $Audit.Contains('shortcuts')){$Audit['shortcuts']=[ordered]@{published=@()}}
     if($Audit.shortcuts -is [Collections.IDictionary]){$Audit.shortcuts['published']=@($published)}
     else{$Audit.shortcuts|Add-Member -NotePropertyName published -NotePropertyValue @($published) -Force}
@@ -4370,7 +4398,8 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
                 server_base_url=$onboardingServerBaseUrl;secret_values_recorded=$false}
             Save $pending $marker
             Set-InstallationEvidenceAcl $pending 'S-1-5-32-545'
-            $shortcutPublication=New-CanonicalMachineShortcut $Root
+            $shortcutPublication=New-CanonicalMachineShortcut $Root -ExpectedPath ([string]$artifactPaths[1])
+            $audit['shortcut_preservation']=@($shortcutPublication.preserved)
             Set-CanonicalPublishedShortcuts $audit @($shortcutPublication)
             $audit.status='PASS_MACHINE_WORKER_PENDING'
         }

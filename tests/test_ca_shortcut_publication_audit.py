@@ -73,24 +73,25 @@ try{
         return
     }
     $audit=[ordered]@{shortcuts=[ordered]@{entries=@('original-entry')}}
+    $expectedPublished=@($result.published);if($audit.Contains('shortcuts')){$expectedPublished+=@($audit.shortcuts.published)}
     Set-CanonicalPublishedShortcuts $audit @($result)
     $auditPath=Join-Path $base 'published-audit.json'
     Save $auditPath $audit
     $audit=Get-Content -LiteralPath $auditPath -Raw -Encoding UTF8|ConvertFrom-Json
     $script:phase=2
     if($audit.shortcuts.entries.Count -ne 1 -or $audit.shortcuts.entries[0] -cne 'original-entry'){throw 'EXISTING_AUDIT_ENTRIES_CHANGED'}
-    if(@($audit.shortcuts.published).Count -lt 2){throw 'PUBLISHED_LIST_MISSING'}
+    if(@($audit.shortcuts.published).Count -ne @($expectedPublished|Select-Object -ExpandProperty shortcut_path -Unique).Count){throw 'PUBLISHED_LIST_MISSING'}
     foreach($entry in @($audit.shortcuts.published)){
         $actual=$shell.CreateShortcut($entry.shortcut_path)
         if($entry.target_path -cne [string]$actual.TargetPath -or $entry.arguments -cne [string]$actual.Arguments -or
             $entry.working_directory -cne [string]$actual.WorkingDirectory){throw 'REAL_SHORTCUT_AUDIT_DIFFERS'}
     }
     $locations=@($audit.shortcuts.published|ForEach-Object location)
-    if($locations -cnotcontains 'emergency'){throw 'EMERGENCY_LOCATION_MISSING'}
-    if($env:CA_PUBLICATION_SCENARIO -ceq 'worker' -and ($locations -cnotcontains 'desktop' -or $locations -cnotcontains 'start_menu')){throw 'NORMAL_LOCATIONS_MISSING'}
+    if((@($expectedPublished|Where-Object location -ceq 'emergency').Count -and $locations -cnotcontains 'emergency')){throw 'EMERGENCY_LOCATION_MISSING'}
+    if($env:CA_PUBLICATION_SCENARIO -ceq 'worker' -and ((@($expectedPublished|Where-Object location -ceq 'desktop').Count -and $locations -cnotcontains 'desktop') -or (@($expectedPublished|Where-Object location -ceq 'start_menu').Count -and $locations -cnotcontains 'start_menu'))){throw 'NORMAL_LOCATIONS_MISSING'}
 }finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}
 '''
-    names=['New-CanonicalMachineShortcut','Get-CanonicalMachineShortcutArguments',
+    names=['Get-CanonicalMachineShortcutPlacement','New-CanonicalMachineShortcut','Get-CanonicalMachineShortcutArguments',
            'Set-CanonicalPublishedShortcuts','Test-ExactPropertySet','Same','Full',
            'Save','ConvertTo-CanonicalAuditJson']
     result=run_functions(tmp_path,ROOT/'INSTALL_CANONICAL_PORTABLE.ps1',names,driver,

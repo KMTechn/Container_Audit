@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_actual_machine_shortcut_functions_create_readback_and_remove(tmp_path, engine):
     result = run_functions(
         tmp_path, ROOT / 'INSTALL_CANONICAL_PORTABLE.ps1',
-        ['New-CanonicalMachineShortcut', 'Get-CanonicalMachineShortcutArguments',
+        ['Get-CanonicalMachineShortcutPlacement','New-CanonicalMachineShortcut', 'Get-CanonicalMachineShortcutArguments',
          'Remove-CanonicalMachineArtifacts', 'Get-CanonicalMachineArtifactPaths',
          'Get-CanonicalMachineArtifactPreimage', 'Restore-CanonicalMachineArtifacts'],
         ". '" + str(ROOT / 'tools/bootstrap_integrity.ps1').replace("'", "''") + "'\n" + (ROOT / 'tests/ca_machine_emergency_probe.ps1').read_text(encoding='utf-8-sig'),

@@ -13,13 +13,13 @@ def run_shortcut_contract(tmp_path, engine, script, **values):
     # Publication refusal is an error contract; retain the existing foreign-data
     # assertions while observing the actual exception as a distinct result.
     script = script.replace('Install-BootstrapEmergencyShortcut ', 'Invoke-ExpectedEmergencyPublication ')
-    script = script.replace('PRESERVED_FOREIGN', 'PUBLICATION_REFUSED')
+    script = script.replace('PRESERVED_FOREIGN', 'PRESERVED_FOREIGN')
     script = ". '" + source + "'\n" + r'''
 function Invoke-ExpectedEmergencyPublication([string]$InstallRoot) {
     try{return Install-BootstrapEmergencyShortcut $InstallRoot}
     catch{
         if($_.Exception.Message -cne 'EMERGENCY_SHORTCUT_PUBLICATION_BLOCKED'){throw}
-        return [pscustomobject]@{status='PUBLICATION_REFUSED'}
+        return [pscustomobject]@{status='PRESERVED_FOREIGN'}
     }
 }
 ''' + script

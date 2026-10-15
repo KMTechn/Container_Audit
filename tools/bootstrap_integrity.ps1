@@ -177,7 +177,7 @@ function Get-BootstrapPublishedShortcut($Shell,[string]$Path,[string]$Location) 
 }
 
 function Write-BootstrapShortcut([string]$Path,[string]$Target,[string]$Arguments,[string]$WorkingDirectory,
-    [string]$Description,[string]$Icon,[string]$Location) {
+    [string]$Description,[string]$Icon,[string]$Location,[switch]$CreateNew) {
     Assert-BootstrapWorkerShortcutPath $Path
     $temporary=Join-Path (Split-Path -Parent $Path) (([IO.Path]::GetFileNameWithoutExtension($Path))+'.tmp.'+[Guid]::NewGuid().ToString('N')+'.lnk')
     $shell=New-Object -ComObject WScript.Shell
@@ -193,7 +193,7 @@ function Write-BootstrapShortcut([string]$Path,[string]$Target,[string]$Argument
             [string]$prepared.WorkingDirectory -ine $WorkingDirectory -or $prepared.WindowStyle -ne 7 -or
             [string]$prepared.Description -cne $Description){throw 'SHORTCUT_PREPARED_READBACK_DIFFERS'}
         Assert-BootstrapWorkerShortcutPath $Path
-        $mode=if([IO.File]::Exists($Path)){'WriteThrough'}else{'CreateNew'}
+        $mode=if($CreateNew){'CreateNew'}elseif([IO.File]::Exists($Path)){'WriteThrough'}else{'CreateNew'}
         Invoke-ContainerAtomicReplace $temporary $Path -Mode $mode
         $published=Get-BootstrapPublishedShortcut $shell $Path $Location
         if($published.target_path -ine $Target -or $published.arguments -cne $Arguments -or
@@ -205,9 +205,9 @@ function Write-BootstrapShortcut([string]$Path,[string]$Target,[string]$Argument
     }
 }
 
-function Write-BootstrapWorkerShortcut([string]$Path,[string]$Launcher,[string]$Icon,[string]$Location='start_menu') {
+function Write-BootstrapWorkerShortcut([string]$Path,[string]$Launcher,[string]$Icon,[string]$Location='start_menu',[switch]$CreateNew) {
     $iconLocation=if($Icon){$Icon+',0'}else{''}
-    return Write-BootstrapShortcut $Path $Launcher '' (Split-Path -Parent $Launcher) '이적 검사' $iconLocation $Location
+    return Write-BootstrapShortcut $Path $Launcher '' (Split-Path -Parent $Launcher) '이적 검사' $iconLocation $Location -CreateNew:$CreateNew
 }
 
 function Get-BootstrapEmergencyShortcutPath([string]$InstallRoot) {
@@ -245,7 +245,7 @@ function Install-BootstrapEmergencyShortcut([string]$InstallRoot) {
     Assert-BootstrapNoReparsePoint $launcher 'emergency shortcut entrypoint' -PathOnly
     if(-not (Test-BootstrapEmergencyShortcutDirectory $path)){
         Write-Warning '이적 비상 바로 가기나 관리용 폴더에 다른 파일이 있어 그대로 둡니다.'
-        throw 'EMERGENCY_SHORTCUT_PUBLICATION_BLOCKED'
+        return [pscustomobject]@{status='PRESERVED_FOREIGN';published=@();preserved=@([pscustomobject]@{shortcut_path=$path;status='FOREIGN_DIRECTORY_PRESERVED'})}
     }
     $directory=Split-Path -Parent $path
     $shell=New-Object -ComObject WScript.Shell
@@ -254,14 +254,14 @@ function Install-BootstrapEmergencyShortcut([string]$InstallRoot) {
             Assert-BootstrapNoReparsePoint $path 'emergency shortcut prestate' -PathOnly
             try{$link=$shell.CreateShortcut($path)}catch{
                 Write-Warning '이적 비상 바로 가기는 다른 파일이어서 그대로 둡니다.'
-                throw 'EMERGENCY_SHORTCUT_PUBLICATION_BLOCKED'
+                return [pscustomobject]@{status='PRESERVED_FOREIGN';published=@();preserved=@([pscustomobject]@{shortcut_path=$path;status='FOREIGN_LINK_PRESERVED'})}
             }
             if(-not (Test-BootstrapEmergencyShortcutOwner $link $launcher)){
                 Write-Warning '이적 비상 바로 가기는 다른 파일이어서 그대로 둡니다.'
-                throw 'EMERGENCY_SHORTCUT_PUBLICATION_BLOCKED'
+                return [pscustomobject]@{status='PRESERVED_FOREIGN';published=@();preserved=@([pscustomobject]@{shortcut_path=$path;status='FOREIGN_LINK_PRESERVED'})}
             }
             if([string]$link.WorkingDirectory -ieq $root -and $link.WindowStyle -eq 7){
-                return [pscustomobject]@{status='RETAINED';published=@(Get-BootstrapPublishedShortcut $shell $path 'emergency')}
+                return [pscustomobject]@{status='RETAINED';published=@();preserved=@([pscustomobject]@{shortcut_path=$path;status='OWNED_LINK_RETAINED'})}
             }
             $status='UPDATED'
         }else{
@@ -270,8 +270,8 @@ function Install-BootstrapEmergencyShortcut([string]$InstallRoot) {
             Assert-BootstrapNoReparsePoint $directory 'emergency shortcut directory' -PathOnly
             $link=$shell.CreateShortcut($path)
         }
-        $published=Write-BootstrapShortcut $path $launcher '--ui tk' $root 'KMTech.ContainerAudit.EmergencyTk.v1' $icon 'emergency'
-        return [pscustomobject]@{status=$status;published=@($published)}
+        $published=Write-BootstrapShortcut $path $launcher '--ui tk' $root 'KMTech.ContainerAudit.EmergencyTk.v1' $icon 'emergency' -CreateNew:($status -ceq 'CREATED')
+        return [pscustomobject]@{status=$status;published=@($published);preserved=@()}
     }finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}
 }
 
@@ -311,21 +311,29 @@ function Install-BootstrapWorkerShortcuts([string]$InstallRoot,[string]$RecordPa
     $record=Read-BootstrapWorkerShortcutRecord $root $RecordPath $Scope
     $folders=@(Get-BootstrapWorkerShortcutFolders $Scope)
     $shell=New-Object -ComObject WScript.Shell
-    $candidates=@();$present=$false;$published=@();$publishedPaths=@{}
+    $candidates=@();$present=$false;$published=@();$publishedPaths=@{};$preserved=@();$locations=@{}
     try{
         foreach($folder in $folders){
             if(-not [IO.Directory]::Exists($folder.path)){continue}
             Assert-BootstrapNoReparsePoint $folder.path 'worker shortcut folder'
             foreach($file in @(Get-ChildItem -LiteralPath $folder.path -Filter '*.lnk' -File -Recurse)){
-                $link=$shell.CreateShortcut($file.FullName)
+                try{$link=$shell.CreateShortcut($file.FullName)}catch{
+                    $preserved+=@([pscustomobject]@{shortcut_path=$file.FullName;status='UNRELATED_LINK_PRESERVED'});continue
+                }
                 $target=[string]$link.TargetPath
-                if(-not $target -or -not [IO.Path]::IsPathRooted($target)){continue}
+                if(-not $target -or -not [IO.Path]::IsPathRooted($target)){
+                    $preserved+=@([pscustomobject]@{shortcut_path=$file.FullName;status='UNRELATED_LINK_PRESERVED'});continue
+                }
                 $target=[IO.Path]::GetFullPath($target)
-                if(-not $target.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)){continue}
+                if(-not $target.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)){
+                    $preserved+=@([pscustomobject]@{shortcut_path=$file.FullName;status='UNRELATED_LINK_PRESERVED'});continue
+                }
                 $present=$true
-                $publishedPaths[$file.FullName]=[string]$folder.location
+                $locations[$file.FullName]=[string]$folder.location
                 # Existing files, other roots and other apps are never retargeted.
-                if(Test-Path -LiteralPath $target -ErrorAction Stop){continue}
+                if(Test-Path -LiteralPath $target -ErrorAction Stop){
+                    $preserved+=@([pscustomobject]@{shortcut_path=$file.FullName;status='EXISTING_LINK_RETAINED'});continue
+                }
                 $candidates+=,[pscustomobject]@{path=$file.FullName;link=$link;action='updated'}
             }
         }
@@ -362,15 +370,16 @@ function Install-BootstrapWorkerShortcuts([string]$InstallRoot,[string]$RecordPa
             }
             Assert-BootstrapWorkerShortcutPath $path
             [void][IO.Directory]::CreateDirectory((Split-Path -Parent $path))
-            $location=if($publishedPaths.ContainsKey($path)){$publishedPaths[$path]}else{[string]$candidate.location}
-            [void](Write-BootstrapWorkerShortcut $path $launcher $icon $location)
+            $location=if($locations.ContainsKey($path)){$locations[$path]}else{[string]$candidate.location}
+            [void](Write-BootstrapWorkerShortcut $path $launcher $icon $location -CreateNew:($candidate.action -ceq 'created'))
             $publishedPaths[$path]=$location
         }
     foreach($path in $publishedPaths.Keys){$published+=@(Get-BootstrapPublishedShortcut $shell $path $publishedPaths[$path])}
     }finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}
     $emergency=Install-BootstrapEmergencyShortcut $root
     $published+=@($emergency.published)
-    return [pscustomobject]@{status='PASS';scope=$Scope;record_path=$RecordPath;changed_count=$candidates.Count;published=@($published)}
+    $preserved+=@($emergency.preserved)
+    return [pscustomobject]@{status='PASS';scope=$Scope;record_path=$RecordPath;changed_count=$candidates.Count;published=@($published);preserved=@($preserved)}
 }
 
 function New-BootstrapEmergencyCleanupFailure($EmergencyFailure,$FollowingFailure) {
