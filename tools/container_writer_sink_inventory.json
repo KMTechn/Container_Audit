@@ -9374,12 +9374,12 @@
       ],
       "file": "user_relay.py",
       "kind": "function",
-      "line": 788,
+      "line": 800,
       "mutation_sites": [
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 908,
+          "line": 923,
           "operation": "path.mkdir",
           "writer_admission_sources": [
             "persistent_relay_status"
@@ -9388,7 +9388,7 @@
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 909,
+          "line": 924,
           "operation": "path.mkdir",
           "writer_admission_sources": [
             "persistent_relay_status"
@@ -9995,7 +9995,7 @@
       "argument_ast_sha256": "c1eed8eb9116f4c6c08f59df6c9e52f9df16e0befeda2b2646e2c7453ebbebc3",
       "caller": "user_relay.main",
       "classification": "writer_admission",
-      "line": 908,
+      "line": 923,
       "probe_only": true,
       "report_only": false,
       "source": "persistent_relay_status",
@@ -10007,7 +10007,7 @@
       "argument_ast_sha256": "773e572279ed42d5919b32486aa595bd2d6024a711e73dfc863581f28ecbda6a",
       "caller": "user_relay.main",
       "classification": "writer_admission",
-      "line": 909,
+      "line": 924,
       "probe_only": true,
       "report_only": false,
       "source": "persistent_relay_status",
@@ -10799,7 +10799,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "28e169dd9ea887908104547b6bb0c2d0acc5f70fd705b585a8ee5814480e1c41",
+  "inventory_sha256": "193ab41517eae3b1b380d6e73b6952473e0560998902f31fad73d2fb3bd65914",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -24782,7 +24782,7 @@
       "direct_mutation_site_count": 2,
       "file": "user_relay.py",
       "function": "user_relay.main",
-      "line": 788,
+      "line": 800,
       "marker_kind": "decorator",
       "source": "persistent_relay_status"
     },

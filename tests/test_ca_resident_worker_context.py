@@ -40,6 +40,7 @@ def test_product_dispatch_refuses_resident_before_storage(monkeypatch, installed
             'status': 'PASS', 'token_elevated': True, 'integrity_level': 'HIGH'})
     def forbidden(*args, **kwargs):
         pytest.fail('refused resident reached storage or loop')
+    monkeypatch.setattr(auto_update, 'startup_gate', forbidden)
     monkeypatch.setattr(user_relay, 'build_container_audit_storage_paths', forbidden)
     monkeypatch.setattr(user_relay, 'run_persistent_relay_loop', forbidden)
     assert product_host.dispatch_product_mode([

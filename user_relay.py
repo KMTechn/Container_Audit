@@ -784,6 +784,18 @@ def _data_root_unavailable(remote_stop: bool) -> int:
     return 1
 
 
+def _resident_worker_admitted(app_root: Path) -> bool:
+    from current_user_onboarding import _machine_worker_context
+    try:
+        _machine_worker_context(app_root)
+    except (OSError, ValueError, RuntimeError):
+        print(json.dumps({"status": "FAILED", "reason_code": "WORKER_INTERACTIVE_SESSION_REQUIRED",
+                          "message": "지정 작업자 계정의 대화형 세션에서 일반 권한으로 실행하세요."},
+                         ensure_ascii=False, sort_keys=True))
+        return False
+    return True
+
+
 @writer_sink("persistent_relay_status", probe_only=True)
 def main(argv: list[str] | None = None) -> int:
     from auto_update import startup_gate, trial_stop_requested
@@ -794,6 +806,16 @@ def main(argv: list[str] | None = None) -> int:
     # the update gate like Label_Match; every other mode stays gated.
     gated = "--request-app-stop" not in selected_arguments
     if gated:
+        # Parse only the code-root selector here: bootstrap/trial arguments still
+        # belong to startup_gate before the full resident parser sees them.
+        selector = argparse.ArgumentParser(add_help=False)
+        selector.add_argument("--app-root", default="")
+        selected_root, _ = selector.parse_known_args(selected_arguments)
+        pre_gate_root = Path(selected_root.app_root or (
+            Path(sys.executable).parent if getattr(sys, "frozen", False)
+            else Path(__file__).resolve().parent)).expanduser().resolve()
+        if not _resident_worker_admitted(pre_gate_root):
+            return 1
         gate_result = startup_gate(Path(__file__).resolve().parent, [USER_RELAY_MODE, *selected_arguments], role="relay")
         if gate_result is not None:
             return gate_result
@@ -811,15 +833,8 @@ def main(argv: list[str] | None = None) -> int:
             else Path(__file__).resolve().parent
         )
     ).expanduser().resolve()
-    if not args.request_app_stop:
-        from current_user_onboarding import _machine_worker_context
-        try:
-            _machine_worker_context(app_root)
-        except (OSError, ValueError, RuntimeError):
-            print(json.dumps({"status": "FAILED", "reason_code": "WORKER_INTERACTIVE_SESSION_REQUIRED",
-                              "message": "지정 작업자 계정의 대화형 세션에서 일반 권한으로 실행하세요."},
-                             ensure_ascii=False, sort_keys=True))
-            return 1
+    if not args.request_app_stop and not _resident_worker_admitted(app_root):
+        return 1
     if args.request_app_stop and not (args.data_root and args.direct_sync_root):
         # Implicit roots are the caller's own profile; another account must name
         # the installed operator's roots instead of reporting a false ABSENT relay.

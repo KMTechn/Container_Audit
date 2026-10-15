@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "28e169dd9ea887908104547b6bb0c2d0acc5f70fd705b585a8ee5814480e1c41",
+  "after_inventory_sha256": "193ab41517eae3b1b380d6e73b6952473e0560998902f31fad73d2fb3bd65914",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -203,7 +203,7 @@
     {
       "path": "app/container_audit_product_host.py",
       "before": "38557fd5eaf3716d2bdf925be0ed8e7e18aec53809413c1ffd14fdc8e09460fb",
-      "after": "54aa7e2fc7e9adebbe77be4d485b8969b374df8f1754a16c81853e8376be544b"
+      "after": "1ba38e321f925fb8282f23312da59782bd17e7b1d2d95dc86519706ed8f2c32c"
     },
     {
       "path": "app/container_audit_test_harness.py",
@@ -1403,7 +1403,7 @@
     {
       "path": "app/user_relay.py",
       "before": "3d9be9672556e284cfd62d7bfa28c1bcbd8c90688a9f13bc08c5894bfd1750fd",
-      "after": "af25ca6846762b02ebe9803bad4d226ab4eabc1f961916db13b1e9d20d28d9da"
+      "after": "02cfe3cfc565db137ecf407ed813f46d445216e91047c8f67eac830f1035cba8"
     },
     {
       "path": "app/vendor/__init__.py",
@@ -1463,7 +1463,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "9c274e7197a87b57c16b55d535b6acd9638307861685a9ef750d7a8fab405bbb"
+      "after": "c7380b06902bba226e34aa468ae30aa0c00ebd0368982d14c8e037316e4dda64"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4513,7 +4513,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "0a9e86c91d6b4cfca23b2ec58ceb256576b1085990f56e91a53128665fc85609"
+      "after": "0e9ff5355465ec67dbfce04b139bb834f1e4c189cdd8fc4e53e74b0ae8cfd59e"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4523,12 +4523,12 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "7c57f4e811ec75a89f21d7da0ac03cc6e80ad4c5106dba30b8cf06ba8e7a8dda"
+      "after": "85c38ba38aa64305b9cb73233cb4ead3bd527c62e1c892e1f5661db52b1f85b2"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "38df864b1c7141aa6618c15dcd5e99c6ac974288df8c47ae4069c98002420872"
+      "after": "ff728494b1da5adc07efeb86add71083447d976340976caefb59fc3065798973"
     }
   ],
   "source_replacements": [
@@ -4555,7 +4555,7 @@
     {
       "path": "container_audit_product_host.py",
       "before": "38557fd5eaf3716d2bdf925be0ed8e7e18aec53809413c1ffd14fdc8e09460fb",
-      "after": "54aa7e2fc7e9adebbe77be4d485b8969b374df8f1754a16c81853e8376be544b"
+      "after": "1ba38e321f925fb8282f23312da59782bd17e7b1d2d95dc86519706ed8f2c32c"
     },
     {
       "path": "current_user_onboarding.py",
@@ -4645,7 +4645,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "0a9e86c91d6b4cfca23b2ec58ceb256576b1085990f56e91a53128665fc85609"
+      "after": "0e9ff5355465ec67dbfce04b139bb834f1e4c189cdd8fc4e53e74b0ae8cfd59e"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4690,12 +4690,12 @@
     {
       "path": "user_relay.py",
       "before": "3d9be9672556e284cfd62d7bfa28c1bcbd8c90688a9f13bc08c5894bfd1750fd",
-      "after": "af25ca6846762b02ebe9803bad4d226ab4eabc1f961916db13b1e9d20d28d9da"
+      "after": "02cfe3cfc565db137ecf407ed813f46d445216e91047c8f67eac830f1035cba8"
     },
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "9c274e7197a87b57c16b55d535b6acd9638307861685a9ef750d7a8fab405bbb"
+      "after": "c7380b06902bba226e34aa468ae30aa0c00ebd0368982d14c8e037316e4dda64"
     }
   ],
   "hash_provenance": {
