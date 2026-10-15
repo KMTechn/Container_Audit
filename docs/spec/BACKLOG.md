@@ -839,3 +839,7 @@ Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRIT
 ### 매일 갱신·시작 경합의 실기 수용
 
 시작/relay/bootstrap의 유한 갱신 잠금 대기와 현재 G 허용 판 복귀, 실패 prepared의 반복 쓰기 억제, 첫 실행 최종 비교의 잠금 아래 재판독을 구현했다. native 별도 프로세스의 6/30초 경합과 서명 검증 실패 반복은 격리 headless 회귀로 확인하며 실제 HDD 로그온·SYSTEM·pythonw 화면의 수용은 별도 랩에 남는다.
+
+### 늦은 outer catch 의 정리 관문 기본 거절(첫 업데이트)
+
+v2.0.109 검토(sub-109 P2-1)에서 본 드문 길이다. 후보 관문 앞에서 실패하면(예: INSTALL_CANONICAL_PORTABLE.ps1 의 inventory sync 예외) outer catch 의 정리 관문이 아직 없는 변수를 false 로 읽어 통과하고, 남의 relay stop 표지를 지울 수 있다. bootstrap_integrity.ps1 의 persistent compensation 도 같은 꼴이다. relay 정지는 일어나지 않고 PID 는 보존된다. 고치는 꼴은 정리 허용을 기본 거절로 두고 cleanup 때 다시 확인하는 것이며, 회귀는 sync·protection·integrity 실패를 주입한다. v2.0.109 에는 넣지 않았다(드문 길·자료 손 0).
