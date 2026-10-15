@@ -2191,7 +2191,8 @@ class ContainerAudit:
         return self._run_durable_ui_steps(self._restore_quarantined_preflight_hold_steps(
             filepath, confirm=confirm, _confirmed=_confirmed))
 
-    def _restore_quarantined_preflight_hold_steps(self, filepath: str, *, confirm: bool = True, _confirmed: bool = False) -> bool:
+    def _restore_quarantined_preflight_hold_steps(self, filepath: str, *, confirm: bool = True, _confirmed: bool = False,
+                                                expected_source_sha256: str = "") -> bool:
         if not self._is_preflight_hold_quarantine_path(filepath):
             self._call_admin_pin_ui(messagebox.showwarning,
                 "보류 묶음 복원 실패",
@@ -2216,6 +2217,8 @@ class ContainerAudit:
                 return False
             store = self._preflight_hold_store(owner_worker=snapshot.worker)
             digest = file_sha256(path if original_present else store.path)
+            if expected_source_sha256 and digest != expected_source_sha256:
+                raise PreflightHoldError("restoration source changed after confirmation")
             pin_store = self._admin_pin_store()
             target_id = hashlib.sha256(canonical_master_label_key(snapshot.master_raw).encode("utf-8")).hexdigest()
             pending_intents = pin_store.pending("CA.PRECHECK_HOLD", target_id, include_applied=True)

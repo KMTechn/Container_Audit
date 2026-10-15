@@ -12,6 +12,7 @@ import time
 import sys
 import threading
 import tkinter as tk
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -655,6 +656,8 @@ class CaProcessor:
         self._answer: Optional[tk.StringVar] = None
         self._scan_answer: Optional[tk.StringVar] = None
         self._credentials: Optional[Tuple[str, str]] = None
+        self._preflight_restore: Optional[Dict[str, Any]] = None
+        self._restore_preflight_handler: Any = None
         self._admin_notes: Optional[List[Dict[str, Any]]] = None
         self._fingerprint = ""
         self._registration_name: Optional[str] = None
@@ -678,10 +681,24 @@ class CaProcessor:
 
         ca.play_sound = play_sound  # type: ignore[assignment]
         app._prompt_blocked_work_admin_pin = self._take_credentials
+        restore = _attr(app, "restore_quarantined_preflight_hold")
+        if callable(restore):
+            self._restore_preflight_handler = restore
+
+            def restore_preflight(filepath: str, *, confirm: bool = True, _confirmed: bool = False) -> bool:
+                if _confirmed:
+                    return self._request_preflight_restore(filepath)
+                return restore(filepath, confirm=confirm)
+
+            app.restore_quarantined_preflight_hold = restore_preflight
         app._prompt_for_test_item = self._no_test_item
         self._watch_job = app.root.after(WATCH_MS, self._watch)
 
     def shutdown(self) -> None:
+        if self._restore_preflight_handler is not None:
+            self.app.restore_quarantined_preflight_hold = self._restore_preflight_handler
+            self._restore_preflight_handler = None
+        self._preflight_restore = None
         for name, value in getattr(self, "_restore", []):
             setattr(ca, name, value)
         self._restore = []
@@ -710,8 +727,13 @@ class CaProcessor:
     # host 넷 ──────────────────────────────────────────
     def state(self) -> Dict[str, Any]:
         extra = self._pane_values()
-        return present_ca(self.app, view=self.view, menu=operations_menu(self.app), notes=self.notes,
-                          sheet=self.sheet, last_sound=self.last_sound, extra=extra)
+        state = present_ca(self.app, view=self.view, menu=operations_menu(self.app), notes=self.notes,
+                           sheet=self.sheet, last_sound=self.last_sound, extra=extra)
+        if self._preflight_restore is not None:
+            for entry in state["admin_menu"]:
+                if entry["name"] == "list_paired":
+                    entry["facts"] = self._preflight_restore["facts"]
+        return state
 
     def scan(self, text: str, info: Dict[str, Any]) -> Dict[str, Any]:
         raw = str(text or "")
@@ -742,7 +764,22 @@ class CaProcessor:
         admin_id, pin = str(args.get("admin_id") or "").strip(), str(args.get("pin") or "")
         if not admin_id or len(pin) != 6 or not pin.isdigit():
             return {"ok": False, "result": {"kind": "warn", "text": "관리자 ID 와 PIN 6자리를 넣으세요"}}
-        enabled, command = operations_menu(self.app).get(name, (False, None))
+        if name == "list_paired" and "target" in args:
+            request = self._preflight_restore
+            if (request is None or args["target"] != request["id"]
+                    or not self.app._blocked_work_identity_is_current(request["identity"])):
+                return {"ok": False, "result": {"kind": "warn", "text": "복원할 기록을 다시 선택하세요"}}
+            try:
+                path = Path(request["path"])
+                if path.is_file() and ca.file_sha256(path) != request["sha256"]:
+                    raise ValueError("restoration source changed")
+            except (OSError, ValueError):
+                return {"ok": False, "result": {"kind": "warn", "text": "보류 기록이 바뀌었습니다. 다시 선택하세요"}}
+            enabled = True
+            command = lambda: self.app._submit_admin_pin_steps(
+                self._preflight_restore_steps(request), "admin-pin-preflight-restore")
+        else:
+            enabled, command = operations_menu(self.app).get(name, (False, None))
         if not enabled or command is None:
             return {"ok": False, "result": {"kind": "warn", "text": "지금은 할 수 없는 관리자 일입니다", "sub": "화면의 상태를 확인하세요"}}
         self._credentials = (admin_id, pin)
@@ -750,6 +787,38 @@ class CaProcessor:
             return self._run_menu_action(command)
         finally:
             self._credentials = None
+
+    def _request_preflight_restore(self, filepath: str) -> bool:
+        """The confirmation keeps source identity only; a new admin request supplies the PIN."""
+        identity = self.app._authorize_blocked_work_supervisor()
+        if identity is None or not self.app._is_preflight_hold_quarantine_path(filepath):
+            return False
+        try:
+            path = Path(filepath).resolve()
+            snapshot = ca.PreflightScanHoldStore.load_path(path)
+            digest = ca.file_sha256(path)
+        except (OSError, ValueError, ca.PreflightHoldError):
+            return False
+        request = {"id": uuid.uuid4().hex, "path": str(path), "sha256": digest, "identity": identity,
+                   "facts": [["동작", "보류 묶음 복원"], ["현품표", snapshot.master_raw],
+                             ["작업자", snapshot.worker], ["스캔 기록", str(len(snapshot.items))]]}
+        self._preflight_restore = request
+        self.sheet = {"kind": "info", "tag": "관리자", "title": "보류 묶음 복원",
+                      "lead": "이 기록을 복원하려면 관리자 ID와 PIN을 다시 넣으세요.",
+                      "facts": request["facts"], "cancel": "close",
+                      "actions": [{"text": "관리자 PIN으로 복원", "go": "open:list_paired:" + request["id"]},
+                                  {"text": "그만두기", "go": "command:close", "quiet": True}]}
+        self._push()
+        return True
+
+    def _preflight_restore_steps(self, request: Dict[str, Any]):
+        restored = yield from self.app._restore_quarantined_preflight_hold_steps(
+            request["path"], _confirmed=True, expected_source_sha256=request["sha256"])
+        if restored and self._preflight_restore is request:
+            self._preflight_restore = None
+            self.sheet = None
+            self._push()
+        return restored
 
     def _run_menu_action(self, command: Callable[[], Any]) -> Dict[str, Any]:
         """관리자 메뉴 명령이 내는 안내를 판 결과로 모은다."""
@@ -1035,6 +1104,9 @@ class CaProcessor:
         return {"ok": True}
 
     def _cmd_close(self, _id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
+        if self._preflight_restore is not None:
+            self._preflight_restore = None
+            self.sheet = None
         self.view = None
         if _attr(self.app, "_progress_visible"):
             self.app._hide_logistics_progress()
