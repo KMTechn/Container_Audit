@@ -1016,7 +1016,7 @@ def test_identification_past_the_path_limit_says_so_and_keeps_only_that_hold(tmp
     tasks[0].finish(tasks[0].work())
     [(title, message)] = errors
     assert title == "보류 기록 대기"
-    assert "Windows 경로 길이 한도" in message and "이 현품표만 계속 보류" in message
+    assert "Windows 경로 한도 259자" in message and "이 현품표만 보류" in message
     assert archive.read_bytes() == original and not store.manager_hold_path(archive).exists()
 
 
