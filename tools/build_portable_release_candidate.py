@@ -616,7 +616,7 @@ def _assert_screen_bundle(repo_root: Path, app_root: Path) -> dict[str, object]:
     if ui_manifest_path.read_bytes() != (repo_root / "ui/MANIFEST.json").read_bytes():
         raise PortableBuildError("packet UI manifest differs from source")
     ui_manifest = json.loads(ui_manifest_path.read_bytes())
-    if ui_manifest.get("app") != "ca" or ui_manifest.get("commit") != "ab74e3487aa819c2b33ca9c4cd74a16ecea18921":
+    if ui_manifest.get("app") != "ca" or ui_manifest.get("commit") != "384305a374dfc8c5604fc76af422059402103acd":
         raise PortableBuildError("packet UI differs from the accepted export")
     for row in ui_manifest["files"]:
         name = Path(row["path"])
