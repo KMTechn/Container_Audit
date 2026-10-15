@@ -469,6 +469,7 @@ class PreflightScanHoldStore:
         quarantined_path: str | os.PathLike[str],
         *,
         expected_sha256: str | None = None,
+        expected_snapshot_hash: str | None = None,
         move=None,
     ) -> PreflightHoldSnapshot:
         from atomic_replace import atomic_replace
@@ -476,6 +477,8 @@ class PreflightScanHoldStore:
             source = Path(quarantined_path)
             snapshot = self.load_path(source)
             snapshot_hash = self.snapshot_hash(snapshot)
+            if expected_snapshot_hash is not None and snapshot_hash != expected_snapshot_hash:
+                raise PreflightHoldConflict("automatic offline return original changed")
             self.path.parent.mkdir(parents=True, exist_ok=True)
             if expected_sha256 is not None:
                 if move is None:
