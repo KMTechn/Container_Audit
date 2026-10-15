@@ -1357,6 +1357,22 @@ def task_trigger_identity_status(task, operator_sid: str) -> str:
     return 'MATCHED' if actual == wanted else 'DIFFERS'
 
 
+def task_readback_value_matches(path: str, actual: str | None, expected: str) -> bool:
+    """Normalize only native spellings of the same task field value."""
+    if not isinstance(actual, str) or not actual or actual != actual.strip():
+        return False
+    if path == 't:Principals/t:Principal/t:UserId':
+        try:
+            return _resolve_task_principal_sid(actual) == 'S-1-5-18'
+        except (ValueError, OSError):
+            return False
+    if path in {'t:Settings/t:AllowHardTerminate', 't:Settings/t:Hidden'}:
+        return actual.lower() in ({'true', '1'} if expected == 'true' else {'false', '0'})
+    if path == 't:Actions/t:Exec/t:Arguments':
+        return actual in (expected, expected.replace(' -ExecutionPolicy Bypass -File ', ' -File ', 1))
+    return actual == expected
+
+
 @writer_sink("auto_update_control")
 def supported_task_present(fixed: Path, sid: str) -> bool:
     """Read the actual derived task without executing installed support code."""
@@ -1382,11 +1398,9 @@ Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Mi
                 and len(actual.findall('t:Triggers/t:LogonTrigger', ns)) == 1
                 and len(actual.findall('t:Principals/t:Principal', ns)) == 1
                 and task_trigger_identity_status(actual, sid) == 'MATCHED'
-                and all(len(actual.findall(path, ns)) == 1 and (actual.findtext(path, namespaces=ns) in (
-                    expected.findtext(path, namespaces=ns),
-                    expected.findtext(path, namespaces=ns).replace(' -ExecutionPolicy Bypass -File ', ' -File ', 1),
-                ) if path == 't:Actions/t:Exec/t:Arguments' else
-                    actual.findtext(path, namespaces=ns) == expected.findtext(path, namespaces=ns))
+                and all(len(actual.findall(path, ns)) == 1 and not len(actual.find(path, ns))
+                    and task_readback_value_matches(path, actual.findtext(path, namespaces=ns),
+                                                    expected.findtext(path, namespaces=ns))
                     for path in paths if path != 't:Triggers/t:LogonTrigger/t:UserId'))
     except (ValueError, xml.ParseError):
         return False

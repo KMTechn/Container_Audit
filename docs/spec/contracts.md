@@ -269,6 +269,8 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 <a id="ca-startup-update"></a>
 ## 로그온 자동 갱신 계약
 
+작업 되읽기는 SYSTEM 계정 이름을 Windows SID `S-1-5-18`로 해석하고 XML boolean의 `true/false`(대소문자 무관)·`1/0`을 같은 값으로 비교한다. Python과 PowerShell lifecycle 소비자는 같은 판정을 사용하며, 다른 주체·실행 수준·작업 명령은 거절한다.
+
 `auto_update.py`의 프로토콜 1은 `PREPARED → APPLIED_PENDING_READY → CONFIRMED`와
 실패 시 `ROLLBACK_PENDING → ROLLED_BACK`을 기록한다. 복귀 대상은 이미 확인된 이전
 판이므로 READY 재시험을 요구하지 않는다(기존 ROLLBACK_PENDING_READY도 정착 가능).
