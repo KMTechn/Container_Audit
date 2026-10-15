@@ -179,16 +179,18 @@ THIRD_PARTY = {
     "pywebview": ("6.2.1", ("webview",)),
 }
 BUILD_ENVIRONMENT_LOCK = "requirements-portable-build-win-py312.lock"
-NATIVE_ALLOWLIST_SOURCE_SHA256 = "d88fc67bd49ccfba37b991c975d6eff38233b00bc24fb66369640b5e140691d7"
-# Byte-identical to Inspection_worker dceb851d; only its unsigned subset is
-# exempt from signature validation. The three WebView2 DLLs remain signed.
+NATIVE_ALLOWLIST_SOURCE_SHA256 = "b58c9873926e26056672f8aa7f2fae9ba0a1dc11a9f5b4ca12dc727959c07c42"
+# Exact approved NATIVE-ALLOWLIST.json bytes; only its unsigned subset is
+# exempt from signature validation. Core, WinForms and all three Loaders remain signed.
 APP_NATIVE_ALLOWLIST: dict[str, tuple[int, str]] = {
     "site-packages/_cffi_backend.cp312-win_amd64.pyd": (181248, "9af5e4f68a41f26b726f2e9424f9d58a4f5666189f6a48be95f406b257102aec"),
     "site-packages/clr_loader/ffi/dlls/amd64/ClrLoader.dll": (10752, "07f62bcb1b70320f221ffb2cfc5ce6133815195f3e7cdb8d833222506188c2ac"),
     "site-packages/pythonnet/runtime/Python.Runtime.dll": (451584, "2ebd4492e28442ef1f1af587afe5b3a090c2ebfa220758ded4f1450f2a27f13a"),
     "site-packages/webview/lib/Microsoft.Web.WebView2.Core.dll": (649800, "8219a3135436c147f8eb02fb831e99596103eebc18b6d7b794ca93f4c67018a2"),
     "site-packages/webview/lib/Microsoft.Web.WebView2.WinForms.dll": (39016, "c48f8d729dc531288d2c53a6241effe7922ed1b947850b2442008a945c098c48"),
+    "site-packages/webview/lib/runtimes/win-arm64/native/WebView2Loader.dll": (147016, "0937030efc718f3da77c5e0978fb5046e381d0bb7b01acaad31a535a1b588a33"),
     "site-packages/webview/lib/runtimes/win-x64/native/WebView2Loader.dll": (161864, "eb5335edeaa6f2122c044e82aab2351dc8c9b4e0fe5e578c71922fb61be285e7"),
+    "site-packages/webview/lib/runtimes/win-x86/native/WebView2Loader.dll": (121928, "04814b2c59314c6452d61b821a4a3a5c5f8e8577b55b985f6a7a4b59f8907ec5"),
 }
 APP_NATIVE_UNSIGNED = frozenset({
     "site-packages/_cffi_backend.cp312-win_amd64.pyd",
@@ -200,8 +202,6 @@ THIRD_PARTY_EXCLUDED_PATHS = frozenset({
     "clr_loader/ffi/dlls/x86/ClrLoader.dll",
     "webview/lib/WebBrowserInterop.x64.dll",
     "webview/lib/WebBrowserInterop.x86.dll",
-    "webview/lib/runtimes/win-arm64/native/WebView2Loader.dll",
-    "webview/lib/runtimes/win-x86/native/WebView2Loader.dll",
 })
 SHELL_BRIDGE_SOURCE_COMMIT = "65003a342d7c79f38ee078edd381a254af38cd07"
 FORBIDDEN_PACKAGE_NAMES = frozenset(
