@@ -1,5 +1,7 @@
 ﻿# 운영·환경·장애 복구
 
+10/15 화면 동작: 부분 제출 확인은 재시작 때 채우는 중으로 돌아가며, 이미 저장된 결정은 유예 없이 같은 키로 복구·확정한다. C02–C07·검증된 C09는 자기 작업에 한해 PIN 없이 처리하고 C08·수동 결속·격리 복원은 관리자 PIN을 요구한다. 실제 창 동작·장면 판정과 부분 제출/PIN 독립 검토는 통합 뒤 별도 수용한다.
+
 자동 업데이트 출발판은 v2.0.104 이상이다. 업데이트 후보는 설치된 판의 `tools/apply_prepared_update.ps1`이 판정한다. v2.0.103처럼 unsigned 목록이 빈 판만 받는 옛 helper가 깔린 PC는 v2.0.104 이후 자동 업데이트를 `STARTUP_UPDATE_PORTABLE_MANIFEST_DIFFERS`로 거절하며 업무를 멈추지 않는다. 그런 PC는 정식 제거 뒤 새로 설치한다. 자료꼴 호환 하한 v2.0.103은 업데이트 출발판을 뜻하지 않는다.
 
 설치 자식의 fallback 진단은 객체·schema·정수 exit_code를 확인한 뒤 읽는다. 누락·null·배열·손상·64 KiB 초과·미지 형식은 「진단 형식 모름」으로 따로 기록한다. 자식의 원 종료값·출력·이유·최초 실패 참조는 유지하며, 진단 parser 예외가 original_failure를 선점하지 않는다. 정상 옛 fallback은 자식 종료값이 일치할 때만 선택한다. 증거 writer 실패와 task 부재·UNKNOWN 거절은 그대로다.
@@ -23,7 +25,7 @@ ctypes의 창 활성화·안내·위치 보정은 runtime_instance_win32 한 모
 업무·사용자 relay·업데이트 내려받기의 기본 자료 자리는 LOCALAPPDATA다. 사용자 실행은 ProgramData 전체(뿌리·KMTech·다른 형제·명시 relay 경로)에 디렉터리나 조상을 만들지 않는다. OS known folder를 기준으로 기존 부모의 최종 경로를 해석해 대소문자·8.3·정션·확장 경로 접두사를 정규화한다. 환경 매핑은 해석된 거절 경계를 더할 수 있을 뿐 OS 경계를 좁히지 않는다. 필요한 디렉터리가 없거나 known folder를 확인하지 못하면 `MACHINE_RUNTIME_DIRECTORY_NOT_PREPARED`와 관리자 설치를 먼저 완료하라는 안내로 거절한다. 기계 설치기가 owner·ACL을 정해 준비한 디렉터리는 mkdir·owner·ACL 변경 없이 사용한다. 이미 잘못된 owner·ACL의 회복은 이 거절 길이 맡지 않으며 기존 설치 보호 검사는 유지한다.
 
 
-현재 사본은 승인된 READY `a8183b66`의 v3.16.3이며 19파일과 READY의 바이트를 대조한다. 어댑터는 `web_allowed`에도 쓰기 guard를 명시하며 셸의 private FileIO가 각 쓰기에 같은 허가를 얻는다. 실제 셸 코드의 시작 실패·수동 재시작·worker 종료 대기는 창과 OS 경계만 대체해 시험한다. 실제 창 하나·설치·현장 확인은 별도다. 최종 UI 97efc8e7을 적용했다. v2.0.106은 writer inventory 검사 실패로 소모했고 v2.0.107은 한 번 빌드해 수용되었다. v2.0.108은 A9 결과와 별도 지시 전까지 빌드하지 않는다. 실패 뒤 같은 번호로 다시 빌드하지 않는다.
+현재 사본은 승인된 READY `a8183b66`의 v3.16.3이며 19파일과 READY의 바이트를 대조한다. 어댑터는 `web_allowed`에도 쓰기 guard를 명시하며 셸의 private FileIO가 각 쓰기에 같은 허가를 얻는다. 실제 셸 코드의 시작 실패·수동 재시작·worker 종료 대기는 창과 OS 경계만 대체해 시험한다. 실제 창 하나·설치·현장 확인은 별도다. 최종 UI a1b37ce2을 적용했다. v2.0.106은 writer inventory 검사 실패로 소모했고 v2.0.107은 한 번 빌드해 수용되었다. v2.0.108은 A9 결과와 별도 지시 전까지 빌드하지 않는다. 실패 뒤 같은 번호로 다시 빌드하지 않는다.
 
 디렉터리 준비 helper는 바탕 b82의 mkdir 33자리를 그대로 대신한다. inventory는 helper의 디렉터리 전용 AST와 정확한 호출자·인수·admission/probe 분류를 검증하고 각 준비 효과를 호출자에게 돌린다. 부트스트랩 전 준비 1자리는 새 writer admission 없이 유지하며 업무 파일 쓰기에는 이 분류를 적용하지 않는다. release의 실제 writer inventory 검사를 빌드 전에 별도로 통과시킨다.
 
@@ -33,7 +35,7 @@ ctypes의 창 활성화·안내·위치 보정은 runtime_instance_win32 한 모
 
 새 화면 보류 목록은 기존 작업자 신원 규칙으로 일반 보류와 사전조회 격리·서버 확인 대기를 읽는다. 격리·대기는 `kind`, `restorable:false`, 품목·현품표 번호·수량의 `label`, 고정 안내의 `note`를 전달하며 복원 명령을 받아도 일반 복원으로 넘기지 않는다. held_count는 실제 전체 건수이고 목록만 50줄로 제한한다. overflow로 넘침을 표시하고 격리·대기 줄에 먼저 자리를 주며 각 종류가 전부 빠지지 않게 한다. 넘친 일반 목록은 옛 화면에서 확인한다. 등록 때 동명이 있으면 현재 명단의 UUID·표시 이름을 후보로 보내고, 선택 직전에 다시 대조해 기존 등록 함수를 부른다. 다른 사람은 구분 이름으로 새로 등록한다. 명단 저장·승인·전송 계약은 그대로다.
 
-새 화면 portable 패킷은 `ca_screen_bridge.py`, `shell/`, `ui/`와 검사 앱 `dceb851d`의 같은 pywebview 6.2.1 의존성을 싣는다. 빌드는 `requirements-portable-build-win-py312.lock`의 정확한 15분포 환경을 요구한다. 셸 v3.16.3 READY SHA256은 `a8183b660932778c08ebdf1ee24f137b4c2540a66207850afeff9990bbfb3198`이다. 배포 경로 이름 `SHELL-READY-v3.16.json`은 유지하고 승인된 v3.16.3 READY를 그대로 담는다. READY의 shell-v3.16.3 접두부만 설치된 shell/ 경로로 매핑하며 원문과 19파일을 바꾸지 않는다. UI는 4차 바탕 최종 `97efc8e733ba8d73c3d4c8d8a486cad5c3d8d531`의 공용10·이적62 파일을 다시 내보냈다. 72파일 모두 committed 바이트와 같고 로컬 P2 두 파일도 이 사본으로 대체했다. 매니페스트 원천 SHA·`dirty=false`·파일별 해시·부품 지문을 대조한다. 이 UI 사본에는 별도 로컬 수정을 하지 않는다.
+새 화면 portable 패킷은 `ca_screen_bridge.py`, `shell/`, `ui/`와 검사 앱 `dceb851d`의 같은 pywebview 6.2.1 의존성을 싣는다. 빌드는 `requirements-portable-build-win-py312.lock`의 정확한 15분포 환경을 요구한다. 셸 v3.16.3 READY SHA256은 `a8183b660932778c08ebdf1ee24f137b4c2540a66207850afeff9990bbfb3198`이다. 배포 경로 이름 `SHELL-READY-v3.16.json`은 유지하고 승인된 v3.16.3 READY를 그대로 담는다. READY의 shell-v3.16.3 접두부만 설치된 shell/ 경로로 매핑하며 원문과 19파일을 바꾸지 않는다. UI는 최종 `a1b37ce25a28f4147f15b3e58b4cc900c8be6f97`에서 정본 exporter로 내보낸 86파일과 MANIFEST를 그대로 적용했다. 86파일 모두 committed 바이트와 대조했다. 매니페스트 원천 SHA·`dirty=false`·파일별 해시·부품 지문을 대조한다. 이 UI 사본에는 별도 로컬 수정을 하지 않는다.
 
 앱 native는 검사와 바이트가 같은 여섯 파일만 허용한다. unsigned 예외는 `_cffi_backend.cp312-win_amd64.pyd`, amd64 `ClrLoader.dll`, `Python.Runtime.dll` 세 개이며 WebView2 Core·WinForms·x64 Loader DLL은 서명 검증 대상이다. 두 설치기의 패킷·설치본 및 자동 업데이트 helper의 manifest 판독은 unsigned 목록이 빈 옛 판 또는 정확히 이 세 경로·SHA인 경우만 받는다. 빌더는 앱 PE 전체 크기·SHA·파일 집합과 설치기·업데이트 helper/빌더/실제 패킷 unsigned pin을 대조하며 빠짐·추가·바이트 변경을 거절한다. 다른 아키텍처 및 WebBrowserInterop 변형은 복사하지 않는다. 패킷의 `--new-screen`, writer guard, 「그래도 닫기」와 기본 `on_force_exit=None` 연결은 AST/바이트로 확인한다. 호스트에서는 실제 창을 띄우지 않고 현장 PC에서 창 동작을 확인한다.
 

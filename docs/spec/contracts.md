@@ -1,4 +1,6 @@
-﻿> 2026-10-01 w9scanonly 현재 계약: 7칸 QT=1–9999 즉시 시작, snapshot 구성원 수 우선, 로컬 intent/checkpoint/TRAY_COMPLETE → 표시 → 독립 배경 교환 ACK/lease/seal. 공통 payload는 scan_payload/local_completion_id/local_completed_at/deferred_reflection/short_confirmed/exchange_idempotency_keys다. short는 전체 topology 증거와 스캔 subset을 보내고 exact 잔량을 검증한다. UPSTREAM_COMPLETION_PENDING 409는 retry, COMPLETION_REVIEW_REQUIRED는 해당 intent review다. 유효 PHS2_LOCAL_ONLY도 같은 대기열로 보내며 옛 13자리 현품표는 기존 과도기 기록만 유지한다.
+﻿10/15 화면 계약(M124·M125): `work.list[].code`는 원문, `work.exchange={phase,remove,insert}`는 교환 중·직후에만 제공, `today.rows[].products`는 내구 완료 제품 수 정수, `admin_menu[].pin`은 boolean이다. C02–C07·검증된 같은 원본 C09는 작업자와 원 소유권·지문·멱등 키·CAS를 유지하고 승인자 칸을 비운다. C08 목록과 C10·C11 수동 결속·C12 격리 복원은 PIN 경계를 유지한다.
+
+> 2026-10-01 w9scanonly 현재 계약: 7칸 QT=1–9999 즉시 시작, snapshot 구성원 수 우선, 로컬 intent/checkpoint/TRAY_COMPLETE → 표시 → 독립 배경 교환 ACK/lease/seal. 공통 payload는 scan_payload/local_completion_id/local_completed_at/deferred_reflection/short_confirmed/exchange_idempotency_keys다. short는 전체 topology 증거와 스캔 subset을 보내고 exact 잔량을 검증한다. UPSTREAM_COMPLETION_PENDING 409는 retry, COMPLETION_REVIEW_REQUIRED는 해당 intent review다. 유효 PHS2_LOCAL_ONLY도 같은 대기열로 보내며 옛 13자리 현품표는 기존 과도기 기록만 유지한다.
 
 새 화면의 업무 동작은 명시 True/boolean ok만 성공으로 돌려준다. False·오류 글·거절 안내는 실패, None은 결과 모름(idle·ok=False)이며 재전송이 실패를 성공으로 덮지 않는다. 관리자 ID/PIN 빈 입력은 실행 전에 거절하고 재인증 필요는 웹 결과로 표시한다. 등록은 같은 원장 함수로 직접 가고 PIN·내부 시험 입력은 기존 인스턴스 대체를 사용해 Tk Toplevel·grab·wait_window를 만들지 않는다. 옛 화면 모달과 업무 자료·인증 계약은 유지한다.
 
@@ -120,7 +122,7 @@ PID 미기록도 같은 run ID 프로세스가 0이면 인정한다. 같은 자�
 작업 상세 펼침·접힘, 운영 작업 메뉴의 선택·취소·닫기, 트레이 이미지 선택은 기존 `_schedule_focus_return()`으로 스캔 입력에 초점을 돌려준다. 메뉴는 grab을 반환한 뒤 초점을 예약하며 팝업·grab 반환 오류 경로도 포함한다. 보조 제어의 Tab 이동 제외는 스캔 입력·대화상자 입력·관리자 PIN 입력의 설정이나 차단 안내의 초점 보호를 바꾸지 않는다.
 예약된 50 ms 복귀가 실행될 때 현재 초점 또는 grab의 `winfo_toplevel()`이 작업 root와 다르면 복귀를 종료한다. 메뉴 반환 뒤 열린 확인·PIN·교환 창의 입력을 침범하지 않는다. 겹친 예약은 기존 취소 장치로 합치며 스캔 칸 내용 지우기·선택·반복 예약은 없다.
 
-교환 선택 단계의 UNDO는 기존 제품 목록·시각을 바꾸지 않는다. 미달 확정 UNDO는 저장된 원 시작 시각·스캔 시각·누적 작업시간으로 재개하고 상태 검증 조건은 유지한다. 미달 유예는 다음 현품표·작업자 변경·정상 종료 또는 확정 뒤 60초 동안 다음 스캔이 없으면 끝난다. 실행·잠금/절전 복귀·재시작 모두 내구 확정 시각으로 남은 유예를 판정하며 1초 UI 시계와 유예 타이머가 점검한다. 시계 역행은 감사 기록을 남기고 이전 관측 시각을 따라잡을 때까지 전송을 보류한다. 유예 끝에는 기존 CSV 내구 투영 뒤 같은 intent·완료 시각·멱등 키로 배경 전송한다. 만료 뒤 먼저 접수한 UNDO도 상태를 유지하고 창 안 안내와 기존 오류음을 사용한다.
+교환 선택 단계의 UNDO는 기존 제품 목록·시각을 바꾸지 않는다. 일반 제품 UNDO는 부분 제출 확정 전까지 시간 제한이 없다. 부분 제출 확인은 메모리에만 두며 `confirm={kind:partial_submit,total,done,short}`와 `partial_submit`·`partial_continue`로 답한다. 계속 작업은 내구 기록을 바꾸지 않고 제품 입력을 정상 처리한다. 확정은 기존 미달 결정과 완료 id·멱등 키를 보존해 HELD→READY→SETTLED로 즉시 한 번 release하며 유예·확정 취소는 없다. 재시작 뒤 남은 HELD/SETTLING 결정도 같은 키로 마무리한다.
 
 교환·완료·작업 전환 뒤 도착하여 현재 트레이가 채택하지 못한 prefetch lease는 기존 내구 해제 큐에 넣는다. 해제는 사용 중인 lease를 다시 확인하며, 교환 뒤 완료는 RELEASED 영수증 확인 후 새 발급 키와 현재 구성원을 사용한다. 교환 없는 동결 발급 요청의 재사용은 유지한다. 알려진 목표·구성원의 checkpoint 저장이 실패하면 이전 트레이 상태를 유지하고 짧은 로컬 재시도로 다시 저장한다. 재시도는 원 현품표·시작 시각·교환·완료 상태를 확인하며, 저장 성공 뒤에만 목표를 표시하고 자동 완료한다. 중앙 대조의 '확인 필요'는 관리자 화면에만 표시하고 작업자 상태줄을 바꾸지 않는다(DESIGN §11-6).
 
