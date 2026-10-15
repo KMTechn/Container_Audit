@@ -110,7 +110,7 @@ class PHSLabelWorkflowError(RuntimeError):
 
 
 class PHSPrintUnknown(PHSLabelWorkflowError):
-    def __init__(self, message="인쇄 제출이 끝나지 않았습니다. 인쇄 대기로 남겼습니다. 출력물을 확인한 뒤 재인쇄하세요."):
+    def __init__(self, message='인쇄 제출이 끝나지 않았습니다\n출력물을 확인한 뒤 재인쇄하세요\n자세히: 인쇄 대기로 남겼습니다'):
         super().__init__("PHS_LOCAL_PRINT_UNKNOWN", message, retryable=True)
 
 
@@ -141,7 +141,7 @@ class PHSLabelExchangeJournal:
             except (OSError, json.JSONDecodeError) as exc:
                 raise PHSLabelWorkflowError(
                     "PHS_LABEL_JOURNAL_CORRUPT",
-                    "현품표 교환 복구 journal을 읽을 수 없습니다.",
+                    '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: journal',
                 ) from exc
         if (
             not isinstance(loaded, dict)
@@ -151,7 +151,7 @@ class PHSLabelExchangeJournal:
         ):
             raise PHSLabelWorkflowError(
                 "PHS_LABEL_JOURNAL_CORRUPT",
-                "현품표 교환 복구 journal 형식이 올바르지 않습니다.",
+                '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: journal',
             )
         return dict(loaded["state"])
 
@@ -260,7 +260,7 @@ PRINT_SUBMIT_TIMEOUT_SECONDS = 60.0
 PRINT_SUBMISSION_THREADS = weakref.WeakSet()
 _PRINT_THREADS_BY_LABEL = weakref.WeakValueDictionary()
 _PRINT_SUBMISSION_LOCK = threading.Lock()
-_NON_LABEL_PRINTER_NOTICE = "기본 프린터가 라벨 프린터가 아닙니다. 관리자에게 알리세요."
+_NON_LABEL_PRINTER_NOTICE = '기본 프린터가 라벨 프린터가 아닙니다.\n현장 관리자에게 알리세요.'
 
 
 class _PrinterInfo2W(ctypes.Structure):
@@ -327,14 +327,14 @@ class WindowsGDIPhysicalLabelPrinter:
             api.argtypes, api.restype = args, result
         handle, size = wintypes.HANDLE(), wintypes.DWORD()
         if not spool.OpenPrinterW(printer_name, ctypes.byref(handle), None):
-            raise PHSPhysicalPrintError("기본 프린터 설정을 확인하지 못했습니다. 관리자에게 알리세요.")
+            raise PHSPhysicalPrintError('기본 프린터 설정을 확인하지 못했습니다.\n현장 관리자에게 알리세요.')
         try:
             spool.GetPrinterW(handle, 2, None, 0, ctypes.byref(size))
             if not ctypes.sizeof(_PrinterInfo2W) <= size.value <= 1024 * 1024:
-                raise PHSPhysicalPrintError("기본 프린터 설정을 확인하지 못했습니다. 관리자에게 알리세요.")
+                raise PHSPhysicalPrintError('기본 프린터 설정을 확인하지 못했습니다.\n현장 관리자에게 알리세요.')
             buffer = ctypes.create_string_buffer(size.value)
             if not spool.GetPrinterW(handle, 2, buffer, size.value, ctypes.byref(size)):
-                raise PHSPhysicalPrintError("기본 프린터 설정을 확인하지 못했습니다. 관리자에게 알리세요.")
+                raise PHSPhysicalPrintError('기본 프린터 설정을 확인하지 못했습니다.\n현장 관리자에게 알리세요.')
             info = ctypes.cast(buffer, ctypes.POINTER(_PrinterInfo2W)).contents
             return tuple(ctypes.wstring_at(value) if value else "" for value in (info.pPortName, info.pDriverName))
         finally:
@@ -368,7 +368,7 @@ class WindowsGDIPhysicalLabelPrinter:
         with _PRINT_SUBMISSION_LOCK:
             previous = _PRINT_THREADS_BY_LABEL.get(key) if key else None
             if previous is not None and previous.is_alive():
-                raise PHSPrintUnknown("이전 인쇄가 아직 프린터 대기열에 있습니다 — 프린터 대기열을 확인한 뒤 다시 누르세요")
+                raise PHSPrintUnknown('이전 인쇄가 아직 프린터 대기열에 있습니다\n프린터 대기열을 확인한 뒤 다시 누르세요')
             PRINT_SUBMISSION_THREADS.add(worker)
             if key:
                 _PRINT_THREADS_BY_LABEL[key] = worker
@@ -392,7 +392,7 @@ class WindowsGDIPhysicalLabelPrinter:
     ) -> PhysicalPrintEvidence:
         path = Path(filepath)
         printer_name = self._default_printer_name()
-        notice = f"기본 프린터가 라벨 프린터가 아닙니다({printer_name}). 관리자에게 알리세요."
+        notice = f'기본 프린터가 라벨 프린터가 아닙니다({printer_name}).\n현장 관리자에게 알리세요.'
         profile = " ".join((printer_name, *self._printer_profile(printer_name))).casefold()
         if any(marker in profile for marker in _NON_LABEL_PRINTER_MARKERS):
             raise PHSPhysicalPrintError(_NON_LABEL_PRINTER_NOTICE, screen_message=notice)
@@ -414,7 +414,7 @@ class WindowsGDIPhysicalLabelPrinter:
             )
         except (PrinterError, OSError, ValueError) as exc:
             raise PHSPhysicalPrintError(
-                f"실물 현품표 GDI 출력에 실패했습니다: {exc}"
+                f'현품표를 인쇄하지 못했습니다\n프린터를 확인하고 다시 시도하세요\n코드: GDI · {exc}'
             ) from exc
         return PhysicalPrintEvidence(
             printer_name=printer_name,
@@ -472,19 +472,19 @@ class PHSLabelRenderer:
         if not label_id or not qr_payload or not business_date or not worker_code:
             raise PHSLabelWorkflowError(
                 "PHS_TARGET_LABEL_INVALID",
-                "중앙 target label의 QR/date/worker-code 증거가 불완전합니다.",
+                '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: target · label · QR/date/worker-code',
             )
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", business_date) is None:
             raise PHSLabelWorkflowError(
                 "PHS_TARGET_LABEL_INVALID",
-                "중앙 target label의 business date 형식이 올바르지 않습니다.",
+                '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: target · label · business · date',
             )
         try:
             datetime.strptime(business_date, "%Y-%m-%d")
         except ValueError as exc:
             raise PHSLabelWorkflowError(
                 "PHS_TARGET_LABEL_INVALID",
-                "중앙 target label의 business date 값이 올바르지 않습니다.",
+                '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: target · label · business · date',
             ) from exc
         safe_label = re.sub(r"[^A-Za-z0-9._-]+", "_", label_id)[:120]
         output_root = self.output_root.expanduser().resolve(strict=False)
@@ -515,7 +515,7 @@ class PHSLabelRenderer:
                     error_correction="M",
                     border=4,
                 )
-                canvas.text((530, 55), "PHS 현품표", font=FontSpec(48, bold=True))
+                canvas.text((530, 55), '현품표\n코드: PHS', font=FontSpec(48, bold=True))
                 canvas.text(
                     (530, 145),
                     f"작업일  {business_date}",
@@ -548,7 +548,7 @@ class PHSLabelRenderer:
             saved = _save_raster_png(label_image, output_path)
         except (RasterError, OSError, ValueError) as exc:
             raise PHSPhysicalPrintError(
-                f"현품표 PNG 생성에 필요한 GDI 렌더링에 실패했습니다: {exc}"
+                f'현품표를 생성하지 못했습니다\n잠시 후 다시 시도하세요\n코드: GDI · {exc}'
             ) from exc
         return RenderedPHSLabel(str(output_path), str(saved["sha256"]))
 
@@ -630,7 +630,7 @@ class PHSLabelExchangeCoordinator:
         if not self.available:
             raise PHSLabelWorkflowError(
                 "PHS_LABEL_CLIENT_UNAVAILABLE",
-                "중앙 현품표 교환 API 설정이 없습니다.",
+                '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: API',
                 retryable=True,
             )
         fields = self._tray_phs_fields(tray)
@@ -691,8 +691,7 @@ class PHSLabelExchangeCoordinator:
         ):
             raise PHSLabelWorkflowError(
                 "PHS_LABEL_TRAY_ANCHOR_MISMATCH",
-                "현재 트레이의 authoritative canonical "
-                "PHS2/item/member-count가 중앙 source와 다릅니다.",
+                '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: authoritative · canonical · PHS2/item/member-count · source',
             )
         return preflight, dict(resolved or {})
 
@@ -704,12 +703,12 @@ class PHSLabelExchangeCoordinator:
         except ValueError as exc:
             raise PHSLabelWorkflowError(
                 "PHS_TARGET_DATE_INVALID",
-                "교환 작업일은 YYYY-MM-DD 실제 달력 날짜여야 합니다.",
+                '교환 작업일: 입력한 값을 확인하세요\n코드: YYYY-MM-DD',
             ) from exc
         if parsed.strftime("%Y-%m-%d") != target_date:
             raise PHSLabelWorkflowError(
                 "PHS_TARGET_DATE_INVALID",
-                "교환 작업일은 YYYY-MM-DD 형식이어야 합니다.",
+                '교환 작업일: 입력한 값을 확인하세요\n코드: YYYY-MM-DD',
             )
         return target_date
 
@@ -760,7 +759,7 @@ class PHSLabelExchangeCoordinator:
         ):
             raise PHSLabelWorkflowError(
                 "PHS_TARGET_CANDIDATES_INVALID",
-                "중앙 후보의 scope/date/item/member-count가 현재 트레이와 다릅니다.",
+                '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: scope/date/item/member-count',
             )
         candidates: list[dict[str, Any]] = []
         for raw in raw_candidates:
@@ -798,7 +797,7 @@ class PHSLabelExchangeCoordinator:
             ):
                 raise PHSLabelWorkflowError(
                     "PHS_TARGET_CANDIDATES_INVALID",
-                    "exact PLANNED 작업지시가 아닌 후보가 포함됐습니다.",
+                    '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: exact · PLANNED',
                 )
             candidates.append(candidate)
         return candidates
@@ -814,7 +813,7 @@ class PHSLabelExchangeCoordinator:
         if kind == "OVERLAY_NOT_ACTIVE":
             raise PHSLabelWorkflowError(
                 "PHS2_LABEL_NOT_ACTIVE",
-                "아직 ACTIVE가 아닌 새 현품표는 교환 source가 될 수 없습니다.",
+                '아직 사용할 수 없는 현품표입니다\n현장 관리자에게 알리세요\n코드: ACTIVE · source',
             )
         effective = resolution.get("effective_labels")
         if (
@@ -825,13 +824,13 @@ class PHSLabelExchangeCoordinator:
         ):
             raise PHSLabelWorkflowError(
                 "PHS2_ACTIVE_LABEL_AMBIGUOUS",
-                "교환 source의 현재 ACTIVE physical label을 하나로 확정하지 못했습니다.",
+                '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: source · ACTIVE · physical · label',
             )
         active = dict(effective[0])
         if str(active.get("state") or "").strip().upper() != "ACTIVE":
             raise PHSLabelWorkflowError(
                 "PHS2_LABEL_NOT_ACTIVE",
-                "교환 source physical label이 ACTIVE가 아닙니다.",
+                '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: source · physical · label · ACTIVE',
             )
         return active, kind
 
@@ -873,7 +872,7 @@ class PHSLabelExchangeCoordinator:
         ):
             raise PHSLabelWorkflowError(
                 "PHS_LABEL_ADOPTION_INVALID",
-                "legacy source adopt 결과가 현재 physical label과 다릅니다.",
+                '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: legacy · source · adopt · physical · label',
             )
         return active
 
@@ -928,8 +927,7 @@ class PHSLabelExchangeCoordinator:
         ):
             raise PHSLabelWorkflowError(
                 "PHS_SOURCE_LABEL_INVALID",
-                "중앙 ACTIVE source label의 QR/anchor/membership 증거가 "
-                "현재 exact PHS와 다릅니다.",
+                '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: ACTIVE · source · label · QR/anchor/membership · exact · PHS',
             )
         return label_id, label_version, membership_version
 
@@ -966,7 +964,7 @@ class PHSLabelExchangeCoordinator:
         ):
             raise PHSLabelWorkflowError(
                 "PHS_EXCHANGE_EVIDENCE_INVALID",
-                "중앙 SINGLE exchange/source/target cardinality 증거가 다릅니다.",
+                '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: SINGLE · exchange/source/target · cardinality',
             )
         target = dict(target_labels[0])
         source = dict(source_labels[0])
@@ -1049,8 +1047,7 @@ class PHSLabelExchangeCoordinator:
         ):
             raise PHSLabelWorkflowError(
                 "PHS_TARGET_LABEL_INVALID",
-                "target label/instruction/date/worker/anchor/member-count/state가 "
-                "선택 및 source와 다릅니다.",
+                '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: target · label/instruction/date/worker/anchor/member-count/state · source',
             )
         return exchange, target
 
@@ -1070,7 +1067,7 @@ class PHSLabelExchangeCoordinator:
             or proof.get("windows_gdi_end_doc") is not True
         ):
             raise PHSPhysicalPrintError(
-                "실제 Windows GDI spool 성공 증거가 불완전합니다."
+                '현품표 인쇄를 확인하지 못했습니다\n프린터를 확인하세요\n코드: GDI · spool'
             )
         return proof
 
@@ -1126,7 +1123,7 @@ class PHSLabelExchangeCoordinator:
                 setattr(tray, field_name, value)
             raise PHSLabelWorkflowError(
                 "PHS_LOCAL_TRAY_STATE_SAVE_FAILED",
-                "중앙 교환은 완료됐지만 current tray label 상태를 안전하게 저장하지 못했습니다.",
+                '현품표 교환은 완료됐지만 이 PC에 저장하지 못했습니다\n현장 관리자에게 알리세요\n코드: current · tray · label',
                 retryable=True,
             )
 
@@ -1248,8 +1245,7 @@ class PHSLabelExchangeCoordinator:
         ):
             raise PHSLabelWorkflowError(
                 "PHS_LABEL_RECOVERY_CONFLICT",
-                "다른 트레이의 미완료 현품표 교환 journal이 있습니다. "
-                "해당 트레이를 복원해 먼저 복구해야 합니다.",
+                '다른 트레이의 현품표 교환이 끝나지 않았습니다\n해당 트레이를 복원해 복구하세요\n코드: journal',
             )
         recoverable = bool(
             state
@@ -1303,7 +1299,7 @@ class PHSLabelExchangeCoordinator:
             if target is None:
                 raise PHSLabelWorkflowError(
                     "PHS_TARGET_INSTRUCTION_STALE",
-                    "선택한 작업지시가 더 이상 exact PLANNED 후보가 아닙니다.",
+                    '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: exact · PLANNED',
                 )
             preflight, resolved = self._resolve_tray_source(tray)
             active_source = self._adopt_if_required(
@@ -1388,9 +1384,9 @@ class PHSLabelExchangeCoordinator:
         if not scope:
             raise PHSLabelWorkflowError(
                 "PHS_LABEL_JOURNAL_CORRUPT",
-                "복구 journal에 authority scope가 없습니다.",
+                '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: journal · authority · scope',
             )
-        notify("중앙 현품표 교환 prepare/복구 상태를 확인하고 있습니다.")
+        notify('현품표 교환 복구 상태를 확인하고 있습니다\n코드: prepare')
         if not exchange_id:
             try:
                 prepared = self.client.prepare_phs_label_exchange(
@@ -1444,7 +1440,7 @@ class PHSLabelExchangeCoordinator:
             if not exchange_id:
                 raise PHSLabelWorkflowError(
                     "PHS_PREPARE_ACK_INVALID",
-                    "중앙 prepare ACK에 exchange id가 없습니다.",
+                    '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: prepare · ACK · exchange · id',
                     retryable=True,
                 )
             state = self._save(
@@ -1531,8 +1527,7 @@ class PHSLabelExchangeCoordinator:
                 failed,
                 success=False,
                 message=(
-                    "기존 현품표는 ACTIVE입니다. 프린터를 확인한 뒤 "
-                    "같은 교환을 재시도하세요."
+                    '기존 현품표를 계속 사용할 수 있습니다\n프린터를 확인한 뒤 같은 교환을 다시 시도하세요\n코드: ACTIVE'
                 ),
                 error_code="LOCAL_PRINTER_ERROR",
                 retryable=True,
@@ -1571,7 +1566,7 @@ class PHSLabelExchangeCoordinator:
                         print_idempotency_key=print_key,
                         print_attempt_id="",
                     )
-                notify("중앙 print-attempt를 요청하고 있습니다.")
+                notify('현품표 인쇄를 요청하고 있습니다\n코드: print-attempt')
                 requested = self.client.request_phs_label_print(
                     exchange_id,
                     authority_scope_id=scope,
@@ -1595,7 +1590,7 @@ class PHSLabelExchangeCoordinator:
                 ):
                     raise PHSLabelWorkflowError(
                         "PHS_PRINT_REQUEST_ACK_INVALID",
-                        "중앙 REQUESTED print-attempt 증거가 일치하지 않습니다.",
+                        '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: REQUESTED · print-attempt',
                     )
                 state = self._save(
                     state,
@@ -1611,8 +1606,7 @@ class PHSLabelExchangeCoordinator:
             ):
                 raise PHSLabelWorkflowError(
                     "PHS_PRINT_REPRINT_CONFIRMATION_REQUIRED",
-                    "이전 실행이 실제 프린터 제출 중 종료됐습니다. 실물 출력 "
-                    "여부를 확인한 뒤 재출력을 명시적으로 승인하세요.",
+                    '이전 실행이 실제 프린터 제출 중 종료됐습니다.\n실물 출력 여부를 확인한 뒤 재출력을 명시적으로 승인하세요.',
                     retryable=True,
                 )
             if journal_status not in {
@@ -1640,7 +1634,7 @@ class PHSLabelExchangeCoordinator:
                         )
                     except Exception:
                         raise PHSPhysicalPrintError(
-                            "현품표 생성 실패와 중앙 실패 ACK가 모두 복구 대기 중입니다."
+                            '현품표 생성과 실패 확인이 복구 대기 중입니다\n현장 관리자에게 알리세요\n코드: ACK'
                         )
                     failed = self._save(
                         state,
@@ -1651,8 +1645,7 @@ class PHSLabelExchangeCoordinator:
                         failed,
                         success=False,
                         message=(
-                            "현품표 생성에 실패했습니다. 기존 현품표는 ACTIVE로 "
-                            "유지됩니다."
+                            '현품표 생성에 실패했습니다\n기존 현품표를 계속 사용하세요\n코드: ACTIVE'
                         ),
                         error_code="LOCAL_PRINTER_ERROR",
                         retryable=True,
@@ -1689,7 +1682,7 @@ class PHSLabelExchangeCoordinator:
                         )
                     except Exception:
                         raise PHSPhysicalPrintError(
-                            "실제 출력과 중앙 실패 ACK가 모두 복구 대기 중입니다."
+                            '현품표 인쇄와 실패 확인이 복구 대기 중입니다\n현장 관리자에게 알리세요\n코드: ACK'
                         )
                     failed = self._save(
                         state,
@@ -1700,8 +1693,7 @@ class PHSLabelExchangeCoordinator:
                         failed,
                         success=False,
                         message=(
-                            error_message + " 인쇄 대기 · 기존 현품표는 ACTIVE로 "
-                            "유지됩니다."
+                            error_message + ' 인쇄 대기 — 기존 현품표를 계속 사용할 수 있습니다\n코드: ACTIVE'
                         ),
                         error_code="LOCAL_PRINTER_ERROR",
                         retryable=True,
@@ -1716,14 +1708,12 @@ class PHSLabelExchangeCoordinator:
                 except Exception as exc:
                     raise PHSLabelWorkflowError(
                         "PHS_LOCAL_PRINT_JOURNAL_UNCERTAIN",
-                        "실물 출력은 제출됐지만 복구 journal에 spool 증거를 "
-                        "저장하지 못했습니다. 출력물을 확인한 뒤 명시적으로 "
-                        "재출력을 승인해야 합니다.",
+                        '현품표 인쇄 뒤 저장하지 못했습니다\n출력물을 확인한 뒤 재인쇄를 승인하세요\n코드: journal · spool',
                         retryable=True,
                     ) from exc
 
             state = self._save(state, status="PRINT_COMPLETE_PENDING")
-            notify("실제 spool 증거를 중앙 print-attempt에 완료 기록합니다.")
+            notify('현품표 인쇄 완료를 기록합니다\n코드: spool · print-attempt')
             completed = self.client.complete_phs_label_print(
                 str(state.get("print_attempt_id") or ""),
                 authority_scope_id=scope,
@@ -1751,7 +1741,7 @@ class PHSLabelExchangeCoordinator:
             ):
                 raise PHSLabelWorkflowError(
                     "PHS_PRINT_COMPLETE_ACK_INVALID",
-                    "중앙 SUCCEEDED print/READY exchange 증거가 없습니다.",
+                    '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: SUCCEEDED · print/READY · exchange',
                 )
             exchange = completed_exchange
             exchange_state = "READY"
@@ -1768,7 +1758,7 @@ class PHSLabelExchangeCoordinator:
         if exchange_state != "READY":
             raise PHSLabelWorkflowError(
                 "PHS_LABEL_EXCHANGE_NOT_READY",
-                "모든 target의 실제 출력 성공 전에는 활성화할 수 없습니다.",
+                '모든 현품표를 인쇄해야 새 현품표를 사용할 수 있습니다\n코드: target',
             )
         expected_exchange_version = _positive_integer(
             exchange.get("entity_version")
@@ -1780,7 +1770,7 @@ class PHSLabelExchangeCoordinator:
             status="ACTIVATE_PENDING",
             exchange_entity_version=expected_exchange_version,
         )
-        notify("출력 성공 증거를 확인하고 새 현품표를 중앙 ACTIVE로 전환합니다.")
+        notify('인쇄를 확인하고 새 현품표를 사용할 수 있도록 바꿉니다\n코드: ACTIVE')
         try:
             activated = self.client.activate_phs_label_exchange(
                 exchange_id,
@@ -1811,7 +1801,7 @@ class PHSLabelExchangeCoordinator:
         ):
             raise PHSLabelWorkflowError(
                 "PHS_ACTIVATE_ACK_INVALID",
-                "중앙 COMMITTED exchange 증거가 없습니다.",
+                '처리하지 못했습니다\n잠시 후 다시 시도하세요\n자세히: 계속되면 현장 관리자에게 알리세요\n코드: COMMITTED · exchange',
                 retryable=True,
             )
         try:
@@ -1843,10 +1833,7 @@ class PHSLabelExchangeCoordinator:
             committed,
             success=True,
             message=(
-                "현품표 날짜 교환 완료: "
-                f"{target_label.get('business_date')} · "
-                f"{target_label.get('worker_code')} · "
-                "현재 트레이/스캔 진행은 그대로 유지됩니다."
+                f"현품표 날짜 교환 완료: {target_label.get('business_date')} · {target_label.get('worker_code')}\n현재 트레이/스캔 진행은 그대로 유지됩니다"
             ),
         )
 
@@ -1875,7 +1862,7 @@ class PHSLabelExchangeCoordinator:
             ):
                 raise PHSLabelWorkflowError(
                     "PHS_LOCAL_REFRESH_CONFIRMATION_INVALID",
-                    "현품표 local refresh 완료 대상을 확인할 수 없습니다.",
+                    '현품표 교환 완료 상태를 확인하지 못했습니다\n현장 관리자에게 알리세요\n코드: local · refresh',
                     retryable=True,
                 )
             return self._save(state, status="COMMITTED")

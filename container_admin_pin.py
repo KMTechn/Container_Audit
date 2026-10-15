@@ -23,8 +23,7 @@ from writer_session_fence import writer_sink
 
 CONTRACT_VERSION = "admin-pin.v1"
 FAILURE_MESSAGE = (
-    "관리자 확인에 실패했습니다. ID와 PIN을 확인하세요. "
-    "잠긴 경우 최상위 관리자에게 해제를 요청하세요."
+    '관리자 확인에 실패했습니다\nID와 PIN을 확인하세요\n자세히: 계정이 잠겼으면 현장 관리자에게 알리세요.'
 )
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,127}$")
 _ACTIONS = frozenset({"CA.PRECHECK_HOLD", "CA.PAIR_RETRY", "CA.PAIR_HANDOFF", "CA.TRAY_HOLD"})
@@ -43,16 +42,16 @@ def operator_message(code: str) -> str:
     if re.fullmatch(r"HTTP_(403|5[0-9]{2})", code):
         status = code.removeprefix("HTTP_")
         reason = "회사 서버가 요청을 거절했습니다" if status == "403" else "회사 서버 오류"
-        return f"{reason}(코드 {status}). 이 건만 보류하고 다른 작업을 계속하세요."
+        return f'{reason}(코드 {status}).\n이 건만 보류하고 다른 작업을 계속하세요.'
     if code in {"PIN_INVALID", "PIN_FORMAT_INVALID", "PIN_NOT_LINKED", "PROOF_REVOKED"}:
         return FAILURE_MESSAGE
     if code == "TARGET_CHANGED":
-        return "대상 또는 작업자가 바뀌었습니다. 원본을 다시 조회하세요."
+        return '대상 또는 작업자가 바뀌었습니다.\n원본을 다시 조회하세요.'
     if code in {"PIN_BUSY", "PIN_RATE_LIMITED"}:
-        return "관리자 확인이 바쁩니다. 잠시 뒤 다시 확인하세요. 이 건만 보류할 수 있습니다."
+        return '관리자 확인이 바쁩니다. 잠시 후 다시 확인하세요. 이 건만 보류할 수 있습니다.'
     if code == "CENTRAL_ACTION_UNAVAILABLE":
         return "이 관리자 동작만 서버 확인을 사용할 수 없습니다. 이 건만 보류할 수 있습니다."
-    return "관리자 확인 결과를 알 수 없습니다. 이 건만 보류하고 다른 작업을 계속하세요."
+    return '관리자 확인 결과를 알 수 없습니다.\n이 건만 보류하고 다른 작업을 계속하세요.'
 
 
 def fingerprint(value: Mapping[str, Any]) -> str:

@@ -878,6 +878,8 @@ def complete_tray_steps(
         self.show_status_message(f"테스트 트레이 완료!", self.COLOR_SUCCESS)
     else:
         self.work_summary[item_code]['count'] += 1
+        self.work_summary[item_code]['products'] = (
+            self.work_summary[item_code].get('products', 0) + len(self.current_tray.scanned_barcodes))
         if supplement_intent:
             self.work_summary[item_code].setdefault(
                 "shipping_supplement_intents", set()
@@ -915,6 +917,7 @@ def complete_tray_steps(
         completion_snapshot=completion_snapshot,
         post_review_required=post_review_required, post_review_case=post_review_case,
         supplement_intent=supplement_intent,
+        is_partial=is_partial,
     )
     if not is_test and transfer_attempt.local_completion_id:
         yield lambda: self._transfer_seal_runtime().store.mark_scan_completion_projected(transfer_attempt.intent_id)
@@ -923,19 +926,22 @@ def complete_tray_steps(
         self._short_confirmation_undo = {"state": short_undo_state,
             "intent_id": transfer_attempt.intent_id if transfer_attempt.local_completion_id else "",
             "completion_id": completion_event_contract["idempotency_key"]}
-        self.undo_button['state'] = tk.NORMAL
+        self.undo_button['state'] = tk.DISABLED
         supplement_notice = (
             f" · {SHIPPING_SUPPLEMENT_NOTICE}"
             if supplement_intent and supplement_intent not in getattr(self, "_shipping_confirmed_intents", set())
             else ""
         )
-        self.show_status_message(f"부족 {shortage}개로 확정{supplement_notice}", self.COLOR_DANGER, duration=0)
-        self.show_fullscreen_warning(f"부족 {shortage}개로 확정",
-            "다음 현품표 전 취소 카드로 되돌릴 수 있습니다. 계속하려면 다음 현품표를 스캔하세요."
-            + supplement_notice,
-            self.COLOR_DANGER)
-        if getattr(self, "error_sound", None):
-            play_sound(self.error_sound)
+        if (yield lambda: self._settle_short_completion_projection(completion_event_contract["idempotency_key"])):
+            self._short_confirmation_undo = None
+            self._last_partial_submit_result = {"master_label": master_label,
+                "done": int(log_detail["scan_count"]), "short": shortage}
+            self.show_status_message(
+                f"부분 제출 완료 — {log_detail['scan_count']}개({shortage}개 부족){supplement_notice}",
+                self.COLOR_SUCCESS, duration=0)
+            self._schedule_scanonly_transport()
+        else:
+            self.show_status_message("부분 제출 기록 저장을 다시 시도하세요.", self.COLOR_DANGER, duration=0)
     if transfer_attempt.local_completion_id and not is_test and not is_partial and transfer_attempt.status != "ACKED":
         self._schedule_scanonly_transport()
     return True
@@ -974,10 +980,11 @@ def present_completed_tray(
     post_review_required: bool,
     post_review_case: Optional[Dict[str, Any]],
     supplement_intent: str = "",
+    is_partial: bool = False,
 ) -> None:
     """Present the already applied completion using the owner's existing UI."""
     self._last_shipping_supplement_intent = supplement_intent
-    sound = getattr(self, "completion_sound", None)
+    sound = getattr(self, "error_sound" if is_partial else "completion_sound", None)
     if sound is not None:
         try:
             play_sound(sound)

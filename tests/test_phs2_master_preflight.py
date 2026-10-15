@@ -1504,6 +1504,9 @@ def test_compact_phs2_partial_submit_routes_directly_without_confirmation(tmp_pa
     app._transfer_member_exchange_attempt_snapshot={"known":True,"master_label":COMPACT_QR,"attempt":None}
     monkeypatch.setattr("Container_Audit.messagebox.askyesno",lambda *a,**k: pytest.fail("R6: partial confirmation is inline"))
     app.submit_current_tray()
+    assert calls == []
+    assert app._partial_submission_state() is not None
+    assert app._confirm_partial_submission()
     assert calls == [(f"{ITEM}-SERIAL-001",f"{ITEM}-SERIAL-002")]
     assert not any("일부 제출할 수 없습니다" in args[0] for args in app.statuses)
 

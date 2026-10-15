@@ -445,11 +445,9 @@ def test_off_refuses_a_damaged_new_system_label_at_tray_start(flow, label):
 def _submit(app, monkeypatch, *, settle=True):
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *_a, **_k: True)
     app.submit_current_tray()
+    _pump_until(app.root, lambda: app._partial_submission_state() is not None)
+    assert app._confirm_partial_submission()
     _pump_until(app.root, lambda: not app.current_tray.master_label_code)
-    # Completed-history assertions represent the next-label/logout boundary;
-    # explicit HELD tests keep settlement off and inspect local evidence.
-    if settle and getattr(app, "_short_confirmation_undo", None):
-        assert app._commit_short_confirmation()
 
 
 MALFORMED_LABELS = [
@@ -834,7 +832,8 @@ def test_on_partial_submit_of_a_13_digit_tray_is_recorded_as_partial(flow, monke
     app.submit_current_tray()
 
     assert _rows(app, "TRAY_COMPLETE") == []
-    assert app._commit_short_confirmation()
+    assert app._partial_submission_state() is not None
+    assert app._confirm_partial_submission()
     [row] = _rows(app, "TRAY_COMPLETE")
     detail = _details(row)
     assert detail["transfer_seal_status"] == "LEGACY_LOCAL_ONLY"
@@ -1100,14 +1099,14 @@ def test_partial_phs2_tray_is_durable_and_held_with_the_switch_on_or_off(flow, t
     for transition in (False, True):
         app = _phs2_tray(flow, tmp_path / str(transition), transition=transition)
         _submit(app, monkeypatch, settle=False)
-        assert _rows(app, "TRAY_COMPLETE") == []
-        held = json.loads(app._short_projection_path(app._short_confirmation_undo["completion_id"]).read_text(encoding="utf-8"))
-        detail = held["detail"]
+        rows = _rows(app, "TRAY_COMPLETE")
+        assert len(rows) == 1
+        detail = _details(rows[0])
         assert detail["is_partial_submission"] is True
         assert detail["scan_count"] == 1
         assert app.seal_calls == [COMPACT_QR]
         assert _has_seal_intent(app) is True
-        assert app._short_confirmation_undo is not None
+        assert app._short_confirmation_undo is None
         assert app.current_tray.master_label_code == ""
 
 

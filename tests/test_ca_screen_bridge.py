@@ -100,7 +100,7 @@ def test_scan_goes_through_the_existing_door_and_the_list_grows(flow):
     state = processor.state()
     work = state["work"]
     assert (work["count"], work["list_count"], work["list"][0]["st"]) == (1, 1, "new")
-    assert work["result"]["kind"] == "ok" and work["result"]["text"] == "맞음 — 1번째"
+    assert work["result"]["kind"] == "ok" and work["result"]["text"] == "제품 확인 1개"
     assert _schema_errors(state, CONTRACT["state"]) == []
 
 
@@ -141,35 +141,36 @@ def test_admin_pin_replaces_the_modal_once_and_keeps_no_value(flow, monkeypatch)
             seen.append(app._prompt_blocked_work_admin_pin(action="CA.TRAY_HOLD"))
             ca.messagebox.showinfo("보류", "보류했습니다 — 다른 현품표 작업을 계속하세요")
 
-        monkeypatch.setattr(screen, "operations_menu", lambda _app: {"defer_unsettled": (True, action)})
+        monkeypatch.setattr(screen, "operations_menu", lambda _app: {"list_paired": (True, action)})
         pin = "".join(random.choice("0123456789") for _ in range(6))
-        reply = processor.admin("defer_unsettled", {"admin_id": "opcheck", "pin": pin})
+        reply = processor.admin("list_paired", {"admin_id": "opcheck", "pin": pin})
         handed = seen[0] == ("opcheck", pin)
         assert handed and seen[1] is None, "PIN 은 그 동작에 한 번만 넘어감"
         assert reply["ok"] is False and reply["result"]["text"].startswith("관리자 확인이 다시 필요합니다")
         leaked = pin in json.dumps(processor.state(), ensure_ascii=False) or pin in json.dumps(reply, ensure_ascii=False)
         assert not leaked, "state · 답에 PIN 이 남음"
-        assert processor.admin("defer_unsettled", {"admin_id": "opcheck", "pin": "12"})["ok"] is False
+        assert processor.admin("list_paired", {"admin_id": "opcheck", "pin": "12"})["ok"] is False
         assert processor.admin("view_sync", {"admin_id": "opcheck", "pin": pin})["ok"] is False  # PIN 없는 보기 판은 admin 아님
     finally:
         processor.shutdown()
     assert ca.messagebox is not processor.dialogs  # 닫으면 모듈 이름이 돌아옴
 
 
-def test_resend_completion_requires_the_existing_supervisor_login(flow, monkeypatch):
+def test_resend_completion_is_a_worker_action_without_pin(flow, monkeypatch):
     app = _app(flow)
     app.worker_role = "WORKER"
     app._authenticated_protected_admin = False
     processor = CaProcessor(app)
     called = []
-    monkeypatch.setattr(screen, "operations_menu", lambda _app: {"resend_completion": (True, lambda: called.append(True))})
-
+    def resend():
+        called.append("same-command")
+        return True
+    monkeypatch.setattr(screen, "operations_menu", lambda _app: {"resend_completion": (True, resend)})
     item = next(item for item in processor.state()["admin_menu"] if item["name"] == "resend_completion")
-    assert item["enabled"] is False
-    assert processor.command("resend_completion") == {
-        "ok": False, "result": {"kind": "warn", "text": "관리자로 로그인해야 다시 보낼 수 있습니다"},
-    }
-    assert called == []
+    assert item["enabled"] is True and item["pin"] is False
+    assert processor.command("resend_completion")["ok"]
+    assert called == ["same-command"]
+    assert processor._credentials is None
 
 
 @pytest.mark.parametrize("role, protected", [("ADMIN", False), ("WORKER", True)])
@@ -324,7 +325,7 @@ def test_held_pane_today_comes_from_the_same_summary_as_tk(flow):
     assert state["view"] == "held" and _schema_errors(state, CONTRACT["state"]) == []
     today = state["today"]
     assert today["total_trays"] == 5 and today["supply"] == 1  # 보충 = 의도 − 확인된 것(지금 「금일 작업 현황」 셈과 같음)
-    assert today["rows"] == [{"item": "시험 품목 · RHD", "trays": 3}, {"item": "다른 품목", "trays": 2}]
+    assert today["rows"] == [{"item": "시험 품목 · RHD", "trays": 3, 'products': 0}, {"item": "다른 품목", "trays": 2, 'products': 0}]
     assert processor.command("close", {}) == {"ok": True} and processor.state()["view"] == "work"
 
 

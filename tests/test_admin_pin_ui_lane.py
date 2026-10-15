@@ -30,6 +30,13 @@ def recovery(monkeypatch, tmp_path):
     hold = app._preflight_hold_store()
     hold.mark_failed(error_code="PHS2_PREFLIGHT_LOCAL_ERROR")
     app._preflight_hold_snapshot = hold.load()
+    # Exercise the PIN protocol independently of the C02 worker classification.
+    # Actual PIN-free dispatch is covered by test_ca_m124_permissions.
+    approval_steps = app._admin_pin_approval_steps
+    def pin_required_steps(*args, **kwargs):
+        kwargs["worker_operation"] = ""
+        return approval_steps(*args, **kwargs)
+    app._admin_pin_approval_steps = pin_required_steps
     root = PinRoot()
     app.root = root
     ui = []
@@ -160,7 +167,7 @@ def test_pin_http_allows_after_duplicate_is_single_and_closed_window_keeps_durab
     else:
         expected = ("관리자 확인 다시 필요" if action == "recheck"
                     else "사전조회 보류 묶음을 복원 가능한 목록으로 옮겼습니다.")
-        assert any(expected in str(args) for _, args in case.ui)
+        assert any(expected in chr(10).join(map(str, args)) for _, args in case.ui)
 
 
 @pytest.mark.parametrize("action", ("recheck", "hold"))
@@ -201,7 +208,7 @@ def test_pin_remote_error_keeps_existing_notice_and_releases_pending(recovery, a
     settle(case, expect_writes=action == "hold")
     if action == "recheck":
         assert case.app._admin_pin_store().read(intent["operation_key"])["state"] == "PREPARED"
-    assert any(pin.operator_message("PIN_LOCKED") in str(args) for _, args in case.ui)
+    assert any(pin.operator_message("PIN_LOCKED") in chr(10).join(map(str, args)) for _, args in case.ui)
     assert case.original.exists()
 
 
@@ -250,7 +257,7 @@ def test_empty_verification_result_keeps_original_and_existing_fallback(recovery
     settle(case, expect_writes=action == "hold")
     assert case.original.exists()
     assert len([args for kind, args in case.ui if kind == "showwarning"
-                and pin.operator_message("VERIFY_UNAVAILABLE") in str(args)]) == 1
+                and pin.operator_message("VERIFY_UNAVAILABLE") in chr(10).join(map(str, args))]) == 1
     assert not case.server.calls
 
 

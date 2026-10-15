@@ -192,6 +192,29 @@ def test_worker_ui_literals_and_direct_diagnostics_exclude_internal_terms():
     }
     literal_violations = []
     diagnostic_violations = []
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+
+    def is_curated_generation_message(node):
+        parent = parents.get(node)
+        if not isinstance(parent, ast.Attribute) or parent.attr != "user_message":
+            return False
+        while parent in parents:
+            parent = parents[parent]
+            if isinstance(parent, ast.ExceptHandler):
+                return (parent.name == node.id and isinstance(parent.type, ast.Name)
+                        and parent.type.id == "DataGenerationBlocked")
+        return False
+
+    def displayed_literals(node):
+        # A conditional's diagnostic-code comparison is not displayed text.
+        if isinstance(node, ast.IfExp):
+            yield from displayed_literals(node.body)
+            yield from displayed_literals(node.orelse)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            yield node.value
+        else:
+            for child in ast.iter_child_nodes(node):
+                yield from displayed_literals(child)
 
     class Visitor(ast.NodeVisitor):
         def __init__(self):
@@ -208,7 +231,7 @@ def test_worker_ui_literals_and_direct_diagnostics_exclude_internal_terms():
             if method not in ui_methods:
                 self.generic_visit(node)
                 return
-            segment = ast.get_source_segment(source, node) or ""
+            segment = "\n".join(displayed_literals(node))
             lowered = segment.casefold()
             for term in FORBIDDEN_WORKER_TERMS:
                 if term.casefold() in lowered:
@@ -219,7 +242,7 @@ def test_worker_ui_literals_and_direct_diagnostics_exclude_internal_terms():
                 for child in ast.walk(node):
                     if isinstance(child, ast.Name) and (
                         child.id in {"e", "exc", "error", "quarantine_error"}
-                    ):
+                    ) and not is_curated_generation_message(child):
                         diagnostic_violations.append((node.lineno, child.id))
                     if (
                         isinstance(child, ast.Attribute)

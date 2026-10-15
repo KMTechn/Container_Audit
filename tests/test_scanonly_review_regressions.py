@@ -69,7 +69,16 @@ def test_waiting_undo_button_restores_the_last_field_action(flow, windows, tmp_p
     real_notice(app)
     if action == 'short':
         public_scan(app, COMPACT_QR)
-        assert app._short_confirmation_undo is not None
+        assert app._partial_submission_state() is not None
+        assert app._continue_partial_submission()
+        ca.ContainerAudit._update_action_button_states(app)
+        assert app.undo_button["state"] == ca.tk.NORMAL
+        app.undo_button.invoke()
+        _pump_until(app.root, lambda: not app._ui_task_lane().is_busy())
+        assert app.current_tray.master_label_code == COMPACT_QR
+        assert app.current_tray.scanned_barcodes == []
+        assert windows == []
+        return
     else:
         assert app.park_current_tray() is True
         assert Path(app._parked_tray_undo['path']).is_file()
@@ -92,15 +101,17 @@ def test_public_scanner_continues_after_short_notice(flow, windows, following):
     public_scan(app, ITEM + '-SERIAL-001')
     real_notice(app)
     public_scan(app, COMPACT_QR)
-    assert app._short_confirmation_undo is not None
-    assert app._warning_state_presenter().state.is_blocking
+    assert app._partial_submission_state() is not None
+    public_scan(app, "")
+    assert app._short_confirmation_undo is None
+    assert not app.current_tray.master_label_code
     _pump_until(app.root, lambda: not app._ui_task_lane().is_busy())
     app.scan_entry = ScannerEntry('KMCMD:UNDO' if following == 'undo' else OTHER_LABEL + '|QT=1')
     app.process_barcode()
     _pump_until(app.root, lambda: not getattr(app, '_scan_callback_pending', False)
                 and not app._ui_task_lane().is_busy())
     if following == 'undo':
-        assert app.current_tray.master_label_code == COMPACT_QR, str(app.statuses[-3:])
+        assert not app.current_tray.master_label_code
     else:
         assert app.current_tray.master_label_code == OTHER_LABEL + '|QT=1', str(app.statuses[-3:])
     assert windows == []
@@ -336,12 +347,14 @@ def test_exchange_audit_replays_after_local_completion(flow, windows, monkeypatc
     assert app.current_tray.scanned_barcodes == [new]
     if completion_kind == 'short':
         public_scan(app, COMPACT_QR)
-        assert app._short_confirmation_undo is not None
+        assert app._partial_submission_state() is not None
+        public_scan(app, "")
+        assert app._short_confirmation_undo is None
     else:
         for number in (2, 3):
             public_scan(app, ITEM + f'-SERIAL-{number:03d}')
     _pump_until(app.root, lambda: not app._ui_task_lane().is_busy())
-    assert len(_rows(app, 'TRAY_COMPLETE')) == (0 if completion_kind == 'short' else 1)
+    assert len(_rows(app, 'TRAY_COMPLETE')) == 1
     assert app.current_tray.master_label_code == ''
     original_log_path, original_worker = app.log_file_path, app.worker_name
     if log_rotated:
