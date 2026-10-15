@@ -843,3 +843,7 @@ Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRIT
 ### 늦은 outer catch 의 정리 관문 기본 거절(첫 업데이트)
 
 v2.0.109 검토(sub-109 P2-1)에서 본 드문 길이다. 후보 관문 앞에서 실패하면(예: INSTALL_CANONICAL_PORTABLE.ps1 의 inventory sync 예외) outer catch 의 정리 관문이 아직 없는 변수를 false 로 읽어 통과하고, 남의 relay stop 표지를 지울 수 있다. bootstrap_integrity.ps1 의 persistent compensation 도 같은 꼴이다. relay 정지는 일어나지 않고 PID 는 보존된다. 고치는 꼴은 정리 허용을 기본 거절로 두고 cleanup 때 다시 확인하는 것이며, 회귀는 sync·protection·integrity 실패를 주입한다. v2.0.109 에는 넣지 않았다(드문 길·자료 손 0).
+
+### 공용 PowerShell 사본의 BOM(첫 업데이트)
+
+kmtech_shared/powershell/portable.ps1 과 ps51_module_prologue.ps1 은 non-ASCII 글자가 있는데 UTF-8 BOM 이 없다(v2.0.108 부터 같은 바이트). 한국어 PS5.1(CP949)에서 읽힐 때를 막으려면 첫 업데이트에서 BOM 을 넣고, 공용 사본 핀과 선언을 같이 갱신한다. 포장 v2.0.107 검토(sub-112 N1)에서 같은 꼴을 고쳤다.
