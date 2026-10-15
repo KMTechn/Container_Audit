@@ -806,14 +806,10 @@ def main(argv: list[str] | None = None) -> int:
     # the update gate like Label_Match; every other mode stays gated.
     gated = "--request-app-stop" not in selected_arguments
     if gated:
-        # Parse only the code-root selector here: bootstrap/trial arguments still
-        # belong to startup_gate before the full resident parser sees them.
-        selector = argparse.ArgumentParser(add_help=False)
-        selector.add_argument("--app-root", default="")
-        selected_root, _ = selector.parse_known_args(selected_arguments)
-        pre_gate_root = Path(selected_root.app_root or (
-            Path(sys.executable).parent if getattr(sys, "frozen", False)
-            else Path(__file__).resolve().parent)).expanduser().resolve()
+        # Admit the executing code identity before reading caller root overrides.
+        # The full parser and requested-root check still follow startup_gate.
+        pre_gate_root = (Path(sys.executable).parent if getattr(sys, "frozen", False)
+                         else Path(__file__).resolve().parent).resolve()
         if not _resident_worker_admitted(pre_gate_root):
             return 1
         gate_result = startup_gate(Path(__file__).resolve().parent, [USER_RELAY_MODE, *selected_arguments], role="relay")

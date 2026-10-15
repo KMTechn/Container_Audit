@@ -9379,7 +9379,7 @@
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 923,
+          "line": 919,
           "operation": "path.mkdir",
           "writer_admission_sources": [
             "persistent_relay_status"
@@ -9388,7 +9388,7 @@
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 924,
+          "line": 920,
           "operation": "path.mkdir",
           "writer_admission_sources": [
             "persistent_relay_status"
@@ -9995,7 +9995,7 @@
       "argument_ast_sha256": "c1eed8eb9116f4c6c08f59df6c9e52f9df16e0befeda2b2646e2c7453ebbebc3",
       "caller": "user_relay.main",
       "classification": "writer_admission",
-      "line": 923,
+      "line": 919,
       "probe_only": true,
       "report_only": false,
       "source": "persistent_relay_status",
@@ -10007,7 +10007,7 @@
       "argument_ast_sha256": "773e572279ed42d5919b32486aa595bd2d6024a711e73dfc863581f28ecbda6a",
       "caller": "user_relay.main",
       "classification": "writer_admission",
-      "line": 924,
+      "line": 920,
       "probe_only": true,
       "report_only": false,
       "source": "persistent_relay_status",
@@ -10799,7 +10799,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "193ab41517eae3b1b380d6e73b6952473e0560998902f31fad73d2fb3bd65914",
+  "inventory_sha256": "c07cbdd415ef90092ebf1c3b927c2b0a4555b78018d976d9164641690d64a70a",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",

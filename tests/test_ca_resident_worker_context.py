@@ -65,3 +65,18 @@ def test_remote_stop_dispatch_keeps_administrator_exception(monkeypatch):
     args = ['--request-app-stop', '--data-root', 'isolated-data', '--direct-sync-root', 'isolated-relay']
     assert product_host.dispatch_product_mode([product_host.USER_RELAY_MODE, *args]) == 0
     assert called == [args]
+
+
+def test_resident_cannot_bypass_installed_context_with_an_unmanaged_root(monkeypatch, installed_worker, tmp_path, capsys):
+    trusted = Path(user_relay.__file__).resolve().parent
+    alternate = tmp_path / "unmanaged-root"
+    monkeypatch.setattr(auto_update, "installation_root", lambda root:
+                        installed_worker.parent if Path(root).resolve() == trusted else None)
+    monkeypatch.setattr(onboarding, "_current_process_session_id", lambda: 0)
+    def forbidden(*args, **kwargs):
+        pytest.fail("unmanaged root bypassed executing-code admission")
+    monkeypatch.setattr(auto_update, "startup_gate", forbidden)
+    monkeypatch.setattr(user_relay, "build_container_audit_storage_paths", forbidden)
+    assert product_host.dispatch_product_mode([
+        product_host.USER_RELAY_MODE, "--app-root", str(alternate), "--once"]) == 1
+    assert json.loads(capsys.readouterr().out)["reason_code"] == "WORKER_INTERACTIVE_SESSION_REQUIRED"
