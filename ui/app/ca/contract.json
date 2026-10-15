@@ -356,7 +356,8 @@
          "type": "string"
         },
         "code": {
-         "type": "string"
+         "type": "string",
+                  "description": "원문 전체 코드. 웹이 칸 너비에 따라 줄이며 옛 다리의 표시값도 그대로 받는다."
         },
         "at": {
          "type": "string"
@@ -467,7 +468,8 @@
        }
       },
       "additionalProperties": false
-     }
+     },
+          "exchange": {"type": "object", "additionalProperties": false, "required": ["phase", "remove", "insert"], "properties": {"phase": {"enum": ["remove", "insert", "done"]}, "remove": {"type": "object", "additionalProperties": false, "required": ["code"], "properties": {"code": {"type": ["string", "null"]}}}, "insert": {"type": "object", "additionalProperties": false, "required": ["code"], "properties": {"code": {"type": ["string", "null"]}}}}}
     },
     "additionalProperties": false
    },
@@ -651,7 +653,8 @@
       },
       "command": {
        "type": "string"
-      }
+      },
+            "pin": {"type": "boolean"}
      },
      "additionalProperties": false
     },
@@ -1154,7 +1157,8 @@
    "events_dropped": {
     "type": "integer",
     "minimum": 0
-   }
+   },
+      "confirm": {"type": ["object", "null"], "additionalProperties": false, "required": ["kind", "total", "done", "short"], "properties": {"kind": {"const": "partial_submit"}, "total": {"type": "integer", "minimum": 0}, "done": {"type": "integer", "minimum": 0}, "short": {"type": "integer", "minimum": 0}}}
   },
   "additionalProperties": false
  },
@@ -1264,7 +1268,15 @@
    "close_app": {
     "args": {},
     "does": "창 닫기 — on_closing CA:16900(저장 중이면 미룸)"
-   }
+   },
+      "partial_submit": {"args": {}, "does": "부분 제출 확정(즉시 release)"},
+      "partial_continue": {"args": {}, "does": "부분 제출 확인만 닫고 계속 작업"},
+      "quarantine_hold": {"args": {}, "does": "같은 이름의 기존 동작. pin:false 작업자 시트에서 기존 대상과 입력을 보존하여 PIN 없이 호출한다. 관리자 효과는 기존 관리자 경로를 유지한다."},
+      "pair_hold": {"args": {}, "does": "같은 이름의 기존 동작. pin:false 작업자 시트에서 기존 대상과 입력을 보존하여 PIN 없이 호출한다. 관리자 효과는 기존 관리자 경로를 유지한다."},
+      "preserve_check": {"args": {}, "does": "같은 이름의 기존 동작. pin:false 작업자 시트에서 기존 대상과 입력을 보존하여 PIN 없이 호출한다. 관리자 효과는 기존 관리자 경로를 유지한다."},
+      "defer_unsettled": {"args": {}, "does": "같은 이름의 기존 동작. pin:false 작업자 시트에서 기존 대상과 입력을 보존하여 PIN 없이 호출한다. 관리자 효과는 기존 관리자 경로를 유지한다."},
+      "list_paired": {"args": {}, "does": "같은 이름의 기존 동작. pin:false 작업자 시트에서 기존 대상과 입력을 보존하여 PIN 없이 호출한다. 관리자 효과는 기존 관리자 경로를 유지한다."},
+      "recheck_review": {"args": {}, "does": "같은 이름의 기존 동작. pin:false 작업자 시트에서 기존 대상과 입력을 보존하여 PIN 없이 호출한다. 관리자 효과는 기존 관리자 경로를 유지한다."}
   },
   "admin": {
    "quarantine_hold": {
