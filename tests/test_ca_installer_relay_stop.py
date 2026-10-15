@@ -42,14 +42,17 @@ function Get-BootstrapStringSha256($text){
 }
 function Invoke-InstallationEvidenceChild($name,$exe,$arguments){
  if($script:events.Count -ne 1 -or $script:events[0].event -cne 'INSTALLER_RELAY_PREIMAGE'){throw 'preimage order differs'}
- if($arguments[0] -cne '-I' -or $arguments[1] -cne '-B' -or $arguments[2] -cne '-c' -or $arguments[-1] -cne 'X:\state'){throw 'stop command differs'}
+ if($arguments[0] -cne '-I' -or $arguments[1] -cne '-B' -or $arguments[2] -cne '-c' -or $arguments[-1] -cne $script:state){throw 'stop command differs'}
  $script:called++
  return [pscustomobject]@{ExitCode=if($env:CA_STOP_CASE -eq 'stop_failed'){4}else{0};EvidenceFailure=$null;Stdout='installer_relay_stop=ABSENT'}
 }
 function Relays {return @()}
-$rows=if($env:CA_STOP_CASE -eq 'absent'){@()}else{@($expected)}
+$rows=@();if($env:CA_STOP_CASE -ne 'absent'){$rows=@($expected)}
+$script:state=Join-Path $env:CA_CONTRACT_ROOT 'state'
+$code=Join-Path $env:CA_CONTRACT_ROOT 'packet'
+$current=Join-Path $env:CA_CONTRACT_ROOT 'current'
 $refused=$false;$proof=$null
-try{$proof=Stop-CanonicalInstallerRelayPreimage $rows 'X:\state' 'X:\packet' 'X:\current' $script:caller.sid @{exists=$true}}catch{$refused=$true}
+try{$proof=Stop-CanonicalInstallerRelayPreimage $rows $script:state $code $current $script:caller.sid @{exists=$true}}catch{$refused=$true}
 if($env:CA_STOP_CASE -in @('normal','absent')){
  if($refused -or $proof.status -cne 'ABSENT'){throw 'ordinary stop failed'}
  if($script:called -ne [int]($env:CA_STOP_CASE -eq 'normal')){throw 'stop count differs'}
