@@ -469,6 +469,7 @@ def test_real_feed_floor_builder_integrity_and_runtime(tmp_path, metadata_build,
     result = run_functions(tmp_path, Path(onboarding.__file__).resolve().parent / "tools/bootstrap_integrity.ps1", [
         "Get-StrictFullPath", "Get-RelativeCodePath", "Get-FileSha256", "Get-CodeInventory",
         "Get-InventoryAggregate", "Protect-InstallationText", "Assert-InstallationMachineMetadataNoSecrets",
+        "Invoke-ContainerAtomicReplaceOnce", "Invoke-ContainerAtomicReplace",
         "Write-Utf8Json", "Write-BootstrapIntegrityRecord"], f"""
 $BootstrapIntegritySchema='container-audit-bootstrap-integrity-v1'
 $BootstrapIntegrityFileName='bootstrap-integrity.json'
