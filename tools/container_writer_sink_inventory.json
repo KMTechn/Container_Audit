@@ -375,11 +375,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 5503,
+      "line": 5499,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 5507,
+          "line": 5503,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -10796,7 +10796,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "01d42aa679dd74c4ef5706679d8d5eb1429dd6c0685eebf07a8f7b642f470a2d",
+  "inventory_sha256": "06b97d1388893be08d2d95d5e07e5c1c6ec596e8bdbab6bba06b8f790290c515",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -24488,7 +24488,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 23308,
+      "line": 23301,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -24496,7 +24496,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 5503,
+      "line": 5499,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },

@@ -4902,10 +4902,6 @@ class ContainerAudit:
         operator_review = self._operator_review_state_payload()
         if operator_review is not None:
             state[OPERATOR_REVIEW_STATE_KEY] = operator_review
-        last_activity_time = getattr(self, "last_activity_time", None)
-        if getattr(self, "is_idle", False) and last_activity_time:
-            idle_duration = max(0.0, (datetime.datetime.now() - last_activity_time).total_seconds())
-            state["total_idle_seconds"] = float(state.get("total_idle_seconds") or 0.0) + idle_duration
         return state
 
     def _load_current_tray_state(self, *, _recovery_choice="pending"):
@@ -16453,11 +16449,8 @@ class ContainerAudit:
             self._start_idle_checker(activity_time=activity_time)
             return
         self.is_idle = False
-        activity_time = activity_time or datetime.datetime.now()
         if self.last_activity_time:
-            idle_duration = (activity_time - self.last_activity_time).total_seconds()
-            self.current_tray.total_idle_seconds += idle_duration
-            yield lambda: self._log_event('IDLE_END', detail={'duration_sec': f"{idle_duration:.2f}"})
+            yield lambda: self._log_event('IDLE_END')
             yield self._current_tray_save_operation()
         self._set_idle_style(is_idle=False)
         self._start_idle_checker()

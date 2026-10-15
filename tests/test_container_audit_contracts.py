@@ -4271,7 +4271,7 @@ def test_close_save_restore_then_auto_complete_marks_restored_session(tmp_path, 
     assert app.ui_reset is True
 
 
-def test_current_tray_state_save_includes_active_idle_duration(tmp_path):
+def test_current_tray_state_save_keeps_personal_timing_neutral(tmp_path):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.save_folder = str(tmp_path)
@@ -4290,7 +4290,7 @@ def test_current_tray_state_save_includes_active_idle_duration(tmp_path):
     assert app._save_current_tray_state() is True
 
     saved_state = json.loads((tmp_path / "current.json").read_text(encoding="utf-8"))
-    assert 595.0 <= saved_state["total_idle_seconds"] <= 615.0
+    assert saved_state["total_idle_seconds"] == saved_state["stopwatch_seconds"] == 0.0
     assert app.current_tray.total_idle_seconds == 5.0
 
 
@@ -5375,7 +5375,7 @@ def test_wakeup_from_waiting_idle_does_not_log_idle_end():
     assert app.started_idle_checker == [{"activity_time": activity_time}]
 
 
-def test_wakeup_from_active_idle_records_previous_idle_duration():
+def test_wakeup_from_active_idle_omits_personal_duration():
     app = _headless_app()
     app.worker_name = "fixture worker"
     app.is_idle = True
@@ -5396,12 +5396,13 @@ def test_wakeup_from_active_idle_records_previous_idle_duration():
     app._update_stopwatch = lambda: setattr(app, "stopwatch_updated", True)
     app.show_status_message = lambda *args, **kwargs: app.status_messages.append((args, kwargs))
 
+    previous_idle_seconds = app.current_tray.total_idle_seconds
     app._wakeup_from_idle(activity_time=datetime.datetime(2026, 6, 22, 9, 0, 30))
 
     assert app.is_idle is False
-    assert app.current_tray.total_idle_seconds == 35.0
+    assert app.current_tray.total_idle_seconds == previous_idle_seconds
     assert app.logged[0][0][0] == "IDLE_END"
-    assert app.logged[0][1]["detail"]["duration_sec"] == "30.00"
+    assert "duration_sec" not in app.logged[0][1].get("detail", {})
     assert app.saved is True
     assert app.styles == [False]
     assert app.stopwatch_updated is True
@@ -8235,7 +8236,7 @@ def test_park_current_tray_logs_identifying_detail(tmp_path):
     assert app._left_sidebar_view == "parked"
 
 
-def test_park_current_tray_snapshot_includes_live_idle_duration(tmp_path):
+def test_park_current_tray_snapshot_keeps_personal_timing_neutral(tmp_path):
     app = _headless_app()
     app.save_folder = str(tmp_path)
     app.log_file_path = str(tmp_path / "events.csv")
@@ -8266,7 +8267,7 @@ def test_park_current_tray_snapshot_includes_live_idle_duration(tmp_path):
     parked_files = list((tmp_path / "parked").glob("parked_*.json"))
     assert len(parked_files) == 1
     parked_state = json.loads(parked_files[0].read_text(encoding="utf-8"))
-    assert 595.0 <= parked_state["total_idle_seconds"] <= 615.0
+    assert parked_state["total_idle_seconds"] == parked_state["stopwatch_seconds"] == 0.0
 
 
 def test_park_current_tray_does_not_overwrite_existing_qr_parked_file(tmp_path, monkeypatch, capsys):
