@@ -24,8 +24,7 @@ def _write_packet(root, source_root, build="a" * 40):
     result = run_functions(root.parent, source_root / "tools/bootstrap_integrity.ps1", [
         "Get-StrictFullPath", "Get-RelativeCodePath", "Get-FileSha256", "Get-CodeInventory",
         "Get-InventoryAggregate", "Protect-InstallationText",
-        "Assert-InstallationMachineMetadataNoSecrets", "Write-Utf8Json", "Write-BootstrapIntegrityRecord",
-    ], f"""
+        "Assert-InstallationMachineMetadataNoSecrets", "Write-Utf8Json", "Write-BootstrapIntegrityRecord", "Invoke-ContainerAtomicReplaceOnce", "Invoke-ContainerAtomicReplace"], f"""
 $BootstrapIntegritySchema='container-audit-bootstrap-integrity-v1'
 $BootstrapIntegrityFileName='bootstrap-integrity.json'
 [void](Write-BootstrapIntegrityRecord -Root '{literal}' -CodeRootIdentity '.')

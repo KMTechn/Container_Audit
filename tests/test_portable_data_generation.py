@@ -95,8 +95,7 @@ def signed_packet(tmp_path, monkeypatch, signed_proof):
             "Get-StrictFullPath", "Get-RelativeCodePath", "Get-FileSha256", "Get-CodeInventory",
             "Get-InventoryAggregate", "Protect-InstallationText",
             "Assert-InstallationMachineMetadataNoSecrets", "Write-Utf8Json",
-            "Write-BootstrapIntegrityRecord",
-        ], f"""
+            "Write-BootstrapIntegrityRecord", "Invoke-ContainerAtomicReplaceOnce", "Invoke-ContainerAtomicReplace"], f"""
 $BootstrapIntegritySchema='container-audit-bootstrap-integrity-v1'
 $BootstrapIntegrityFileName='bootstrap-integrity.json'
 [void](Write-BootstrapIntegrityRecord -Root '{literal}' -CodeRootIdentity '.')
@@ -190,7 +189,7 @@ def test_python_packet_generation_identity(tmp_path, monkeypatch):
         ["Get-StrictFullPath", "Get-RelativeCodePath", "Get-FileSha256", "Get-CodeInventory",
          "Get-InventoryAggregate", "Protect-InstallationText",
          "Assert-InstallationMachineMetadataNoSecrets", "Write-Utf8Json",
-         "Write-BootstrapIntegrityRecord"], f"""
+         "Write-BootstrapIntegrityRecord", "Invoke-ContainerAtomicReplaceOnce", "Invoke-ContainerAtomicReplace"], f"""
 $BootstrapIntegritySchema='container-audit-bootstrap-integrity-v1'
 $BootstrapIntegrityFileName='bootstrap-integrity.json'
 [void](Write-BootstrapIntegrityRecord -Root '{literal}' -CodeRootIdentity '.')

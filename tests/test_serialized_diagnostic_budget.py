@@ -91,7 +91,7 @@ $value=$parsed.failure.exception_chain[0].message
 if(-not $value.StartsWith('FIRST-CONTEXT') -or -not $value.EndsWith('LAST-CONTEXT')){throw 'head or tail missing'}
 'PASS'
 """ % POWERSHELL_INPUTS[name]
-    result = run_functions(tmp_path, ROOT / 'tools/bootstrap_integrity.ps1', FUNCTIONS, script, engine=engine)
+    result = run_functions(tmp_path, ROOT / 'tools/bootstrap_integrity.ps1', [*FUNCTIONS, "Invoke-ContainerAtomicReplaceOnce", "Invoke-ContainerAtomicReplace"], script, engine=engine)
     assert result.returncode == 0, result.stderr
 
 
