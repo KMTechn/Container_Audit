@@ -1190,11 +1190,11 @@
       ],
       "file": "ca_screen_bridge.py",
       "kind": "function",
-      "line": 1175,
+      "line": 1181,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 1181,
+          "line": 1187,
           "operation": "path.open",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -6384,8 +6384,6 @@
         "Container_Audit.ContainerAudit._save_tray_state_snapshot_admitted",
         "Container_Audit.ContainerAudit._save_work_session_state",
         "Container_Audit.ContainerAudit._settle_short_completion_projection",
-        "Container_Audit.ContainerAudit._undo_short_confirmation.steps",
-        "Container_Audit.ContainerAudit._undo_short_confirmation.steps.cancel_projection",
         "Container_Audit.ContainerAudit.save_settings",
         "best_time_records.BestTimeRecordStore.save",
         "container_admin_pin.AdminPinIntentStore.write",
@@ -10798,7 +10796,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "68e140896d34c14a94e48ee23f665a23208fc0f4099b0292583e9e8fed0a11e3",
+  "inventory_sha256": "8da08d6e7d2466abb01f05a13ab6736c6686a35f8c40e97a3dc889e310e32ea2",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -24490,7 +24488,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 23195,
+      "line": 23174,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -25402,7 +25400,7 @@
       "direct_mutation_site_count": 1,
       "file": "ca_screen_bridge.py",
       "function": "ca_screen_bridge._write_screen_startup_record",
-      "line": 1175,
+      "line": 1181,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },

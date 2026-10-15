@@ -29,6 +29,7 @@ LIST_LIMIT = 200
 
 # ── 새 화면 낱말 ─────────────────────────────────────────────
 CHOICE_IDS = {
+    "부분 제출": "partial_submit", "계속 작업": "partial_continue",
     "작업자 변경": "change_worker", "작업 계속": "continue", "이어서 작업": "resume", "보류하고 새 작업": "park_new",
     "로그인 화면": "pick_worker", "원본 보존": "preserve", "실물 확인 후 재출력": "f8_reprint",
     "보류하고 이어서 작업": "park_resume", "현재 작업 유지": "keep_current", "꺼냈습니다": "cofill_overflow_ack",
@@ -178,14 +179,6 @@ def _alerts(app: Any, presenter_state: Any, notes: List[Dict[str, Any]], now: da
             band["choices"] = [{"id": "ack", "text": "확인", "go": "command:ack", "default": True}]
             band["tail"] = "빈 Enter · Esc = 확인"
         alerts.append(band)
-    undo = _attr(app, "_short_confirmation_undo")
-    if undo:
-        try:
-            left = int(app._short_confirmation_remaining(undo.get("contract") or undo))
-        except Exception:
-            left = 0
-        alerts.append({"kind": "strong", "text": '수량 부족 — 부분 제출하시겠습니까?\n[부분 제출] [계속 작업]',
-                       "tail": f"{left}초 남음"})
     if _attr(app, "is_idle"):
         alerts.append({"kind": "quiet", "text": "휴식 상태 — 스캔하면 작업을 다시 시작합니다", "tail": "7분 넘게 스캔 없음"})
     try:
@@ -293,6 +286,15 @@ def _exchange(app: Any, master_label: Optional[str]) -> Optional[Dict[str, Any]]
 
 
 def _result(app: Any, presenter_state: Any, tray: Any, count: int, last_sound: Optional[str]) -> Dict[str, Any]:
+    partial = _attr(app, "_last_partial_submit_result")
+    completion = presenter_state.completion
+    notice = presenter_state.active_notice
+    if (partial and completion and completion.master_label == partial["master_label"]
+            and not _attr(tray, "master_label_code") and not (notice and notice.blocking)):
+        supplement = _attr(app, "_last_shipping_supplement_intent", "")
+        pending = supplement and supplement not in (_attr(app, "_shipping_confirmed_intents", set()) or set())
+        return {"kind": "warn" if pending else "ok", "text": f"부분 제출 완료 — {partial['done']}개({partial['short']}개 부족)",
+                **({"sub": "출고 전 관리자 보충 필요"} if pending else {})}
     notice = presenter_state.active_notice
     sound = _sound_text(app, last_sound)
     out: Dict[str, Any]
@@ -510,6 +512,7 @@ def present_ca(app: Any, *, view: Optional[str] = None, menu: Optional[Dict[str,
                         and (name != "resend_completion" or app._is_preflight_hold_supervisor()),
                         "facts": admin_facts(app, name), "pin": name in ADMIN_PIN} for name in ADMIN_MENU],
         "sheet": sheet,
+        "confirm": app._partial_submission_state(),
     }
     state.update(extra or {})
     return state
@@ -523,14 +526,13 @@ def fingerprint(app: Any, view: Optional[str], notes: List[Dict[str, Any]], shee
     parts = (
         _attr(tray, "master_label_code"), len(_attr(tray, "scanned_barcodes") or []), _attr(tray, "tray_size"),
         repr(presenter_state), _attr(app, "_inline_exchange_mode"), _attr(app, "_last_inline_exchange"),
-        bool(_attr(app, "_short_confirmation_undo")),
+        bool(_attr(app, "_short_confirmation_undo")), app._partial_submission_state(),
         bool(_attr(app, "_master_preflight_pending")), bool(_attr(app, "is_idle")), bool(_attr(app, "_warning_beep_active")),
         [c[0] for c in (_attr(app, "_inline_scan_choices") or [])], _attr(app, "worker_name"), _view(app, view),
         app._is_preflight_hold_supervisor(),
         conn, queue, _held_count(app), len(notes), json.dumps(sheet, ensure_ascii=False, sort_keys=True, default=str),
         {name: _widget_enabled(app, name) for name in ("undo_button", "submit_tray_button", "park_button")},
         f8_values(app) if _view(app, view) == "f8" else None,
-        int(_attr(app, "_short_confirmation_undo") and 1 or 0) and datetime.datetime.now().second,
     )
     return hashlib.sha256(repr(parts).encode("utf-8", "replace")).hexdigest()
 
@@ -986,6 +988,12 @@ class CaProcessor:
 
     def _cmd_submit(self, _id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
         return self._invoke("submit_tray_button")
+
+    def _cmd_partial_submit(self, _id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
+        return self._run_menu_action(self.app._confirm_partial_submission)
+
+    def _cmd_partial_continue(self, _id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
+        return self._run_menu_action(self.app._continue_partial_submission)
 
     def _cmd_park(self, _id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
         return self._invoke("park_button")

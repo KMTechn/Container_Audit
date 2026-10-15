@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import Container_Audit as ca
+from tests.test_w9scanonly_workflow import _pump_until
 from event_log_store import EVENT_LOG_HEADERS, EventLogOutbox
 from parked_tray_store import ParkedTrayStore
 from preflight_scan_hold import PreflightScanHoldStore
@@ -199,11 +200,16 @@ def test_audit_retry_freezes_capability_and_name(flow, windows, tmp_path, monkey
 
 
 @pytest.mark.parametrize("case", ["off_to_on", "on_to_off", "rename", "legacy"])
-def test_short_undo_keeps_original_completion_identity(flow, windows, tmp_path, case):
+def test_short_release_keeps_original_completion_identity(flow, windows, tmp_path, case, monkeypatch):
     enabled = case in {"on_to_off", "rename"}
     app = _app(flow, tmp_path, enabled=enabled)
     public_scan(app, ITEM + "-SERIAL-001")
+    settle = app._settle_short_completion_projection
+    monkeypatch.setattr(app, "_settle_short_completion_projection", lambda *_a, **_k: False)
     public_scan(app, COMPACT_QR + "|QT=3")
+    assert app._confirm_partial_submission()
+    _pump_until(app.root, lambda: bool(getattr(app, "_short_confirmation_undo", None))
+                and not app._ui_task_lane().is_busy())
     undo = app._short_confirmation_undo
     assert undo
     path = app._short_projection_path(undo["completion_id"])
@@ -214,7 +220,10 @@ def test_short_undo_keeps_original_completion_identity(flow, windows, tmp_path, 
     expected = record["contract"].get("worker_record", {})
     app._worker_record_identity_enabled = case != "on_to_off"
     app.worker_roster.apply(response(row("corrected", worker_id=WORKER_ID), version=2), requested_version=1)
-    public_scan(app, "KMCMD:UNDO")
+    monkeypatch.setattr(app, "_settle_short_completion_projection", settle)
+    assert app._commit_short_confirmation()
+    _pump_until(app.root, lambda: app._short_confirmation_undo is None
+                and not app._ui_task_lane().is_busy())
     app._flush_pending_event_logs()
     app.log_queue.join()
     cancelled = json.loads(path.read_text(encoding="utf-8"))

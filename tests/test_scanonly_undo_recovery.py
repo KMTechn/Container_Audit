@@ -19,7 +19,7 @@ from tray_state import validate_tray_state
 pytestmark = pytest.mark.usefixtures('fixed_operation_lease_clock', 'owned_tk_workers')
 
 
-def test_short_undo_preserves_original_clock_and_restart_checkpoint(flow, windows):
+def test_partial_continue_preserves_original_clock_and_restart_checkpoint(flow, windows):
     app = _active(flow)
     app.root.tk = object()
     app._ui_task_lane()
@@ -37,8 +37,8 @@ def test_short_undo_preserves_original_clock_and_restart_checkpoint(flow, window
     app._update_stopwatch = lambda: None
     real_notice(app)
     public_scan(app, COMPACT_QR)
-    assert app._short_confirmation_undo
-    public_scan(app, 'KMCMD:UNDO')
+    assert app._partial_submission_state()
+    assert app._continue_partial_submission()
     assert app.current_tray.start_time == original_start
     assert app.current_tray.scan_times == original_times
     assert app.current_tray.stopwatch_seconds >= original_elapsed

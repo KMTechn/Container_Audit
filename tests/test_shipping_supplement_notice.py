@@ -74,8 +74,8 @@ def test_local_new_label_completion_shows_shipping_supplement(flow, partial):
     _scan_products(app, 1 if partial else 2)
     if partial:
         app.submit_current_tray()
-        assert GUIDANCE in app.warnings[-1][1]
-        assert app._commit_short_confirmation()
+        assert app._partial_submission_state()
+        assert app._confirm_partial_submission()
     _pump_until(app.root, lambda: not app.current_tray.master_label_code)
 
     detail = _details(_rows(app, "TRAY_COMPLETE")[0])

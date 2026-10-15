@@ -14777,6 +14777,9 @@ class ContainerAudit:
         if self._reject_residual_tag(raw_barcode):
             self._clear_consumed_scan_entry(raw_barcode)
             return
+        if self._handle_partial_submission_scan(raw_barcode):
+            self._clear_consumed_scan_entry(raw_barcode)
+            return
         if raw_barcode and getattr(self, "_progress_visible", False):
             self._hide_logistics_progress(raw_barcode)
         if not raw_barcode:
@@ -14812,6 +14815,8 @@ class ContainerAudit:
         self.root.after(0, self._process_barcode_if_current, raw_barcode, scan_epoch)
 
     def _invalidate_pending_scan_callbacks(self, *, preserve_held_scans: bool = False) -> None:
+        if getattr(self, "_partial_submit_confirmation", None):
+            self._continue_partial_submission()
         self._scan_callback_epoch = int(getattr(self, "_scan_callback_epoch", 0)) + 1
         # Successful completion/UNDO explicitly rebases retained scanner input;
         # reset, park and handoff refuse old-work input after their own notice.
@@ -14917,6 +14922,8 @@ class ContainerAudit:
     ):
         if self._reject_residual_tag(raw_barcode):
             return False
+        if self._handle_partial_submission_scan(raw_barcode):
+            return True
         # Earlier actions retain their durable checkpoint/outbox originals.
         # Wake the log writer; a new scan only waits for its own tray save.
         log_thread = getattr(self, 'log_thread', None)
@@ -14964,7 +14971,7 @@ class ContainerAudit:
                 if getattr(self, "success_sound", None):
                     play_sound(self.success_sound)
             elif tray.scanned_barcodes:
-                self._complete_current_tray_as_partial()
+                self._request_partial_submission()
             return
         fields = self._parse_new_format_qr(raw_barcode) or {}
         is_label = bool(fields.get("CLC") or (raw_barcode.isdigit() and len(raw_barcode) == self.ITEM_CODE_LENGTH))
@@ -16011,6 +16018,8 @@ class ContainerAudit:
             self._request_operation_lease_release(reset_lease_id)
 
     def submit_current_tray(self):
+        if getattr(self, "_short_confirmation_undo", None):
+            return self._commit_short_confirmation()
         if self._reject_mutation_during_preflight_hold():
             return
         blocking_completion = self._active_blocking_completion_snapshot()
@@ -16032,8 +16041,76 @@ class ContainerAudit:
         self._update_last_activity_time()
         if not self.current_tray.master_label_code or not self.current_tray.scanned_barcodes:
             self.show_status_message("제출할 스캔 내역이 없습니다.", self.COLOR_TEXT_SUBTLE); return
-        self._complete_current_tray_as_partial()
+        self._request_partial_submission()
         self._schedule_focus_return()
+
+    def _partial_submission_state(self):
+        confirmation = getattr(self, "_partial_submit_confirmation", None)
+        tray = getattr(self, "current_tray", None)
+        if (not confirmation or confirmation["tray"] is not tray
+                or confirmation["total"] != tray.tray_size
+                or confirmation["done"] != len(tray.scanned_barcodes)):
+            return None
+        return {"kind": "partial_submit", "total": confirmation["total"],
+                "done": confirmation["done"], "short": confirmation["total"] - confirmation["done"]}
+
+    def _request_partial_submission(self):
+        tray = self.current_tray
+        done, total = len(tray.scanned_barcodes), int(tray.tray_size or 0)
+        if not tray.master_label_code or not 0 < done < total:
+            if done and done >= total:
+                return self.request_complete_tray() if hasattr(self.root, "tk") else self.complete_tray()
+            return False
+        self._partial_submit_confirmation = {"tray": tray, "done": done, "total": total}
+        self._request_inline_choice(
+            "수량 부족 — 부분 제출하시겠습니까?",
+            f"{total}개 중 {done}개({total - done}개 부족)\n"
+            "현품표 한 번 더·Enter = 부분 제출 / 제품 스캔·Esc = 계속 작업",
+            [("부분 제출", self._confirm_partial_submission), ("계속 작업", self._continue_partial_submission)],
+            on_scan=self._continue_partial_submission,
+        )
+        if not getattr(self, "_partial_escape_bound", False):
+            try:
+                self.root.bind("<Escape>", lambda _event: (
+                    self._continue_partial_submission() and "break"
+                    if getattr(self, "_partial_submit_confirmation", None) else None), add="+")
+                self._partial_escape_bound = True
+            except (AttributeError, tk.TclError):
+                pass
+        return True
+
+    def _continue_partial_submission(self):
+        if not getattr(self, "_partial_submit_confirmation", None):
+            return True
+        self._partial_submit_confirmation = None
+        self._inline_scan_choices = []
+        self._inline_choice_on_scan = None
+        frame = getattr(self, "_inline_choice_frame", None)
+        if frame is not None:
+            frame.destroy()
+            self._inline_choice_frame = None
+        self._warning_state_presenter().acknowledge()
+        self._stop_warning_beep()
+        self._render_warning_state()
+        return True
+
+    def _confirm_partial_submission(self):
+        confirmation = self._partial_submission_state()
+        self._continue_partial_submission()
+        if confirmation is None:
+            return False
+        return self._complete_current_tray_as_partial()
+
+    def _handle_partial_submission_scan(self, raw_barcode):
+        if not getattr(self, "_partial_submit_confirmation", None):
+            return False
+        same_label = canonical_master_label_key(raw_barcode) == canonical_master_label_key(
+            self.current_tray.master_label_code)
+        if not raw_barcode or same_label:
+            self._confirm_partial_submission()
+            return True
+        self._continue_partial_submission()
+        return False
 
     def _complete_current_tray_as_partial(self) -> bool:
         if self._reject_mutation_during_preflight_hold():
@@ -16591,6 +16668,9 @@ class ContainerAudit:
             return
 
     def _acknowledge_active_notice(self) -> None:
+        if getattr(self, "_partial_submit_confirmation", None):
+            self._continue_partial_submission()
+            return
         if self._precommand_operator_review_retry_context() is not None:
             self._retry_precommand_operator_review_completion()
             return
@@ -18589,9 +18669,8 @@ class ContainerAudit:
         return Path(self.save_folder) / "short_confirmations" / name
 
     def _short_confirmation_remaining(self, contract):
-        confirmed = datetime.datetime.fromisoformat(contract["observed_at"])
-        elapsed = (datetime.datetime.now(confirmed.tzinfo) - confirmed).total_seconds()
-        return min(60.0, max(0.0, 60.0 - elapsed))
+        """A persisted decision is final; older HELD records have no grace."""
+        return 0.0
 
     def _cancel_short_confirmation_expiry(self):
         self._short_confirmation_expiry_token = None
@@ -18601,60 +18680,24 @@ class ContainerAudit:
             self.root.after_cancel(job)
 
     def _check_short_confirmation_expiry(self):
-        """Count suspended time from the durable confirmation, including on resume."""
-        undo = getattr(self, "_short_confirmation_undo", None)
-        if undo is None or getattr(self, "_ui_close_requested", False):
+        """Compatibility seam: retry a confirmed decision, never a draft."""
+        if not getattr(self, "_short_confirmation_undo", None):
             return None
-        contract = self._completion_event_contract_from_state(undo["state"])
-        confirmed = datetime.datetime.fromisoformat(contract["observed_at"])
-        now = datetime.datetime.now(confirmed.tzinfo)
-        observation = getattr(self, "_short_confirmation_clock_observation", None)
-        previous = observation[1] if observation and observation[0] is undo else confirmed
-        self._short_confirmation_clock_observation = (undo, max(previous, now))
-        remaining = self._short_confirmation_remaining(contract)
-        if now < previous:
-            if getattr(self, "_short_confirmation_clock_warning_owner", None) is not undo:
-                if self._log_event("SHORT_CONFIRMATION_CLOCK_REGRESSION",
-                                   detail={"backward_seconds": (previous - now).total_seconds()}):
-                    self._short_confirmation_clock_warning_owner = undo
-            return max(1.0, remaining)
-        self._short_confirmation_clock_warning_owner = None
         lane = getattr(self, "_ui_lane", None)
-        if remaining <= 0:
-            self.undo_button["state"] = tk.DISABLED
-            if not (getattr(self, "_scan_callback_pending", False)
-                    or getattr(self, "_live_scan_save_pending", False)
-                    or getattr(self, "_completion_lane_busy", False)
-                    or (lane is not None and lane.is_busy())):
-                self._commit_short_confirmation()
-        return remaining
+        if not (getattr(self, "_completion_lane_busy", False)
+                or (lane is not None and lane.is_busy())):
+            self._commit_short_confirmation()
+        return 0.0
 
     def _arm_short_confirmation_expiry(self):
-        """Keep one short poll; Tk delay is a wake-up hint, not elapsed time."""
+        """Retry an interrupted immediate release once when the lane is idle."""
         self._cancel_short_confirmation_expiry()
-        undo = getattr(self, "_short_confirmation_undo", None)
-        if undo is None or getattr(self, "_ui_close_requested", False):
+        if not getattr(self, "_short_confirmation_undo", None):
             return
-        contract = self._completion_event_contract_from_state(undo["state"])
-        token = self._short_confirmation_expiry_token = object()
-
-        def expire():
-            if (getattr(self, "_short_confirmation_undo", None) is not undo
-                    or self._short_confirmation_expiry_token is not token
-                    or getattr(self, "_ui_close_requested", False)):
-                return
-            self._short_confirmation_expiry_job = None
-            remaining = self._check_short_confirmation_expiry()
-            if remaining > 0:
-                delay = min(1000, max(1, int(remaining * 1000) + 1))
-            else:
-                delay = 100  # Retry pending scans/storage/admission through the same path.
-            if (getattr(self, "_short_confirmation_undo", None) is undo
-                    and self._short_confirmation_expiry_token is token):
-                self._short_confirmation_expiry_job = self.root.after(delay, expire)
-
-        self._short_confirmation_expiry_job = self.root.after(
-            min(1000, max(0, int(self._short_confirmation_remaining(contract) * 1000) + 1)), expire)
+        if hasattr(getattr(self, "root", None), "tk"):
+            self.root.after(0, self._commit_short_confirmation)
+        else:
+            self._commit_short_confirmation()
 
     def _persist_short_completion_projection(self, contract, detail, state, intent_id):
         path = self._short_projection_path(contract["idempotency_key"])
@@ -18677,9 +18720,7 @@ class ContainerAudit:
             return False
         if record["status"] == "SETTLED":
             return True
-        # A next-label/logout/close request or expiry ends UNDO even if a
-        # durable CSV acknowledgement is lost. Retry cannot cancel a row
-        # that may already have been read by the unchanged legacy relay.
+        # Confirmation is final even if the durable CSV acknowledgement is lost.
         record["status"] = "SETTLING"
         atomic_write_json(path, record, ensure_ascii=False)
         contract = record["contract"]
@@ -18692,7 +18733,8 @@ class ContainerAudit:
         if record["intent_id"]:
             runtime = coordinator or self._transfer_seal_runtime()
             runtime.store.mark_scan_completion_projected(record["intent_id"])
-            runtime.store.settle_short_confirmation(record["intent_id"])
+            if runtime.store.load(record["intent_id"])["scan_context_state"] != "READY":
+                runtime.store.settle_short_confirmation(record["intent_id"])
         record["status"] = "SETTLED"
         atomic_write_json(path, record, ensure_ascii=False)
         return True
@@ -18706,7 +18748,7 @@ class ContainerAudit:
             active = getattr(self, "_short_confirmation_undo", None)
             if (record["status"] == "HELD" and active
                     and active["completion_id"] == record["contract"]["idempotency_key"]):
-                continue  # The live UI owns the durable confirmation's expiry checks.
+                continue  # The live completion lane owns this immediate release.
             remaining = (self._short_confirmation_remaining(record["contract"])
                          if record["status"] == "HELD" else 0.0)
             if record["status"] == "HELD" and remaining > 0:
@@ -18806,6 +18848,11 @@ class ContainerAudit:
                 return False
             self._short_confirmation_undo = None
             self._cancel_short_confirmation_expiry()
+            record = yield lambda: json.loads(self._short_projection_path(undo["completion_id"]).read_text(encoding="utf-8"))
+            self._last_partial_submit_result = {
+                "master_label": record["state"]["master_label_code"],
+                "done": int(record["detail"]["scan_count"]),
+                "short": max(0, int(record["detail"]["tray_capacity"]) - int(record["detail"]["scan_count"]))}
             self.undo_button["state"] = tk.DISABLED
             self._schedule_scanonly_transport()
             return True
@@ -18815,74 +18862,8 @@ class ContainerAudit:
         return self._run_durable_ui_steps(steps())
 
     def _undo_short_confirmation(self):
-        undo = self._short_confirmation_undo
-        contract = self._completion_event_contract_from_state(undo["state"])
-        if self._short_confirmation_remaining(contract) <= 0:
-            self._check_short_confirmation_expiry()
-            self.show_status_message('부분 제출 뒤에는 되돌릴 수 없습니다\n다음 작업을 계속하세요', self.COLOR_DANGER)
-            self._start_warning_beep()
-            return False
-        def steps():
-            state = dict(undo["state"])
-            state.pop(COMPLETION_EVENT_STATE_KEY, None)
-            state.pop("scan_completion_context", None)
-            state["is_partial_submission"] = False
-            path = self._short_projection_path(undo["completion_id"])
-            def cancel_projection():
-                record = json.loads(path.read_text(encoding="utf-8"))
-                if record["status"] != "HELD":
-                    return None
-                contract = record['contract']
-                events = list(record.get('pending_audit_events', []))
-                for source in (record['state'], state):
-                    for event in source.get('pending_audit_events', []):
-                        if event not in events:
-                            events.append(event)
-                events.extend([self._checkpoint_stored_audit_event('TRAY_COMPLETE', detail=record['detail'],
-                    idempotency_key=contract['idempotency_key'], event_timestamp=contract['observed_at'],
-                    worker_name_override=contract['projection_worker_name'],
-                    stored_worker_record=contract.get('worker_record', {}),
-                    log_file_path_override=str(self._completion_projection_log_path(contract['projection_log_name']))),
-                    self._checkpoint_audit_event('TRAY_SHORT_CONFIRMATION_UNDONE',
-                        detail={'completion_id': undo['completion_id']},
-                        idempotency_key='short-undo:' + undo['completion_id'])])
-                state['pending_audit_events'] = events
-                record.update(status="CANCELLED", undo_state=state, undo_applied=False,
-                    pending_audit_events=events,
-                    undo_event={"event": "TRAY_SHORT_CONFIRMATION_UNDONE",
-                                "completion_id": undo["completion_id"]})
-                atomic_write_json(path, record, ensure_ascii=False)
-                self._stage_checkpoint_audit_events(record)
-                if undo["intent_id"]:
-                    self._transfer_seal_runtime().store.settle_short_confirmation(undo["intent_id"], undo=True)
-                return record
-            record = yield cancel_projection
-            if record is None:
-                self.show_status_message('부분 제출 뒤에는 되돌릴 수 없습니다\n완료 저장을 다시 시도하세요', self.COLOR_DANGER)
-                return False
-            if not (yield lambda: self._save_tray_state_snapshot(state)):
-                self.show_status_message('부분 제출 뒤에는 되돌릴 수 없습니다', self.COLOR_DANGER)
-                return False
-            record["undo_applied"] = True
-            yield lambda: atomic_write_json(path, record, ensure_ascii=False)
-            yield self._flush_pending_event_logs
-            self._restore_tray_from_state(state, preserve_held_scans=True)
-            original_log_path = self.log_file_path
-            yield lambda: self._load_session_state()
-            self.log_file_path = original_log_path
-            self._update_all_summaries()
-            self._short_confirmation_undo = None
-            self._cancel_short_confirmation_expiry()
-            self._pending_completion_event_contract = None
-            self._warning_state_presenter().acknowledge()
-            self._update_current_item_label()
-            self._update_center_display()
-            self._start_stopwatch(resume=True)
-            self.show_status_message('부분 제출 뒤에는 되돌릴 수 없습니다', self.COLOR_PRIMARY)
-            return True
-        if hasattr(getattr(self, "root", None), "tk"):
-            return self._submit_scan_steps(steps())
-        return self._run_durable_ui_steps(steps())
+        self.show_status_message("부분 제출은 되돌릴 수 없습니다.", self.COLOR_DANGER)
+        return False
 
     def _scanonly_completion_context(self, observed_at: Optional[datetime.datetime] = None) -> Dict[str, Any]:
         if getattr(self.current_tray, "scan_completion_context", None):

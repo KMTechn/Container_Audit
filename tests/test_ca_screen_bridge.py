@@ -100,7 +100,7 @@ def test_scan_goes_through_the_existing_door_and_the_list_grows(flow):
     state = processor.state()
     work = state["work"]
     assert (work["count"], work["list_count"], work["list"][0]["st"]) == (1, 1, "new")
-    assert work["result"]["kind"] == "ok" and work["result"]["text"] == "맞음 — 1번째"
+    assert work["result"]["kind"] == "ok" and work["result"]["text"] == "제품 확인 1개"
     assert _schema_errors(state, CONTRACT["state"]) == []
 
 
