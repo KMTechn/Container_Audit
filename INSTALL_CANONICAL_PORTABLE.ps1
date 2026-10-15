@@ -1577,6 +1577,25 @@ function Test-CanonicalOrdinaryRelaySecurity($Security,[string]$SubjectSid) {
         $Security.elevated -is [bool] -and -not $Security.elevated)
 }
 
+function Assert-CanonicalInstallerStopPath([string]$Path) {
+    $full=Full $Path 'installer stop marker'
+    $cursor=$full
+    while($cursor){
+        $item=$null
+        try{$item=Get-Item -LiteralPath $cursor -Force -ErrorAction Stop}
+        catch [Management.Automation.ItemNotFoundException] {}
+        if($null -ne $item){
+            Assert-BootstrapNoReparsePoint $cursor 'installer stop marker' -PathOnly
+            if(-not(Same $cursor $full) -and -not $item.PSIsContainer){throw 'INSTALLER_RELAY_STOP_PATH_INVALID'}
+            return
+        }
+        $parent=Split-Path -Parent $cursor
+        if($parent -ceq $cursor){break}
+        $cursor=$parent
+    }
+    throw 'INSTALLER_RELAY_STOP_PATH_INVALID'
+}
+
 function Read-CanonicalInstallerOwnedStopMarker($Proof,[switch]$BindHash,[switch]$AllowAbsent) {
     $transaction=[string](Get-Variable -Name CanonicalWriterFenceTransactionId -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
     if($null -eq $Proof -or [string]$Proof.schema -cne 'container-audit-installer-stop-preimage-v1' -or
@@ -1589,7 +1608,7 @@ function Read-CanonicalInstallerOwnedStopMarker($Proof,[switch]$BindHash,[switch
     if(-not(Same $path (Join-Path ([string]$Proof.state_root) 'control\container_audit_user_relay.stop.json'))){
         throw 'INSTALLER_RELAY_STOP_OWNERSHIP_UNPROVEN'
     }
-    Assert-BootstrapNoReparsePoint $path 'installer stop marker' -PathOnly
+    Assert-CanonicalInstallerStopPath $path
     if(-not(Test-Path -LiteralPath $path)){
         if($AllowAbsent){return 'ABSENT'}
         throw 'INSTALLER_RELAY_STOP_OWNERSHIP_UNPROVEN'
@@ -1612,7 +1631,7 @@ function Restore-CanonicalInstallerStopPreimage {
     $sha=Read-CanonicalInstallerOwnedStopMarker $proof -AllowAbsent
     if($sha -cne 'ABSENT'){
         $path=Full ([string]$proof.path) 'installer stop marker'
-        Assert-BootstrapNoReparsePoint $path 'installer stop marker' -PathOnly
+        Assert-CanonicalInstallerStopPath $path
         if((Read-CanonicalInstallerOwnedStopMarker $proof) -cne $sha){throw 'INSTALLER_RELAY_STOP_OWNERSHIP_UNPROVEN'}
         Remove-Item -LiteralPath $path -ErrorAction Stop
         if(Test-Path -LiteralPath $path){throw 'INSTALLER_RELAY_STOP_PREIMAGE_RESTORE_UNPROVEN'}
@@ -1671,7 +1690,7 @@ function Stop-CanonicalInstallerRelayPreimage([object[]]$Expected,[string]$State
     $Script:CanonicalInstallerRelayPreimage=@(Get-CanonicalGlobalRelayPreimage)
     Write-InstallationEvidenceEvent ([ordered]@{event='INSTALLER_RELAY_PREIMAGE';relays=$Script:CanonicalInstallerRelayPreimage;run_preimage=$RunPreimage})
     $markerPath=Full (Join-Path $StateRoot 'control\container_audit_user_relay.stop.json') 'installer stop marker'
-    Assert-BootstrapNoReparsePoint $markerPath 'installer stop marker' -PathOnly
+    Assert-CanonicalInstallerStopPath $markerPath
     if(Test-Path -LiteralPath $markerPath){throw 'INSTALLER_RELAY_STOP_PREIMAGE_PRESENT'}
     $transaction=[string](Get-Variable -Name CanonicalWriterFenceTransactionId -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
     if($transaction -cnotmatch '^[0-9a-f]{32}$'){throw 'INSTALLER_RELAY_STOP_ROUND_INVALID'}
@@ -6219,46 +6238,57 @@ catch {
         if ($retirementResume -and $canonicalWriterFenceActive) {
             throw 'RETIREMENT_RESUME_JOURNAL_UNKNOWN_FENCE_RETAINED'
         }
-        $earlyFenceMatches = $false
         try {
-            $earlyFence = Read-ContainerWriterFence -AllowAbsent
-            $earlyFenceMatches = (
-                $null -ne $earlyFence -and
-                [string]$earlyFence.session_id -ceq $Script:CanonicalWriterFenceSessionId -and
-                [string]$earlyFence.attempt_id -ceq $Script:CanonicalWriterFenceAttemptId -and
-                [string]$earlyFence.replacement_transaction_id -ceq $Script:CanonicalWriterFenceTransactionId
-            )
-        }
-        catch {
-    Write-InstallationCaughtFailure $_
- $earlyFenceMatches = $canonicalWriterFenceActive }
-        if ($earlyFenceMatches) {
+            $earlyFenceMatches = $false
             try {
-                [void](Abort-ContainerWriterFence `
-                    -SessionId $Script:CanonicalWriterFenceSessionId `
-                    -AttemptId $Script:CanonicalWriterFenceAttemptId `
-                    -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
-                    -AuthorityLease $canonicalWriterFenceAuthority)
-                $canonicalWriterFenceActive = $false
+                $earlyFence = Read-ContainerWriterFence -AllowAbsent
+                $earlyFenceMatches = (
+                    $null -ne $earlyFence -and
+                    [string]$earlyFence.session_id -ceq $Script:CanonicalWriterFenceSessionId -and
+                    [string]$earlyFence.attempt_id -ceq $Script:CanonicalWriterFenceAttemptId -and
+                    [string]$earlyFence.replacement_transaction_id -ceq $Script:CanonicalWriterFenceTransactionId
+                )
             }
             catch {
-    Write-InstallationCaughtFailure $_
- throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("CANONICAL_WRITER_FENCE_EARLY_ABORT_FAILED: $($_.Exception.GetType().Name)")) -UserLine) }
-        }
-        if (Test-Path -LiteralPath $canonicalWriterFencePreparedPath) {
-            Remove-Item -LiteralPath $canonicalWriterFencePreparedPath -ErrorAction Stop
+        Write-InstallationCaughtFailure $_
+     $earlyFenceMatches = $canonicalWriterFenceActive }
+            if ($earlyFenceMatches) {
+                try {
+                    [void](Abort-ContainerWriterFence `
+                        -SessionId $Script:CanonicalWriterFenceSessionId `
+                        -AttemptId $Script:CanonicalWriterFenceAttemptId `
+                        -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+                        -AuthorityLease $canonicalWriterFenceAuthority)
+                    $canonicalWriterFenceActive = $false
+                }
+                catch {
+        Write-InstallationCaughtFailure $_
+     throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("CANONICAL_WRITER_FENCE_EARLY_ABORT_FAILED: $($_.Exception.GetType().Name)")) -UserLine) }
+            }
             if (Test-Path -LiteralPath $canonicalWriterFencePreparedPath) {
-                throw 'CANONICAL_WRITER_FENCE_EARLY_RECEIPT_CLEANUP_FAILED'
+                Remove-Item -LiteralPath $canonicalWriterFencePreparedPath -ErrorAction Stop
+                if (Test-Path -LiteralPath $canonicalWriterFencePreparedPath) {
+                    throw 'CANONICAL_WRITER_FENCE_EARLY_RECEIPT_CLEANUP_FAILED'
+                }
             }
-        }
-        if($Script:CanonicalInstallerRelayStopAttempted){
-            [void](Restore-CanonicalInstallerEarlyRuntime -Before $before -Old $old -Root $install)
-        }
-        elseif ($earlyFenceMatches -and $old.Count -gt 0) {
-            if (@(Relays).Count -eq 0) {
-                [void](Start-CanonicalRelayAfterFenceRelease -Root $install -RunCommand ([string]$before.data))
+            if($Script:CanonicalInstallerRelayStopAttempted){
+                [void](Restore-CanonicalInstallerEarlyRuntime -Before $before -Old $old -Root $install)
             }
-            [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
+            elseif ($earlyFenceMatches -and $old.Count -gt 0) {
+                if (@(Relays).Count -eq 0) {
+                    [void](Start-CanonicalRelayAfterFenceRelease -Root $install -RunCommand ([string]$before.data))
+                }
+                [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
+            }
+        } catch {
+            if($Script:CanonicalInstallerRelayStopAttempted){
+                $Script:CanonicalInstallerEarlyRecovery.status='RECOVERY_REQUIRED'
+                Write-InstallationCaughtFailure $_
+                $recoveryFailure=[InvalidOperationException]::new('RECOVERY_REQUIRED',$original.Exception)
+                $recoveryFailure.Data['original_type']=$original.Exception.GetType().FullName
+                throw $recoveryFailure
+            }
+            throw
         }
         Write-CanonicalInstallerRelayGuidance
         $publicFailure=[InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text $original.Exception.Message -UserLine),$original.Exception);$publicFailure.Data['original_type']=$original.Exception.GetType().FullName;$publicRecord=[Management.Automation.ErrorRecord]::new($publicFailure,'CanonicalInstallationFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null);throw $publicRecord

@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("engine", ("powershell", "pwsh"))
-@pytest.mark.parametrize("case", ("sid", "account", "local_dot", "short_name", "upn", "system_nt", "system_short", "system_localized", "foreign_trigger", "foreign_principal", "unresolved"))
+@pytest.mark.parametrize("case", ("sid", "account", "local_dot", "short_name", "upn", "system_nt", "system_short", "system_localized", "foreign_trigger", "foreign_account_trigger", "foreign_principal", "foreign_local_principal", "unresolved", "unresolved_account"))
 def test_removal_task_identity_forms(tmp_path, engine, case):
     result = run_functions(tmp_path, ROOT / "INSTALL_THIS_PC.ps1", [
         "Resolve-ContainerRemovalTaskSid", "Get-ContainerRemovalTaskNames",
@@ -42,6 +42,9 @@ public static class KMTechRemovalFixtureAccountName {
 }
 switch($env:CA_ACCOUNT_CASE){
  'local_dot' {$trigger='.\'+$parts[-1]}
+ 'foreign_local_principal' {$principal='.\'+$parts[-1]}
+ 'foreign_account_trigger' {$trigger='NT AUTHORITY\SYSTEM'}
+ 'unresolved_account' {$trigger=[Environment]::MachineName+'\KMTechSub197NonexistentAccount'}
  'short_name' {$trigger=$parts[-1]}
  'system_nt' {$principal='NT AUTHORITY\SYSTEM'}
  'system_short' {$principal='SYSTEM'}
@@ -60,9 +63,9 @@ $refused=$false;$selected=@()
 try{$selected=@(Get-ContainerRemovalTaskNames $folder $root)}catch{
  if($_.Exception.Message -cne 'REMOVAL_TASK_IDENTITY_UNKNOWN'){throw};$refused=$true
 }
-if($env:CA_ACCOUNT_CASE -in @('foreign_principal','unresolved')){
+if($env:CA_ACCOUNT_CASE -in @('foreign_principal','foreign_local_principal','unresolved','unresolved_account')){
  if(-not $refused){throw 'refusal missing'}
-}elseif($env:CA_ACCOUNT_CASE -eq 'foreign_trigger'){
+}elseif($env:CA_ACCOUNT_CASE -in @('foreign_trigger','foreign_account_trigger')){
  if($refused -or $name -cin $selected){throw 'foreign task selected'}
 }elseif($refused -or $name -cnotin $selected){throw 'own task not selected'}
 'PASS'

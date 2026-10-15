@@ -8,11 +8,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("engine", ("powershell", "pwsh"))
-@pytest.mark.parametrize("case", ("normal", "absent", "foreign_sid", "other_session", "elevated", "reused_pid", "other_writer", "stop_failed", "caller-integrity", "relay-integrity", "relay-elevated", "session-zero", "missing-caller-level", "missing-relay-level"))
+@pytest.mark.parametrize("case", ("normal", "absent", "foreign_sid", "other_session", "elevated", "reused_pid", "other_writer", "stop_failed", "caller-integrity", "relay-integrity", "relay-elevated", "session-zero", "missing-caller-level", "missing-relay-level", "existing-marker", "junction-parent"))
 def test_installer_ordinary_relay_stop_boundary(tmp_path, engine, case):
     result = run_functions(tmp_path, ROOT / "INSTALL_CANONICAL_PORTABLE.ps1", [
         "Stop-CanonicalInstallerRelayPreimage", "Test-CanonicalOrdinaryRelaySecurity",
-        "Read-CanonicalInstallerOwnedStopMarker", "Full", "Same", "Sha",
+        "Read-CanonicalInstallerOwnedStopMarker", "Assert-CanonicalInstallerStopPath", "Full", "Same", "Sha",
     ], r'''
 Set-StrictMode -Version Latest
 Initialize-BootstrapRelaySecurity
@@ -65,7 +65,7 @@ function Get-BootstrapStringSha256($text){
 }
 function Invoke-InstallationEvidenceChild($name,$exe,$arguments){
  if($script:events.Count -ne 1 -or $script:events[0].event -cne 'INSTALLER_RELAY_PREIMAGE'){throw 'preimage order differs'}
- if($arguments[0] -cne '-I' -or $arguments[1] -cne '-B' -or $arguments[2] -cne '-c' -or $arguments[-1] -cne $script:state){throw 'stop command differs'}
+ if($arguments[0] -cne '-I' -or $arguments[1] -cne '-B' -or $arguments[2] -cne '-c' -or $arguments[5] -cne $script:state){throw 'stop command differs'}
  $marker=Join-Path $script:state 'control/container_audit_user_relay.stop.json'
  [void][IO.Directory]::CreateDirectory((Split-Path -Parent $marker))
  [IO.File]::WriteAllText($marker,(@{schema_version='container-audit-user-relay-stop-v1';request_id=[string]$arguments[6]}|ConvertTo-Json -Compress))
@@ -77,6 +77,18 @@ $rows=@();if($env:CA_STOP_CASE -ne 'absent'){$rows=@($expected)}
 $script:state=Join-Path $env:CA_CONTRACT_ROOT 'state'
 $code=Join-Path $env:CA_CONTRACT_ROOT 'packet'
 $current=Join-Path $env:CA_CONTRACT_ROOT 'current'
+$marker=Join-Path $script:state 'control/container_audit_user_relay.stop.json'
+if($env:CA_STOP_CASE -ceq 'existing-marker'){
+ [void][IO.Directory]::CreateDirectory((Split-Path -Parent $marker))
+ [IO.File]::WriteAllText($marker,'foreign-stop-preimage')
+}
+if($env:CA_STOP_CASE -ceq 'junction-parent'){
+ $keep=Join-Path $env:CA_CONTRACT_ROOT 'foreign-control'
+ [void][IO.Directory]::CreateDirectory($keep)
+ [void][IO.Directory]::CreateDirectory($script:state)
+ [IO.File]::WriteAllText((Join-Path $keep 'keep.dat'),'foreign-control-preimage')
+ [void](New-Item -ItemType Junction -Path (Split-Path -Parent $marker) -Target $keep)
+}
 $refused=$false;$proof=$null
 try{$proof=Stop-CanonicalInstallerRelayPreimage $rows $script:state $code $current $subjectSid @{exists=$true}}catch{$refused=$true}
 if($env:CA_STOP_CASE -in @('normal','absent')){
@@ -86,7 +98,9 @@ if($env:CA_STOP_CASE -in @('normal','absent')){
  if(-not $refused){throw 'unsafe stop admitted'}
  if($script:called -ne [int]($env:CA_STOP_CASE -eq 'stop_failed')){throw 'unsafe child started'}
 }
-'PASS'
+if($env:CA_STOP_CASE -ceq 'existing-marker' -and [IO.File]::ReadAllText($marker) -cne 'foreign-stop-preimage'){throw 'foreign marker changed'}
+if($env:CA_STOP_CASE -ceq 'junction-parent' -and [IO.File]::ReadAllText((Join-Path $keep 'keep.dat')) -cne 'foreign-control-preimage'){throw 'foreign control changed'}
+ 'PASS'
 ''', engine=engine, values={"CA_STOP_CASE": case, "CA_STOP_FIELD_MUTATION": "0"})
     assert result.returncode == 0
     assert result.stdout.strip() == "PASS"
@@ -104,7 +118,7 @@ $main=$source.Substring($calls[0].Extent.EndOffset)
 if($main.IndexOf('Start-ContainerWriterFence') -lt 0){throw 'fence order differs'}
 $machine=($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Invoke-CanonicalMachineInstallation'},$true))[0].Body.Extent.Text
 if($machine -match 'Start-CanonicalRelayAfterFenceRelease|Stop-CanonicalInstallerRelayPreimage' -or $machine -notmatch 'DEFERRED_WORKER_INTERACTIVE_SESSION'){throw 'machine scope differs'}
-if($source -notmatch 'earlyFenceMatches -or \$Script:CanonicalInstallerRelayStopAttempted'){throw 'early restoration route missing'}
+if($source -notmatch 'Restore-CanonicalInstallerEarlyRuntime -Before \$before -Old \$old -Root \$install'){throw 'early restoration route missing'}
 if($source -notmatch 'savedRelayPreimage' -or $source -notmatch 'Assert-CanonicalTransactionRelayPreimage'){throw 'persistent preimage route missing'}
 'PASS'
 ''', engine="powershell")

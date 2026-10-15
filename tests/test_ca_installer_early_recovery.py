@@ -27,6 +27,7 @@ def test_actual_early_failure_restores_only_owned_stop_then_proves_old_ready(tmp
     assert result.returncode == 1
     data = json.loads(output.read_text(encoding='utf-8-sig'))
     assert data['injected'] is True and data['stop_calls'] == 1
+    assert data['original_cause_preserved'] is True
     assert data['run_unchanged'] is True and data['code_unchanged'] is True
     assert data['fence_present'] is False and data['prepared_present'] is False
     assert data['audit_present'] is True

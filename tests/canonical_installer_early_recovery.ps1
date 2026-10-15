@@ -6,6 +6,7 @@ if($errors.Count){throw 'canonical parse failed'}
 $canonicalText=$ast.Extent.Text
 $source=Split-Path -Parent $CanonicalSource
 . (Join-Path $source 'tools/bootstrap_integrity.ps1')
+. (Get-BootstrapSharedPortableLeaf $source)
 . (Join-Path $source 'tools/container_writer_fence.ps1')
 $definitions=$ast.FindAll({param($n)
     if($n -isnot [Management.Automation.Language.FunctionDefinitionAst]){return $false}
@@ -19,7 +20,7 @@ $outer=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.CatchCla
 if($inner.Count -ne 1 -or $outer.Count -ne 1){throw 'actual catch boundary differs'}
 $body=$inner[0].Parent.Body
 $stopCommand=@($body.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ceq 'Stop-CanonicalInstallerRelayPreimage'},$true))
-$auditSave=@($body.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ceq 'Save' -and $n.Extent.Text -ceq 'Save $auditPath $audit $true'},$true))
+$auditSave=@($body.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ceq 'Save' -and $n.Extent.Text -ceq 'Save $auditPath $audit $true'},$true) | Sort-Object {$_.Extent.StartOffset} | Select-Object -First 1)
 if($stopCommand.Count -ne 1 -or $auditSave.Count -ne 1){throw 'actual preparation route differs'}
 $stopStatement=$stopCommand[0]
 while($stopStatement.Parent -ne $body){$stopStatement=$stopStatement.Parent}
@@ -39,10 +40,14 @@ $scan=[Management.Automation.Language.Parser]::ParseInput($preamble+"`n"+$innerB
 foreach($variable in @($scan.FindAll({param($n) $n -is [Management.Automation.Language.VariableExpressionAst]},$true))){
     if($variable.VariablePath.IsUnscopedVariable){
         $name=$variable.VariablePath.UserPath
-        if($name -notin @('_','PSItem') -and -not(Get-Variable -Name $name -ErrorAction SilentlyContinue)){Set-Variable -Name $name -Value $null}
+        if($name -notin @('_','PSItem','LASTEXITCODE') -and -not(Get-Variable -Name $name -ErrorAction SilentlyContinue)){Set-Variable -Name $name -Value $null}
+    }elseif($variable.VariablePath.IsScript){
+        $name=$variable.VariablePath.UserPath.Substring(7)
+        if(-not(Get-Variable -Name $name -Scope Script -ErrorAction SilentlyContinue)){Set-Variable -Name $name -Scope Script -Value $null}
     }
 }
 [void][IO.Directory]::CreateDirectory($Root)
+$script:FixtureRoot=[IO.Path]::GetFullPath($Root)
 $install=Join-Path $Root 'current';[void][IO.Directory]::CreateDirectory($install)
 $activeRelayRoot=Join-Path $Root 'state'
 $stop=Join-Path $activeRelayRoot 'control/container_audit_user_relay.stop.json'
@@ -125,9 +130,11 @@ function Invoke-InstallationEvidenceChild {
     $script:StopCalls++
     # Keep iwrun guards in this finite child. Only the native machine boundary
     # is replaced; the product probe and actual atomic stop publisher both run.
-    $probe="import pathlib, sys, runtime_instance_win32; runtime_instance_win32.known_program_data=lambda:pathlib.Path(sys.argv[2])/'machine-boundary'`n"+[string]$Arguments[3]
+    $probe="import pathlib, sys; sys.path.insert(0,sys.argv[1]); import runtime_instance_win32; runtime_instance_win32.known_program_data=lambda:pathlib.Path(sys.argv[2])/'machine-boundary'`n"+[string]$Arguments[3]
     $raw=@(& $Python -B -c $probe ([string]$Arguments[4]) ([string]$Arguments[5]) ([string]$Arguments[6]))
-    $exitCode=$LASTEXITCODE
+    $exitCode=$global:LASTEXITCODE
+    $script:ChildExitCode=$exitCode
+    $script:ChildProtocolMatches=(($raw -join "`n").Trim() -ceq 'installer_relay_stop=ABSENT')
     if($exitCode -eq 0){$script:NativeLive=$false}
     return [pscustomobject]@{ExitCode=$exitCode;Stdout=($raw -join "`n");Stderr='';EvidenceFailure=$null}
 }
@@ -167,20 +174,37 @@ $nativeRemove=(Get-Command Microsoft.PowerShell.Management\Remove-Item)
 function Remove-Item {
     param([string]$LiteralPath,$ErrorAction)
     $resolved=[IO.Path]::GetFullPath($LiteralPath)
-    if(-not $resolved.StartsWith(([IO.Path]::GetFullPath($Root).TrimEnd('\')+'\'),[StringComparison]::OrdinalIgnoreCase)){throw 'fixture removal escaped root'}
+    if(-not $resolved.StartsWith(($script:FixtureRoot.TrimEnd('\')+'\'),[StringComparison]::OrdinalIgnoreCase)){throw 'fixture removal escaped root'}
     if(Same $resolved $stop){$script:StopDeletes++}
     & $nativeRemove -LiteralPath $resolved -ErrorAction Stop
 }
 try {
     try {. ([scriptblock]::Create($preamble))}
-    catch {$script:ForwardActive=$false;. ([scriptblock]::Create($innerBody))}
+    catch {
+        $script:ForwardFailureType=$_.Exception.GetType().FullName
+        $script:ForwardFailureLine=$_.InvocationInfo.ScriptLineNumber
+        $script:ForwardFailureStaticCode=if($_.Exception.Message -cmatch '^[A-Z][A-Z_]+$'){$_.Exception.Message}else{''}
+        $script:ForwardActive=$false;. ([scriptblock]::Create($innerBody))
+    }
 } catch {
     . ([scriptblock]::Create($outerBody))
 } finally {
     $markerUnchanged=$false
     if(Test-Path -LiteralPath $stop){$markerUnchanged=((Sha $stop) -ceq $script:MarkerAtFailure)}
     $recovery=$Script:CanonicalInstallerEarlyRecovery
+    $causePreserved=$false
+    $failureRecord=Get-Variable -Name outputFailure -ValueOnly -ErrorAction SilentlyContinue
+    if($null -ne $failureRecord){
+        $cause=$failureRecord.Exception
+        while($null -ne $cause){
+            if($cause.Message -ceq 'INJECTED_EARLY_FAILURE'){$causePreserved=$true}
+            $cause=$cause.InnerException
+        }
+    }
     $result=[ordered]@{injected=$script:FailureInjected;stop_calls=$script:StopCalls;stop_deletes=$script:StopDeletes;
+        forward_failure_type=$script:ForwardFailureType;forward_failure_line=$script:ForwardFailureLine;forward_failure_code=$script:ForwardFailureStaticCode;
+        child_exit_code=$script:ChildExitCode;child_protocol_matches=$script:ChildProtocolMatches;
+        original_cause_preserved=$causePreserved;
         marker_present=(Test-Path -LiteralPath $stop);marker_unchanged=$markerUnchanged;
         run_unchanged=((Sha $runPath) -ceq $runBefore);code_unchanged=((Sha $codePath) -ceq $codeBefore);
         restarts=$script:Restarts;resident_present=$script:NativeLive;fence_present=(Test-Path -LiteralPath $fencePath);

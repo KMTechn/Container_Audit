@@ -1875,6 +1875,9 @@ function Resolve-ContainerRemovalTaskSid([string]$Identity) {
         if ($Identity -cmatch '^S-1-') {
             return ([Security.Principal.SecurityIdentifier]::new($Identity)).Value
         }
+        if ($Identity.StartsWith('.\',[StringComparison]::Ordinal)) {
+            $Identity=[Environment]::MachineName+$Identity.Substring(1)
+        }
         return ([Security.Principal.NTAccount]::new($Identity)).Translate([Security.Principal.SecurityIdentifier]).Value
     } catch { throw 'REMOVAL_TASK_IDENTITY_UNKNOWN' }
 }
