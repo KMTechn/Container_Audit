@@ -227,6 +227,8 @@ def install_user_relay_autostart(
     setter: Callable[[str], None] | None = None,
     getter: Callable[[], str] | None = None,
 ) -> dict[str, Any]:
+    from current_user_onboarding import _machine_worker_context
+    _machine_worker_context(app_root, environ=environ)
     command_line = user_relay_command_line(app_root, environ=environ)
     (setter or _registry_set)(command_line)
     readback = (getter or _registry_get)()
@@ -267,6 +269,8 @@ def start_user_relay_process(
     environ: Mapping[str, str] | None = None,
     launcher: Callable[[Sequence[str]], Any] | None = None,
 ) -> dict[str, Any]:
+    from current_user_onboarding import _machine_worker_context
+    _machine_worker_context(app_root, environ=environ)
     if installation_relay_start_deferred():
         return {"status": "DEFERRED_CANONICAL_RELEASE", "process_id": 0}
     command = build_user_relay_command(app_root, environ=environ)
@@ -807,6 +811,15 @@ def main(argv: list[str] | None = None) -> int:
             else Path(__file__).resolve().parent
         )
     ).expanduser().resolve()
+    if not args.request_app_stop:
+        from current_user_onboarding import _machine_worker_context
+        try:
+            _machine_worker_context(app_root)
+        except (OSError, ValueError, RuntimeError):
+            print(json.dumps({"status": "FAILED", "reason_code": "WORKER_INTERACTIVE_SESSION_REQUIRED",
+                              "message": "지정 작업자 계정의 대화형 세션에서 일반 권한으로 실행하세요."},
+                             ensure_ascii=False, sort_keys=True))
+            return 1
     if args.request_app_stop and not (args.data_root and args.direct_sync_root):
         # Implicit roots are the caller's own profile; another account must name
         # the installed operator's roots instead of reporting a false ABSENT relay.

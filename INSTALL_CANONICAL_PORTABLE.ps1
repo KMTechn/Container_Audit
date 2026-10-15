@@ -71,7 +71,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '923d867256fdc543e4fd98babbadc5028d70f6a976904e3a42b46a3c692c758e'
+$ExpectedBootstrapIntegritySha256 = 'e7a8d3cefb66408fb08ec9ea29e6178ca031ef731d9c4b9ea061c51c076ee1ac'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -1695,6 +1695,9 @@ function Assert-CanonicalRuntimePreimage(
     }
 }
 function Product([string]$Root,[string]$Mode,[string]$AppRoot='') {
+    if ($Mode -ceq '--onboard-current-user' -and [Diagnostics.Process]::GetCurrentProcess().SessionId -le 0) {
+        throw '작업자 첫 설정은 대화형 사용자 세션에서 실행하세요.'
+    }
     if (-not $AppRoot) { $AppRoot=Join-Path $Root 'app' }
     $args = @('-I','-B',(Join-Path $Root 'app\main.py'),$Mode,'--app-root',$AppRoot)
     if ($Mode -ceq '--onboard-current-user' -and $onboardingServerBaseUrl) {
@@ -3710,6 +3713,8 @@ function Remove-CanonicalMachineArtifacts([string]$Root,$Worker,[string[]]$Paths
         catch [IO.IOException]{$emergencyFailure=$_}
         catch [UnauthorizedAccessException]{$emergencyFailure=$_}
     }
+    $followingFailure=$null
+    try {
     if (Test-Path -LiteralPath $pending) {
         Assert-BootstrapNoReparsePoint $pending 'machine pending removal' -PathOnly
         $marker=Get-Content -LiteralPath $pending -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -3731,7 +3736,8 @@ function Remove-CanonicalMachineArtifacts([string]$Root,$Worker,[string[]]$Paths
         } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) }
     }
     if (Test-Path -LiteralPath $pending) { Remove-Item -LiteralPath $pending -ErrorAction Stop }
-    if($null -ne $emergencyFailure){throw $emergencyFailure}
+    } catch { $followingFailure=$_ }
+    Complete-BootstrapEmergencyCleanup $Root $emergencyFailure $followingFailure
 }
 function New-CanonicalMachineShortcut([string]$Root,[string]$Directory='') {
     if (-not $Directory) { $Directory=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms) }
@@ -4100,9 +4106,7 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         }
     }
     $workerPreparation=$null
-    if ([bool]$Worker.same_caller -and -not $Uninstall -and -not $RestoreVerifiedReplacement) {
-        $workerPreparation=Get-CanonicalWorkerPreparationPaths $Worker
-    }
+    # User paths and HKCU are prepared by the ordinary interactive worker first run.
     if ($PlanOnly) { Write-Output 'install_status=PLAN_ONLY'; return }
     $Script:ContainerMachineInstallControlRoot=$control
     $Script:ContainerWriterFenceAdmissionProductionRoot=$control
@@ -4253,11 +4257,7 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
                 (Sha (Join-Path $Root 'portable-manifest.json')) -cne (Sha (Join-Path $Source 'portable-manifest.json'))) {
                 throw 'Machine installed identity differs.'
             }
-            if ($null -ne $workerPreparation) {
-                Initialize-CanonicalSameWorkerScope $Root $workerPreparation
-                $audit.after.observation_status='PREPARED'
-                $audit.worker_setup='USER_SCOPE_PREPARED_INTERACTIVE_PENDING'
-            }
+            # Machine placement leaves relay and GUI preparation pending.
             $marker=[ordered]@{schema='container-audit-machine-pending-v1';status='PENDING';install_id=$run;
                 target_sid=[string]$Worker.sid;version=[string]$Manifest.version;source_commit=[string]$Manifest.source_commit;
                 install_root=$Root;survey_sha256=[string]$Worker.survey_sha256;installed_at_utc=$started;
@@ -4316,12 +4316,11 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
     }
 }
 
-# Admit the worker before any installation evidence, authority or profile writer.
-try { $machineWorker=Resolve-CanonicalMachineWorker $WorkerAccount $WorkerSurveyInventory (Get-CanonicalInstallationCallerSecurity) }
-catch {
-    $code=if($_.Exception.Message -ceq 'MACHINE_WORKER_ARGUMENTS_REQUIRE_ADMINISTRATOR'){$_.Exception.Message}else{'PENDING_TARGET_AMBIGUOUS'}
-    Write-CanonicalMachinePublicRecord $code
-    exit 4
+function Assert-CanonicalOperatingWorkerAccount([string]$Operation,[bool]$Continuation=$false) {
+    if ($Operation -ceq 'INSTALL' -and -not $Continuation -and -not $testMode -and -not $PlanOnly -and
+        [string]::IsNullOrWhiteSpace($WorkerAccount)) {
+        throw '설치 인수 WorkerAccount에 실제 로컬 작업자 계정 하나를 명시하세요.'
+    }
 }
 
 try {
@@ -4351,6 +4350,15 @@ if ($RestoreVerifiedReplacement) {
 elseif ($RestoreReceiptPath -or $RestoreReceiptSha256) {
     throw 'Restore receipt arguments require -RestoreVerifiedReplacement.'
 }
+# Classify the requested operation before applying the new-install requirement.
+$canonicalOperation=if($CompleteRetiredRemoval){'COMPLETE_RETIRED_REMOVAL'}elseif($Uninstall){'UNINSTALL'}elseif($RestoreVerifiedReplacement){'RESTORE'}elseif($RecoverMachineInstallation){'MACHINE_RECOVERY'}else{'INSTALL'}
+try { $machineWorker=Resolve-CanonicalMachineWorker $WorkerAccount $WorkerSurveyInventory (Get-CanonicalInstallationCallerSecurity) }
+catch {
+    $code=if($_.Exception.Message -ceq 'MACHINE_WORKER_ARGUMENTS_REQUIRE_ADMINISTRATOR'){$_.Exception.Message}else{'PENDING_TARGET_AMBIGUOUS'}
+    Write-CanonicalMachinePublicRecord $code
+    exit 4
+}
+if ($null -ne $machineWorker) { Assert-CanonicalOperatingWorkerAccount $canonicalOperation }
 $source = Full $SourceRoot 'SourceRoot'; $install = Full $InstallRoot 'InstallRoot'
 $SourceRoot = $source
 if (-not $testMode -and -not (Same $install $CanonicalRoot)) { throw 'InstallRoot is not canonical.' }
@@ -4423,6 +4431,7 @@ if ($rollbackContinuation) {
         $continuationPriorFenceSha=Get-ContainerWriterFenceFileSha256 (Get-ContainerWriterFenceActivePath)
     }
 }
+Assert-CanonicalOperatingWorkerAccount $canonicalOperation ([bool]$rollbackContinuation)
 $supportedContext=$null
 $supportedPlacement=$false
 $installedCodeRoot=$install

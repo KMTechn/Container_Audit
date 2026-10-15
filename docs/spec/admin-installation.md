@@ -56,7 +56,15 @@ Run·새 폴더 복원이 모두 확인되면 실패 승인 receipt로 fence를 
 실제 등록·DPAPI·HKCU·ACL·공용 바로가기 및 옛 앱 복원·켜짐은 랩 VM 실제 설치 회차에서
 별도로 검증해야 한다. 키트 `-Rollback` 끝까지의 결과를 제품 fixture PASS로 대신하지 않는다.
 
-### 현재 콘솔 작업자의 자동 선택
+### 새 운영 설치와 지원 작업의 계정 관문
+
+새 운영 설치는 작업을 먼저 분류한 뒤 명시 WorkerAccount를 요구한다. receipt로 결속된 복원,
+완료 제거와 검증된 rollback continuation은 기존 원본·사용자·runtime·fence 검사를 그대로 사용한다.
+기계 배치는 작업자 자료/HKCU를 준비하지 않으며 첫 설정과 상주 relay는 지정 작업자의
+일반 권한·MEDIUM·양수 세션을 확인한다. 관리자 request-app-stop 예외는 유지한다.
+비상 링크 정리 오류와 후속 오류는 모두 보존하며 removed.json에 잔존 링크와 대상 존재를 기록한다.
+
+### 지원 작업의 현재 콘솔 작업자 자동 선택
 
 `-WorkerAccount`와 `-WorkerSurveyInventory`를 모두 생략한 승격 호출은 현재 활성 콘솔 세션의 explorer 소유 SID가 하나이고 그 SID의 ProfileList가 확인될 때만 받는다. 호출자 SID와 세션이 콘솔 작업자와 같으면 기존 일반 설치·업데이트·지원 재개 길을 유지한다. Session 0 또는 다른 관리자는 그 작업자를 기계 배치 대상으로 결속하고 대화형 완료를 PENDING으로 남긴다. 콘솔 없음·소유자 판정 실패·여러 SID는 쓰기 전에 거절한다. 둘 중 하나만 넘긴 명시적 인수는 계속 거절하며, 두 인수를 넘기면 기존 READY inventory 검증을 유지한다.
 

@@ -2122,7 +2122,8 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
     Write-ContainerStartupUpdateRecord -Path $markerPath -Payload @{
         schema='container-audit-supported-removal-v1'; lifecycle_state='REMOVED';
         evidence_root=$evidence; business_data_and_registration_preserved=$true
-        retained_paths=@($remaining.retained_paths); artifact_dispositions=@($plan.decisions)
+        retained_paths=@($remaining.retained_paths)+@($(if(Test-Path -LiteralPath (Get-BootstrapEmergencyShortcutPath $current)){Get-BootstrapEmergencyShortcutPath $current})); artifact_dispositions=@($plan.decisions)
+        emergency_shortcut=(Get-BootstrapEmergencyRemovalState $current)
     }
     $marker = Get-Content -LiteralPath $markerPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ([string]$marker.lifecycle_state -cne 'REMOVED') { throw 'REMOVAL_MARKER_READBACK_FAILED' }

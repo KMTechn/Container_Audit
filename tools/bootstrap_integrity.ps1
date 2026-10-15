@@ -328,6 +328,55 @@ function Install-BootstrapWorkerShortcuts([string]$InstallRoot,[string]$RecordPa
     return [pscustomobject]@{status='PASS';scope=$Scope;record_path=$RecordPath;changed_count=$candidates.Count}
 }
 
+function New-BootstrapEmergencyCleanupFailure($EmergencyFailure,$FollowingFailure) {
+    $causes=[Exception[]]@($EmergencyFailure.Exception,$FollowingFailure.Exception)
+    return [AggregateException]::new('EMERGENCY_SHORTCUT_CLEANUP_AND_FOLLOWUP_FAILED',$causes)
+}
+
+function Complete-BootstrapEmergencyCleanup([string]$InstallRoot,$EmergencyFailure,$FollowingFailure) {
+    $failures=@()
+    if($null -ne $EmergencyFailure){$failures+=@($EmergencyFailure)}
+    if($null -ne $FollowingFailure){$failures+=@($FollowingFailure)}
+    try { Update-BootstrapEmergencyRemovalMarker $InstallRoot $EmergencyFailure }
+    catch { $failures+=@($_) }
+    if($failures.Count -eq 1){throw $failures[0]}
+    if($failures.Count -gt 1){
+        $causes=[Exception[]]@($failures|ForEach-Object {$_.Exception})
+        throw [AggregateException]::new('EMERGENCY_SHORTCUT_CLEANUP_AND_FOLLOWUP_FAILED',$causes)
+    }
+}
+
+function Get-BootstrapEmergencyRemovalState([string]$InstallRoot,$Failure=$null) {
+    $path=Get-BootstrapEmergencyShortcutPath $InstallRoot
+    $target=Join-Path $InstallRoot 'launch-container-audit.cmd'
+    $exists=Test-Path -LiteralPath $path -ErrorAction Stop
+    return [pscustomobject]@{shortcut_path=$path;shortcut_exists=[bool]$exists;
+        target_path=$target;target_exists=[bool](Test-Path -LiteralPath $target -ErrorAction Stop);
+        directory_path=(Split-Path -Parent $path);directory_exists=[bool](Test-Path -LiteralPath (Split-Path -Parent $path) -ErrorAction Stop);
+        cleanup_status=$(if($Failure){'FAILED'}elseif($exists){'RETAINED'}else{'ABSENT'});
+        failure_type=$(if($Failure){$Failure.Exception.GetType().FullName}else{''})}
+}
+
+function Update-BootstrapEmergencyRemovalMarker([string]$InstallRoot,$Failure=$null) {
+    $markerPath=Join-Path (Split-Path -Parent $InstallRoot) 'removed.json'
+    if(-not [IO.File]::Exists($markerPath)){return}
+    Assert-BootstrapNoReparsePoint $markerPath 'emergency removal marker' -PathOnly
+    $marker=Get-Content -LiteralPath $markerPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if([string]$marker.schema -cne 'container-audit-supported-removal-v1' -or [string]$marker.lifecycle_state -cne 'REMOVED'){
+        throw 'Emergency removal marker binding differs.'
+    }
+    $state=Get-BootstrapEmergencyRemovalState $InstallRoot $Failure
+    $marker | Add-Member -NotePropertyName emergency_shortcut -NotePropertyValue $state -Force
+    $path=[string]$state.shortcut_path
+    $directory=[string]$state.directory_path
+    $marker.retained_paths=@($marker.retained_paths | Where-Object {$_ -ine $path -and $_ -ine $directory})
+    if($state.shortcut_exists){$marker.retained_paths+=@($path)}
+    if($state.directory_exists){$marker.retained_paths+=@($directory)}
+    $marker.artifact_dispositions=@($marker.artifact_dispositions | Where-Object {$_.path -ine $path})+@(
+        [pscustomobject]@{path=$path;disposition=$state.cleanup_status;target_exists=$state.target_exists})
+    Write-Utf8Json $markerPath $marker
+}
+
 function Restore-BootstrapWorkerShortcuts([string]$InstallRoot,[string]$RecordPath,[string]$Scope='All',[switch]$DeferEmergencyCleanup) {
     $record=Read-BootstrapWorkerShortcutRecord $InstallRoot $RecordPath $Scope
     $launcher=Join-Path $InstallRoot 'launch-container-audit.cmd'
@@ -339,6 +388,8 @@ function Restore-BootstrapWorkerShortcuts([string]$InstallRoot,[string]$RecordPa
         catch [IO.IOException]{$emergencyFailure=$_}
         catch [UnauthorizedAccessException]{$emergencyFailure=$_}
     }
+    $followingFailure=$null
+    try {
     $shell=New-Object -ComObject WScript.Shell
     try{
         foreach($entry in @($record.entries)){
@@ -357,7 +408,8 @@ function Restore-BootstrapWorkerShortcuts([string]$InstallRoot,[string]$RecordPa
             }
         }
     }finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}
-    if($null -ne $emergencyFailure){throw $emergencyFailure}
+    } catch { $followingFailure=$_ }
+    Complete-BootstrapEmergencyCleanup $InstallRoot $emergencyFailure $followingFailure
     return [pscustomobject]@{status='PASS_RESTORED';scope=$Scope;record_path=$RecordPath}
 }
 

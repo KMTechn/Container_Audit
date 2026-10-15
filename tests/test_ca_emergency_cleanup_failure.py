@@ -98,6 +98,9 @@ if($env:CA_CLEANUP_KIND -eq 'guard'){
 '''
 
 
+DRIVER = ". '" + str(ROOT / 'tools/bootstrap_integrity.ps1').replace("'", "''") + "'\n" + DRIVER
+
+
 @pytest.mark.parametrize('engine',('powershell','pwsh'))
 @pytest.mark.parametrize('kind',('link','folder','guard'))
 @pytest.mark.parametrize('target',('bootstrap','machine'))
