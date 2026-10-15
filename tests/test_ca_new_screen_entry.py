@@ -740,3 +740,39 @@ def test_restart_exit_waits_for_isolated_durable_write_and_mutex_release(entry, 
     with sqlite3.connect(database) as connection:
         assert connection.execute('SELECT value FROM saved').fetchall() == [(1,)]
     assert 'prepare' not in entry.events and 'deiconify' not in entry.events
+
+
+@pytest.mark.parametrize(("outcome", "expected_rc"), [("web", 0), ("exit", 3)])
+def test_shell_outcome_maps_to_process_code_and_keeps_daily_report(entry, monkeypatch, tmp_path, outcome, expected_rc):
+    import startup_check_report as reports
+
+    program_data = tmp_path / "program-data"
+    folder = program_data / "KMTech" / "start-check"
+    folder.mkdir(parents=True)
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
+    monkeypatch.setattr(ca, "_startup_check_observe", reports.observe)
+    monkeypatch.setattr(screen.ScreenLaunchAttempt, "surface_was_seen", lambda self: True)
+    calls = []
+    saved = {}
+
+    def allowed(*args, **kwargs):
+        calls.append("web_allowed")
+        return True
+
+    def run_app(profile, data, **kwargs):
+        calls.append("run_app")
+        kwargs["owner_main"](entry.bridge)
+        ca.CA_SCREEN_HOST.pop("exit", None)
+        reports.publish()
+        paths = list(folder.glob("*-CA.json"))
+        assert len(paths) == 1
+        saved[paths[0]] = paths[0].read_bytes()
+        return outcome
+
+    monkeypatch.setattr(sys.modules["host"], "web_allowed", allowed, raising=False)
+    monkeypatch.setattr(sys.modules["host"], "run_app", run_app)
+    with pytest.raises(SystemExit) as closed:
+        raise SystemExit(ca.main([]))
+    assert type(closed.value.code) is int and closed.value.code == expected_rc
+    assert calls == ["web_allowed", "run_app"]
+    assert saved and {path: path.read_bytes() for path in saved} == saved

@@ -1254,7 +1254,9 @@ def screen_runner(module: Any) -> Callable[[List[str]], Any]:
             if "error" in host:
                 raise host["error"]
             if getattr(attempt, "startup_refused", False) or attempt.surface_was_seen():
-                return host.get("exit", result)
+                # The shell returns outcome strings; SystemExit consumes integers.
+                rc = 0 if result == "web" else 3
+                return host.get("exit", rc)
             raise ScreenStartupUnavailable("SCREEN_START_ERROR")
         except CaStartupRefused as refused:
             return refused.code
