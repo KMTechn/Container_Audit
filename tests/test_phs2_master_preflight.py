@@ -1759,6 +1759,102 @@ def test_offline_queue_other_worker_waiting_label_does_not_displace_active_hold(
     assert app.warnings[-1][0] == "보류 묶음 작업자 확인"
 
 
+@pytest.mark.parametrize("boundary", [
+    "foreign_worker", "manual_quarantine", "changed_fingerprint", "changed_during_move", "explicit_c12",
+])
+def test_offline_return_keeps_other_restorations_behind_c12(tmp_path, monkeypatch, boundary):
+    from Container_Audit import PROTECTED_ADMIN_OPERATOR_ID
+
+    app, _client = _offline_queue_app(tmp_path, monkeypatch)
+    app.worker_role = "WORKER"
+    store = app._preflight_hold_store()
+    held = store.quarantine(app._preflight_hold_quarantine_directory(), reason="fixture")
+    reason = "supervisor_new_work_required" if boundary == "manual_quarantine" else "offline_next_label"
+    assert app._log_event(
+        "PHS2_PREFLIGHT_HOLD_QUARANTINED",
+        detail=app._preflight_hold_ownership_detail(
+            held.snapshot, snapshot_hash=held.snapshot_hash, reason=reason,
+            quarantine_path=held.path,
+        ), synchronous=True,
+    )
+    if boundary == "changed_fingerprint":
+        payload = json.loads(held.path.read_text(encoding="utf-8"))
+        payload["scan_epoch"] += 1
+        held.path.write_text(json.dumps(payload), encoding="utf-8")
+    if boundary == "foreign_worker":
+        app.worker_name = PROTECTED_ADMIN_OPERATOR_ID
+        app.worker_role = "ADMIN"
+        app._authenticated_protected_admin = True
+    original = held.path.read_bytes()
+    app._preflight_hold_snapshot = None
+    app._master_preflight_pending = False
+    app._set_preflight_scan_input_locked(False)
+    approvals = []
+    changed = []
+
+    if boundary == "changed_during_move":
+        restore = PreflightScanHoldStore.restore_quarantined
+
+        def change_before_load(hold_store, filepath, **kwargs):
+            payload = json.loads(held.path.read_text(encoding="utf-8"))
+            payload["scan_epoch"] += 1
+            held.path.write_text(json.dumps(payload), encoding="utf-8")
+            changed.append(held.path.read_bytes())
+            return restore(hold_store, filepath, **kwargs)
+
+        monkeypatch.setattr(PreflightScanHoldStore, "restore_quarantined", change_before_load)
+
+    def require_pin(action, *_args, **_kwargs):
+        approvals.append(action)
+        if False:
+            yield
+        return None
+
+    monkeypatch.setattr(app, "_admin_pin_approval_steps", require_pin)
+    if boundary == "explicit_c12":
+        result = app.restore_quarantined_preflight_hold(str(held.path), confirm=False)
+    else:
+        result = app._run_durable_ui_steps(app._restore_quarantined_preflight_hold_steps(
+            str(held.path), confirm=False, offline_return=held,
+        ))
+        if changed:
+            assert result is False
+            assert approvals == []
+            assert not store.exists()
+            original = changed[0]
+            fresh, = app._offline_waiting_preflight_holds()
+            result = app._run_durable_ui_steps(app._restore_quarantined_preflight_hold_steps(
+                str(fresh.path), confirm=False, offline_return=fresh,
+            ))
+    assert result is False
+    assert approvals == ["CA.PRECHECK_HOLD"]
+    assert held.path.read_bytes() == original
+    assert not store.exists()
+
+
+@pytest.mark.parametrize("raise_error", [False, True])
+def test_offline_queue_intent_audit_failure_keeps_the_active_original(tmp_path, monkeypatch, raise_error):
+    app, client = _offline_queue_app(tmp_path, monkeypatch)
+    store = app._preflight_hold_store()
+    original = store.path.read_bytes()
+    log_event = app._log_event
+
+    def unavailable(event, *args, **kwargs):
+        if event == "PHS2_PREFLIGHT_HOLD_OFFLINE_QUEUEING":
+            if raise_error:
+                raise OSError("fixture intent audit failure")
+            return False
+        return log_event(event, *args, **kwargs)
+
+    app._log_event = unavailable
+    app._process_barcode_logic(OTHER_LABEL)
+    _pump_until(app.root, lambda: not getattr(app, "_preflight_hold_switch_pending", False))
+    assert store.path.read_bytes() == original
+    assert app._quarantined_preflight_holds() == ()
+    assert all(row["scan_payload"] == COMPACT_QR for row in client.identities)
+    assert app.current_tray.master_label_code == ""
+
+
 def test_offline_queue_swaps_labels_then_recovers_original_fifo_before_completion(tmp_path, monkeypatch):
     app, client = _offline_queue_app(tmp_path, monkeypatch)
     store = app._preflight_hold_store()
