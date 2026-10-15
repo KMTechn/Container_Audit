@@ -9314,12 +9314,12 @@
       ],
       "file": "user_relay.py",
       "kind": "function",
-      "line": 671,
+      "line": 676,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 695,
+          "line": 700,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -9372,12 +9372,12 @@
       ],
       "file": "user_relay.py",
       "kind": "function",
-      "line": 804,
+      "line": 812,
       "mutation_sites": [
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 923,
+          "line": 931,
           "operation": "path.mkdir",
           "writer_admission_sources": [
             "persistent_relay_status"
@@ -9386,7 +9386,7 @@
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 924,
+          "line": 932,
           "operation": "path.mkdir",
           "writer_admission_sources": [
             "persistent_relay_status"
@@ -9993,7 +9993,7 @@
       "argument_ast_sha256": "c1eed8eb9116f4c6c08f59df6c9e52f9df16e0befeda2b2646e2c7453ebbebc3",
       "caller": "user_relay.main",
       "classification": "writer_admission",
-      "line": 923,
+      "line": 931,
       "probe_only": true,
       "report_only": false,
       "source": "persistent_relay_status",
@@ -10005,7 +10005,7 @@
       "argument_ast_sha256": "773e572279ed42d5919b32486aa595bd2d6024a711e73dfc863581f28ecbda6a",
       "caller": "user_relay.main",
       "classification": "writer_admission",
-      "line": 924,
+      "line": 932,
       "probe_only": true,
       "report_only": false,
       "source": "persistent_relay_status",
@@ -10796,7 +10796,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "a5fe1798c82c1a4f384dd078d618d8364c704ddcd63738758b3b05aaddd47758",
+  "inventory_sha256": "37e55a1c5263e759f22a52dbe9d64e85204993e16a9c3e1185aea389163d6d03",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -24856,7 +24856,7 @@
       "direct_mutation_site_count": 2,
       "file": "user_relay.py",
       "function": "user_relay.main",
-      "line": 804,
+      "line": 812,
       "marker_kind": "decorator",
       "source": "persistent_relay_status"
     },
@@ -24864,7 +24864,7 @@
       "direct_mutation_site_count": 1,
       "file": "user_relay.py",
       "function": "user_relay.native_app_process_snapshot",
-      "line": 671,
+      "line": 676,
       "marker_kind": "decorator",
       "source": "persistent_relay_status"
     },
