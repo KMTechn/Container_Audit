@@ -19,8 +19,13 @@ Initialize-BootstrapRelaySecurity
 $Script:CanonicalWriterFenceTransactionId='1234567890abcdef1234567890abcdef'
 . (Join-Path (Split-Path -Parent $env:CA_CONTRACT_SOURCE) 'tools/container_writer_fence.ps1')
 if($env:CA_STOP_FIELD_MUTATION -ceq '1'){
- $body=(Get-Command Test-CanonicalOrdinaryRelaySecurity).ScriptBlock.ToString().Replace('integrity_level','integrity_rid')
- Set-Item -LiteralPath Function:Test-CanonicalOrdinaryRelaySecurity -Value ([scriptblock]::Create($body))
+ $mutationAst=[Management.Automation.Language.Parser]::ParseFile($env:CA_CONTRACT_SOURCE,[ref]$null,[ref]$null)
+ $originalField=@($mutationAst.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Test-CanonicalOrdinaryRelaySecurity'},$true))
+ if($originalField.Count -ne 1){throw 'actual security declaration differs'}
+ $originalDeclaration=$originalField[0].Extent.Text
+ $mutatedDeclaration=$originalDeclaration.Replace('integrity_level','integrity_rid')
+ if($mutatedDeclaration.Replace('integrity_rid','integrity_level') -cne $originalDeclaration){throw 'field mutation changed another boundary'}
+ Invoke-Expression $mutatedDeclaration
 }
 $script:called=0;$script:events=[Collections.Generic.List[object]]::new()
 $script:CanonicalInstallerRelayStopAttempted=$false

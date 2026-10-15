@@ -15,6 +15,18 @@ $definitions=$ast.FindAll({param($n)
     return $true
 },$true)
 foreach($definition in $definitions){Invoke-Expression $definition.Extent.Text}
+if($Case -ceq 'bad-ready'){
+    # Retain the actual function declaration and every readiness guard. Only
+    # shorten this negative fixture's six-minute startup grace period.
+    $timed=@($definitions|Where-Object {$_.Name -ceq 'Start-CanonicalRelayAfterFenceRelease'})
+    if($timed.Count -ne 1){throw 'actual startup budget boundary differs'}
+    $originalTimed=$timed[0].Extent.Text
+    $budget='[Math]::Floor(360-'
+    if([regex]::Matches($originalTimed,[regex]::Escape($budget)).Count -ne 1){throw 'actual startup budget differs'}
+    $negativeTimed=$originalTimed.Replace($budget,'[Math]::Floor(2-')
+    if($negativeTimed.Replace('[Math]::Floor(2-',$budget) -cne $originalTimed){throw 'negative fixture changed more than its time budget'}
+    Invoke-Expression $negativeTimed
+}
 $inner=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.CatchClauseAst] -and $n.Body.Extent.Text.Contains('if (-not $enteredPlacementTry)')},$true))
 $outer=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.CatchClauseAst] -and $n.Body.Extent.Text.Contains("`$publicMessage='FAILED_PREPARATION_ADMISSION'")},$true))
 if($inner.Count -ne 1 -or $outer.Count -ne 1){throw 'actual catch boundary differs'}

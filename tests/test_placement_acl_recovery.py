@@ -273,6 +273,7 @@ def test_runtime_rollback_attempts_remaining_steps_after_failure(tmp_path, engin
     result = run_functions(tmp_path, ROOT / 'INSTALL_CANONICAL_PORTABLE.ps1',
                            ['Restore-CanonicalApplicationProtection', 'Invoke-CanonicalRollbackRuntimePreimage', 'Assert-CanonicalRollbackStopCleanup'], r'''
 $testMode=$false;$install=Join-Path $env:CA_CONTRACT_ROOT 'app\current';$operatorSid='S-1-5-21-100-100-100-1000'
+[void][IO.Directory]::CreateDirectory($install)
 $stop=Join-Path $env:CA_CONTRACT_ROOT 'stop.json';[IO.File]::WriteAllText($stop,'owned marker')
 $Script:order=[Collections.Generic.List[string]]::new();$Script:restored=$null
 function Set-InstallationEvidenceStage {}
