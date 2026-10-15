@@ -21,6 +21,22 @@ REPO = Path(updates.__file__).parent
 NATIVE_SLEEP = time.sleep
 
 
+def restored_ready_processes(control, stage):
+    """Simulate fresh OS process/READY readback for the restored ordinary pair."""
+    state = updates.optional_record(control / "transition.json")
+    if not state or state["phase"] != "ROLLBACK_PENDING_READY":
+        return []
+    stamp = updates.now_utc()
+    proof = {"nonce": state["nonce"], "transition_id": state["transition_id"], "pid": 456}
+    updates.write_json_durable(stage / "trial.json", proof)
+    updates.write_json_durable(stage / "ready.json", {
+        **{check: True for check in updates.READY_CHECKS}, **proof,
+        "sha": state["previous_sha"], "ready_at": stamp})
+    return [dict(pid=pid, observable=True, sha=state["previous_sha"], sid=SID,
+                 ordinary_user=True, role=role, created_at=stamp)
+            for pid, role in ((456, "gui"), (457, "relay"))]
+
+
 @pytest.fixture
 def endpoint(monkeypatch, tmp_path):
     control, stage = tmp_path / "update-control", tmp_path / "stage"
@@ -61,7 +77,7 @@ def endpoint(monkeypatch, tmp_path):
     monkeypatch.setattr(updates, "ordinary_user_context", lambda *_: True)
     monkeypatch.setattr(updates, "fixed_helper", lambda *a, **k: "")
     monkeypatch.setattr(updates, "update_lock", lambda *a, **k: contextlib.nullcontext())
-    monkeypatch.setattr(updates, "process_snapshot", lambda *_: [])
+    monkeypatch.setattr(updates, "process_snapshot", lambda *_: restored_ready_processes(control, stage))
     monkeypatch.setattr(updates, "request_apply_task", lambda *_: updates.apply_prepared(control))
     # Time is an OS boundary. No production test hook is added.
     ticks = iter(range(0, 1000000))
@@ -124,10 +140,13 @@ def test_x1_x3_terminal_next_start_really_launches_allowed_version(endpoint, pha
     assert_ordinary(endpoint, NEW)
 
 
-def test_x1_x2_rollback_does_not_retest_confirmed_previous_ready(endpoint):
+def test_x1_x2_rollback_requires_fresh_previous_ready(endpoint, monkeypatch):
     control, _, _, _, _, _ = endpoint
-    updates.apply_prepared(control)  # No bootstrap is present to publish READY.
-    assert updates.read_json(control / "transition.json")["phase"] == "ROLLED_BACK"
+    monkeypatch.setattr(updates, "process_snapshot", lambda *_: [])
+    assert updates.apply_prepared(control) == 20  # No bootstrap publishes READY.
+    result = updates.read_json(control / "transition.json")
+    assert result["phase"] == "FAILED"
+    assert "confirmed_at" not in result
     assert_ordinary(endpoint, OLD)
 
 
@@ -176,7 +195,7 @@ def test_x3_hung_writer_is_preserved_then_recovered_after_logon(endpoint, monkey
     monkeypatch.setattr(updates, "process_snapshot", lambda *_: [{"pid": 456, "observable": False}])
     assert updates.apply_prepared(control) == 20
     assert updates.read_json(control / "active.json")["sha"] == NEW
-    monkeypatch.setattr(updates, "process_snapshot", lambda *_: [])
+    monkeypatch.setattr(updates, "process_snapshot", lambda *_: restored_ready_processes(control, endpoint[1]))
     assert updates.apply_prepared(control) == 0
     assert_ordinary(endpoint, OLD)
 
@@ -333,7 +352,7 @@ def test_x2_retained_candidate_is_previous_for_next_signed_failure(endpoint, mon
     assert state["candidate_sha"] == hot
     assert state["previous_sha"] == NEW
     assert state["phase"] == "ROLLED_BACK"
-    assert not (stage / "ready.json").exists()
+    assert updates.read_json(stage / "ready.json")["sha"] == NEW
     assert_ordinary(endpoint, NEW)
 
 
@@ -538,7 +557,7 @@ def test_deferred_recovery_settles_once_after_writer_exit(endpoint, monkeypatch,
     assert updates.read_json(control / "active.json")["sha"] == NEW
     if advanced:
         generation.record_generation(marker, "v2.0.99", app_id="container_audit", subject_sid=SID, build_id=NEW)
-    monkeypatch.setattr(updates, "process_snapshot", lambda *_: [])
+    monkeypatch.setattr(updates, "process_snapshot", lambda *_: restored_ready_processes(control, endpoint[1]))
     expected = NEW if advanced else OLD
     assert_ordinary(endpoint, expected)  # A fresh icon must request pending recovery.
     settled = updates.read_json(control / "transition.json")
@@ -686,7 +705,7 @@ def test_deferred_recovery_precedes_next_signed_hotfix(endpoint, monkeypatch, ph
     assert updates.apply_prepared(control) == 0
     assert (control / "transition.json").read_bytes() == pending
     assert updates.read_json(control / "active.json")["sha"] == NEW
-    monkeypatch.setattr(updates, "process_snapshot", lambda *_: [])
+    monkeypatch.setattr(updates, "process_snapshot", lambda *_: restored_ready_processes(control, endpoint[1]))
     written = updates.write_json_durable
     decisions = []
     def observe(path, value):

@@ -223,8 +223,9 @@ def test_readiness_io_error_keeps_normal_rollback_and_original_proof(monkeypatch
             write(path.with_name("ready.json"), {**value, "sha": "2" * 40})
     monkeypatch.setattr(updates, "write_json_durable", proof)
     import time
-    ticks = iter(range(0, 10000, 10))
-    monkeypatch.setattr(time, "monotonic", lambda: next(ticks))
+    from itertools import count
+    ticks = count()
+    monkeypatch.setattr(time, "monotonic", lambda: next(ticks) / 10)
     denied = []
     def contested(path, **kwargs):
         journal = tmp_path / "managed/update-control/transition.json"
@@ -234,9 +235,11 @@ def test_readiness_io_error_keeps_normal_rollback_and_original_proof(monkeypatch
                 raise OSError("synthetic sharing contention")
         return original(path, **kwargs)
     monkeypatch.setattr(updates, "read_json", contested)
-    test_engine_candidate_exit_selects_generation_compatible_code_without_reverting_data(monkeypatch, tmp_path, "unchanged")
+    test_engine_candidate_exit_selects_generation_compatible_code_without_reverting_data(monkeypatch, tmp_path, "unchanged", "exit")
     assert denied
-    assert (tmp_path / "operator/updates" / record).read_bytes() == denied[0]
+    # Recovery replaces candidate proofs only with a fresh rollback cohort.
+    proof = original(tmp_path / "operator/updates" / record)
+    assert proof["nonce"] != __import__("json").loads(denied[0])["nonce"]
     state = original(tmp_path / "managed/update-control/transition.json")
     assert state["last_ready_error"] == "OSError"
 

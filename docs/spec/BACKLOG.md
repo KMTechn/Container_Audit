@@ -563,6 +563,10 @@ portable direct-sync 자식은 기존 relay startup gate와 writer sink를 거�
 <a id="ca-g19"></a>
 ## CA-G19 로그온 자동 갱신 실기 수용
 
+sub-238은 같은 소유 scheduler의 SYSTEM/boolean 되읽기와 복원 relay READY 전 완료를 고친다.
+격리 helper 회귀는 실제 task 등록·로그온·앞 판 relay 기동·현장 수용을 대신하지 않는다.
+저장 protocol 1·기존 phase/필드와 writer admission 불변식은 유지하며 새 설치/배포 권한은 추가하지 않는다.
+
 [읽기 전용 시작 확인](startup-check.md)의 headless 시험은 실물 HDD 10초 상한·로그온 작업·
 실제 작업자 계정·원격 알림 수용을 대신하지 않는다. 이 수용은 설치 키트/현장 lane에서 남는다.
 평상시 `app_gui_ready.v1` 표지의 필드·원자 교체·실패 시 화면 진행과 기존 trial 표지

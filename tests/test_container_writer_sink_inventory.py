@@ -366,12 +366,12 @@ def test_container_writer_sink_inventory_has_expected_current_findings(tmp_path)
     ]
     assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
     "call_operator": 19,
-    "com_wmi_process_create": 7,
-    "dot_source": 30,
+    "com_wmi_process_create": 15,
+    "dot_source": 47,
     "dotnet_process_start": 2,
     "invoke_expression": 1,
     "native_process_api": 4,
-    "reflective_invocation": 8,
+    "reflective_invocation": 7,
     "scheduler_com": 5,
     "start_process": 4
 }
@@ -561,11 +561,24 @@ def test_container_writer_sink_inventory_has_expected_current_findings(tmp_path)
 
 
 def test_container_writer_sink_inventory_cli_is_read_only_without_write(
-    tmp_path, capsys
+    tmp_path, capsys, monkeypatch
 ) -> None:
     module = _load_module()
     payload = module.derive_inventory(ROOT)
     assert json.loads(SNAPSHOT.read_text(encoding="utf-8")) == payload
+    # Derive the shipping tree once; the remaining checks exercise CLI modes.
+    monkeypatch.setattr(module, "derive_inventory", lambda _root: payload)
+    isolated_root = tmp_path / "source"
+    originals = {}
+    for relative in (
+        "INSTALL_CANONICAL_PORTABLE.ps1", "tools/bootstrap_integrity.ps1",
+        "tools/container_writer_fence.ps1", "tools/container_writer_session_contract.json",
+    ):
+        originals[relative] = (ROOT / relative).read_bytes()
+        target = isolated_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(originals[relative])
+    monkeypatch.setattr(module, "ROOT", isolated_root)
     encoded = module._canonical_json_bytes(payload)
     snapshot_path = tmp_path / "inventory.json"
     snapshot_path.write_text("stale\n", encoding="utf-8")
@@ -593,6 +606,7 @@ def test_container_writer_sink_inventory_cli_is_read_only_without_write(
     snapshot_path.write_text("stale\n", encoding="utf-8")
     assert module.main(["--write"]) == 0
     assert snapshot_path.read_bytes() == encoded
+    assert all((ROOT / relative).read_bytes() == contents for relative, contents in originals.items())
 
 
 def test_raw_scheduled_task_mutation_outside_approved_wrapper_fails_closed(

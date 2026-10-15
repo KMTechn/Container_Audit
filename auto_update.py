@@ -191,8 +191,12 @@ def rollback_transition(
     if transition.get("failure_decision", {}).get("selected_sha") != transition.get("previous_sha"):
         raise ValueError("rollback requires an observed unchanged data generation")
     _utc(now)
-    # E6: previous was already confirmed; a second READY is no recovery gate.
-    return {**transition, "phase": "ROLLED_BACK", "nonce": _sha(nonce, length=32), "trial_pid": None, "trial_sha": None, "trial_started_at": None, "rollback_at": now, "confirmed_at": now}
+    # Pointer restoration alone does not prove that the restored relay is ready.
+    # Reuse protocol 1's existing trial phase and its GUI/relay READY contract.
+    restored = {**transition, "phase": "ROLLBACK_PENDING_READY", "nonce": _sha(nonce, length=32),
+                "trial_pid": None, "trial_sha": None, "trial_started_at": None, "rollback_at": now}
+    restored.pop("confirmed_at", None)
+    return restored
 
 
 def recovery_sha(transition: Mapping[str, Any], *, pointer_sha: str) -> str:
@@ -1859,7 +1863,84 @@ def settle_trial_failure(control: Path, state: Mapping[str, Any], policy: Mappin
     return state
 
 
+class _RollbackReadyPending(Exception):
+    """Release update ownership before observing the restored ordinary trial."""
+
+
+def observe_trial_ready(control, policy, state, rows, claim, receipt, *, deadline):
+    """Candidate and rollback use the same process-bound READY validation."""
+    import time
+
+    sha = state["previous_sha"] if state["phase"] == "ROLLBACK_PENDING_READY" else state["candidate_sha"]
+    if state.get("trial_pid") is None and claim and claim.get("nonce") == state["nonce"] and claim.get("transition_id") == state["transition_id"]:
+        row = next((row for row in rows if row.get("pid") == claim.get("pid")), None)
+        if row and process_matches_trial(row, state=state, sha=sha, sid=policy["operator_sid"], role="gui"):
+            state = bind_trial(state, sha=sha, pid=row["pid"], ordinary_user=True, now=row["created_at"])
+            write_json_durable(control / "transition.json", state)
+    gui = next((row for row in rows if row.get("pid") == state.get("trial_pid")), None)
+    relays = [row for row in rows if process_matches_trial(row, state=state, sha=sha, sid=policy["operator_sid"], role="relay")]
+    process_ok = bool(gui and process_matches_trial(gui, state=state, sha=sha, sid=policy["operator_sid"], role="gui"))
+    if time.monotonic() < deadline and receipt and ready_matches(state, receipt, process_matches=process_ok, relay_matches=len(relays) == 1, now=now_utc()):
+        confirmed = confirm_transition(state, receipt, process_matches=process_ok, relay_matches=True, now=now_utc())
+        write_json_durable(control / "transition.json", confirmed)
+        record_confirmed_policy(control, confirmed)
+        return confirmed, True, False
+    return state, False, bool(state.get("trial_pid") and gui is None)
+
+
+def wait_for_rollback_ready(control: Path, policy: Mapping[str, Any]) -> int:
+    """Resume the existing recovery window without renewing it after a restart."""
+    import time
+
+    stage = Path(policy["staging_root"])
+    with update_lock(control, policy["operator_sid"]):
+        state = read_json(control / "transition.json")
+        if state.get("phase") == "ROLLED_BACK":
+            return 0
+        if state.get("phase") != "ROLLBACK_PENDING_READY":
+            return 20
+        remaining = max(0.0, 120 - (_utc(now_utc()) - _utc(state.get("rollback_at", state["applied_at"]))).total_seconds())
+    deadline = time.monotonic() + min(120.0, remaining)
+    while time.monotonic() < deadline:
+        with update_lock(control, policy["operator_sid"]):
+            state = read_json(control / "transition.json")
+            if state.get("phase") == "ROLLED_BACK":
+                return 0
+            if (state.get("phase") != "ROLLBACK_PENDING_READY"
+                    or read_json(control / "active.json")["sha"] != state["previous_sha"]):
+                return 20
+            try:
+                rows = process_snapshot(control)
+                claim = optional_record(stage / "trial.json")
+                receipt = optional_record(stage / "ready.json")
+                state, confirmed, exited = observe_trial_ready(
+                    control, policy, state, rows, claim, receipt, deadline=deadline)
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                # Unreadable or forged evidence cannot confirm or renew the trial.
+                write_json_durable(control / "transition.json", {**state, "last_ready_error": type(error).__name__})
+                confirmed = exited = False
+            if confirmed:
+                return 0
+            if exited:
+                break
+        time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
+    with update_lock(control, policy["operator_sid"]):
+        state = read_json(control / "transition.json")
+        if state.get("phase") == "ROLLED_BACK":
+            return 0
+        if state.get("phase") == "ROLLBACK_PENDING_READY":
+            write_json_durable(control / "transition.json", {**state, "phase": "FAILED", "reason": "previous version readiness failed"})
+    return 20
+
+
 def _apply_prepared(control: Path) -> int:
+    try:
+        return _apply_prepared_once(control)
+    except _RollbackReadyPending:
+        return wait_for_rollback_ready(control, read_json(control / "policy.json"))
+
+
+def _apply_prepared_once(control: Path) -> int:
     """SYSTEM applies code only; the operator bootstrap launches the trial."""
     import time
     from update_service import file_sha256
@@ -1900,10 +1981,21 @@ def _apply_prepared(control: Path) -> int:
                     "recovery_pending": True, "recovery_phase": state["phase"],
                     "recovery_reason_code": state.get("reason_code")})
                 return 0
-        if state and state["phase"] in {"UNKNOWN", "FAILED", "ROLLBACK_PENDING_READY"}:
+        if state and state["phase"] == "ROLLBACK_PENDING_READY":
+            pointer = read_json(control / "active.json")
+            selected = recovery_sha(state, pointer_sha=pointer["sha"])
+            if pointer["sha"] != selected:
+                if writer_processes(process_snapshot(control), own_pid=os.getpid()):
+                    return 20
+                fixed_helper(control, "Verify", code_root=version_bundle(control, selected))
+                persist_switch(control, state, selected)
+            raise _RollbackReadyPending
+        if state and state["phase"] in {"UNKNOWN", "FAILED"}:
             if writer_processes(process_snapshot(control), own_pid=os.getpid()):
                 return 20
             state = settle_trial_failure(control, state, policy)
+            if state["phase"] == "ROLLBACK_PENDING_READY":
+                raise _RollbackReadyPending
         if state and state.get("retained_candidate") is True and state["phase"] == "DEFERRED":
             # Resume an interrupted decision publication without retrying the trial.
             selected = recovery_sha(state, pointer_sha=read_json(control / "active.json")["sha"])
@@ -1995,7 +2087,9 @@ def _apply_prepared(control: Path) -> int:
                 if writer_processes(process_snapshot(control), own_pid=os.getpid()):
                     return 20
                 settled = settle_trial_failure(control, state, policy)
-                return 20 if settled.get("retained_candidate") else 0
+                if settled.get("retained_candidate"):
+                    return 20
+                raise _RollbackReadyPending
             sha = recovery_sha(state, pointer_sha=pointer["sha"])
             if pointer["sha"] != sha:
                 if writer_processes(process_snapshot(control), own_pid=os.getpid()):
@@ -2005,6 +2099,10 @@ def _apply_prepared(control: Path) -> int:
     while time.monotonic() < deadline:
         with update_lock(control, policy["operator_sid"]):
             state = read_json(control / "transition.json")
+            if state["phase"] in {"CONFIRMED", "ROLLED_BACK"}:
+                return 0
+            if state["phase"] not in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"}:
+                return 20
             rows = process_snapshot(control)
             claim = None
             receipt = None
@@ -2016,25 +2114,17 @@ def _apply_prepared(control: Path) -> int:
                 # journal deadline and normal stop/rollback decision alive.
                 state = {**state, "last_ready_error": type(error).__name__}
                 write_json_durable(control / "transition.json", state)
-            sha = state["previous_sha"] if state["phase"] == "ROLLBACK_PENDING_READY" else state["candidate_sha"]
-            if state.get("trial_pid") is None and claim and claim.get("nonce") == state["nonce"] and claim.get("transition_id") == state["transition_id"]:
-                row = next((row for row in rows if row.get("pid") == claim.get("pid")), None)
-                if row and process_matches_trial(row, state=state, sha=sha, sid=policy["operator_sid"], role="gui"):
-                    state = bind_trial(state, sha=sha, pid=row["pid"], ordinary_user=True, now=row["created_at"])
-                    write_json_durable(control / "transition.json", state)
-            gui = next((row for row in rows if row.get("pid") == state.get("trial_pid")), None)
-            relays = [row for row in rows if process_matches_trial(row, state=state, sha=sha, sid=policy["operator_sid"], role="relay")]
-            process_ok = bool(gui and process_matches_trial(gui, state=state, sha=sha, sid=policy["operator_sid"], role="gui"))
-            if receipt and ready_matches(state, receipt, process_matches=process_ok, relay_matches=len(relays) == 1, now=now_utc()):
-                confirmed = confirm_transition(state, receipt, process_matches=process_ok, relay_matches=True, now=now_utc())
-                write_json_durable(control / "transition.json", confirmed)
-                record_confirmed_policy(control, confirmed)
+            state, confirmed, exited = observe_trial_ready(
+                control, policy, state, rows, claim, receipt, deadline=deadline)
+            if confirmed:
                 return 0
-            if state.get("trial_pid") and gui is None:
+            if exited:
                 break
         time.sleep(0.25)
     with update_lock(control, policy["operator_sid"]):
         state = read_json(control / "transition.json")
+        if state["phase"] in {"CONFIRMED", "ROLLED_BACK"}:
+            return 0
         if state["phase"] == "ROLLBACK_PENDING_READY":
             write_json_durable(control / "transition.json", {**state, "phase": "FAILED", "reason": "previous version readiness failed"})
             return 20
@@ -2051,7 +2141,9 @@ def _apply_prepared(control: Path) -> int:
         with update_lock(control, policy["operator_sid"]):
             if not writer_processes(process_snapshot(control), own_pid=os.getpid()):
                 settled = settle_trial_failure(control, state, policy)
-                return 20 if settled.get("retained_candidate") else 0
+                if settled.get("retained_candidate"):
+                    return 20
+                raise _RollbackReadyPending
         time.sleep(0.25)
     write_json_durable(control / "transition.json", {**state, "phase": "UNKNOWN", "reason": "candidate normal stop could not be proven"})
     return 20
