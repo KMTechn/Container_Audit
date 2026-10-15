@@ -123,8 +123,9 @@ def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
         "scan_times": [dt.isoformat() for dt in tray.scan_times],
         "tray_size": tray.tray_size,
         "mismatch_error_count": tray.mismatch_error_count,
-        "total_idle_seconds": tray.total_idle_seconds,
-        "stopwatch_seconds": tray.stopwatch_seconds,
+        # Retain the checkpoint schema without persisting personal timing metrics.
+        "total_idle_seconds": 0.0,
+        "stopwatch_seconds": 0.0,
         "start_time": tray.start_time.isoformat() if tray.start_time else None,
         "has_error_or_reset": tray.has_error_or_reset,
         "is_test_tray": tray.is_test_tray,

@@ -475,24 +475,4 @@ def load_session_history(
         if not session.get("is_test_tray", False) and not session.get("is_partial_submission", False):
             history.total_tray_count += 1
 
-    valid_times: List[float] = []
-    for session in current_week_sessions:
-        capacity = _session_capacity(session, tray_size)
-        scan_count = _session_scan_count(session)
-        if not (
-            scan_count == capacity
-            and session.get("has_error_or_reset") is False
-            and session.get("is_partial_submission") is False
-            and session.get("is_restored_session") is False
-            and session.get("is_test_tray") is False
-        ):
-            continue
-        try:
-            work_time = float(session.get("work_time_sec", 0.0))
-        except (TypeError, ValueError):
-            history.load_errors.append(f"{session.get('_history_source', 'TRAY_COMPLETE')} work_time_sec 처리 중 오류")
-            continue
-        if work_time / capacity >= minimum_realistic_time_per_pc:
-            valid_times.append(work_time)
-    history.completed_tray_times = valid_times
     return history

@@ -900,14 +900,6 @@ def complete_tray_steps(
                 self.COLOR_SUCCESS,
             )
 
-        # 조건에 맞는 경우 최고 기록 갱신
-        if self._completion_time_eligible_for_best_time(log_detail):
-            work_time = float(log_detail["work_time_sec"])
-            self.completed_tray_times.append(work_time) # 주간 평균 계산을 위해 유지
-            try:
-                yield lambda: self._update_best_time_records(work_time) # 30일 최고 기록 갱신
-            except Exception as e:
-                print(f"최고 기록 갱신 실패: {e}")
     state_delete_failed = yield from apply_completed_tray_state_steps(
         self, session_factory=session_factory, _lane_prechecked=_lane_prechecked,
         master_label=master_label, item_code=item_code,

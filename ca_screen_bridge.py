@@ -1013,7 +1013,7 @@ class CaProcessor:
                     shown_restricted[-1] = missing
         park = park[:50 - len(shown_restricted)] + shown_restricted
         return {"park": park, "held_count": total, "overflow": total > len(park),
-                "today": today_values(self.app), "stats": []}
+                "today": today_values(self.app)}
 
     # 명령 ──────────────────────────────────────────────
     def _cmd_ack(self, _id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:

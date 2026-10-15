@@ -1418,26 +1418,14 @@ class ContainerAudit:
     def _load_audio_feedback(self):
         self._start_audio_feedback_initialization()
     def _load_best_time_records(self):
-        """설정 폴더에서 30일 최고 기록 파일을 불러옵니다."""
-        self.best_time_file_path = str(self.storage_paths.best_time_records_path)
-        self.best_time_store = BestTimeRecordStore(self.best_time_file_path)
-        self.best_time_records = self.best_time_store.load()
-        if self.best_time_store.load_warning:
-            self.root.after(
-                0, self.show_status_message,
-                f"최고 기록 확인: {self.best_time_store.load_warning}", self.COLOR_IDLE, 0,
-            )
+        """Personal timing statistics are retired; leave historical files untouched."""
+        self.best_time_records = {}
 
     def _save_best_time_records(self):
-        """현재 최고 기록 데이터를 파일에 저장합니다."""
-        try:
-            self.best_time_store.save(self.best_time_records)
-        except Exception as e:
-            print(f"최고 기록 저장 실패: {e}")
+        """Compatibility hook: no personal timing statistics are persisted."""
 
     def _update_best_time_records(self, new_time: float):
-        """새로운 완료 시간을 받아 최고 기록을 갱신하고 저장합니다."""
-        self.best_time_records = self.best_time_store.update_best_time(self.best_time_records, new_time)
+        """Compatibility hook: no personal timing statistics are collected."""
             
     def _setup_paths_and_dirs(self):
         """애플리케이션에서 사용하는 주요 경로와 디렉터리를 설정하고 생성합니다."""

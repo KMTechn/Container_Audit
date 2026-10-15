@@ -2853,7 +2853,7 @@ def test_session_history_loads_daily_summary_completed_labels_and_clean_times(tm
     assert history.total_tray_count == 1
     assert history.work_summary["AAA2270730100"]["count"] == 1
     assert history.work_summary["BBB2270730100"]["test_count"] == 1
-    assert history.completed_tray_times == [360.0]
+    assert history.completed_tray_times == []
     assert label_qr.canonical_master_label_key('{"CLC":"AAA2270730100","QT":"60"}') in history.completed_master_labels
     assert label_qr.canonical_master_label_key("PHS=1|CLC=BBB2270730100|QT=60") not in history.completed_master_labels
 
@@ -2949,7 +2949,7 @@ def test_session_history_dedupes_replayed_qr_completion_for_summary_and_times(tm
 
     assert history.total_tray_count == 1
     assert history.work_summary["AAA2270730100"]["count"] == 1
-    assert history.completed_tray_times == [360.0]
+    assert history.completed_tray_times == []
     assert label_qr.canonical_master_label_key(replayed_label) in history.completed_master_labels
 
 
@@ -2980,7 +2980,7 @@ def test_session_history_keeps_legacy_raw_completion_rows_conservative(tmp_path)
 
     assert history.total_tray_count == 2
     assert history.work_summary["AAA2270730100"]["count"] == 2
-    assert history.completed_tray_times == [360.0, 420.0]
+    assert history.completed_tray_times == []
 
 
 def test_session_history_uses_all_workers_for_completed_labels_but_current_worker_for_summary(tmp_path):
@@ -3175,7 +3175,7 @@ def test_session_history_local_received_data_handles_today_past_and_injection_ro
     assert history.total_tray_count == 1
     assert history.work_summary[malicious_item]["count"] == 1
     assert "BBB2270730100" not in history.work_summary
-    assert history.completed_tray_times == [20.0]
+    assert history.completed_tray_times == []
     assert label_qr.canonical_master_label_key(malicious_label) in history.completed_master_labels
     assert label_qr.canonical_master_label_key(past_label) in history.completed_master_labels
     assert len(history.load_errors) == 1
@@ -3332,7 +3332,7 @@ def test_session_history_uses_event_tray_capacity_for_clean_time(tmp_path):
         tray_size=60,
     )
 
-    assert history.completed_tray_times == [20.0]
+    assert history.completed_tray_times == []
 
 
 def test_session_history_uses_item_spec_fallback_for_summary(tmp_path):
@@ -3508,7 +3508,7 @@ def test_session_history_skips_parseable_malformed_complete_row_and_continues(tm
     )
 
     assert history.work_summary["AAA2270730100"]["count"] == 1
-    assert history.completed_tray_times == [360.0]
+    assert history.completed_tray_times == []
     assert len(history.load_errors) == 1
     assert "2행 TRAY_COMPLETE" in history.load_errors[0]
 
@@ -3668,7 +3668,7 @@ def test_session_history_skips_parseable_malformed_boolean_complete_row_and_cont
     assert "BAD2270730100" not in history.work_summary
     assert history.work_summary["AAA2270730100"]["count"] == 1
     assert history.total_tray_count == 1
-    assert history.completed_tray_times == [360.0]
+    assert history.completed_tray_times == []
     assert len(history.load_errors) == 1
     assert "2행 TRAY_COMPLETE" in history.load_errors[0]
 
@@ -3726,7 +3726,7 @@ def test_session_history_skips_invalid_work_time_without_losing_summary(tmp_path
 
     assert history.work_summary["AAA2270730100"]["count"] == 1
     assert history.completed_tray_times == []
-    assert any("work_time_sec" in error for error in history.load_errors)
+    assert history.load_errors == []
 
 
 def test_session_history_ignores_backup_suffix_log_files(tmp_path):
@@ -3831,7 +3831,7 @@ def test_app_load_session_state_warns_and_keeps_readable_records(
 
     assert app.total_tray_count == valid_count
     assert len(app.work_summary) == valid_count
-    assert app.completed_tray_times == ([360.0] if valid_count else [])
+    assert app.completed_tray_times == []
     if valid_count:
         assert app.work_summary["AAA2270730100"]["count"] == 1
         assert app._is_completed_master_label("QT=60|CLC=AAA2270730100|PHS=1")
@@ -7373,7 +7373,7 @@ def test_complete_tray_still_resets_when_best_time_update_fails(tmp_path):
 
     app.complete_tray()
 
-    assert app.completed_tray_times == [300.0]
+    assert app.completed_tray_times == []
     assert app.total_tray_count == 1
     assert app.current_tray.master_label_code == ""
     assert app.state_deleted is True
@@ -7532,8 +7532,8 @@ def test_complete_tray_matches_reload_time_best_time_eligibility(tmp_path, work_
 
     app.complete_tray()
 
-    assert app.completed_tray_times == expected_updates
-    assert updates == expected_updates
+    assert app.completed_tray_times == []
+    assert updates == []
     assert app.current_tray.master_label_code == ""
 
 
