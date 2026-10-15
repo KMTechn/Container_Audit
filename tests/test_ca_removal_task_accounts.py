@@ -50,7 +50,7 @@ if($env:CA_ACCOUNT_CASE -in @('foreign_principal','unresolved')){
 
 
 def test_machine_recovery_new_code_removal_uses_shared_task_identity_guard(tmp_path):
-    result = run_functions(tmp_path, ROOT / "INSTALL_CANONICAL_PORTABLE.ps1", [], r'''
+    result = run_functions(tmp_path, ROOT / "INSTALL_CANONICAL_PORTABLE.ps1", ["Resolve-CanonicalWorkerSid"], r'''
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile($env:CA_CONTRACT_SOURCE,[ref]$tokens,[ref]$errors)
 $functions=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)
