@@ -387,7 +387,7 @@ def test_frozen_package_guard_rejects_actual_forbidden_files(tmp_path, forbidden
 
 def test_portable_builder_requires_pinned_screen_native_closure_and_curated_tools():
     assert portable_builder.EXPECTED_PYTHON == (3, 12, 10)
-    assert len(portable_builder.APP_NATIVE_ALLOWLIST) == 6
+    assert len(portable_builder.APP_NATIVE_ALLOWLIST) == 8
     assert len(portable_builder.APP_NATIVE_UNSIGNED) == 3
     assert portable_builder.APP_NATIVE_UNSIGNED <= set(portable_builder.APP_NATIVE_ALLOWLIST)
     assert "ca_screen_bridge.py" in portable_builder.APP_ROOT_FILES

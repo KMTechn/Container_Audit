@@ -18,8 +18,7 @@ def _record_installed_packet(tmp_path, packet):
     result = run_functions(tmp_path, source / "tools/bootstrap_integrity.ps1", [
         "Get-StrictFullPath", "Get-RelativeCodePath", "Get-FileSha256", "Get-CodeInventory",
         "Get-InventoryAggregate", "Protect-InstallationText", "Assert-InstallationMachineMetadataNoSecrets",
-        "Write-Utf8Json", "Write-BootstrapIntegrityRecord",
-    ], f"""
+        "Write-Utf8Json", "Write-BootstrapIntegrityRecord", "Invoke-ContainerAtomicReplaceOnce", "Invoke-ContainerAtomicReplace"], f"""
 $BootstrapIntegritySchema='container-audit-bootstrap-integrity-v1'
 $BootstrapIntegrityFileName='bootstrap-integrity.json'
 [void](Write-BootstrapIntegrityRecord -Root '{literal}' -CodeRootIdentity '.')

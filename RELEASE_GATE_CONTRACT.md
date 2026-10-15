@@ -11,6 +11,29 @@ for relevant changes, failures, or unresolved risks. The publication and
 deployment controls below apply when those actions are actually assigned;
 they are not extra gates for routine source or documentation maintenance.
 
+## Native files in the portable app
+
+The pywebview 6.2.1 packet must contain the actual `WebView2Loader.dll` files
+under `webview/lib/runtimes/win-arm64/native`, `win-x64/native`, and
+`win-x86/native`, including on an x64 PC. `edgechromium` resolves all three
+paths while importing; empty directories are insufficient and are absent
+from a file-only ZIP. Only the loader for the running architecture is loaded.
+
+The builder requires exactly eight app native files with fixed sizes and
+SHA-256 hashes. Core, WinForms and the three Loaders retain Microsoft
+Authenticode signatures; the existing three unsigned dependencies retain
+their separate exact pins. ARM64 (147,016 bytes) and x86 (121,928 bytes) match
+the approved `NATIVE-ALLOWLIST.json`, source SHA-256
+`b58c9873926e26056672f8aa7f2fae9ba0a1dc11a9f5b4ca12dc727959c07c42`.
+The builder records this source pin in `build_environment`.
+
+Before releasing, extract the outgoing ZIP on E: and use that extracted
+runtime to import `webview.platforms.edgechromium` and run the approved
+headless WebView2 probe (webview, pythonnet, edgechromium, Core/runtime).
+Require every stage to succeed and verify all three Loader files against
+the pins. A diagnostic stage ZIP can prove this import closure before an
+authorized build; the final outgoing ZIP still receives the same checks.
+
 ## 현장 옛 판 전환 중 공개 발행 동결
 
 현장 옛 이적 판이 모두 걷힐 때까지(되돌림 기간 포함) 공개 릴리스·태그 push·GitHub latest 변경은 0건으로 유지한다. 새 판은 회사 서버 private feed·설치 패키지로만 전달한다. v2.0.9는 시작 때 `releases/latest` 태그를 문자열로 비교하므로 `v2.0.99 > v2.0.9`이면 작업자에게 서명 없는 ZIP 덮어쓰기를 제시한다. 아래 공개 발행 절차는 이 동결이 해제된 뒤에만 적용한다. 저장소의 `gh release create/edit` 호출은 `--latest=false`(또는 `make_latest` false)를 명시해야 하며, 이 방어 설정 자체가 동결 기간의 공개 발행 권한은 아니다.
