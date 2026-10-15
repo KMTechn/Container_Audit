@@ -31,14 +31,14 @@ def assert_undeployed_tools_absent(table, stock_names):
 @pytest.mark.parametrize('engine', ('powershell.exe','pwsh.exe'))
 @pytest.mark.parametrize('mutation', ('ea','892','byte','mixed','ea-absent','892-present',
     'inventory','commit','reverse','after-byte','same-build','projection-before-byte','projection-after-byte'))
-def test_installed_release_exact_pair_binds_complete_preimages(tmp_path, engine, mutation):
+def test_installed_release_exact_pair_binds_complete_preimages(tmp_path, engine, mutation, release=None):
     declaration=json.loads((ROOT/'tools/container_data_generation_transition.json').read_bytes())
     releases={row['source_commit']:row for row in declaration['installed_release_preimages']}
-    assert set(releases)=={EA,INSTALLED}
+    assert set(releases)=={EA,INSTALLED,"e0c46f4104c3034f061580f11718aca2bc209bcc","d3a1ad7b2364aae808c36a2359b18b04f92025e2"}
     assert all(len(row['files'])==25 for row in releases.values())
     before=tmp_path/'before';after=tmp_path/'after'
     before.mkdir();after.mkdir()
-    selected=EA if mutation in ('ea','ea-absent') else INSTALLED
+    selected=release or (EA if mutation in ('ea','ea-absent') else INSTALLED)
     source_map={f['path']:e['path'] for e in declaration['source_replacements'] for f in declaration['files']
                 if f['path'] in (e['path'],'app/'+e['path']) or
                    (e['path']=='portable/main.py' and f['path']=='app/main.py')}
@@ -119,3 +119,9 @@ def test_non_deployed_g_tools_fail_if_added_to_stock(tmp_path):
             if path.is_file():output.write(path,path.relative_to(stock).as_posix())
     with zipfile.ZipFile(archive) as package:
         assert_undeployed_tools_absent(json.loads((ROOT/'tools/container_data_generation_transition.json').read_bytes()),set(package.namelist()))
+
+
+@pytest.mark.parametrize("engine", ("powershell", "pwsh"))
+@pytest.mark.parametrize("release", ("e0c46f4104c3034f061580f11718aca2bc209bcc", "d3a1ad7b2364aae808c36a2359b18b04f92025e2"))
+def test_v107_v108_installed_release_to_current_exact_admission(tmp_path, engine, release):
+    test_installed_release_exact_pair_binds_complete_preimages(tmp_path, engine, 'ea', release=release)

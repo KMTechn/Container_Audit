@@ -36,6 +36,7 @@ def declaration_root(tmp_path, monkeypatch):
     path.write_bytes(refresh.inventory._canonical_json_bytes(declaration))
     monkeypatch.setattr(refresh, 'ROOT', tmp_path)
     monkeypatch.setattr(refresh.inventory, 'main', lambda _args: 0)
+    monkeypatch.setattr(refresh, "INSTALLED_RELEASE_SOURCES", ())
     return tmp_path, copy.deepcopy(declaration)
 
 

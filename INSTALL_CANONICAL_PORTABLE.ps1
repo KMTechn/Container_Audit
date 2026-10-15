@@ -766,7 +766,7 @@ function Test-InstalledReleasePreimages($Old,$New,[string]$BeforeRoot,[string]$A
             [string]$declaration.direction -cne 'forward' -or
             [string]$declaration.after_inventory_sha256 -cne [string]$New.writer_sink_inventory_contract_sha256) { return $false }
         $rows=@($declaration.installed_release_preimages)
-        if ($rows.Count -ne 2) { return $false }
+        if ($rows.Count -ne 4) { return $false }
         $releases=@{}
         foreach($row in $rows) {
             if (-not (Test-ExactPropertySet $row @('source_commit','writer_inventory_sha256','files')) -or
