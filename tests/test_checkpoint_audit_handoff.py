@@ -41,8 +41,12 @@ def test_pending_undo_audit_survives_short_completion_after_outbox_failure(flow,
         pending, = [e for e in checkpoint['pending_audit_events'] if e['log_entry']['event'] == 'SCAN_UNDO']
         assert app.current_tray.scanned_barcodes == [ITEM + '-SERIAL-001']
         app._process_barcode_logic(COMPACT_QR)
-        assert app.current_tray.master_label_code == ''
-        completion_id = app._short_confirmation_undo['completion_id']
+        assert app._partial_submission_state() is not None
+        assert app._confirm_partial_submission()
+        assert not app.current_tray.master_label_code
+        short_path, = app._short_projection_path("unused").parent.glob("*.json")
+        short = json.loads(short_path.read_bytes())
+        completion_id = short['contract']['idempotency_key']
         short_path = app._short_projection_path(completion_id)
         short = json.loads(short_path.read_text(encoding='utf-8'))
         assert pending in short['state']['pending_audit_events']
@@ -58,9 +62,9 @@ def test_pending_undo_audit_survives_short_completion_after_outbox_failure(flow,
     if followup == 'settle':
         assert restarted._settle_short_completion_projection(completion_id)
     else:
-        restarted._short_confirmation_undo = {'state': short['state'],
-            'intent_id': short['intent_id'], 'completion_id': completion_id}
-        assert restarted._undo_short_confirmation()
+        recovered = restarted._recover_short_completion_projections(restarted.transfer_seal_coordinator)
+        assert "error" not in recovered
+        assert not restarted._undo_short_confirmation()
     assert restarted._flush_pending_event_logs()
     rows = _rows(restarted, 'SCAN_UNDO')
     assert len(rows) == 1, {'followup': followup, 'undo_rows': rows,

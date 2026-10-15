@@ -122,10 +122,11 @@ def test_audio_failure_preserves_full_and_partial_durable_completion(flow, monke
     app._process_barcode_logic(ITEM + "-AUDIO-001")
     if partial:
         assert app._complete_current_tray_as_partial() is True
-        assert app._short_confirmation_undo is not None
-        path = app._short_projection_path(app._short_confirmation_undo["completion_id"])
+        assert app._short_confirmation_undo is None
+        path, = app._short_projection_path("unused").parent.glob("*.json")
         assert path.is_file()
-        assert _rows(app, "TRAY_COMPLETE") == []  # Original deferred projection contract.
+        assert len(_rows(app, 'TRAY_COMPLETE')) == 1
+        assert not app.current_tray.master_label_code
     else:
         app._process_barcode_logic(ITEM + "-AUDIO-002")
         assert len(_rows(app, "TRAY_COMPLETE")) == 1

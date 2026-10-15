@@ -1388,7 +1388,7 @@
     {
       "path": "app/tray_completion.py",
       "before": "a04e9d08bf543dfd4e83341f92510491c9a82a477cc5530a9859c55b8d8388a7",
-      "after": "396c4cdc03f1f840314185093599d8cfdc9dbea9fbb70ad8c4d599570ef7cb32"
+      "after": "efd3e9d7619d9c0bbc3f3971069671151d9052f635161791adbe583247ab0fc4"
     },
     {
       "path": "app/tray_state.py",

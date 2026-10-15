@@ -8116,11 +8116,11 @@ def test_worker_scanner_partial_submit_writes_completion_and_relay_plan(tmp_path
     app.submit_current_tray()
 
     assert not Path(app.log_file_path).exists()
-    assert app._short_confirmation_undo is not None
-    assert expiry_jobs and 0 <= expiry_jobs[0][0] <= 60001
-    expiry_job = app._short_confirmation_expiry_job
-    assert app._commit_short_confirmation()
-    assert cancelled_jobs == [expiry_job]
+    assert app._partial_submission_state() is not None
+    assert expiry_jobs == []
+    assert app._confirm_partial_submission()
+    assert app._short_confirmation_undo is None
+    assert cancelled_jobs == []
     with open(app.log_file_path, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     assert len(rows) == 1

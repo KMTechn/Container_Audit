@@ -917,6 +917,7 @@ def complete_tray_steps(
         completion_snapshot=completion_snapshot,
         post_review_required=post_review_required, post_review_case=post_review_case,
         supplement_intent=supplement_intent,
+        is_partial=is_partial,
     )
     if not is_test and transfer_attempt.local_completion_id:
         yield lambda: self._transfer_seal_runtime().store.mark_scan_completion_projected(transfer_attempt.intent_id)
@@ -979,10 +980,11 @@ def present_completed_tray(
     post_review_required: bool,
     post_review_case: Optional[Dict[str, Any]],
     supplement_intent: str = "",
+    is_partial: bool = False,
 ) -> None:
     """Present the already applied completion using the owner's existing UI."""
     self._last_shipping_supplement_intent = supplement_intent
-    sound = getattr(self, "completion_sound", None)
+    sound = getattr(self, "error_sound" if is_partial else "completion_sound", None)
     if sound is not None:
         try:
             play_sound(sound)

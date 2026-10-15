@@ -31,11 +31,7 @@ def audit_rows(app, event):
 
 
 @pytest.mark.parametrize('replay', ['retry', 'next_scan', 'restart'])
-@pytest.mark.parametrize('action,event', [
-    ('undo', 'SCAN_UNDO'), ('park', 'TRAY_PARKED'), ('reset', 'TRAY_RESET'),
-    ('exchange', 'PRODUCT_EXCHANGE_COMPLETED'), ('complete', 'TRAY_COMPLETE'),
-    ('short', 'TRAY_COMPLETE'), ('short_undo', 'TRAY_SHORT_CONFIRMATION_UNDONE'),
-])
+@pytest.mark.parametrize('action,event', [('undo', 'SCAN_UNDO'), ('park', 'TRAY_PARKED'), ('reset', 'TRAY_RESET'), ('exchange', 'PRODUCT_EXCHANGE_COMPLETED'), ('complete', 'TRAY_COMPLETE'), ('short', 'TRAY_COMPLETE'), ('short_undo', 'SCAN_UNDO')])
 def test_saved_action_survives_csv_failure(flow, windows, monkeypatch, tmp_path, action, event, replay):
     app = _active(flow)
     app.parked_trays_dir = str(tmp_path / 'parked')
@@ -74,12 +70,13 @@ def test_saved_action_survives_csv_failure(flow, windows, monkeypatch, tmp_path,
         assert app.current_tray.master_label_code == ''
     else:
         app._process_barcode_logic(COMPACT_QR)
-        assert app._short_confirmation_undo
+        assert app._partial_submission_state()
         if action == 'short_undo':
-            assert app._undo_short_confirmation() is True
-            assert app.current_tray.scanned_barcodes == [ITEM + '-SERIAL-001']
+            assert app._continue_partial_submission()
+            app.undo_last_scan()
+            assert app.current_tray.scanned_barcodes == []
         else:
-            assert app._commit_short_confirmation() is True
+            assert app._confirm_partial_submission()
     assert Path(app.save_folder, '_event_outbox').exists() or any(
         'pending_audit_events' in path.read_text(encoding='utf-8')
         for path in Path(app.save_folder).rglob('*.json')
@@ -101,8 +98,10 @@ def test_saved_action_survives_csv_failure(flow, windows, monkeypatch, tmp_path,
         # Finish this test's writer projection before requiring a successful retry.
         app.log_queue.put({})
         app.log_queue.join()
-        assert app._flush_pending_event_logs()
+        _pump_until(app.root, app._flush_pending_event_logs)
         projection_app = app
+    if getattr(projection_app, "_short_confirmation_undo", None):
+        assert projection_app._commit_short_confirmation()
     rows = audit_rows(projection_app, event)
     assert len(rows) == 1
     original = dict(rows[0])
@@ -112,7 +111,7 @@ def test_saved_action_survives_csv_failure(flow, windows, monkeypatch, tmp_path,
         assert projection_app._flush_pending_event_logs()
     assert audit_rows(projection_app, event) == [original]
     if action == 'short_undo':
-        assert len(_rows(projection_app, 'TRAY_COMPLETE')) == 1
+        assert len(_rows(projection_app, 'TRAY_COMPLETE')) == 0
     assert windows == []
 
 
