@@ -2,6 +2,8 @@
 
 자동 오프라인 보관 원본의 복귀는 같은 작업자·동기 감사의 자동 보관 사유·원본 지문이 모두 맞는 내부 스캔 경로에서만 PIN 없이 처리한다. 관리자 격리 원본의 복원과 공개 C12 진입은 기존 관리자 PIN을 요구한다. 자동 보관 의도는 이동 전에 기존 CSV 형식으로 동기 기록해 이동 직후 중단에도 같은 조건을 증명한다.
 
+자동 오프라인 보관 의도·격리·복귀 감사는 LOCAL_ONLY이며 CSV 투영 전의 durable outbox 원본도 같은 소유권·지문 확인에 쓴다. 복귀 rename 뒤 중단하면 새 app/store에서 원 작업자·원 지문·자동 격리 감사·격리 원본 부재를 확인하고 같은 idempotency key로 RESTORED 감사를 마친다. C12 intent의 복구는 기존 PIN 길에 남긴다. APP_STOP_DEFERRED·APP_CLOSE_DELAY·UI_LANE_FAULT는 업무 수량 event가 아닌 로컬 종료·오류 진단으로 서버 CSV에 싣지 않는다.
+
 > 2026-10-01 w9scanonly 현재 계약: 7칸 QT=1–9999 즉시 시작, snapshot 구성원 수 우선, 로컬 intent/checkpoint/TRAY_COMPLETE → 표시 → 독립 배경 교환 ACK/lease/seal. 공통 payload는 scan_payload/local_completion_id/local_completed_at/deferred_reflection/short_confirmed/exchange_idempotency_keys다. short는 전체 topology 증거와 스캔 subset을 보내고 exact 잔량을 검증한다. UPSTREAM_COMPLETION_PENDING 409는 retry, COMPLETION_REVIEW_REQUIRED는 해당 intent review다. 유효 PHS2_LOCAL_ONLY도 같은 대기열로 보내며 옛 13자리 현품표는 기존 과도기 기록만 유지한다.
 
 새 화면의 업무 동작은 명시 True/boolean ok만 성공으로 돌려준다. False·오류 글·거절 안내는 실패, None은 결과 모름(idle·ok=False)이며 재전송이 실패를 성공으로 덮지 않는다. 관리자 ID/PIN 빈 입력은 실행 전에 거절하고 재인증 필요는 웹 결과로 표시한다. 등록은 같은 원장 함수로 직접 가고 PIN·내부 시험 입력은 기존 인스턴스 대체를 사용해 Tk Toplevel·grab·wait_window를 만들지 않는다. 옛 화면 모달과 업무 자료·인증 계약은 유지한다.
