@@ -2115,7 +2115,7 @@ class ContainerAudit:
             "CA.PRECHECK_HOLD",
             hashlib.sha256(canonical_master_label_key(snapshot.master_raw).encode("utf-8")).hexdigest(),
             source, (snapshot.master_raw,), effect,
-        ))
+         worker_operation="C02" if self._owns_worker_record(snapshot.to_payload()) else ""))
         if approval is None:
             return False
         if not self._blocked_work_identity_matches(approval):
@@ -2231,6 +2231,10 @@ class ContainerAudit:
             if not original_present and not resuming_restore:
                 raise PreflightHoldError("restoration original is unavailable")
             restoring_paths = (path, *(pin_store.path(row["operation_key"]).resolve() for row in intents))
+            restore_target_id = "restore-" + digest
+            restore_intents = pin_store.pending("CA.PRECHECK_HOLD", restore_target_id, include_applied=True)
+            restore_intent_paths = tuple(pin_store.path(row["operation_key"]).resolve() for row in restore_intents)
+            restoring_paths += restore_intent_paths
         except (OSError, ValueError, TypeError, KeyError, PreflightHoldError):
             self._call_admin_pin_ui(messagebox.showerror,
                 "보류 묶음 복원 실패",
@@ -2238,7 +2242,8 @@ class ContainerAudit:
                 parent=getattr(self, "root", None),
             )
             return False
-        if self._paired_preflight_blocks_label(snapshot.master_raw, restoring_paths=restoring_paths):
+        if self._paired_preflight_blocks_label(snapshot.master_raw, restoring_paths=restoring_paths,
+                                               retry_intent_paths=restore_intent_paths):
             pin_blocked = any(row.get("state") != "APPLIED" for row in pending_intents)
             self._call_admin_pin_ui(messagebox.showwarning,
                 "보류 묶음 복원 차단",
@@ -2284,6 +2289,32 @@ class ContainerAudit:
                 on_scan=lambda: True,
             )
             return False
+        def restore_source():
+            candidate = path if path.is_file() else store.path
+            if file_sha256(candidate) != digest:
+                raise PreflightHoldError("restoration source changed")
+            return {"restore_preflight_id": snapshot.preflight_id, "hold_sha256": digest,
+                    "quarantine_source": str(path), "active_target": str(store.path.resolve())}
+
+        restore_approval = None
+        restore_base = self._authorize_blocked_work_supervisor()
+        if restore_base is None:
+            return False
+        for row in restore_intents:
+            if (row.get("state") in {"CONSUMED", "APPLIED"} and row.get("verification_id")
+                    and row.get("authorization_mode") != "WORKER"
+                    and row.get("source_snapshot") == restore_source()
+                    and self._admin_pin_recovered_effect(row)):
+                restore_approval = {**restore_base, "supervisor": row["admin_id"],
+                    "verification_id": row["verification_id"], "operation_key": row["operation_key"],
+                    "action": "CA.PRECHECK_HOLD", "target": restore_target_id}
+                break
+        if restore_approval is None:
+            restore_approval = yield from self._admin_pin_approval_steps(
+                "CA.PRECHECK_HOLD", restore_target_id, restore_source,
+                (snapshot.master_raw,), self._admin_pin_recovered_effect)
+        if restore_approval is None or not self._blocked_work_identity_matches(restore_approval):
+            return False
         try:
             for row in intents:
                 (yield lambda: pin_store.write(dict(row, restoration={"state": "RESTORING", "source": str(path),
@@ -2308,6 +2339,7 @@ class ContainerAudit:
             reason="supervisor_restore" if confirm else "offline_label_rescan",
             quarantine_path=Path(filepath),
         )
+        detail.update(self._blocked_work_audit_identity(restore_approval))
         audit_key = (
             "preflight-hold-restore:"
             f"{restored.preflight_id}:{restored_hash}"
@@ -2344,6 +2376,8 @@ class ContainerAudit:
                 "복원 감사 기록을 남기지 못해 격리 상태를 유지합니다.",
                 parent=getattr(self, "root", None),
             )
+            return False
+        if not (yield lambda: self._admin_pin_complete(restore_approval, self._admin_pin_recovered_effect)):
             return False
         try:
             for row in intents:
@@ -5348,7 +5382,7 @@ class ContainerAudit:
                         and read_recovery_file(preserved, "stale", tray_size=self.TRAY_SIZE).sha256 == expected)
 
         approval = self._admin_pin_approval_for(
-            "CA.PAIR_RETRY", expected, source, (), effect)
+            "CA.PAIR_RETRY", expected, source, (), effect, worker_operation="C04")
         if approval is None or not self._preserve_paired_stale_current(approval):
             return False
         if not self._admin_pin_complete(approval, effect):
@@ -5379,7 +5413,7 @@ class ContainerAudit:
             result = read_recovery_file(marker, "stale_hold")
             return bool(result.verified and result.value["original_sha256"] == expected)
 
-        approval = self._admin_pin_approval_for("CA.TRAY_HOLD", expected, source, (), effect)
+        approval = self._admin_pin_approval_for("CA.TRAY_HOLD", expected, source, (), effect, worker_operation="C04")
         if approval is None or not self._preserve_paired_stale_current(approval):
             return False
         if not self._blocked_work_identity_matches(approval):
@@ -8564,7 +8598,7 @@ class ContainerAudit:
             ),
         )
         menu.add_command(
-            label="보류 묶음 격리 후 다른 작업 계속 (관리자)",
+            label="보류 묶음 격리 후 다른 작업 계속",
             command=self._quarantine_preflight_hold_from_operations,
             state=tk.NORMAL if hold_blocked and not active_tray and not transfer_lane_busy
             and not offline_hold
@@ -8573,7 +8607,7 @@ class ContainerAudit:
         if offline_hold:
             menu.add_command(label="연결 끊김: PIN 격리 불가 · 다음 현품표를 스캔하세요", state=tk.DISABLED)
         menu.add_command(
-            label="두 원본 함께 보류 후 계속 (관리자)",
+            label="두 원본 함께 보류 후 계속",
             command=self._defer_paired_preflight_from_operations,
             state=tk.NORMAL if hold_blocked and not transfer_lane_busy else tk.DISABLED,
         )
@@ -8583,19 +8617,19 @@ class ContainerAudit:
         )
         if getattr(self, "_paired_stale_current_blocked", False):
             menu.add_command(
-                label="현재 현품표 보존 재확인 (관리자)",
+                label="현재 현품표 보존 재확인",
                 command=self._recheck_paired_stale_current,
             )
             menu.add_command(
-                label="현재 현품표 보존 다시 시도 (관리자)",
+                label="현재 현품표 보존 다시 시도",
                 command=self._retry_paired_stale_current_preservation,
             )
             menu.add_command(
-                label="보류 후 다른 현품표 계속 (관리자)",
+                label="보류 후 다른 현품표 계속",
                 command=self._continue_after_paired_stale_current,
             )
         menu.add_command(
-            label="미확정 묶음 보류 후 다른 작업 계속 (관리자)",
+            label="미확정 묶음 보류 후 다른 작업 계속",
             command=self._defer_blocked_current_tray_for_supervisor,
             state=(
                 tk.NORMAL if active_tray and not hold_blocked
@@ -8612,11 +8646,13 @@ class ContainerAudit:
             command=self._on_phs_label_exchange_shortcut,
         )
         menu.add_command(
-            label="완료 작업 회사 서버 반영 재시도 (관리자)",
+            label="완료 작업 회사 서버 반영 재시도",
             command=self._retry_transfer_post_review,
             state=(
                 tk.NORMAL
-                if self._is_preflight_hold_supervisor()
+                if (bool(str(getattr(self, "worker_name", "") or "").strip())
+                    and (str(getattr(self, "worker_role", "")).upper() == "WORKER"
+                         or self._is_preflight_hold_supervisor()))
                 and not active_tray
                 and not transfer_lane_busy
                 and not replacement_active
@@ -8946,7 +8982,7 @@ class ContainerAudit:
 
     def _admin_pin_audit(self, event: str, intent: Mapping[str, Any]) -> bool:
         resume_epoch = (str((intent.get("resuming_operator") or {}).get("login_epoch") or "")
-                        if event == "ADMIN_PIN_RESUMED" else "")
+                        if event in {"ADMIN_PIN_RESUMED", "WORKER_ACTION_RESUMED"} else "")
         source = intent.get("source_snapshot") or {}
         audit_path = (str(Path(self.save_folder) /
                           f"admin-pin-{uuid.UUID(intent['operation_key']).hex}.csv")
@@ -8960,6 +8996,10 @@ class ContainerAudit:
                      "resuming_operator_raw": intent.get("resuming_operator_raw") or "",
                     "verification_id": intent.get("verification_id") or "",
                     "operation_key": intent["operation_key"],
+                    "authorization_mode": intent.get("authorization_mode") or "ADMIN_PIN",
+                    "worker_operation": intent.get("worker_operation") or "",
+                    "approving_supervisor": intent.get("admin_id") or "",
+                    "approving_role": "ADMIN" if intent.get("admin_id") else "",
                     "reason": intent.get("reason") or ""},
             synchronous=True,
             idempotency_key=f"admin-pin:{event}:{intent['operation_key']}:{resume_epoch}",
@@ -8977,7 +9017,8 @@ class ContainerAudit:
             return dict(intent)
         resumed = dict(intent, resuming_operator=operator,
                        resuming_operator_raw=base["operator"])
-        if not self._admin_pin_audit("ADMIN_PIN_RESUMED", resumed):
+        event = "WORKER_ACTION_RESUMED" if intent.get("authorization_mode") == "WORKER" else "ADMIN_PIN_RESUMED"
+        if not self._admin_pin_audit(event, resumed):
             raise AdminPinError("AUDIT_UNAVAILABLE", unknown=True)
         return self._admin_pin_store().write(resumed)
 
@@ -9435,17 +9476,20 @@ class ContainerAudit:
 
     def _admin_pin_approval_for(self, action: str, target_id: str,
                                 read_source, labels: tuple[str, ...],
-                                effect_readback) -> Optional[Dict[str, str]]:
+                                effect_readback, *, worker_operation: str = "") -> Optional[Dict[str, str]]:
         return self._run_durable_ui_steps(self._admin_pin_approval_steps(
-            action, target_id, read_source, labels, effect_readback))
+            action, target_id, read_source, labels, effect_readback, worker_operation=worker_operation))
 
     def _admin_pin_approval_steps(self, action: str, target_id: str,
                                 read_source, labels: tuple[str, ...],
-                                effect_readback) -> Optional[Dict[str, str]]:
+                                effect_readback, *, worker_operation: str = "") -> Optional[Dict[str, str]]:
         """Reserve and consume one PIN for one item before its existing writer."""
         base = self._authorize_blocked_work_supervisor()
         if base is None:
             return None
+        if worker_operation:
+            return (yield from self._worker_action_approval_steps(
+                base, worker_operation, action, target_id, read_source, labels, effect_readback))
         active_intent = None
         try:
             operator = {"local_id": operator_local_id(base["operator"]),
@@ -9626,11 +9670,79 @@ class ContainerAudit:
                                    parent=getattr(self, "root", None))
             return None
 
+    def _worker_action_approval_steps(self, base, operation, action, target_id,
+                                      read_source, labels, effect_readback):
+        """M124: authorize only explicitly classified, original-preserving actions."""
+        allowed = {"C02": {"CA.PRECHECK_HOLD"}, "C03": {"CA.PAIR_HANDOFF"},
+                   "C04": {"CA.PAIR_RETRY", "CA.TRAY_HOLD"},
+                   "C05": {"CA.TRAY_HOLD"}, "C09": {"CA.PAIR_RETRY"}}
+        if action not in allowed.get(operation, set()):
+            return None
+        try:
+            store = self._admin_pin_store()
+            pending = store.pending(action, target_id)
+            intent = pending[0] if pending else None
+            if intent is not None:
+                if (base["role"] == "WORKER" and persistent_operator_name(base["operator"])
+                        != persistent_operator_name(intent.get("operator_raw") or "")):
+                    return None
+                if intent.get("authorization_mode") == "WORKER" and intent.get("worker_operation") != operation:
+                    return None
+                if intent.get("state") in {"UNVERIFIED_DETACHING", "UNVERIFIED_OPERATOR_HOLD", "HANDED_OFF_UNKNOWN"}:
+                    return None  # Preserve the existing uncertain original for its recovery path.
+                if intent.get("state") == "TARGET_CHANGED":
+                    if not (yield lambda: self._admin_pin_audit("ADMIN_PIN_SUPERSEDED", intent)):
+                        return None
+                    yield lambda: store.transition(intent, "SUPERSEDED", reason="WORKER_RETRY")
+                    intent = None
+                elif intent.get("state") in {"CONSUMED", "APPLIED"} and effect_readback(intent):
+                    if (yield lambda: self._admin_pin_complete({"operation_key": intent["operation_key"]}, effect_readback)):
+                        self._admin_pin_release_completed_work(intent)
+                    return None
+            original = read_source()
+            digest = admin_pin_fingerprint(original)
+            if intent is not None:
+                if (intent["target"]["state_fingerprint"] != digest
+                        or intent.get("source_snapshot") != original):
+                    yield lambda: self._admin_pin_target_changed(intent)
+                    return None
+                intent = dict(intent,
+                    prior_admin_id=intent.get("prior_admin_id") or intent.get("admin_id") or "",
+                    prior_verification_id=intent.get("prior_verification_id") or intent.get("verification_id") or "")
+            else:
+                intent = {"schema": "container-admin-pin-intent-v1", "state": "PREPARED",
+                    "operation_key": str(uuid.uuid4()), "request_id": str(uuid.uuid4()),
+                    "action": action, "target": {"kind": action.split(".", 1)[1].lower(),
+                        "id": target_id, "state_fingerprint": digest},
+                    "operator": {"local_id": operator_local_id(base["operator"]), "login_epoch": base["login_epoch"]},
+                    "operator_raw": base["operator"], "source_evidence_sha256": digest,
+                    "source_snapshot": original, "labels": list(labels), "reason": ""}
+            intent.update(authorization_mode="WORKER", worker_operation=operation, admin_id="", verification_id="")
+            intent = yield lambda: store.write(intent)
+            if not self._blocked_work_identity_is_current(base) or read_source() != original:
+                yield lambda: self._admin_pin_target_changed(intent)
+                return None
+            intent = yield lambda: self._admin_pin_record_resumer(intent)
+            if not (yield lambda: self._admin_pin_audit("WORKER_ACTION_AUTHORIZED", intent)):
+                return None
+            intent = yield lambda: store.transition(intent, "CONSUMED")
+            if not self._blocked_work_identity_is_current(base) or read_source() != original:
+                yield lambda: self._admin_pin_target_changed(intent)
+                return None
+            return {**base, "supervisor": "", "verification_id": "", "authorization_mode": "WORKER",
+                    "operation_key": intent["operation_key"], "action": action, "target": target_id}
+        except (OSError, ValueError, KeyError, TypeError, AdminPinError):
+            self._call_admin_pin_ui(messagebox.showwarning, "보류 기록 확인 필요",
+                "원본과 보류 기록을 확인하지 못했습니다. 같은 동작을 다시 선택하세요.",
+                parent=getattr(self, "root", None))
+            return None
+
     def _admin_pin_complete(self, approval: Mapping[str, str], effect_readback) -> bool:
         intent = None
         try:
             store = self._admin_pin_store()
             intent = store.read(approval["operation_key"])
+            applied_event = "WORKER_ACTION_APPLIED" if intent.get("authorization_mode") == "WORKER" else "ADMIN_PIN_APPLIED"
             if intent.get("state") not in {"CONSUMED", "APPLIED"}:
                 raise OSError("admin PIN intent is no longer consumable")
             if not self._admin_pin_check_moves(intent):
@@ -9657,10 +9769,10 @@ class ContainerAudit:
                     raise OSError("admin PIN effect readback incomplete")
                 if intent.get("state") == "APPLIED":
                     # Only finish cleanup; never replay an already completed effect.
-                    if not self._admin_pin_effect_audited("ADMIN_PIN_APPLIED", intent["operation_key"]):
+                    if not self._admin_pin_effect_audited(applied_event, intent["operation_key"]):
                         raise OSError("admin PIN completion audit unavailable")
                     return True
-                if not self._admin_pin_audit("ADMIN_PIN_APPLIED", intent):
+                if not self._admin_pin_audit(applied_event, intent):
                     raise OSError("admin PIN success audit unavailable")
                 if not self._admin_pin_check_moves(intent) or not effect_readback(intent):
                     raise OSError("admin PIN effect changed during success audit")
@@ -9679,6 +9791,12 @@ class ContainerAudit:
             return False
         action = intent.get("action")
         key = intent.get("operation_key")
+        if action == "CA.PRECHECK_HOLD" and source.get("restore_preflight_id"):
+            active = Path(source["active_target"])
+            original = Path(source["quarantine_source"])
+            return bool(active.is_file() and not original.exists()
+                        and file_sha256(active) == source["hold_sha256"]
+                        and self._admin_pin_effect_audited("PHS2_PREFLIGHT_HOLD_RESTORED", key))
         if action == "CA.PRECHECK_HOLD":
             hold = self._admin_pin_preflight_hold_store(intent)
             if hold.path.exists():
@@ -9794,6 +9912,8 @@ class ContainerAudit:
     def _admin_pin_release_completed_work(self, intent: Mapping[str, Any], *, startup: bool = False) -> None:
         """Apply normal completion cleanup only to this recovered active owner."""
         source = intent.get("source_snapshot") or {}
+        if source.get("restore_preflight_id"):
+            return
         action = intent.get("action")
         if not ((action == "CA.PRECHECK_HOLD" and source.get("hold_sha256"))
                 or (action == "CA.PAIR_HANDOFF" and source.get("handoff_id"))
@@ -9979,9 +10099,29 @@ class ContainerAudit:
             return
         for intent in intents:
             action = intent.get("action")
+            if ((intent.get("source_snapshot") or {}).get("restore_preflight_id")
+                    and intent.get("state") == "CONSUMED"):
+                yield from self._restore_quarantined_preflight_hold_steps(
+                    intent["source_snapshot"]["quarantine_source"], confirm=False)
+                continue
             if (action == "CA.PRECHECK_HOLD" and intent.get("state") == "APPLIED"
                     and (intent.get("restoration") or {}).get("state") == "RESTORING"):
-                (yield from self._restore_quarantined_preflight_hold_steps(intent["restoration"]["source"]))
+                yield from self._restore_quarantined_preflight_hold_steps(intent["restoration"]["source"], confirm=False)
+                continue
+            if intent.get("authorization_mode") == "WORKER":
+                base = self._authorize_blocked_work_supervisor()
+                if (base is None or (base["role"] == "WORKER" and persistent_operator_name(base["operator"])
+                        != persistent_operator_name(intent.get("operator_raw") or ""))):
+                    continue
+                intent = yield lambda: self._admin_pin_record_resumer(intent)
+                if intent.get("state") not in {"CONSUMED", "APPLIED"}:
+                    continue
+                complete = yield lambda: self._admin_pin_recovered_effect(intent)
+                if not complete:
+                    complete = yield lambda: self._admin_pin_resume_intermediate(intent)
+                if complete and (yield lambda: self._admin_pin_complete(
+                        {"operation_key": intent["operation_key"]}, self._admin_pin_recovered_effect)):
+                    self._admin_pin_release_completed_work(intent)
                 continue
             if intent.get("state") == "APPLIED":
                 if (yield lambda: self._admin_pin_complete(
@@ -10134,10 +10274,10 @@ class ContainerAudit:
         detail = {
             "acting_worker": persistent_operator_name(approval["operator"]),
             "acting_role": approval["role"],
-            "approving_supervisor": persistent_operator_name(approval["supervisor"]),
-            "approving_role": "ADMIN",
+            "approving_supervisor": persistent_operator_name(approval["supervisor"]) if approval.get("supervisor") else "",
+            "approving_role": "ADMIN" if approval.get("supervisor") else "",
         }
-        if approval.get("verification_id"):
+        if approval.get("operation_key"):
             detail.update({"verification_id": approval["verification_id"],
                            "operation_key": approval["operation_key"],
                            "action": approval["action"], "target": approval["target"]})
@@ -10230,7 +10370,7 @@ class ContainerAudit:
                 "CA.PAIR_HANDOFF", str(record["id"]), source,
                 tuple(label for label in (held.get("master_raw"), current.get("master_label_code"))
                       if isinstance(label, str) and label), effect,
-            )
+             worker_operation="C03" if self._owns_worker_record(held) and self._owns_worker_record(current) else "")
             if pin_approval is None:
                 return any(self._admin_pin_store().read(row["operation_key"])["state"] == "APPLIED"
                            for row in resuming)
@@ -10701,7 +10841,8 @@ class ContainerAudit:
                         "PHS2_STALE_HOLD_RECHECKED", intent["operation_key"]))
 
                 pin_approval = self._admin_pin_approval_for(
-                    "CA.PAIR_RETRY", marker.stem, source, tuple(labels), effect)
+                    "CA.PAIR_RETRY", marker.stem, source, tuple(labels), effect,
+                    worker_operation="C09" if result.verified else "")
                 if pin_approval is None:
                     return
                 with self._admin_pin_locked_sources(pin_approval, [
@@ -10868,7 +11009,7 @@ class ContainerAudit:
                         )
 
         approval = self._admin_pin_approval_for(
-            "CA.PAIR_RETRY", target_id, source, (master,), effect)
+            "CA.PAIR_RETRY", target_id, source, (master,), effect, worker_operation="C09" if self._owns_worker_record(current) else "")
         if approval is None:
             return
         if not self._blocked_work_identity_matches(approval):
@@ -17560,7 +17701,7 @@ class ContainerAudit:
                 "CA.TRAY_HOLD",
                 target_id,
                 source, (master_label,), effect,
-            )
+             worker_operation="C05" if self._owns_worker_record(state) else "")
             if pin_approval is None:
                 return False
             approval = pin_approval
@@ -19491,9 +19632,9 @@ class ContainerAudit:
         return self._schedule_transfer_post_review_refresh()
 
     def _retry_transfer_post_review(self) -> bool:
-        """Offer one reviewed completion through the existing supervisor lane."""
-        if not self._is_preflight_hold_supervisor():
-            messagebox.showwarning("관리자 인증 필요", "관리자로 로그인해 주세요.", parent=self.root)
+        """Resend one original completion through the existing serial lane."""
+        identity = self._authorize_blocked_work_supervisor()
+        if identity is None:
             return False
         if (
             getattr(getattr(self, "current_tray", None), "master_label_code", "")
@@ -19527,7 +19668,7 @@ class ContainerAudit:
 
         def authorized() -> bool:
             return bool(
-                self._is_preflight_hold_supervisor()
+                self._blocked_work_identity_is_current(identity)
                 and persistent_operator_name(str(getattr(self, "worker_name", "") or "")) == supervisor
                 and int(getattr(self, "_scan_callback_epoch", 0) or 0) == generation
                 and not getattr(getattr(self, "current_tray", None), "master_label_code", "")
@@ -19541,7 +19682,7 @@ class ContainerAudit:
 
         def work() -> SealAttempt:
             return self._transfer_seal_runtime().retry_operator_review(
-                str(case["intent_id"]), supervisor=supervisor,
+                str(case["intent_id"]), acting_operator={"worker": supervisor, "role": identity["role"]},
                 authorize=authorized, record_audit=audit,
             )
 

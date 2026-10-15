@@ -33,7 +33,7 @@ def _app(tmp_path, monkeypatch):
     app.worker_name = PROTECTED_ADMIN_OPERATOR_ID
     app.worker_role = "ADMIN"
     app._authenticated_protected_admin = True
-    def fake_approval(action, target, source, labels, effect):
+    def fake_approval(action, target, source, labels, effect, **_options):
         operation_key = str(uuid.uuid4())
         snapshot = source()
         app._admin_pin_store().write({

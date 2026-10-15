@@ -3165,13 +3165,18 @@ class TransferSealCoordinator:
         self,
         intent_id: str,
         *,
-        supervisor: str,
+        supervisor: str = "",
+        acting_operator: Optional[Mapping[str, str]] = None,
         authorize: Callable[[], bool],
         record_audit: Callable[[Mapping[str, Any]], bool],
     ) -> SealAttempt:
-        """Explicitly retry one intact command after durable supervisor audit."""
+        """Retry the same intact command after an authenticated actor audit."""
         self._assert_owner()
-        if not str(supervisor or "").strip() or not bool(authorize()):
+        actor = dict(acting_operator or {})
+        worker = str(actor.get("worker") or "").strip()
+        actor_valid = (bool(worker) and actor.get("role") in {"WORKER", "ADMIN"} and not supervisor
+                       if acting_operator is not None else bool(str(supervisor or "").strip()))
+        if not actor_valid or not bool(authorize()):
             raise TransferSealError(
                 "SUPERVISOR_AUTHORIZATION_REQUIRED", "관리자 인증이 필요합니다."
             )
@@ -3205,6 +3210,8 @@ class TransferSealCoordinator:
             "command_hash": str(row["command_hash"]),
             "operation_lease_id": str(row["operation_lease_id"]),
             "supervisor": str(supervisor).strip(),
+            **({"acting_worker": worker, "acting_role": actor["role"],
+                "approving_supervisor": "", "approving_role": ""} if acting_operator is not None else {}),
             "prior_error_code": str(row["last_error_code"] or ""),
             "prior_attempt_count": int(row["attempt_count"]),
         }

@@ -25,7 +25,7 @@ class RecordingLane:
         return SimpleNamespace(accepted=True)
 
 
-def _review_ui(tmp_path, monkeypatch, *, role="ADMIN", confirm=True, audit_ok=True):
+def _review_ui(tmp_path, monkeypatch, *, role="WORKER", confirm=True, audit_ok=True):
     coordinator, manager, intent_id, posted, _db_path = _rejected_review(tmp_path)
     lane = RecordingLane()
     audit = []
@@ -107,7 +107,7 @@ def test_review_lease_failure_keeps_internal_diagnostics_out_of_dialog(tmp_path,
 @pytest.mark.parametrize("blocked", ["worker", "cancelled", "active_tray", "worker_changed", "audit_failed"])
 def test_review_action_rejects_unauthorized_or_unsafe_ui_boundary(tmp_path, monkeypatch, blocked):
     app, lane, audit, posted, coordinator, intent_id, _messages = _review_ui(
-        tmp_path, monkeypatch, role="WORKER" if blocked == "worker" else "ADMIN",
+        tmp_path, monkeypatch, role="INVALID" if blocked == "worker" else "WORKER",
         confirm=blocked != "cancelled", audit_ok=blocked != "audit_failed",
     )
     if blocked == "active_tray":

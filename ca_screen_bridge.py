@@ -40,7 +40,8 @@ BAND_KIND = {NoticeSeverity.SUCCESS: "quiet", NoticeSeverity.INFO: "quiet", Noti
 SOUND_TEXT = {"success": "성공음", "completion": "완료음", "error": "오류음"}
 ADMIN_MENU = ("quarantine_hold", "pair_hold", "preserve_check", "defer_unsettled", "resend_completion",
               "recheck_review", "list_paired", "check_unsettled", "view_handoff", "view_sync")
-ADMIN_PIN = frozenset(ADMIN_MENU[:7]) - {"resend_completion"}
+ADMIN_PIN = frozenset({"list_paired"})
+WORKER_MENU = frozenset(ADMIN_MENU) - ADMIN_PIN
 # 지금 운영 메뉴 글(앞부분) → 다리 이름. 같은 이름 여럿이면 켜진 첫 항목(보존 다시 확인 · 다시 시도 · 계속 셋 중 지금 맞는 것)
 MENU_LABELS = (
     ("보류 묶음 격리 후 다른 작업 계속", "quarantine_hold"), ("두 원본 함께 보류 후 계속", "pair_hold"),
@@ -258,7 +259,7 @@ def _work(app: Any, presenter_state: Any, last_sound: Optional[str], now: dateti
     elif mode == "swap2":
         nxt, sub = '넣는 제품(양품)을 스캔하세요', [{"text": "① 불량 제품", "off": True}, {"text": "  →  "}, {"text": '② 대체 양품', "on": True}]
     elif short:
-        nxt, sub = "다음 현품표를 스캔하세요", [{"text": '다음 현품표를 스캔하면 바로 확정됩니다'}]
+        nxt, sub = "부분 제출 기록 확인 필요", [{"text": "기록 저장을 다시 확인한 뒤 다음 현품표를 스캔하세요"}]
     elif target and count >= target:
         nxt = "회사 서버 이적 확인 중 — 트레이를 그대로 두세요" if busy else '다 스캔했습니다\n「트레이 제출」 을 누르세요'
         sub = [{"text": f"{item['name'] if item else ''} · {count}개"}]
@@ -508,8 +509,7 @@ def present_ca(app: Any, *, view: Optional[str] = None, menu: Optional[Dict[str,
         "legacy": bool(_attr(app, "legacy_label_transition")), "held_count": _held_count(app),
         "conn": conn, "queue": queue, "update": None,
         "alerts": _alerts(app, presenter_state, notes or [], now), "work": work, "allow": _allow(app, menu, work),
-        "admin_menu": [{"name": name, "enabled": bool(menu.get(name, (False, None))[0])
-                        and (name != "resend_completion" or app._is_preflight_hold_supervisor()),
+        "admin_menu": [{"name": name, "enabled": bool(menu.get(name, (False, None))[0]),
                         "facts": admin_facts(app, name), "pin": name in ADMIN_PIN} for name in ADMIN_MENU],
         "sheet": sheet,
         "confirm": app._partial_submission_state(),
@@ -728,6 +728,8 @@ class CaProcessor:
     def command(self, name: str, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         args = dict(args or {})
         handler = getattr(self, f"_cmd_{name}", None)
+        if handler is None and name in WORKER_MENU:
+            return self._menu(name)
         if handler is None:
             return {"ok": False, "result": {"kind": "warn", "text": "이 단추는 아직 처리 층에 없습니다"}}
         out = handler(args.get("id"), args)
@@ -1014,8 +1016,6 @@ class CaProcessor:
         return self._menu("refresh")
 
     def _cmd_resend_completion(self, _id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
-        if not self.app._is_preflight_hold_supervisor():
-            return {"ok": False, "result": {"kind": "warn", "text": "관리자로 로그인해야 다시 보낼 수 있습니다"}}
         enabled, command = operations_menu(self.app).get("resend_completion", (False, None))
         if not enabled or command is None:
             return {"ok": False, "result": {"kind": "warn", "text": "지금은 할 수 없는 관리자 일입니다", "sub": "화면의 상태를 확인하세요"}}

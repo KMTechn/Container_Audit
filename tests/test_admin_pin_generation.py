@@ -11,7 +11,14 @@ import requests
 
 import container_admin_pin as pin
 from product_exchange import ProductExchangeSession
-from tests.test_admin_pin_move_timing import _business_case
+from tests.test_admin_pin_move_timing import _business_case as _administrator_business_case
+from tests.test_container_admin_pin import _require_pin_protocol
+
+def _business_case(*args, **kwargs):
+    case = _administrator_business_case(*args, **kwargs)
+    _require_pin_protocol(case[0])
+    return case
+
 from tests.test_admin_pin_ui_lane import PinRoot, recovery, settle
 from tk_serial_ui_lane import Admission
 
@@ -324,7 +331,7 @@ def test_readmission_rejection_closes_generator_and_releases_pending(triplet, mo
     assert request["steps"].gi_frame is None
     assert case.app._admin_pin_ui_request is None
     assert not case.server.calls
-    assert any(pin.operator_message("VERIFY_UNAVAILABLE") in str(args) for args in case.ui)
+    assert any(pin.operator_message("VERIFY_UNAVAILABLE") in chr(10).join(map(str, args)) for args in case.ui)
 
 
 def test_close_during_unanswered_request_uses_existing_timeout_and_finalizes_once(recovery):

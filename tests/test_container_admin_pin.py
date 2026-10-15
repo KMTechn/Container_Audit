@@ -252,6 +252,15 @@ def make_headless_app(monkeypatch, tmp_path, server):
     return app, audits, notices
 
 
+def _require_pin_protocol(app):
+    """Test the administrator protocol independently of worker UI classification."""
+    original = app._admin_pin_approval_steps
+    def steps(*args, **kwargs):
+        kwargs["worker_operation"] = ""
+        return original(*args, **kwargs)
+    app._admin_pin_approval_steps = steps
+
+
 def assert_other_phs2_starts(app, blocked_label):
     from Container_Audit import TraySession
 
@@ -541,6 +550,7 @@ def test_offline_stale_current_pin_hold_releases_other_phs2_and_keeps_key(
     app._quarantine_current_tray_state = quarantine
     app._admin_pin_login_epoch = uuid.uuid4().hex
     app._admin_pin_approval_for = ContainerAudit._admin_pin_approval_for.__get__(app)
+    _require_pin_protocol(app)
     app._admin_pin_client = make_client(
         monkeypatch, lambda *_args: (_ for _ in ()).throw(TimeoutError("offline")))
     app._prompt_blocked_work_admin_pin = lambda **_request: ("manager-1", "194826")
@@ -927,6 +937,7 @@ def test_offline_precheck_hold_preserves_bytes_and_releases_busy_slot(monkeypatc
     app._admin_pin_client = make_client(monkeypatch, offline)
     app._prompt_blocked_work_admin_pin = lambda **_request: ("manager-1", "194826")
     app._admin_pin_approval_for = ContainerAudit._admin_pin_approval_for.__get__(app)
+    _require_pin_protocol(app)
     monkeypatch.setattr(messagebox, "askyesno", lambda *args, **kwargs: True)
     monkeypatch.setattr(messagebox, "showwarning", lambda *args, **kwargs: None)
     monkeypatch.setattr(messagebox, "showerror", lambda *args, **kwargs: None)
@@ -1087,6 +1098,7 @@ def test_precheck_quarantine_recovers_same_request_and_preserved_bytes(monkeypat
     app._admin_pin_client = make_client(monkeypatch, server)
     app._prompt_blocked_work_admin_pin = lambda **_request: ("manager-1", "194826")
     app._admin_pin_approval_for = ContainerAudit._admin_pin_approval_for.__get__(app)
+    _require_pin_protocol(app)
     app._admin_pin_complete = ContainerAudit._admin_pin_complete.__get__(app)
     monkeypatch.setattr(messagebox, "askyesno", lambda *args, **kwargs: True)
     monkeypatch.setattr(messagebox, "showinfo", lambda *args, **kwargs: None)
