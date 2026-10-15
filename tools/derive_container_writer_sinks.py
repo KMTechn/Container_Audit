@@ -157,7 +157,7 @@ POWERSHELL_NATIVE_PROCESS_APIS = (
 
 # Fold only the 33 pre-existing b82 directory preparations into their unchanged callers.
 ATOMIC_REPLACEMENT_HELPER = "atomic_replace.atomic_replace"
-ATOMIC_REPLACEMENT_MODULE_AST_SHA256 = "d189b2238fa6e689758fff3aa6e4c18fa99c859f067e8bfa66e955afe431a6c8"
+ATOMIC_REPLACEMENT_MODULE_AST_SHA256 = "d4b3034a10a68e0ce8f744361be629967666a16b9850e004e210d909e89958c0"
 POWERSHELL_ATOMIC_HELPERS_SHA256 = "9ca4943f643b639cfa68a5787e12be99409e06474d444ceae6d81e468fd7139c"
 POWERSHELL_ATOMIC_FUNCTIONS = frozenset({"Invoke-ContainerAtomicReplace", "Invoke-ContainerAtomicReplaceOnce"})
 DIRECTORY_PREPARATION_HELPER = "storage_policy.ensure_user_runtime_directory"

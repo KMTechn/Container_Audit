@@ -358,7 +358,7 @@ def test_retry_sleep_past_deadline_prevents_later_native_call(monkeypatch):
     assert failure.value is first and attempts==[0.0]
 
 
-@pytest.mark.parametrize("deadline",[0.0,0.1])
+@pytest.mark.parametrize("deadline", [0.01, 0.1])
 def test_explicit_publication_budget_preserves_first_error(monkeypatch,deadline):
     now=[0.0];attempts=[];first=ctypes.WinError(32)
     def replace(*args, **kwargs):

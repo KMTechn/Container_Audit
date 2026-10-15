@@ -11,11 +11,11 @@ RETRY_INTERVAL_SECONDS = 0.05
 
 
 def _replace_once(source, destination, write_through: bool, *, retry_check=None) -> None:
+    prepared_source, prepared_destination = os.fspath(source), os.fspath(destination)
     if write_through and os.name == "nt":
         move = ctypes.WinDLL("kernel32", use_last_error=True).MoveFileExW
         move.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
         move.restype = wintypes.BOOL
-        prepared_source, prepared_destination = os.fspath(source), os.fspath(destination)
         if retry_check is not None:
             retry_check()
         if not move(prepared_source, prepared_destination, 0x1 | 0x8):
@@ -23,7 +23,7 @@ def _replace_once(source, destination, write_through: bool, *, retry_check=None)
     else:
         if retry_check is not None:
             retry_check()
-        os.replace(source, destination)
+        os.replace(prepared_source, prepared_destination)
 
 
 def atomic_replace(source, destination, *, write_through: bool = False, deadline: float | None = None) -> None:
@@ -32,16 +32,17 @@ def atomic_replace(source, destination, *, write_through: bool = False, deadline
     deadline = local_deadline if deadline is None else min(local_deadline, deadline)
     first_error = None
     first_traceback = None
-    def check_retry_deadline():
-        if first_error is not None and monotonic() >= deadline:
-            raise first_error.with_traceback(first_traceback) from None
+    def check_deadline():
+        if monotonic() >= deadline:
+            if first_error is not None:
+                raise first_error.with_traceback(first_traceback) from None
+            raise TimeoutError("ATOMIC_REPLACE_DEADLINE_EXCEEDED")
 
     while True:
-        if first_error is not None and monotonic() >= deadline:
-            raise first_error.with_traceback(first_traceback) from None
+        check_deadline()
         try:
             _replace_once(source, destination, write_through,
-                          retry_check=check_retry_deadline if first_error is not None else None)
+                          retry_check=check_deadline)
             return
         except OSError as error:
             if getattr(error, "winerror", None) not in (5, 32):
