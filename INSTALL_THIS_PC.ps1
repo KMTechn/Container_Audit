@@ -1302,12 +1302,41 @@ function Restore-ContainerStartupUpdatePreimage([string]$Root, [string]$Director
     } | Out-Null
 }
 
+function Get-ContainerStartupRepairObservation([string]$Root) {
+    $control=Join-Path (Split-Path -Parent $Root) 'update-control'
+    $files=@()
+    foreach($name in @('policy.json','active.json','transition.json')){
+        $path=Join-Path $control $name
+        Assert-NoReparsePoint $path 'startup repair observation' -PathOnly
+        $exists=Test-Path -LiteralPath $path -PathType Leaf
+        $files+=@([pscustomobject]@{name=$name;exists=[bool]$exists;sha256=$(if($exists){Get-FileSha256 $path}else{''})})
+    }
+    $task=Get-ContainerStartupUpdateTaskPreimage $Root
+    $specSha=''
+    if($task.exists){$specSha=Get-BootstrapStringSha256 (([xml]$task.xml).OuterXml)}
+    return [pscustomobject]@{control_files=$files;task_exists=[bool]$task.exists;
+        task_spec_sha256=$specSha;task_security_sha256=$(if($task.exists){Get-BootstrapStringSha256 ([string]$task.sddl)}else{''})}
+}
+
+function Write-ContainerStartupRepairResult([string]$Root,$Before,[string]$Status) {
+    $after=Get-ContainerStartupRepairObservation $Root
+    $comparison=if($Before.task_exists -eq $after.task_exists -and $Before.task_spec_sha256 -ceq $after.task_spec_sha256){'UNCHANGED'}else{'CHANGED'}
+    Write-InstallationEvidenceEvent ([ordered]@{event='STARTUP_REPAIR_AFTER';status=$Status;
+        code_placement='UNCHANGED';before=$Before;after=$after;task_spec_disposition=$comparison})
+}
+
 function Initialize-ContainerStartupUpdate([string]$Root) {
     $settingsPath = Join-Path $Root 'app\auto-update-settings.json'
     if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) { return }
     if ($testOverride) { Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string]('startup_update_status=NOT_TESTED_HOST'))); return }
     Set-InstallationEvidenceStage 'startup.trust' 'startup'
     Assert-ContainerStartupUpdateTrust $Root
+    $repairBefore=$null
+    if((Get-Variable -Name bootstrapStatus -ValueOnly -ErrorAction SilentlyContinue) -ceq 'REUSED'){
+        $repairBefore=Get-ContainerStartupRepairObservation $Root
+        Write-InstallationEvidenceEvent ([ordered]@{event='STARTUP_REPAIR_BEFORE';status='IN_PROGRESS';code_placement='UNCHANGED';before=$repairBefore})
+    }
+    try {
     Set-InstallationEvidenceStage 'startup.save_preimage' 'startup'
     if ($null -eq $Script:StartupUpdatePreimage) {
         $Script:StartupUpdatePreimage = Save-ContainerStartupUpdatePreimage $Root 'install'
@@ -1408,6 +1437,15 @@ function Initialize-ContainerStartupUpdate([string]$Root) {
     $hiberbootCode=if($hiberboot -eq 1){'HIBERBOOT_ENABLED'}elseif($hiberboot -eq 0){'HIBERBOOT_DISABLED'}else{'HIBERBOOT_UNKNOWN'}
     Write-InstallationHelperPublicRecord @{status='PASS';reason_code=$hiberbootCode}
     Write-Output (ConvertTo-KmtechRedactedSinkText -Text ([string](('hiberboot_read_status=' + $hiberbootReadStatus))))
+    if($null -ne $repairBefore){Write-ContainerStartupRepairResult $Root $repairBefore 'PASS'}
+    } catch {
+        $repairFailure=$_
+        if($null -ne $repairBefore){
+            try { Write-ContainerStartupRepairResult $Root $repairBefore 'FAILED' }
+            catch { $repairFailure.Exception.Data['startup_repair_audit_failure_type']=$_.Exception.GetType().FullName }
+        }
+        throw $repairFailure
+    }
 }
 
 $testOverride = (

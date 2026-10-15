@@ -2,7 +2,7 @@ param([string]$Root)
 $ErrorActionPreference='Stop'
 $rows=[Collections.Generic.List[object]]::new()
 $skip=@('.git','__pycache__','.pytest_cache','build','dist','.venv','venv','node_modules')
-$files=Get-ChildItem -LiteralPath $Root -File -Recurse -Filter '*.ps1' |
+$files=Get-ChildItem -LiteralPath $Root -File -Recurse -Include '*.ps1','*.psm1' |
     Where-Object { $parts=$_.FullName.Substring($Root.Length).Split([char[]]'\/'); @($parts|Where-Object {$_ -in $skip}).Count -eq 0 }
 foreach($file in $files){
     $tokens=$null;$errors=$null

@@ -33,6 +33,8 @@ inventory SHA256을 결속한다. 관리자/SYSTEM만 쓰고 사용자는 읽는
 표지 ACL 실패 시 복구 fence를 유지하며 첫 시작 등록을 막는다.
 `PASS_MACHINE_WORKER_PENDING`은 기계 배치 결과이며 설치 완료가 아니다.
 
+REUSED는 **코드 배치 바이트가 그대로**라는 뜻이며 전체 설치 no-op을 뜻하지 않는다. startup control 재게시와 예약 작업 재등록은 별도 startup 수리로, 보호된 자식 감사에 앞뒤 control digest·작업 spec/security digest·작업 spec 같음/바뀜을 남긴다. 수리 실패는 실패로 기록하고 기존 startup preimage 보상을 유지한다.
+
 동일 코드의 REUSED는 교체 receipt 대신 자식 보호 폴더의 별도 증거를 받는다. 같은 회차·실제 자식 PID·transaction·helper와 원천/설치 manifest·inventory·aggregate를 모두 결속하며 교체나 코드 복원을 주장하지 않는다. 증거 없음·다른 회차·내용 불일치·UNKNOWN은 계속 거절한다.
 
 지정 작업자의 첫 앱 실행은 기존 current-user onboarding의 READY 뒤 HKCU

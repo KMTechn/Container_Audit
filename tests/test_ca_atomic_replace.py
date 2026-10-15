@@ -155,7 +155,7 @@ def test_ordered_reader_overlap_retries_the_same_prepared_file(tmp_path, monkeyp
     assert ready.wait(5)
     original = publication._replace_once
     blocked = []
-    def ordered_replace(prepared, target, durable):
+    def ordered_replace(prepared, target, durable, **kwargs):
         try:
             return original(prepared, target, durable)
         except OSError as error:
@@ -183,7 +183,7 @@ def test_ordered_reader_overlap_retries_the_same_prepared_file(tmp_path, monkeyp
 def test_persistent_denial_preserves_first_exception_and_deadline(monkeypatch, code):
     first, later = ctypes.WinError(code), ctypes.WinError(code)
     now, attempts = [0.0], []
-    def fail(*args):
+    def fail(*args, **kwargs):
         attempts.append(now[0])
         raise first if len(attempts) == 1 else later
     monkeypatch.setattr(publication, "_replace_once", fail)
@@ -198,7 +198,7 @@ def test_persistent_denial_preserves_first_exception_and_deadline(monkeypatch, c
 @pytest.mark.parametrize("error", [ctypes.WinError(2), ctypes.WinError(87), PermissionError(13, "isolated denial")])
 def test_non_transient_errors_never_retry_or_substitute_default(monkeypatch, error):
     attempts = []
-    def fail(*args):
+    def fail(*args, **kwargs):
         attempts.append(args)
         raise error
     monkeypatch.setattr(publication, "_replace_once", fail)
@@ -229,7 +229,7 @@ def test_control_document_consumer_retries_overlap_without_changing_reader(tmp_p
     reader = destination.open("rb")
     original = publication._replace_once
     blocked = []
-    def release_on_first_denial(source, target, durable):
+    def release_on_first_denial(source, target, durable, **kwargs):
         assert durable is True
         assert fence._WRITER_EXIT_COUNT > 0 and fence._WRITER_LOCAL.depth > 0
         try:
@@ -260,7 +260,7 @@ def test_prepared_packet_publication_retries_only_the_blocked_member(tmp_path, m
     reader = (tmp_path / "manifest.sig").open("rb")
     original = publication._replace_once
     attempts = []
-    def once(source, target, durable):
+    def once(source, target, durable, **kwargs):
         attempts.append(target.name)
         assert durable is False and fence._WRITER_EXIT_COUNT > 0 and fence._WRITER_LOCAL.depth > 0
         try:
@@ -347,7 +347,7 @@ def test_guard_parses_powershell_commands_and_multiline_calls(tmp_path, source):
 
 def test_retry_sleep_past_deadline_prevents_later_native_call(monkeypatch):
     now=[0.0];attempts=[];first=ctypes.WinError(5)
-    def replace(*args):
+    def replace(*args, **kwargs):
         attempts.append(now[0])
         if len(attempts)==1: raise first
     monkeypatch.setattr(publication,"_replace_once",replace)
@@ -361,7 +361,7 @@ def test_retry_sleep_past_deadline_prevents_later_native_call(monkeypatch):
 @pytest.mark.parametrize("deadline",[0.0,0.1])
 def test_explicit_publication_budget_preserves_first_error(monkeypatch,deadline):
     now=[0.0];attempts=[];first=ctypes.WinError(32)
-    def replace(*args):
+    def replace(*args, **kwargs):
         attempts.append(now[0]);raise first
     monkeypatch.setattr(publication,"_replace_once",replace)
     monkeypatch.setattr(publication,"monotonic",lambda:now[0])

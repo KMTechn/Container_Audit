@@ -4076,6 +4076,15 @@ function Invoke-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[st
     }
 }
 
+function Read-CanonicalPlacementStatus([string]$Stdout,[bool]$Replacing) {
+    if(-not $Replacing){return ''}
+    $lines=@($Stdout -split '\r?\n'|Where-Object {$_ -cmatch '^bootstrap_status='})
+    if($lines.Count -ne 1 -or $lines[0] -cnotin @('bootstrap_status=REUSED','bootstrap_status=REPLACED_VERIFIED')){
+        throw 'MACHINE_PLACEMENT_STATUS_INVALID'
+    }
+    return $lines[0].Substring('bootstrap_status='.Length)
+}
+
 function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Root,$Manifest,$AuthorityLease) {
     if (-not $testMode -and -not (Test-InstallationEvidencePrivileged)) {
         throw 'Machine installation requires an already privileged token.'
@@ -4214,10 +4223,9 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         $child=Invoke-InstallationEvidenceChild 'machine-placement-helper' $engine $arguments -OnStarted $placementStarted
         $audit.placement_child.status='EXITED';$audit.placement_child.exit_code=[int]$child.ExitCode
         if ($child.ExitCode -ne 0) { $helperReason=Get-CanonicalMachineHelperReason ([string]$child.Stdout) }
-        $placementStatus=@($child.Stdout -split '\r?\n'|Where-Object {$_ -cmatch '^bootstrap_status='})
-        $reusedPlacement=($arguments -ccontains '-ReplaceExistingVerifiedPortable' -and
-            $placementStatus.Count -eq 1 -and $placementStatus[0] -ceq 'bootstrap_status=REUSED')
-        # The new no-op contract is checked even in an isolated test layout.
+        $placementKind=if($child.ExitCode -eq 0){Read-CanonicalPlacementStatus ([string]$child.Stdout) ($arguments -ccontains '-ReplaceExistingVerifiedPortable')}else{''}
+        $reusedPlacement=($placementKind -ceq 'REUSED')
+        # REUSED proves unchanged code placement; startup repair is audited separately.
         if (-not $testMode -or $reusedPlacement) {
             $binding=Read-InstallationHelperEvidenceBinding @($child.Stdout -split "`r?`n") `
                 (Join-Path $state ('install-audit\placement-'+$run+'.jsonl')) $child.ProcessId ([string]$Manifest.helper_sha256)
@@ -4230,6 +4238,8 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
                 if($placementStatus.Count -eq 1 -and $placementStatus[0] -ceq 'bootstrap_status=REUSED'){
                     $reused=Read-CanonicalReusedPlacementEvidence $binding $Source $Root $Manifest $run
                     $audit.code_replacement.disposition='REUSED_VERIFIED'
+                    $audit.code_replacement.scope='CODE_PLACEMENT_ONLY'
+                    $audit.startup_repair=@{status='RECORDED_IN_CHILD_EVIDENCE';code_placement='UNCHANGED'}
                     $audit.code_replacement.receipt_path=''
                     $audit.code_replacement.reused_evidence_path=$reused.path
                     $audit.code_replacement.reused_evidence_sha256=$reused.sha256
