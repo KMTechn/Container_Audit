@@ -5072,11 +5072,11 @@
       ],
       "file": "parked_tray_store.py",
       "kind": "function",
-      "line": 815,
+      "line": 816,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 816,
+          "line": 817,
           "operation": "unlink",
           "writer_admission_sources": []
         }
@@ -10796,7 +10796,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "6eb36faad8638aa5e508dde02e055c28562d02e3e0b390884dc0c9c620656abc",
+  "inventory_sha256": "62ac3ca6a9fb653973737a8aca618df2b7a93668aa63821a4477a1f52de80c61",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -24768,7 +24768,7 @@
       "direct_mutation_site_count": 0,
       "file": "parked_tray_store.py",
       "function": "parked_tray_store.ParkedTrayStore.defer_recovery_state",
-      "line": 642,
+      "line": 643,
       "marker_kind": "decorator",
       "source": "parked_recovery_defer"
     },
@@ -24776,7 +24776,7 @@
       "direct_mutation_site_count": 1,
       "file": "parked_tray_store.py",
       "function": "parked_tray_store.ParkedTrayStore.delete",
-      "line": 815,
+      "line": 816,
       "marker_kind": "decorator",
       "source": "parked_tray_delete"
     },
@@ -24784,7 +24784,7 @@
       "direct_mutation_site_count": 0,
       "file": "parked_tray_store.py",
       "function": "parked_tray_store.ParkedTrayStore.load",
-      "line": 797,
+      "line": 798,
       "marker_kind": "decorator",
       "source": "parked_tray_load_normalize"
     },
@@ -24792,7 +24792,7 @@
       "direct_mutation_site_count": 0,
       "file": "parked_tray_store.py",
       "function": "parked_tray_store.ParkedTrayStore.bind_invalid_label",
-      "line": 596,
+      "line": 597,
       "marker_kind": "decorator",
       "source": "parked_tray_manager_hold"
     },
@@ -24800,7 +24800,7 @@
       "direct_mutation_site_count": 0,
       "file": "parked_tray_store.py",
       "function": "parked_tray_store.ParkedTrayStore.save_state",
-      "line": 695,
+      "line": 696,
       "marker_kind": "decorator",
       "source": "parked_tray_save"
     },

@@ -220,7 +220,8 @@ class ParkedTrayStore:
                 restored = value.get("restoration") or {}
                 source = value.get("source_snapshot") or {}
                 if (precheck and isinstance(source, dict) and source.get("restore_preflight_id")
-                        and value.get("target", {}).get("id") == "restore-" + str(source.get("hold_sha256") or "")
+                        and isinstance(value.get("target"), dict)
+                        and value["target"].get("id") == "restore-" + str(source.get("hold_sha256") or "")
                         and value.get("authorization_mode") != "WORKER" and value.get("verification_id")):
                     # A completed C12 approval records the restore, not a new quarantine.
                     continue

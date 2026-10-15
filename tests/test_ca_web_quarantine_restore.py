@@ -232,3 +232,17 @@ def test_web_consumed_restore_resumes_the_same_request_without_another_pin(resto
     assert not case.app._paired_preflight_blocks_label(case.label)
     assert sum(path.endswith("/verifications") for path, _ in case.server.calls) == 1
     assert sum(path.endswith("/redemptions") for path, _ in case.server.calls) == 1
+
+
+@pytest.mark.parametrize("malformed_target", (None, []), ids=("null", "list"))
+def test_completed_restore_with_damaged_binding_keeps_its_label_locked(restore_case, malformed_target):
+    case = restore_case
+    target = _confirm(case)
+    assert case.processor.admin("list_paired", _credentials(case, target=target))["ok"]
+    _settle(case)
+    assert not case.app._paired_preflight_blocks_label(case.label)
+    store = case.app._admin_pin_store()
+    intent = next(row for row in store.list_pending() if row.get("source_snapshot", {}).get("restore_preflight_id"))
+    intent["target"] = malformed_target
+    store.path(intent["operation_key"]).write_text(json.dumps(intent), encoding="utf-8")
+    assert case.app._paired_preflight_blocks_label(case.label)
