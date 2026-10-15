@@ -27,10 +27,10 @@ MAX_LOCAL_BYTES = 4 * 1024 * 1024
 
 def normalize_registration_name(value: str) -> str:
     if not isinstance(value, str):
-        raise ValueError("이름을 적어 주세요.")
+        raise ValueError('이름을 적으세요.')
     # Reject unsafe characters before whitespace normalization can erase them.
     if any(unicodedata.category(char) in {"Cc", "Cf", "Cs", "Zl", "Zp"} for char in value):
-        raise ValueError("이름에 보이지 않는 문자가 있습니다. 다시 적어 주세요.")
+        raise ValueError('이름에 보이지 않는 문자가 있습니다.\n다시 적으세요.')
     value = unicodedata.normalize("NFC", value)
     value = " ".join(value.split())
     WorkerRegistry._validate_name(value)
@@ -313,10 +313,10 @@ class WorkerRoster:
     @writer_sink("worker_roster_registration")
     def _save_local(self, value):
         if self.local_blocked:
-            raise ValueError("이 PC의 이름 등록 기록을 확인해야 합니다. 기존 이름으로 작업을 계속하세요.")
+            raise ValueError('이 PC의 이름 등록 기록을 확인해야 합니다.\n기존 이름으로 작업을 계속하세요.')
         encoded = {**value, "sha256": _digest(value)}
         if len(json.dumps(encoded, ensure_ascii=False).encode("utf-8")) > MAX_LOCAL_BYTES // 2:
-            raise ValueError("회사 서버로 보낼 이름이 많습니다. 기존 이름으로 작업을 계속하세요.")
+            raise ValueError('회사 서버로 보낼 이름이 많습니다.\n기존 이름으로 작업을 계속하세요.')
         self._validate_local(encoded)
         atomic_write_json(self.local_path, encoded, indent=2, ensure_ascii=False, trailing_newline=True)
         self.local = value
@@ -354,7 +354,7 @@ class WorkerRoster:
         if existing_worker_id:
             row = self.active_worker(worker_id=existing_worker_id)
             if row is None:
-                raise ValueError("이 이름은 지금 사용할 수 없습니다. 다른 이름을 골라 주세요.")
+                raise ValueError('이 이름은 지금 사용할 수 없습니다.\n다른 이름을 선택하세요.')
             source = next((entry for entry in value["requests"]
                            if entry["body"] and entry["body"].get("temp_uuid") == existing_worker_id), None)
             if source is not None and existing_worker_id not in value["temp_links"]:
@@ -365,7 +365,7 @@ class WorkerRoster:
             selected = existing_worker_id
         else:
             if self.duplicate_workers(name):
-                raise ValueError("같은 이름이 있습니다. 같은 분인지 확인하거나 구분할 이름을 적어 주세요.")
+                raise ValueError('같은 이름이 있습니다.\n같은 분인지 확인하거나 구분할 이름을 적으세요.')
             selected = str(uuid.uuid4())
             value["sequence"] += 1
             body["temp_uuid"] = selected

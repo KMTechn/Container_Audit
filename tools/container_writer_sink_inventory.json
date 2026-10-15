@@ -3,7 +3,7 @@
     {
       "caller": "Container_Audit.ContainerAudit._publish_tray_state_snapshot",
       "category": "filesystem",
-      "line": 3966,
+      "line": 3952,
       "operation": "atomic_replace.atomic_replace",
       "writer_admission_sources": []
     },
@@ -253,24 +253,24 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 3932,
+      "line": 3918,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 3937,
+          "line": 3923,
           "operation": "temporary.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 3943,
+          "line": 3929,
           "operation": "temporary.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 3934,
+          "line": 3920,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -319,11 +319,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 3950,
+      "line": 3936,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 3966,
+          "line": 3952,
           "operation": "atomic_replace.atomic_replace",
           "writer_admission_sources": []
         }
@@ -375,11 +375,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 5504,
+      "line": 5478,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 5508,
+          "line": 5482,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -1190,11 +1190,11 @@
       ],
       "file": "ca_screen_bridge.py",
       "kind": "function",
-      "line": 1178,
+      "line": 1163,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 1184,
+          "line": 1169,
           "operation": "path.open",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -1222,11 +1222,11 @@
       ],
       "file": "container_admin_pin.py",
       "kind": "function",
-      "line": 134,
+      "line": 133,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 164,
+          "line": 163,
           "operation": "self.session.post",
           "writer_admission_sources": []
         }
@@ -1247,17 +1247,17 @@
       "direct_callers": [],
       "file": "container_admin_pin.py",
       "kind": "function",
-      "line": 206,
+      "line": 205,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 214,
+          "line": 213,
           "operation": "self.post",
           "writer_admission_sources": []
         },
         {
           "category": "network",
-          "line": 218,
+          "line": 217,
           "operation": "self.post",
           "writer_admission_sources": []
         }
@@ -1281,11 +1281,11 @@
       ],
       "file": "container_admin_pin.py",
       "kind": "function",
-      "line": 240,
+      "line": 239,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 241,
+          "line": 240,
           "operation": "self.post",
           "writer_admission_sources": []
         }
@@ -1306,11 +1306,11 @@
       "direct_callers": [],
       "file": "container_admin_pin.py",
       "kind": "function",
-      "line": 255,
+      "line": 254,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 261,
+          "line": 260,
           "operation": "self.post",
           "writer_admission_sources": []
         }
@@ -9669,7 +9669,7 @@
       "argument_ast_sha256": "d8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81",
       "caller": "Container_Audit.ContainerAudit._prepare_tray_state_snapshot",
       "classification": "probe_only",
-      "line": 3934,
+      "line": 3920,
       "probe_only": true,
       "report_only": false,
       "source": "gui_tray_state_save",
@@ -10799,7 +10799,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "484ec2c338c724dc581affc713ad0a609b86a489a68255451b2b76a0af920aed",
+  "inventory_sha256": "cd752c1a2655486b5c080d6bd6cbd1e21e4866c38ecb9e26114aaa3ad0b03de0",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -23971,7 +23971,7 @@
       "direct_mutation_site_count": 0,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinIntentStore.write",
-      "line": 336,
+      "line": 335,
       "marker_kind": "decorator",
       "source": "admin_pin_intent"
     },
@@ -23979,7 +23979,7 @@
       "direct_mutation_site_count": 1,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinClient._post_signed",
-      "line": 134,
+      "line": 133,
       "marker_kind": "decorator",
       "source": "admin_pin_network"
     },
@@ -23987,7 +23987,7 @@
       "direct_mutation_site_count": 0,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinClient.post",
-      "line": 105,
+      "line": 104,
       "marker_kind": "decorator",
       "source": "admin_pin_network"
     },
@@ -23995,7 +23995,7 @@
       "direct_mutation_site_count": 0,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinClient.query_roster",
-      "line": 111,
+      "line": 110,
       "marker_kind": "decorator",
       "source": "admin_pin_network"
     },
@@ -24003,7 +24003,7 @@
       "direct_mutation_site_count": 0,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinClient.query_roster_v2",
-      "line": 117,
+      "line": 116,
       "marker_kind": "decorator",
       "source": "admin_pin_network"
     },
@@ -24011,7 +24011,7 @@
       "direct_mutation_site_count": 1,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinClient.redeem",
-      "line": 255,
+      "line": 254,
       "marker_kind": "decorator",
       "source": "admin_pin_network"
     },
@@ -24019,7 +24019,7 @@
       "direct_mutation_site_count": 0,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinClient.register_roster",
-      "line": 122,
+      "line": 121,
       "marker_kind": "decorator",
       "source": "admin_pin_network"
     },
@@ -24027,7 +24027,7 @@
       "direct_mutation_site_count": 1,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinClient.status",
-      "line": 240,
+      "line": 239,
       "marker_kind": "decorator",
       "source": "admin_pin_network"
     },
@@ -24035,7 +24035,7 @@
       "direct_mutation_site_count": 2,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinClient.verify",
-      "line": 206,
+      "line": 205,
       "marker_kind": "decorator",
       "source": "admin_pin_network"
     },
@@ -24483,7 +24483,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1487,
+      "line": 1486,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -24491,7 +24491,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 23279,
+      "line": 23192,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -24499,7 +24499,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 5504,
+      "line": 5478,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -24507,7 +24507,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._clear_projected_checkpoint_audits",
-      "line": 4084,
+      "line": 4070,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -24515,7 +24515,7 @@
       "direct_mutation_site_count": 3,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._prepare_tray_state_snapshot",
-      "line": 3932,
+      "line": 3918,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -24523,7 +24523,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._publish_tray_state_snapshot",
-      "line": 3950,
+      "line": 3936,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -24531,7 +24531,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._recover_checkpoint_audit_events",
-      "line": 4052,
+      "line": 4038,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -24539,7 +24539,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot_admitted",
-      "line": 3975,
+      "line": 3961,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -24547,7 +24547,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 4561,
+      "line": 4546,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },
@@ -25403,7 +25403,7 @@
       "direct_mutation_site_count": 1,
       "file": "ca_screen_bridge.py",
       "function": "ca_screen_bridge._write_screen_startup_record",
-      "line": 1178,
+      "line": 1163,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },

@@ -143,14 +143,14 @@ _COMPLETION_NOTICE_DEFAULTS = {
     CompletionOutcome.RETRY_WAIT: (
         "completion.retry_wait",
         "서버 이적 확인 대기",
-        "서버 이적 확인이 아직 완료되지 않았습니다. 자동 재시도를 기다려 주세요.",
+        '서버 이적 확인이 아직 완료되지 않았습니다.\n자동 재시도를 기다리세요.',
         NoticeSeverity.WARNING,
         True,
     ),
     CompletionOutcome.LOCAL_EVENT_RETRY: (
         "completion.local_event_retry",
         "완료 기록 저장 재시도",
-        "완료 처리는 확정됐지만 기록 저장이 끝나지 않았습니다. 완료 기록 재시도를 눌러 주세요.",
+        '완료 처리는 확정됐지만 기록 저장이 끝나지 않았습니다.\n완료 기록 재시도를 누르세요.',
         NoticeSeverity.ERROR,
         True,
     ),

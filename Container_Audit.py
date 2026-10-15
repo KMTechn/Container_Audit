@@ -35,7 +35,7 @@ from urllib.parse import urlsplit
 
 # Capture this process's start before application imports and startup work.
 _APP_PROCESS_STARTED_AT = datetime.datetime.now(datetime.timezone.utc)
-_APP_STOP_DEFERRED_MESSAGE = "관리자가 프로그램 종료를 요청했습니다. 지금 트레이를 마친 뒤 [종료] 를 누르세요."
+_APP_STOP_DEFERRED_MESSAGE = '관리자가 프로그램 종료를 요청했습니다.\n지금 트레이를 마친 뒤 [종료] 를 누르세요.'
 
 from runtime_dependency_guard import install_charset_normalizer_block
 
@@ -498,8 +498,7 @@ UPDATE_PACKAGED_KEY_CONFIG_FILENAME = "update-manifest-key-config.json"
 UPDATE_PACKAGED_KEY_CONFIG_SCHEMA = "container-audit-update-key-config-v1"
 UPDATE_PACKAGED_KEY_CONFIG_MAX_BYTES = 16 * 1024
 RUNTIME_UPDATE_BOOTSTRAP_MESSAGE = (
-    "코드 루트는 읽기 전용입니다. 앱은 업데이트를 직접 적용하지 않습니다.\n"
-    "관리자가 검증된 새 배포 패키지의 INSTALL_THIS_PC.ps1로 교체 설치해 주세요."
+    '프로그램을 직접 업데이트할 수 없습니다\n현장 관리자에게 알리세요\n코드: INSTALL_THIS_PC.ps1'
 )
 
 
@@ -1021,7 +1020,7 @@ def _recovery_item_firewall(action):
             try:
                 messagebox.showerror(
                     "원본 보류 유지",
-                    "이 항목을 확인하지 못했습니다. 원본을 유지하고 다시 확인하세요.",
+                    '이 항목을 확인하지 못했습니다.\n원본을 유지하고 다시 확인하세요.',
                     parent=getattr(self, "root", None),
                 )
             except Exception:
@@ -1536,8 +1535,7 @@ class ContainerAudit:
                 print(f"필수 품목 파일 없음: {item_path}")
                 messagebox.showerror(
                     "필수 파일 없음",
-                    "품목 정보를 불러오는 데 필요한 파일을 찾을 수 없습니다. "
-                    "관리자에게 문의하세요.",
+                    '품목 정보를 불러오는 데 필요한 파일을 찾을 수 없습니다.\n현장 관리자에게 알리세요.',
                 )
                 self.root.destroy()
                 return []
@@ -1547,14 +1545,13 @@ class ContainerAudit:
                 print(f"품목 파일 읽기 실패: {item_path}: {e.__class__.__name__}: {e}")
                 messagebox.showerror(
                     "파일 읽기 오류",
-                    "품목 정보를 읽지 못했습니다. 프로그램을 다시 시작한 뒤 "
-                    "계속되면 관리자에게 문의하세요.",
+                    '품목 정보를 읽지 못했습니다.\n프로그램을 다시 시작한 뒤 계속되면 현장 관리자에게 알리세요.',
                 )
                 self.root.destroy()
                 return []
         if not show_errors:
             raise UnicodeError("item catalog encoding is unsupported")
-        messagebox.showerror("인코딩 감지 실패", f"'{os.path.basename(item_path)}' 파일의 인코딩 형식을 알 수 없습니다.")
+        messagebox.showerror('입력한 파일을 확인하세요', f'입력한 파일을 확인하세요\n코드: {os.path.basename(item_path)}')
         self.root.destroy()
         return []
 
@@ -1578,8 +1575,7 @@ class ContainerAudit:
         ):
             messagebox.showinfo(
                 "품목 목록 새로 고침 대기",
-                "진행 중인 작업을 먼저 완료하거나 보류해 주세요. "
-                "조회·제출 처리가 끝난 뒤 다시 눌러 주세요.",
+                '진행 중인 작업이나 조회·제출 처리가 있습니다\n끝나거나 보류한 뒤 다시 누르세요',
                 parent=self.root,
             )
             return False
@@ -1651,7 +1647,7 @@ class ContainerAudit:
         ))
         if admission.accepted:
             self.show_status_message(
-                "품목 목록을 확인하고 있습니다. 잠시 기다려 주세요.",
+                '품목 목록을 확인하고 있습니다.\n잠시 기다리세요.',
                 self.COLOR_PRIMARY,
             )
             self._update_action_button_states()
@@ -1678,12 +1674,11 @@ class ContainerAudit:
             print(f"처리 오류 보존·재개 실패: {type(recovery_error).__name__}")
         try:
             notice = self._refuse_scans_behind_save(
-                "처리 실행기를 안전하게 중지했습니다. 현재 작업을 보존하고 관리자에게 문의하세요. "
-                "이어서 들어온 스캔 {count}개는 받지 않았습니다. 다시 스캔하세요."
+                '작업을 중지했습니다\n현장 관리자에게 알리세요 이어서 들어온 스캔 {count}개는 받지 않았습니다. 다시 스캔하세요.'
             )
             if not notice:
                 self.show_status_message(
-                    "처리 실행기를 안전하게 중지했습니다. 현재 작업을 보존하고 관리자에게 문의하세요.",
+                    '작업을 중지했습니다\n현장 관리자에게 알리세요',
                     self.COLOR_DANGER,
                     duration=0,
                 )
@@ -1755,7 +1750,7 @@ class ContainerAudit:
         self._finish_blocked_current_tray_handoff()
         self._ui_task_lane()
         self.show_status_message(
-            "처리 중 오류로 이 트레이를 따로 보관했습니다. 관리자 확인 대기 — 다음 트레이를 계속하세요.",
+            '처리 중 오류로 이 트레이를 따로 보관했습니다.\n관리자 확인 대기 — 다음 트레이를 계속하세요.',
             self.COLOR_DANGER, duration=0,
         )
         return True
@@ -2251,7 +2246,7 @@ class ContainerAudit:
                  "관리자 확인 다시 조회에서 확인하세요. 미확정 인계가 남으면 원본을 보존하고 "
                  "IT 담당자에게 인계하세요. 다른 현품표 작업은 계속할 수 있습니다."
                  if pin_blocked else
-                 "이 현품표는 짝 인계 보류 중입니다. 관리자 인계 목록에서 확인하세요."),
+                 '이 현품표는 짝 인계 보류 중입니다.\n관리자 인계 목록에서 확인하세요.'),
                 parent=getattr(self, "root", None),
             )
             return False
@@ -2772,17 +2767,13 @@ class ContainerAudit:
         if not self._is_pre_phs2_label(qr_data):
             self.show_fullscreen_warning(
                 "현품표 정보 확인 필요",
-                "이 현품표에는 새 시스템 정보가 있지만 PHS=2 표시가 없습니다. "
-                "손상되었거나 잘못 읽혔을 수 있습니다.\n"
-                "현품표를 다시 스캔하고, 계속 안 되면 관리자에게 알려 주세요.",
+                '현품표를 읽을 수 없습니다\n현품표를 다시 스캔하세요. 또 안 되면 현장 관리자에게 알리세요\n코드: PHS=2',
                 self.COLOR_DANGER,
             )
             return True
         self.show_fullscreen_warning(
             "새 시스템 이전 현품표",
-            "이 현품표는 새 시스템 이전 방식입니다. 관리자에게 알려 주세요.\n"
-            "이 PC는 과도기 모드가 꺼져 있어 PHS=2 현품표만 받습니다. "
-            "옛 현품표를 받아야 하는 기간에만 관리자가 과도기 모드를 켭니다.",
+            '옛 현품표를 받을 수 없습니다\n현장 관리자에게 알리세요\n코드: PHS=2',
             self.COLOR_DANGER,
         )
         return True
@@ -3516,7 +3507,7 @@ class ContainerAudit:
         if not self._disable_remembered_worker_start():
             return False
         if not self._end_work_session(reason="roster_inactive"):
-            self.show_status_message("작업 종료 기록을 저장하지 못했습니다. 다시 시도하세요.", self.COLOR_DANGER, duration=0)
+            self.show_status_message('작업 종료 기록을 저장하지 못했습니다.\n다시 시도하세요.', self.COLOR_DANGER, duration=0)
             return False
         self._work_session_identity_bound = False
         self.worker_name = ""
@@ -3575,7 +3566,7 @@ class ContainerAudit:
                 self._authenticated_protected_admin = False
                 messagebox.showerror(
                     "인증 오류",
-                    "관리자 코드를 확인할 수 없습니다. 보호 프로필과 입력값을 확인하세요.",
+                    '관리자 확인을 마치지 못했습니다\n입력한 값을 확인하세요',
                     parent=self.root,
                 )
                 return None
@@ -3601,7 +3592,7 @@ class ContainerAudit:
         if name == PROTECTED_ADMIN_DISPLAY_NAME and getattr(self, "_authenticated_protected_admin", False):
             return PROTECTED_ADMIN_OPERATOR_ID
         if name not in self._worker_selection_names():
-            self.show_status_message("이름을 골라 주세요. 목록에 없으면 『새 이름 등록』을 누르세요.", self.COLOR_DANGER, duration=0)
+            self.show_status_message('이름을 선택하세요.\n목록에 없으면 『새 이름 등록』을 누르세요.', self.COLOR_DANGER, duration=0)
             return None
         roster = getattr(self, "worker_roster", None)
         row = next((row for row in roster.active_workers() if worker_choice_label(row) == name), None) if roster is not None else None
@@ -3624,7 +3615,7 @@ class ContainerAudit:
         try:
             registry.disable_automatic_start()
         except (OSError, UnicodeError, ValueError):
-            self.show_status_message("작업자 변경 정보를 저장하지 못했습니다. 다시 시도하세요.", self.COLOR_DANGER, duration=0)
+            self.show_status_message('작업자 변경 정보를 저장하지 못했습니다.\n다시 시도하세요.', self.COLOR_DANGER, duration=0)
             return False
         return True
 
@@ -3728,8 +3719,7 @@ class ContainerAudit:
             self.worker_name = ""
             self.worker_role = ""
             self.show_worker_input_screen()
-            message = ("작업 세션과 감사 outbox를 함께 저장하거나 투영하지 못했습니다. "
-                       "상태를 보존했으니 다시 시도하고 계속되면 관리자에게 문의하세요.")
+            message = ('작업 시작 기록을 남기지 못했습니다\n다시 시도하세요. 또 안 되면 현장 관리자에게 알리세요\n코드: outbox')
             if getattr(self, "_storage_failure_blocked", False):
                 message = self._storage_failure_stop_message()
             if _automatic:
@@ -3756,7 +3746,7 @@ class ContainerAudit:
         self._schedule_startup_transfer_recovery()
         if not self._audit_recovered_atomic_temps(startup_evidence):
             self.show_status_message(
-                "원자 저장 중단 파일의 격리 감사 기록을 확인하지 못했습니다. 관리자 목록에서 이 건을 다시 확인하세요.",
+                '저장 기록을 확인하지 못했습니다\n현장 관리자에게 알리세요',
                 self.COLOR_DANGER, duration=0,
             )
         if not self.root.winfo_exists(): return
@@ -3822,8 +3812,7 @@ class ContainerAudit:
         if not self._end_work_session(reason="worker_change"):
             messagebox.showerror(
                 "작업 종료 기록 대기",
-                "작업 세션 종료 상태와 감사 outbox를 함께 저장하거나 투영하지 "
-                "못해 작업자를 변경하지 않습니다.",
+                '작업 종료 기록을 남기지 못해 작업자를 변경하지 않았습니다\n현장 관리자에게 알리세요\n코드: outbox',
             )
             return
         self._cancel_all_jobs()
@@ -3854,10 +3843,7 @@ class ContainerAudit:
         if history.load_errors:
             messagebox.showwarning(
                 "작업 현황 확인 필요",
-                "금일 작업 현황을 모두 확인하지 못했습니다.\n"
-                f"작업 기록 읽기 오류: {len(history.load_errors)}건\n"
-                "표시된 수량에 누락이 있을 수 있습니다.\n"
-                "관리자에게 작업 기록 확인을 요청해 주세요.",
+                f'작업 현황에 누락이 있을 수 있습니다\n현장 관리자에게 알리세요\n자세히: 작업 기록 읽기 오류 {len(history.load_errors)}건',
                 parent=self.root,
             )
         elif any(self.work_summary):
@@ -4507,8 +4493,7 @@ class ContainerAudit:
 
     @staticmethod
     def _storage_failure_stop_message() -> str:
-        return ("이 PC 에 저장할 수 없습니다. 지금 트레이 실물을 그대로 두고 "
-                "다른 작업대로 옮겨 계속하세요. 관리자에게 알리세요.")
+        return ('이 PC에 저장할 수 없습니다\n현장 관리자에게 알리세요\n자세히: 지금 트레이 실물을 그대로 두고 다른 작업대로 옮겨 계속하세요.')
 
     def _resume_storage_failure_slots(self) -> None:
         try:
@@ -4966,7 +4951,7 @@ class ContainerAudit:
                 if not self._save_tray_state_snapshot(saved_state):
                     self._show_field_notice(
                         "이전 작업 확인 필요",
-                        "이전 작업자 정보를 안전하게 변환하지 못했습니다. 관리자에게 문의하세요.",
+                        '이전 작업자 정보를 안전하게 변환하지 못했습니다.\n현장 관리자에게 알리세요.',
                     )
                     return
             if not self._reconcile_activation_event_from_state(saved_state):
@@ -4975,8 +4960,7 @@ class ContainerAudit:
                 self.worker_name = ""
                 self._show_field_notice(
                     "현품표 시작 기록 복구 실패",
-                    "저장된 현품표 시작 감사 기록을 복구하지 못했습니다. "
-                    "상태와 감사 outbox를 보존했으니 관리자에게 문의하세요.",
+                    '현품표 시작 기록을 복구하지 못했습니다\n현장 관리자에게 알리세요\n코드: outbox',
                 )
                 return
             if not self._reconcile_parked_restore_from_state(saved_state):
@@ -4985,9 +4969,7 @@ class ContainerAudit:
                 self.worker_name = ""
                 self._show_field_notice(
                     "보류 작업 복구 기록 대기",
-                    "저장된 보류 작업 복구 기록을 투영하거나 source를 정리하지 "
-                    "못했습니다. 상태와 감사 outbox를 보존했으니 관리자에게 "
-                    "문의하세요.",
+                    '보류 작업을 복구하지 못했습니다\n현장 관리자에게 알리세요\n코드: source · outbox',
                 )
                 return
         except Exception as e:
@@ -4998,8 +4980,7 @@ class ContainerAudit:
                 print(f"현재 트레이 상태 격리 위치: {quarantined_path}")
             self._show_field_notice(
                 "이전 작업 확인 필요",
-                "이전 작업 상태를 불러오지 못해 안전하게 분리했습니다. "
-                "관리자에게 문의하세요.",
+                '이전 작업 상태를 불러오지 못해 안전하게 분리했습니다.\n현장 관리자에게 알리세요.',
             )
             return
 
@@ -5034,7 +5015,7 @@ class ContainerAudit:
                     if restore_ok:
                         self._show_field_notice("작업 기록 실패", "완료된 이전 작업 상태 정리 기록을 남기지 못해 상태 파일을 보존합니다.")
                     else:
-                        self._show_field_notice("작업 기록 실패", "완료된 이전 작업 상태 정리 기록을 남기지 못했고 상태 파일 복원에도 실패했습니다. 상태 폴더를 확인하세요.")
+                        self._show_field_notice("작업 기록 실패", '완료된 이전 작업 상태 정리 기록을 남기지 못했고 상태 파일 복원에도 실패했습니다.\n상태 폴더를 확인하세요.')
                     return
                 return
             if self._owns_worker_record(saved_state):
@@ -5083,8 +5064,7 @@ class ContainerAudit:
                     if not self._defer_saved_recovery_state(saved_state):
                         self._show_field_notice(
                             "작업 보류 실패",
-                            "이전 작업을 보류 상태로 안전하게 옮기지 못했습니다. "
-                            "현재 상태를 보존했으니 다시 복구하거나 관리자에게 문의하세요.",
+                            '이전 작업을 보류 상태로 안전하게 옮기지 못했습니다\n현장 관리자에게 알리세요',
                         )
                         return
                     if hasattr(self, "_update_parked_trays_list"):
@@ -5161,7 +5141,7 @@ class ContainerAudit:
                         if rollback_ok:
                             self._show_field_notice("작업 기록 실패", "작업 인수 기록을 남기지 못해 이전 작업 상태를 보존합니다.")
                         else:
-                            self._show_field_notice("작업 기록 실패", "작업 인수 기록을 남기지 못했고 이전 작업 상태 복원에도 실패했습니다. 상태 파일을 확인하세요.")
+                            self._show_field_notice("작업 기록 실패", '작업 인수 기록을 남기지 못했고 이전 작업 상태 복원에도 실패했습니다.\n상태 파일을 확인하세요.')
                         return
                     self._restore_operator_review_from_state(saved_state)
                     self._invalidate_pending_scan_callbacks()
@@ -5173,8 +5153,7 @@ class ContainerAudit:
                     ):
                         self._show_field_notice(
                             "삭제 불가",
-                            "담당자 확인이 필요한 트레이는 삭제할 수 없습니다. "
-                            "담당자 확인 후 기존 작업자가 다시 로그인해 주세요.",
+                            '담당자 확인이 필요한 트레이는 삭제할 수 없습니다\n담당자 확인 후 기존 작업자가 다시 로그인하세요',
                         )
                         self.worker_name = ""
                         self.current_tray = TraySession()
@@ -5208,7 +5187,7 @@ class ContainerAudit:
             print(f"현재 트레이 상태 로드 실패: {e}")
             self._show_field_notice(
                 "이전 작업 확인 필요",
-                "이전 작업 상태를 불러오지 못했습니다. 관리자에게 문의하세요.",
+                '이전 작업 상태를 불러오지 못했습니다.\n현장 관리자에게 알리세요.',
             )
 
     def _restore_tray_from_state(self, state: Dict[str, Any], *, preserve_held_scans: bool = False):
@@ -5271,10 +5250,7 @@ class ContainerAudit:
                 preserved_status = "보존 파일 읽기 실패 · 잠금 유지"
         messagebox.showinfo(
             "현재 현품표 보존 재확인",
-            f"현재 상태 파일: {source_status}\n보존 사본: {preserved_status}\n"
-            f"보존 시점 뒤 내용: {'SHA256 변경 · 두 바이트 모두 보존 필요' if changed else '변경 확인 안 됨'}\n"
-            "보존을 다시 시도한 뒤 보류 후 다른 현품표 계속을 누르세요. "
-            "원 현품표는 관리자 인계 목록에서 계속 막힙니다.",
+            f"원본 보존 확인이 필요합니다\n보존을 다시 시도한 뒤 보류하고 다른 작업을 계속하세요\n자세히: 현재 상태 파일 {source_status} · 보존 사본 {preserved_status} · 보존 시점 뒤 내용 {('SHA256 변경 · 두 바이트 모두 보존 필요' if changed else '변경 확인 안 됨')}\n원 현품표는 관리자 인계 목록에서 계속 보류합니다",
             parent=getattr(self, "root", None),
         )
         return True
@@ -5348,8 +5324,7 @@ class ContainerAudit:
         except (OSError, UnicodeDecodeError, ValueError, TrayStateValidationError):
             messagebox.showerror(
                 "현재 현품표 보존 대기",
-                "원본 보존을 확인하지 못했습니다. 같은 현품표와 새 작업을 계속 막습니다. "
-                "저장 공간과 파일 접근을 확인한 뒤 보존을 다시 시도하세요.",
+                '원본 보존을 확인하지 못했습니다\n저장 공간과 파일 접근을 확인한 뒤 보존을 다시 시도하세요\n자세히: 같은 현품표와 새 작업을 계속 막습니다',
                 parent=getattr(self, "root", None),
             )
             return False
@@ -5434,8 +5409,7 @@ class ContainerAudit:
         if not audited:
             messagebox.showerror(
                 "현재 현품표 보류 기록 대기",
-                "원본 사본은 보존했지만 관리자 보류 기록을 남기지 못했습니다. "
-                "기록 상태를 확인하고 같은 보류 동작을 다시 시도하세요.",
+                '원본 사본은 보존했지만 관리자 보류 기록을 남기지 못했습니다.\n기록 상태를 확인하고 같은 보류 동작을 다시 시도하세요.',
                 parent=getattr(self, "root", None),
             )
             return False
@@ -5459,7 +5433,7 @@ class ContainerAudit:
         self._set_preflight_scan_input_locked(False)
         self._update_action_button_states()
         self.show_status_message(
-            "원 현품표는 관리자 보류 상태입니다. 다른 현품표 작업을 계속하세요.",
+            '원 현품표는 관리자 보류 상태입니다.\n다른 현품표 작업을 계속하세요.',
             self.COLOR_PRIMARY, duration=0,
         )
         return True
@@ -6842,9 +6816,7 @@ class ContainerAudit:
     def _show_phs_replacement_waiting_storage_block(self) -> None:
         self.show_fullscreen_warning(
             "현품표 교체 대기 저장 실패",
-            "현품표 교체 대기 기록을 안전하게 저장하지 못했습니다. "
-            "현재 현품표 상태를 변경하지 않았습니다. 작업을 계속하지 말고 "
-            "저장 장치 상태를 확인한 뒤 다시 시도하세요.",
+            '현품표 교체 대기 기록을 안전하게 저장하지 못했습니다\n작업을 계속하지 말고 저장 장치 상태를 확인한 뒤 다시 시도하세요\n자세히: 현재 현품표 상태를 변경하지 않았습니다',
             self.COLOR_DANGER,
         )
 
@@ -7164,7 +7136,7 @@ class ContainerAudit:
             if action == "현재 트레이 보류" or self.park_current_tray(confirm=False):
                 return False
         self.show_status_message(
-            f"현품표 날짜 교환 확인 대기 · {action} 전에 트레이 보관을 확인하세요.",
+            f'현품표 날짜 교환 확인 대기\n{action} 전에 트레이 보관을 확인하세요.',
             self.COLOR_DANGER,
             duration=8000,
         )
@@ -7245,7 +7217,7 @@ class ContainerAudit:
             self._toggle_phs_label_exchange_panel()
         else:
             self.show_status_message(
-                "회사 서버 현품표 reconciliation 교체 API 설정이 없습니다.",
+                '현품표 교환 설정이 준비되지 않았습니다\n현장 관리자에게 알리세요\n코드: reconciliation · API',
                 self.COLOR_DANGER,
                 duration=6000,
             )
@@ -7341,8 +7313,7 @@ class ContainerAudit:
         self._refresh_phs_active_label_info()
         self._update_action_button_states()
         self.show_status_message(
-            "보조 기능입니다. 현재 사용 중인 현품표의 교환 작업일과 "
-            "후보를 선택하세요.",
+            '보조 기능입니다.\n현재 사용 중인 현품표의 교환 작업일과 후보를 선택하세요.',
             self.COLOR_PRIMARY,
             duration=8000,
         )
@@ -7374,7 +7345,7 @@ class ContainerAudit:
         legacy_single_available = self._phs_label_exchange_available_for_tray()
         if not (legacy_single_available or reconciliation_mode):
             self.show_status_message(
-                "회사 서버 현품표 교체 API 설정이 없습니다.",
+                '현품표 교환 설정이 준비되지 않았습니다\n현장 관리자에게 알리세요\n코드: API',
                 self.COLOR_DANGER,
                 duration=6000,
             )
@@ -7473,7 +7444,7 @@ class ContainerAudit:
         self._set_phs_label_candidates([])
         self._update_action_button_states()
         self.show_status_message(
-            "동일 품목·member-count의 회사 서버 PLANNED 작업지시를 조회합니다.",
+            '같은 품목·제품 수의 작업지시를 조회합니다\n코드: member-count · PLANNED',
             self.COLOR_PRIMARY,
             duration=0,
         )
@@ -7501,8 +7472,7 @@ class ContainerAudit:
                     code = getattr(error, "code", "PHS_TARGET_LOOKUP_FAILED")
                     print(f"현품표 교환 대상 조회 실패: {code}: {error}")
                     self.show_status_message(
-                        "교환 가능한 작업지시를 확인하지 못했습니다. "
-                        "네트워크를 확인한 뒤 다시 시도하세요.",
+                        '교환 가능한 작업지시를 확인하지 못했습니다.\n네트워크를 확인한 뒤 다시 시도하세요.',
                         self.COLOR_DANGER,
                         duration=8000,
                     )
@@ -7515,7 +7485,7 @@ class ContainerAudit:
                     )
                 else:
                     self.show_status_message(
-                        "해당 날짜에 동일 품목·member-count의 PLANNED 후보가 없습니다.",
+                        '해당 날짜에 같은 품목·제품 수의 작업지시가 없습니다\n코드: member-count · PLANNED',
                         self.COLOR_DANGER,
                         duration=8000,
                     )
@@ -7613,7 +7583,7 @@ class ContainerAudit:
             validate_compact_phs2_fields(fields)
         except TransferSealError:
             self.show_status_message(
-                "현품표 정보를 읽지 못했습니다. 현품표를 확인한 뒤 다시 스캔하세요.",
+                '현품표 정보를 읽지 못했습니다.\n현품표를 확인한 뒤 다시 스캔하세요.',
                 self.COLOR_DANGER,
                 duration=8000,
             )
@@ -7821,7 +7791,7 @@ class ContainerAudit:
             )
         except Exception:
             self.show_status_message(
-                "이전 현품표 교체 상태를 확인하지 못했습니다. 관리자에게 문의하세요.",
+                '이전 현품표 교체 상태를 확인하지 못했습니다.\n현장 관리자에게 알리세요.',
                 self.COLOR_DANGER,
                 duration=8000,
             )
@@ -7863,7 +7833,7 @@ class ContainerAudit:
                 recovery = coordinator.journal.load()
             except Exception:
                 self.show_status_message(
-                    "이전 현품표 교체 상태를 확인하지 못했습니다. 관리자에게 문의하세요.",
+                    '이전 현품표 교체 상태를 확인하지 못했습니다.\n현장 관리자에게 알리세요.',
                     self.COLOR_DANGER,
                     duration=8000,
                 )
@@ -7984,7 +7954,7 @@ class ContainerAudit:
                 (
                     "현품표 날짜 교환을 완료했습니다. 현재 트레이 진행은 유지됩니다."
                     if success
-                    else (((getattr(result, "screen_message", "") or result.message) if getattr(result, "error_code", "") in {"LOCAL_PRINTER_ERROR", "PHS_LOCAL_PRINT_UNKNOWN"} else "") or "현품표 날짜 교환을 완료하지 못했습니다. F8로 복구하거나 관리자에게 문의하세요.")
+                    else (((getattr(result, "screen_message", "") or result.message) if getattr(result, "error_code", "") in {"LOCAL_PRINTER_ERROR", "PHS_LOCAL_PRINT_UNKNOWN"} else "") or '현품표 날짜 교환을 완료하지 못했습니다. F8로 복구하거나 현장 관리자에게 알리세요.')
                 ),
                 color,
                 duration=10000,
@@ -8005,7 +7975,7 @@ class ContainerAudit:
             print(f"현품표 날짜 교환 lane 실패: {exc.__class__.__name__}")
             self._phs_label_exchange_pending = False
             self.show_status_message(
-                "현품표 날짜 교환을 완료하지 못했습니다. F8로 복구하거나 관리자에게 문의하세요.",
+                '현품표 날짜 교환을 완료하지 못했습니다. F8로 복구하거나 현장 관리자에게 알리세요.',
                 self.COLOR_DANGER,
                 duration=10000,
             )
@@ -8062,8 +8032,7 @@ class ContainerAudit:
                 f"{exc.__class__.__name__}: {exc}"
             )
             self.show_status_message(
-                "현품표 교체 복구 정보를 읽지 못했습니다. "
-                "F8로 다시 시도하거나 관리자에게 문의하세요.",
+                '현품표 교체 복구 정보를 읽지 못했습니다. F8로 다시 시도하거나 현장 관리자에게 알리세요.',
                 self.COLOR_DANGER,
                 duration=10000,
             )
@@ -8225,8 +8194,7 @@ class ContainerAudit:
             )
             if not preserved:
                 self.show_status_message(
-                    "현품표 교체 중 현재 이적 작업 상태가 변경됐습니다. "
-                    "추가 교체를 중지하고 관리자에게 문의하세요.",
+                    '현품표 교체 중 현재 이적 작업 상태가 변경됐습니다.\n추가 교체를 중지하고 현장 관리자에게 알리세요.',
                     self.COLOR_DANGER,
                     duration=10000,
                 )
@@ -8265,7 +8233,7 @@ class ContainerAudit:
                         journal_context
                     )
                 self.show_status_message(
-                    ((getattr(result, "screen_message", "") or result.message) if getattr(result, "error_code", "") in {"LOCAL_PRINTER_ERROR", "PHS_LOCAL_PRINT_UNKNOWN"} else "") or "현품표 교체를 완료하지 못했습니다. F8로 복구하거나 관리자에게 문의하세요.",
+                    ((getattr(result, "screen_message", "") or result.message) if getattr(result, "error_code", "") in {"LOCAL_PRINTER_ERROR", "PHS_LOCAL_PRINT_UNKNOWN"} else "") or '현품표 교체를 완료하지 못했습니다. F8로 복구하거나 현장 관리자에게 알리세요.',
                     self.COLOR_DANGER,
                     duration=10000,
                 )
@@ -8278,7 +8246,7 @@ class ContainerAudit:
             print(f"현품표 reconciliation lane 실패: {exc.__class__.__name__}")
             self._phs_label_exchange_pending = False
             self.show_status_message(
-                "현품표 교체를 완료하지 못했습니다. F8로 복구하거나 관리자에게 문의하세요.",
+                '현품표 교체를 완료하지 못했습니다. F8로 복구하거나 현장 관리자에게 알리세요.',
                 self.COLOR_DANGER,
                 duration=10000,
             )
@@ -8329,8 +8297,7 @@ class ContainerAudit:
                 f"{exc.__class__.__name__}: {exc}"
             )
             self.show_status_message(
-                "현품표 교환 복구 정보를 읽지 못했습니다. "
-                "F8로 다시 시도하거나 관리자에게 문의하세요.",
+                '현품표 교환 복구 정보를 읽지 못했습니다\nF8 키를 눌러 다시 시도하세요. 또 안 되면 현장 관리자에게 알리세요',
                 self.COLOR_DANGER,
                 duration=10000,
             )
@@ -8397,7 +8364,7 @@ class ContainerAudit:
         self._phs_label_exchange_pending = True
         self._update_action_button_states()
         self.show_status_message(
-            "미완료 현품표 날짜 교환을 회사 서버 ACK에서 복구하고 있습니다.",
+            '현품표 날짜 교환 결과를 확인하고 있습니다\n코드: ACK',
             self.COLOR_PRIMARY,
             duration=0,
         )
@@ -8451,7 +8418,7 @@ class ContainerAudit:
                     (
                         "이전 현품표 교체를 복구했습니다. 현재 트레이 진행은 유지됩니다."
                         if success
-                        else "이전 현품표 교체를 복구하지 못했습니다. 관리자에게 문의하세요."
+                        else '이전 현품표 교체를 복구하지 못했습니다.\n현장 관리자에게 알리세요.'
                     ),
                     self.COLOR_SUCCESS if success else self.COLOR_DANGER,
                     duration=10000,
@@ -8474,7 +8441,7 @@ class ContainerAudit:
             print(f"현품표 교체 복구 lane 실패: {exc.__class__.__name__}")
             self._phs_label_exchange_pending = False
             self.show_status_message(
-                "이전 현품표 교체를 복구하지 못했습니다. 관리자에게 문의하세요.",
+                '이전 현품표 교체를 복구하지 못했습니다.\n현장 관리자에게 알리세요.',
                 self.COLOR_DANGER,
                 duration=10000,
             )
@@ -10227,8 +10194,7 @@ class ContainerAudit:
                     raise PairedHandoffError("matching draining hold must use normal recovery")
                 if not messagebox.askyesno(
                     "두 원본 보류 확인",
-                    "제품 반영 중 보류 입력과 현재 트레이가 다릅니다. 두 원본을 함께 "
-                    "보류하고 다른 현품표 작업을 계속하시겠습니까? 원 현품표는 계속 잠깁니다.",
+                    '보류한 작업과 현재 트레이가 다릅니다\n두 기록을 함께 관리자 보류하고 다른 작업을 계속할까요?',
                     parent=getattr(self, "root", None),
                 ):
                     return False
@@ -10312,14 +10278,13 @@ class ContainerAudit:
             self._set_preflight_scan_input_locked(True)
             messagebox.showerror(
                 "두 원본 보류 대기",
-                "두 원본을 모두 확인하지 못했습니다. 원래 잠금을 유지합니다. "
-                "관리자 인계 목록에서 같은 건을 다시 확인하세요.",
+                '두 원본을 모두 확인하지 못했습니다\n관리자 인계 목록에서 같은 건을 다시 확인하세요',
                 parent=getattr(self, "root", None),
             )
             return False
         self._finish_preflight_handoff(paired=True)
         self.show_status_message(
-            "두 원본을 관리자 보류 목록으로 옮겼습니다. 다른 현품표 작업을 계속하세요.",
+            '두 원본을 관리자 보류 목록으로 옮겼습니다.\n다른 현품표 작업을 계속하세요.',
             self.COLOR_PRIMARY, duration=0,
         )
         return True
@@ -10367,9 +10332,7 @@ class ContainerAudit:
         directory_errors = tuple(row for row in evidence if row.kind == "directory_error")
         for row in directory_errors:
             messagebox.showwarning(
-                "보류 폴더 다시 확인", f"{row.path.name}: {row.problem}\n"
-                "확인된 현품표만 계속 보류합니다. 다른 현품표는 작업할 수 있습니다. "
-                "잠시 뒤 이 목록을 다시 열어 확인하세요.", parent=self.root)
+                "보류 폴더 다시 확인", f'{row.path.name}: {row.problem}\n확인된 현품표만 계속 보류합니다. 다른 현품표는 작업할 수 있습니다. 잠시 후 이 목록을 다시 열어 확인하세요.', parent=self.root)
         paths = tuple(row.path for row in evidence if row.kind == "pair")
         stale_entries = tuple((row.path, read_recovery_file(row.path, "stale_hold"))
                               for row in evidence if row.kind == "stale")
@@ -10407,7 +10370,7 @@ class ContainerAudit:
                                                 label_count=1, known_labels=row.labels)
             else:
                 messagebox.showwarning("사전조회 격리 원본 확인",
-                                       "원본을 읽지 못했습니다. 원본을 보존하고 다시 확인하세요.", parent=self.root)
+                                       '원본을 읽지 못했습니다.\n원본을 보존하고 다시 확인하세요.', parent=self.root)
         for path in paths:
             if not self._blocked_work_identity_matches(approval):
                 return
@@ -10543,7 +10506,7 @@ class ContainerAudit:
             if not self._blocked_work_identity_matches(approval):
                 return
             if not self._audit_recovered_atomic_temps((row,)):
-                messagebox.showerror("격리 감사 대기", "임시 원본의 격리 감사 기록에 실패했습니다. 원본을 보존하고 다시 확인하세요.", parent=self.root)
+                messagebox.showerror("격리 감사 대기", '임시 원본의 격리 감사 기록에 실패했습니다.\n원본을 보존하고 다시 확인하세요.', parent=self.root)
                 continue
             detail = (f"원자 저장 중단 파일: {row.path.name}\n"
                       f"원인: {row.problem}\nSHA256: {row.content_sha256 or '읽기 실패'}\n"
@@ -10561,7 +10524,7 @@ class ContainerAudit:
                 else:
                     messagebox.showerror("원본 읽기 대기", "임시 원본을 읽지 못해 이 건을 계속 보류합니다.", parent=self.root)
             elif not row.labels and not row.unidentified:
-                messagebox.showinfo("임시 원본 격리", detail + "\n\n현품표 key가 없어 다른 현품표 작업은 계속할 수 있습니다.", parent=self.root)
+                messagebox.showinfo("임시 원본 격리", detail + '\n\n현품표 번호가 없어 다른 현품표 작업은 계속할 수 있습니다\n코드: key', parent=self.root)
             elif row.labels and messagebox.askyesno(
                 "임시 원본 보류", detail + "\n\n원 현품표를 회사 서버에서 다시 확인하고 이 건을 보류할까요?",
                 parent=self.root,
@@ -10572,10 +10535,7 @@ class ContainerAudit:
         for row in audit_entries:
             if not self._blocked_work_identity_matches(approval):
                 return
-            detail = (f"감사 근거: {row.path.name}\n"
-                      f"원인: {row.problem}\n"
-                      f"원 현품표: {', '.join(row.labels) or '확인 필요'}\n"
-                      "원본 감사 기록은 보존하고 해당 현품표만 보류합니다.")
+            detail = (f"해당 현품표는 보류합니다\n원본 감사 기록을 보존하세요\n자세히: 감사 근거 {row.path.name} · 원인 {row.problem} · 원 현품표 {', '.join(row.labels) or '확인 필요'}")
             if row.unidentified and messagebox.askyesno(
                 "감사 근거 확인", detail + "\n\n원 현품표 두 장을 스캔해 회사 서버에서 읽기 전용으로 확인할까요?",
                 parent=self.root,
@@ -10683,7 +10643,7 @@ class ContainerAudit:
             except Exception:
                 messagebox.showerror("보류 기록 대기", "감사 기록을 확인하지 못했습니다. 이 건은 계속 보류합니다.", parent=self.root)
                 return
-            messagebox.showinfo("감사 근거 보류", "확인한 원 현품표만 보류했습니다. 다른 현품표 작업을 계속하세요.", parent=self.root)
+            messagebox.showinfo("감사 근거 보류", '확인한 원 현품표만 보류했습니다.\n다른 현품표 작업을 계속하세요.', parent=self.root)
 
         lane.submit(LaneTask(
             name="audit-evidence-identification", generation=getattr(self, "_scan_callback_epoch", 0),
@@ -10764,7 +10724,7 @@ class ContainerAudit:
                 messagebox.showerror("보류 기록 대기", "관리자 기록을 확인하지 못했습니다. 이 건은 계속 보류합니다.", parent=self.root)
                 return
             self._set_preflight_scan_input_locked(False)
-            messagebox.showinfo("현재 상태 보류", "원 현품표를 다시 확인했습니다. 이 건은 계속 보류하고 다른 현품표를 진행하세요.", parent=self.root)
+            messagebox.showinfo("현재 상태 보류", '원 현품표를 다시 확인했습니다.\n이 건은 계속 보류하고 다른 현품표를 진행하세요.', parent=self.root)
 
         lane.submit(LaneTask(
             name="stale-hold-readback", generation=getattr(self, "_scan_callback_epoch", 0),
@@ -10868,7 +10828,7 @@ class ContainerAudit:
                 return
             self._set_preflight_scan_input_locked(False)
             self._update_action_button_states()
-            messagebox.showinfo("두 원본 보류", "두 원 현품표만 보류했습니다. 다른 현품표 작업을 계속하세요.", parent=self.root)
+            messagebox.showinfo("두 원본 보류", '두 원 현품표만 보류했습니다.\n다른 현품표 작업을 계속하세요.', parent=self.root)
 
         lane.submit(LaneTask(
             name="paired-original-identification",
@@ -10934,7 +10894,7 @@ class ContainerAudit:
         if not audited:
             messagebox.showerror(
                 "원 요청 재확인 기록 대기",
-                "관리자 재확인 기록을 남기지 못했습니다. 기록 상태를 확인한 뒤 다시 시도하세요.",
+                '관리자 재확인 기록을 남기지 못했습니다.\n기록 상태를 확인한 뒤 다시 시도하세요.',
                 parent=getattr(self, "root", None),
             )
             return
@@ -11022,8 +10982,7 @@ class ContainerAudit:
                     presenter.present_completion(snapshot)
                     messagebox.showerror(
                         "회사 서버 확인 저장 실패",
-                        "중앙 영수증은 확인했지만 현재 트레이의 잠금 상태를 "
-                        "저장하지 못했습니다. 원래 작업을 유지하고 관리자에게 인계하세요.",
+                        '회사 서버 확인 뒤 현재 트레이 상태를 저장하지 못했습니다\n현재 작업을 유지하고 현장 관리자에게 알리세요',
                         parent=getattr(self, "root", None),
                     )
                     return
@@ -11047,17 +11006,13 @@ class ContainerAudit:
             if kind == "exchange" and status.startswith("ACKED:"):
                 messagebox.showinfo(
                     "회사 서버 교환 확인 · 이 PC 기록과 대조 필요",
-                    "중앙 교체 영수증은 확인됐지만 이 PC의 제품 목록 반영은 "
-                    "아직 확인되지 않았습니다. 원 묶음을 보존하고 관리자에게 "
-                    "중앙 영수증과 현재 트레이 대조를 요청하세요.",
+                    '제품 교환 결과를 이 PC에 반영했는지 확인하지 못했습니다\n현장 관리자에게 알리세요\n자세히: 원 묶음을 보존하고 회사 서버 영수증과 현재 트레이를 대조해야 합니다.',
                     parent=getattr(self, "root", None),
                 )
                 return
             messagebox.showinfo(
                 "회사 서버 결과 확인 대기",
-                "원 요청의 확정된 결과를 아직 확인하지 못했습니다. "
-                "묶음은 미확정 상태로 남습니다. 관리자 보류 후 다른 작업을 "
-                "계속하거나 인계 내용을 확인하세요.",
+                '원 요청의 확정된 결과를 아직 확인하지 못했습니다\n관리자 보류 후 다른 작업을 계속하거나 인계 내용을 확인하세요\n자세히: 묶음은 미확정 상태로 남습니다',
                 parent=getattr(self, "root", None),
             )
 
@@ -12479,7 +12434,7 @@ class ContainerAudit:
         if not p_text:
             return True
         if re.search(r'[ㄱ-ㅎㅏ-ㅣ가-힣]', p_text):
-            self.show_fullscreen_warning("입력 모드 오류", "한글이 입력되었습니다. 한/영 키를 눌러주세요.", self.COLOR_DANGER)
+            self.show_fullscreen_warning("입력 모드 오류", '한글이 입력되었습니다.\n한/영 키를 누르세요.', self.COLOR_DANGER)
             return False
         return True
 
@@ -12714,8 +12669,7 @@ class ContainerAudit:
             self._preflight_hold_draining = snapshot.state == HOLD_DRAINING
             if not getattr(self, "_ui_close_requested", False):
                 self.show_status_message(
-                    f"늦은 중앙 조회 결과를 보류 상태로 정리했습니다 · "
-                    f"보류 {len(snapshot.items)}건",
+                    f'늦은 중앙 조회 결과를 보류 상태로 정리했습니다\n보류 {len(snapshot.items)}건',
                     self.COLOR_DANGER,
                     duration=0,
                 )
@@ -12723,8 +12677,7 @@ class ContainerAudit:
         def fail(_exc: BaseException) -> None:
             if not getattr(self, "_ui_close_requested", False):
                 self.show_status_message(
-                    "늦은 중앙 조회 결과를 정리하지 못했습니다. 보류 파일을 유지하고 "
-                    "관리자에게 문의하세요.",
+                    '늦은 중앙 조회 결과를 정리하지 못했습니다.\n보류 파일을 유지하고 현장 관리자에게 알리세요.',
                     self.COLOR_DANGER,
                     duration=0,
                 )
@@ -12768,7 +12721,7 @@ class ContainerAudit:
         if self._paired_preflight_blocks_label(barcode):
             self.show_fullscreen_warning(
                 "관리자 보류 현품표",
-                "이 현품표는 짝 인계 보류 중입니다. 관리자 인계 목록에서 확인하세요.",
+                '이 현품표는 짝 인계 보류 중입니다.\n관리자 인계 목록에서 확인하세요.',
                 self.COLOR_DANGER,
             )
             return False
@@ -12813,7 +12766,7 @@ class ContainerAudit:
             self.current_tray = TraySession()
             self._pending_activation_event_contract = None
             self.show_status_message(
-                "현품표 시작 기록을 준비하지 못했습니다. 관리자에게 문의하세요.",
+                '현품표 시작 기록을 준비하지 못했습니다.\n현장 관리자에게 알리세요.',
                 self.COLOR_DANGER,
             )
             return False
@@ -12830,8 +12783,7 @@ class ContainerAudit:
             self.worker_name = ""
             self._show_field_notice(
                 "현품표 시작 기록 대기",
-                "현품표 상태와 감사 outbox는 안전하게 저장했지만 CSV 투영에 "
-                "실패했습니다. 다시 작업자를 선택하면 같은 기록으로 재시도합니다.",
+                '현품표와 감사 기록은 저장했지만 작업 기록에 표시하지 못했습니다\n작업자를 다시 선택하세요\n코드: outbox',
             )
             if hasattr(self, "show_worker_input_screen"):
                 self.show_worker_input_screen()
@@ -12872,8 +12824,8 @@ class ContainerAudit:
             canonical_fields = validate_compact_phs2_fields(qr_data)
         except TransferSealError:
             self.show_fullscreen_warning(
-                "중앙 PHS=2 확인 실패",
-                "현품표 정보를 읽지 못했습니다. 현품표를 확인한 뒤 다시 스캔하세요.",
+                '현품표 확인 실패\n코드: PHS=2',
+                '현품표 정보를 읽지 못했습니다.\n현품표를 확인한 뒤 다시 스캔하세요.',
                 self.COLOR_DANGER,
             )
             return False
@@ -13215,7 +13167,7 @@ class ContainerAudit:
         if not admission.accepted or admission.handle is None:
             self._master_preflight_pending = False
             self.show_status_message(
-                "이전 회사 서버 작업 처리 중입니다. 현품표 입력을 다시 시도하세요.",
+                '이전 회사 서버 작업 처리 중입니다.\n현품표 입력을 다시 시도하세요.',
                 self.COLOR_DANGER,
             )
             return False
@@ -13273,7 +13225,7 @@ class ContainerAudit:
         if not success or preflight is None:
             failure = error if isinstance(error, TransferSealError) else TransferSealError(
                 "PHS2_PREFLIGHT_FAILED",
-                "중앙 PHS=2 확인에 실패했습니다.",
+                '현품표를 확인하지 못했습니다\n잠시 후 다시 시도하세요\n코드: PHS=2',
             )
             if failure.code == RESIDUAL_TAG_NOT_ALLOWED:
                 if operation_lease_id:
@@ -13307,7 +13259,7 @@ class ContainerAudit:
                     self._transition_preflight_requeried = barcode
                     self._transition_preflight_unused_lease = str(result[2] or "")
                     self.show_status_message(
-                        "회사 서버 확인을 잠시 뒤 한 번 더 합니다 · 제품은 계속 스캔하세요.",
+                        '회사 서버 확인을 잠시 후 한 번 더 합니다\n제품은 계속 스캔하세요.',
                         self.COLOR_IDLE,
                         duration=0,
                     )
@@ -13464,7 +13416,7 @@ class ContainerAudit:
         self._master_preflight_pending = False
         self._preflight_offline_error_code = ""
         self._set_preflight_scan_input_locked(True)
-        notice = f"중앙 확인 실패({reason}) · 과도기 로컬 작업(새 원장 제외)"
+        notice = f'현품표를 확인하지 못했습니다\n자세히: {reason} · 과도기 작업(새 기록 제외)'
         activated = self._activate_master_label_tray(
             barcode=barcode,
             item_code=str(canonical_fields.get("CLC") or ""),
@@ -13505,20 +13457,19 @@ class ContainerAudit:
         if error_code == "OPERATION_LEASE_NOT_YET_VALID":
             return (
                 "PC·서버 시간 확인 필요",
-                "서버가 발급한 작업 확인 정보의 시작 시각이 이 PC보다 앞서 있습니다. "
-                "잠시 기다린 뒤 확인을 누르세요. "
+                '서버가 발급한 작업 확인 정보의 시작 시각이 이 PC보다 앞서 있습니다.\n잠시 기다린 뒤 확인을 누르세요. '
                 + retry
-                + " 반복되면 IT 담당자에게 PC·서버 시간 동기화를 요청하세요.",
+                + ' 현장 관리자에게 알리세요\n코드: IT',
             )
         if error_code == "PHS2_PREFLIGHT_LOCAL_ERROR":
             return (
                 "PC 처리 오류",
                 "서버 연결 문제가 아닙니다. 이 PC에서 현품표 확인 처리 중 오류가 났습니다. "
                 + retry
-                + " 반복되면 IT 담당자에게 알리세요.",
+                + ' 현장 관리자에게 알리세요\n코드: IT',
             )
         return (
-            "중앙 PHS=2 확인 실패",
+            '현품표 확인 실패\n코드: PHS=2',
             "검사 완료 상태와 네트워크를 확인하세요. " + retry,
         )
 
@@ -13531,10 +13482,7 @@ class ContainerAudit:
             len(snapshot.items) if isinstance(snapshot, PreflightHoldSnapshot) else 0
         )
         self.show_status_message(
-            f"회사 서버 연결 끊김 · 제품 {held_count}개 저장 · 대기 {len(self._offline_waiting_preflight_holds())}개. "
-            "제품은 계속 스캔하세요. 현재 현품표는 30초마다 자동 확인합니다. "
-            "다음 현품표를 스캔하면 지금 것은 대기합니다. "
-            "대기는 연결되면 그 현품표를 다시 스캔하세요. 제품은 다시 스캔하지 마세요.",
+            f'회사 서버와 연결이 끊겼습니다\n제품은 계속 스캔하세요\n자세히: 제품 {held_count}개 저장 · 대기 {len(self._offline_waiting_preflight_holds())}개\n현재 현품표는 30초마다 자동 확인합니다. 다음 현품표를 스캔하면 지금 것은 대기합니다. 연결되면 대기 현품표를 다시 스캔하세요. 제품은 다시 스캔하지 마세요',
             self.COLOR_IDLE,
             duration=0,
         )
@@ -13702,7 +13650,7 @@ class ContainerAudit:
             lambda: store.mark_failed(error_code=error_code),
             finish,
             lambda exc: self.show_status_message(
-                "회사 서버 조회는 실패했고 보류 상태 갱신도 지연 중입니다. 현재 파일은 삭제하지 마세요.",
+                '회사 서버 조회는 실패했고 보류 상태 갱신도 지연 중입니다.\n현재 파일은 삭제하지 마세요.',
                 self.COLOR_DANGER,
                 duration=0,
             ),
@@ -13923,26 +13871,26 @@ class ContainerAudit:
     ):
         title = "보류 스캔 확인"
         message = "보류 중 접수된 제품 바코드를 반영하지 않았습니다."
-        action = "이 제품이 상자에 있으면 빼세요."
+        action = '이 제품이 트레이에 있으면 빼세요.'
         if decision.status == SCAN_FORMAT_ERROR:
             title = "바코드 형식 오류"
             message = decision.format_error_message
         elif decision.status == SCAN_DUPLICATE:
             title = "바코드 중복"
             message = "보류 중 같은 제품 바코드가 중복 접수되어 두 번째 입력을 반영하지 않았습니다."
-            action = "이 바코드는 한 번 반영됐습니다. 상자에 이 제품이 한 개만 있는지 확인하세요."
+            action = '이 바코드는 한 번 반영됐습니다.\n트레이에 이 제품이 한 개만 있는지 확인하세요.'
         elif decision.status == SCAN_TRAY_FULL:
             title = "트레이 수량 초과"
             message = "목표 수량을 넘는 보류 스캔을 반영하지 않았습니다."
-            action = "이 제품을 상자에서 빼세요."
+            action = '이 제품을 트레이에서 빼세요.'
         elif decision.event_name == "SCAN_FAIL_AMBIGUOUS_ITEM_CODE":
             title = "품목 코드 모호"
             message = "여러 품목 코드가 포함된 보류 스캔을 반영하지 않았습니다."
-            action = "이 제품을 상자에서 빼세요."
+            action = '이 제품을 트레이에서 빼세요.'
         elif decision.status == SCAN_MISMATCH:
             title = "품목 코드 불일치"
             message = "현재 트레이와 품목 코드가 다른 보류 스캔을 반영하지 않았습니다."
-            action = "이 제품을 상자에서 빼세요."
+            action = '이 제품을 트레이에서 빼세요.'
         # Held scans skipped the live check, so the product may already be in
         # the box: name it. A format rejection may carry an unsafe raw value,
         # so it is named by its hold order instead.
@@ -14118,8 +14066,7 @@ class ContainerAudit:
             if clear_entry_after_ack:
                 self._clear_consumed_scan_entry(raw)
             self.show_status_message(
-                "현품표 확인이 끝날 때까지 현품표 스캔은 받지 않습니다(이번 입력 미접수). "
-                "이 현품표 제품은 계속 스캔하세요.",
+                '현품표 확인이 끝날 때까지 현품표 스캔은 받지 않습니다(이번 입력 미접수).\n이 현품표 제품은 계속 스캔하세요.',
                 self.COLOR_DANGER,
                 duration=0,
             )
@@ -14254,8 +14201,7 @@ class ContainerAudit:
             self._set_preflight_scan_input_locked(True)
             self._show_field_notice(
                 "두 원본 인계 대기",
-                "두 원본의 관리자 인계가 끝나지 않았습니다. 운영 작업에서 같은 인계를 "
-                "다시 확인하세요. 원 현품표와 새 작업은 잠금 상태입니다.",
+                '두 원본의 관리자 인계가 끝나지 않았습니다\n운영 작업에서 같은 인계를 다시 확인하세요',
                 parent=getattr(self, "root", None),
             )
             return True
@@ -14263,7 +14209,7 @@ class ContainerAudit:
             self._preflight_hold_snapshot = None
             foreign = self._other_worker_preflight_holds()
             if foreign:
-                self.show_status_message(f"다른 작업자 보류 {len(foreign)}건 있음 · 다른 현품표를 스캔하세요.",
+                self.show_status_message(f'다른 작업자 보류 {len(foreign)}건 있음\n다른 현품표를 스캔하세요.',
                     self.COLOR_PRIMARY, duration=0)
             return True
         try:
@@ -14271,7 +14217,7 @@ class ContainerAudit:
         except PreflightHoldError:
             self._show_field_notice(
                 "보류 스캔 확인 필요",
-                "사전조회 보류 파일을 읽지 못했습니다. 파일을 보존하고 관리자에게 문의하세요.",
+                '사전조회 보류 파일을 읽지 못했습니다.\n파일을 보존하고 현장 관리자에게 알리세요.',
             )
             return False
         if self._reject_residual_tag(snapshot.master_raw):
@@ -14289,8 +14235,7 @@ class ContainerAudit:
             self._set_preflight_scan_input_locked(True)
             self._show_field_notice(
                 "보류 스캔 복구 차단",
-                "이 현품표는 짝 인계 보류 중입니다. 원래 보류 파일을 보존하고 "
-                "관리자 인계 목록에서 확인하세요.",
+                '이 현품표는 짝 인계 보류 중입니다.\n원래 보류 파일을 보존하고 관리자 인계 목록에서 확인하세요.',
                 parent=getattr(self, "root", None),
             )
             return True
@@ -14301,7 +14246,7 @@ class ContainerAudit:
         ):
             self._preflight_hold_snapshot = None
             self._set_preflight_scan_input_locked(False)
-            self.show_status_message("다른 작업자 보류 1건 있음 · 다른 현품표를 스캔하세요.",
+            self.show_status_message('다른 작업자 보류 1건 있음\n다른 현품표를 스캔하세요.',
                 self.COLOR_PRIMARY, duration=0)
             return True
         self._preflight_hold_snapshot = snapshot
@@ -14313,10 +14258,7 @@ class ContainerAudit:
             else:
                 self._show_field_notice(
                     "보류 묶음 소유권 확인 필요",
-                    "제품 반영 중인 보류 묶음과 현재 트레이가 일치하지 않습니다. "
-                    "두 원본을 보존하고 관리자에게 현품표·작업자·남은 스캔 수를 "
-                    "알려 주세요. 운영 작업에서 관리자 인증 후 두 원본을 함께 "
-                    "보류하면 다른 현품표 작업을 계속할 수 있습니다.",
+                    '보류한 기록과 현재 트레이가 다릅니다\n현장 관리자에게 알리세요\n자세히: 두 원본을 보존하고 현품표·작업자·남은 스캔 수를 대조합니다. 관리자 인증 후 함께 보류하면 다른 현품표 작업을 계속할 수 있습니다.',
                     parent=getattr(self, "root", None),
                 )
                 return True
@@ -14368,7 +14310,7 @@ class ContainerAudit:
             canonical_fields = validate_compact_phs2_fields(scanned_fields)
         except TransferSealError:
             self.show_status_message(
-                "현품표 정보를 읽지 못했습니다. 현품표를 확인한 뒤 다시 스캔하세요.",
+                '현품표 정보를 읽지 못했습니다.\n현품표를 확인한 뒤 다시 스캔하세요.',
                 self.COLOR_DANGER,
                 duration=8000,
             )
@@ -14385,7 +14327,7 @@ class ContainerAudit:
             != canonical_fields["CLC"]
         ):
             self.show_status_message(
-                "현재 트레이와 다른 ITG/품목의 현품표입니다.",
+                '품목 불일치 — 이 트레이의 현품표가 아닙니다\n이 트레이의 현품표를 스캔하세요\n코드: ITG',
                 self.COLOR_DANGER,
                 duration=8000,
             )
@@ -14555,10 +14497,7 @@ class ContainerAudit:
                 )
             else:
                 message = (
-                    "현재 사용 현품표 "
-                    f"{preflight.active_label_business_date or '날짜 미표기'} · "
-                    f"{preflight.active_label_worker_code or '작업코드 미배정'}를 "
-                    "확인했습니다."
+                    f"현재 사용 현품표 {preflight.active_label_business_date or '날짜 미표기'}\n{preflight.active_label_worker_code or '작업코드 미배정'}를 확인했습니다."
                 )
             if message is not None:
                 self.show_status_message(
@@ -14575,7 +14514,7 @@ class ContainerAudit:
             self._phs_label_refresh_pending = False
             self._update_action_button_states()
             self.show_status_message(
-                "현재 사용 현품표를 확인하지 못했습니다. 잠시 후 다시 스캔하세요.",
+                '현재 사용 현품표를 확인하지 못했습니다.\n잠시 후 다시 스캔하세요.',
                 self.COLOR_DANGER,
                 duration=8000,
             )
@@ -14628,8 +14567,7 @@ class ContainerAudit:
                 },
             )
             self.show_status_message(
-                "PHS=2 현품표는 제품 바코드로 등록하지 않았습니다. "
-                "올바른 현품표를 확인해 주세요.",
+                '현품표는 제품으로 등록하지 않았습니다\n올바른 현품표를 스캔하세요\n코드: PHS=2',
                 self.COLOR_DANGER,
             )
             self._schedule_focus_return()
@@ -14640,7 +14578,7 @@ class ContainerAudit:
         if self._transition_local_tray():
             # A tray completed on this PC has no central label to refresh.
             self.show_status_message(
-                "과도기 로컬 트레이에는 현품표를 다시 확인하지 않습니다. 제품을 계속 스캔하세요.",
+                '과도기 트레이는 현품표를 다시 확인하지 않습니다\n제품을 계속 스캔하세요',
                 self.COLOR_DANGER,
             )
             self._schedule_focus_return()
@@ -15140,7 +15078,7 @@ class ContainerAudit:
             != normalize_master_label_input(hold_snapshot.master_raw)
         ):
             self.show_status_message(
-                f"회사 서버 조회 실패 · 보류 {len(hold_snapshot.items)}건. 같은 현품표로 재시도하세요. 이번 스캔은 접수되지 않았습니다.",
+                f'회사 서버 조회 실패\n보류 {len(hold_snapshot.items)}건. 같은 현품표로 재시도하세요. 이번 스캔은 접수되지 않았습니다.',
                 self.COLOR_DANGER,
                 duration=0,
             )
@@ -15211,7 +15149,7 @@ class ContainerAudit:
                 ) for label in labels if isinstance(label, str) and label))
         if exchange_blocked:
             self.show_status_message(
-                "이 현품표는 날짜 교환 확인 대기 중입니다. 트레이 보류 후 다른 현품표를 스캔하세요.",
+                '이 현품표는 날짜 교환 확인 대기 중입니다.\n트레이 보류 후 다른 현품표를 스캔하세요.',
                 self.COLOR_DANGER, duration=8000)
             self._schedule_focus_return()
             return
@@ -15260,7 +15198,7 @@ class ContainerAudit:
                         and (str(qr_data.get("PHS") or "") == "2" or not row.unidentified)), None)
                 except Exception:
                     self.show_fullscreen_warning(
-                        "보류 근거 확인 필요", "보류 원본 목록을 읽지 못했습니다. 관리자에게 확인을 요청하세요.",
+                        "보류 근거 확인 필요", '보류 원본 목록을 읽지 못했습니다\n현장 관리자에게 알리세요',
                         self.COLOR_DANGER,
                     )
                     return
@@ -15306,7 +15244,7 @@ class ContainerAudit:
                         else inspection_master_item_code(qr_data)
                     )
                     if not item_code:
-                        self.show_fullscreen_warning("QR코드 오류", "QR코드에 고객사 코드(CLC)가 없습니다.", self.COLOR_DANGER)
+                        self.show_fullscreen_warning("QR코드 오류", 'QR코드에 고객사 코드가 없습니다\n번호를 확인하고 다시 스캔하세요\n코드: CLC', self.COLOR_DANGER)
                         return
                     matched_item = self._item_catalog().find_by_code(item_code)
                     if transition:
@@ -15358,7 +15296,7 @@ class ContainerAudit:
                         # the tray takes the default size.
                         tray_quantity = self.TRAY_SIZE
                     if tray_quantity is None:
-                        self.show_fullscreen_warning("QR코드 오류", "QR코드 수량(QT)은 1 이상의 숫자여야 합니다.", self.COLOR_DANGER)
+                        self.show_fullscreen_warning("QR코드 오류", '현품표 수량은 1개 이상이어야 합니다\n입력한 값을 확인하세요\n코드: QT', self.COLOR_DANGER)
                         return
                     event_detail = dict(qr_data)
                     round_class = ""
@@ -15385,8 +15323,7 @@ class ContainerAudit:
                     ) and "DUPLICATE_LABEL" in transition_reasons:
                         self.show_fullscreen_warning(
                             "현품표 중복 · 과도기 기록",
-                            "이미 완료 처리된 현품표입니다. 과도기 모드라 막지 않고 "
-                            "'중복'으로 기록합니다.\n같은 제품이 두 번 들어가지 않았는지 확인하세요.",
+                            "이미 완료 처리된 현품표입니다\n같은 제품이 두 번 들어가지 않았는지 확인하세요\n자세히: 과도기 모드라 막지 않고 '중복'으로 기록합니다",
                             self.COLOR_DANGER,
                         )
                     return
@@ -15397,8 +15334,7 @@ class ContainerAudit:
                     )
                     self.show_fullscreen_warning(
                         "QR코드 분석 오류",
-                        "현품표 정보를 읽지 못했습니다. 현품표를 확인한 뒤 "
-                        "다시 스캔하세요.",
+                        '현품표 정보를 읽지 못했습니다.\n현품표를 확인한 뒤 다시 스캔하세요.',
                         self.COLOR_DANGER,
                     )
                     return
@@ -15447,7 +15383,7 @@ class ContainerAudit:
             hold.setdefault("items", []).append({"scan_id": uuid.uuid4().hex,
                 "raw_barcode": raw_barcode, "received_at": datetime.datetime.now().isoformat()})
             if not (yield self._current_tray_save_operation()):
-                self.show_status_message("보류 스캔을 화면에 보존했습니다. 같은 현품표로 저장을 다시 확인하세요.",
+                self.show_status_message('보류 스캔을 화면에 보존했습니다.\n같은 현품표로 저장을 다시 확인하세요.',
                                          self.COLOR_DANGER, duration=0)
                 return False
             self._show_operation_lease_hold_notice()
@@ -15483,14 +15419,14 @@ class ContainerAudit:
             )
             self.show_fullscreen_warning(
                 "바코드 중복!",
-                f"이미 스캔된 제품입니다.\n{duplicate_display}",
+                f'중복 스캔 — 이미 스캔한 제품입니다.\n{duplicate_display}',
                 self.COLOR_DANGER,
             )
             yield lambda: self._log_event(scan_decision.event_name, detail=scan_decision.event_detail)
             (yield self._current_tray_save_operation())
             return
         if scan_decision.status == SCAN_TRAY_FULL:
-            self.show_fullscreen_warning("트레이 수량 초과", "현재 트레이는 이미 목표 수량에 도달했습니다. 트레이 완료 처리를 먼저 진행하세요.", self.COLOR_DANGER)
+            self.show_fullscreen_warning("트레이 수량 초과", '현재 트레이는 이미 목표 수량에 도달했습니다.\n트레이 완료 처리를 먼저 진행하세요.', self.COLOR_DANGER)
             yield lambda: self._log_event(scan_decision.event_name, detail=scan_decision.event_detail)
             (yield self._current_tray_save_operation())
             return
@@ -15518,7 +15454,7 @@ class ContainerAudit:
         if known_members and normalize_barcode(raw_barcode) not in {normalize_barcode(value) for value in known_members}:
             self.current_tray.mismatch_error_count += 1
             self.current_tray.has_error_or_reset = True
-            self.show_fullscreen_warning("구성원이 아닌 제품", "이 현품표에 없는 제품은 받지 않았습니다.", self.COLOR_DANGER)
+            self.show_fullscreen_warning('이 현품표의 제품이 아닙니다\n이 트레이의 제품을 스캔하세요', "이 현품표에 없는 제품은 받지 않았습니다.", self.COLOR_DANGER)
             yield lambda: self._log_event("SCAN_FAIL_FORMAT", detail={"reason": "BARCODE_NOT_IN_SOURCE_BUNDLE",
                 "barcode": raw_barcode, "item_code": self.current_tray.item_code})
             (yield self._current_tray_save_operation())
@@ -15639,7 +15575,7 @@ class ContainerAudit:
         def fail(exc):
             print(f"스캔 내구 처리 실패: {exc.__class__.__name__}")
             self.show_status_message(
-                "스캔 저장 확인 필요 · 현재 입력과 보류 기록을 확인하세요.",
+                '스캔 저장 확인 필요\n현재 입력과 보류 기록을 확인하세요.',
                 self.COLOR_DANGER, duration=0,
             )
         admission = lane.submit(LaneTask(
@@ -15911,7 +15847,7 @@ class ContainerAudit:
         if getattr(self, "_inline_exchange_mode", ""):
             self._inline_exchange_mode = ""
             self._inline_exchange_target = ""
-            self.show_status_message("교환 입력을 취소했습니다. 제품을 계속 스캔하세요.", self.COLOR_PRIMARY)
+            self.show_status_message('교환 입력을 취소했습니다.\n제품을 계속 스캔하세요.', self.COLOR_PRIMARY)
             self._schedule_focus_return()
             return True
         if not self.current_tray.master_label_code and getattr(self, "_short_confirmation_undo", None):
@@ -16048,7 +15984,7 @@ class ContainerAudit:
                     self.current_tray.operation_lease_id, schedule=False,
                 )
             except Exception:
-                self.show_status_message("잠금 해제 요청 저장에 실패했습니다. 현재 작업을 유지합니다.", self.COLOR_DANGER)
+                self.show_status_message('작업 종료 요청을 저장하지 못했습니다\n현재 작업을 유지하고 현장 관리자에게 알리세요', self.COLOR_DANGER)
                 return
             isolated = False
             if not self._save_tray_state_snapshot(state_snapshot):
@@ -16069,7 +16005,7 @@ class ContainerAudit:
             self._sync_last_normal_scan_from_active_tray(clear_when_inactive=True)
             self._update_all_summaries(); self.undo_button['state'] = tk.DISABLED
             self._reset_ui_to_waiting_state()
-            self.show_status_message("이 트레이를 관리자 확인 대기로 따로 보관했습니다. 다음 트레이를 계속하세요."
+            self.show_status_message('이 트레이를 관리자 확인 대기로 따로 보관했습니다.\n다음 트레이를 계속하세요.'
                                      if isolated else "현재 작업이 초기화되었습니다.", self.COLOR_DANGER)
             self._schedule_focus_return()
             self._request_operation_lease_release(reset_lease_id)
@@ -16333,7 +16269,7 @@ class ContainerAudit:
         status_widget = self.info_cards['status']['value']
         if is_idle:
             status_widget['text'] = "대기 중"; status_widget['foreground'] = self.COLOR_TEXT
-            self.show_status_message(f"휴식 상태입니다. 스캔하여 작업을 재개하세요.", self.COLOR_IDLE, duration=10000)
+            self.show_status_message('휴식 상태입니다.\n스캔하여 작업을 재개하세요.', self.COLOR_IDLE, duration=10000)
         else:
             status_widget['text'] = "작업 중"; status_widget['foreground'] = self.COLOR_SUCCESS
 
@@ -16804,7 +16740,7 @@ class ContainerAudit:
 
     def show_fullscreen_warning(self, title: str, message: str, color: str):
         normalized_title = str(title or "확인 필요").strip() or "확인 필요"
-        normalized_message = str(message or "내용을 확인해 주세요.").strip() or "내용을 확인해 주세요."
+        normalized_message = str(message or '내용을 확인하세요.').strip() or '내용을 확인하세요.'
         code_slug = re.sub(r"[^0-9A-Za-z가-힣]+", "_", normalized_title).strip("_").lower() or "warning"
         notice = Notice(
             code=f"scan.{code_slug}",
@@ -16931,8 +16867,7 @@ class ContainerAudit:
         elif current_master:
             self._show_field_notice(
                 "보류 입력 소유권 충돌",
-                "중앙 조회 보류 묶음과 별도의 현재 트레이가 함께 있어 프로그램을 "
-                "종료하지 않습니다. 두 상태를 보존하고 관리자에게 문의하세요.",
+                '중앙 조회 보류 묶음과 별도의 현재 트레이가 함께 있어 프로그램을 종료하지 않습니다.\n두 상태를 보존하고 현장 관리자에게 알리세요.',
                 parent=getattr(self, "root", None),
             )
             return False, True
@@ -17095,8 +17030,7 @@ class ContainerAudit:
             return
 
         held_notice = self._refuse_scans_behind_save(
-            "종료 전에 이어서 들어온 스캔 {count}개는 저장하지 않았습니다. "
-            "다시 실행한 뒤 그 제품을 다시 스캔하세요."
+            '종료 전에 이어서 들어온 스캔 {count}개는 저장하지 않았습니다.\n다시 실행한 뒤 그 제품을 다시 스캔하세요.'
         )
         if held_notice:
             # The window closes next: the operator reads it before it goes.
@@ -17107,7 +17041,7 @@ class ContainerAudit:
                 if (getattr(self, "_ui_close_requested", False)
                         and not getattr(self, "_application_close_complete", False)
                         and time.monotonic() - self._close_wait_started >= 60):
-                    self.show_status_message("종료가 끝나지 않았습니다. 창을 그대로 두고 관리자에게 알리세요.", self.COLOR_DANGER, duration=0)
+                    self.show_status_message('종료가 끝나지 않았습니다.\n창을 그대로 두고 현장 관리자에게 알리세요.', self.COLOR_DANGER, duration=0)
                     if not getattr(self, "_event_log_close_requested", False):
                         self.log_queue.put({"close_delay": True})
             self.root.after(60000, delayed_close_notice)
@@ -17210,8 +17144,7 @@ class ContainerAudit:
                     restore_notice = "\n\n삭제했던 현재 트레이 상태 파일을 복구했습니다."
                 else:
                     restore_notice = (
-                        "\n\n삭제했던 현재 트레이 상태 파일 복구에도 실패했습니다. "
-                        "상태 폴더를 확인하세요."
+                        '\n\n삭제했던 현재 트레이 상태 파일 복구에도 실패했습니다.\n상태 폴더를 확인하세요.'
                     )
             self._show_field_notice(
                 "작업 종료 기록 실패",
@@ -17274,7 +17207,7 @@ class ContainerAudit:
             self.log_thread = threading.Thread(target=self._event_log_writer, daemon=True)
             self.log_thread.start()
             self.show_status_message(
-                "로그 저장 실패 · 재시도 중입니다. 저장 공간을 확인하세요. 저장 전에는 종료할 수 없습니다.",
+                '로그 저장 실패\n재시도 중입니다. 저장 공간을 확인하세요. 저장 전에는 종료할 수 없습니다.',
                 self.COLOR_DANGER, duration=0,
             )
             self._poll_event_log_notice()
@@ -17563,15 +17496,13 @@ class ContainerAudit:
             print(f"미확정 묶음 보류 실패: {exc.__class__.__name__}")
             messagebox.showerror(
                 "미확정 묶음 보류 실패",
-                "원래 작업 잠금을 유지합니다. 저장 공간과 기록을 확인한 뒤 "
-                "같은 요청을 다시 확인하거나 관리자에게 인계하세요.",
+                '현재 작업을 유지합니다\n같은 요청을 다시 확인하세요',
                 parent=getattr(self, "root", None),
             )
             return False
         self._finish_blocked_current_tray_handoff()
         self.show_status_message(
-            "미확정 묶음을 보류했습니다. 다른 현품표 작업을 시작할 수 있습니다. "
-            "원 묶음은 보류 목록에서 다시 확인하세요.",
+            '미확정 묶음을 보류했습니다\n원 묶음은 보류 목록에서 다시 확인하세요\n자세히: 다른 현품표 작업을 시작할 수 있습니다',
             self.COLOR_PRIMARY, duration=0,
         )
         return True
@@ -18404,8 +18335,7 @@ class ContainerAudit:
                 or str(snapshot.get("master_label") or "") != master_label
             ):
                 self.show_status_message(
-                    "이 현품표는 새 시스템 이전 방식이라 과도기 모드가 꺼진 이 PC에서는 "
-                    f"{action} 작업을 할 수 없습니다. 현재 작업은 보존합니다. 관리자에게 알려 주세요."
+                    f'이 현품표는 새 시스템 이전 방식이라 과도기 모드가 꺼진 이 PC에서는 {action} 작업을 할 수 없습니다. 현재 작업은 보존합니다. 현장 관리자에게 알리세요.'
                     if not getattr(self, "legacy_label_transition", False)
                     and self._is_pre_phs2_label(self._parse_new_format_qr(master_label))
                     else "이전 회사 서버 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
@@ -18421,14 +18351,12 @@ class ContainerAudit:
         ):
             title = "중앙 제품 교체 확인 필요"
             message = (
-                "중앙 제품 교체 결과를 자동으로 확인할 수 없습니다.\n"
-                f"{action} 작업을 진행하지 말고 현재 트레이를 유지한 채 관리자에게 알려 주세요."
+                f'중앙 제품 교체 결과를 자동으로 확인할 수 없습니다.\n{action} 작업을 진행하지 말고 현재 트레이를 유지한 채 현장 관리자에게 알리세요.'
             )
         elif attempt.status == "ACKED":
             title = "중앙 제품 교체 복구 필요"
             message = (
-                "중앙 제품 교체는 완료됐지만 현재 트레이에 반영되지 않았습니다.\n"
-                f"로컬 복구가 끝날 때까지 {action} 작업을 진행할 수 없습니다."
+                f'제품 교환은 완료됐지만 이 PC에 반영되지 않았습니다\n현장 관리자에게 알리세요\n코드: {action}'
             )
         else:
             title = "중앙 제품 교체 응답 대기"
@@ -18589,7 +18517,7 @@ class ContainerAudit:
         ):
             messagebox.showerror(
                 "트레이 제출 다시 하기 실패",
-                "재시도 요청 기록을 저장하지 못해 현재 잠금을 유지합니다.",
+                '다시 시도할 요청을 저장하지 못했습니다\n현장 관리자에게 알리세요',
                 parent=getattr(self, "root", None),
             )
             return False
@@ -18623,7 +18551,7 @@ class ContainerAudit:
             self._start_warning_beep()
             self._render_warning_state()
             self._update_action_button_states()
-            message = "이적 사전검증을 완료하지 못해 기존 담당자 확인 잠금을 복원했습니다."
+            message = '이적 확인을 완료하지 못해 현재 작업을 유지했습니다\n현장 관리자에게 알리세요'
             if not state_restored:
                 message += "\n잠금 상태 재저장에도 실패했으므로 프로그램을 종료하지 마세요."
             messagebox.showerror(
@@ -18838,7 +18766,7 @@ class ContainerAudit:
             self.work_summary = history.work_summary
             self.tray_last_end_time = None
             if history.load_errors:
-                self.show_status_message("작업 기록 확인 필요 · 관리자에게 알려 주세요.", self.COLOR_DANGER)
+                self.show_status_message('작업 기록 확인 필요\n현장 관리자에게 알리세요', self.COLOR_DANGER)
         contract = self._active_completion_event_contract()
         if contract and contract["idempotency_key"] in result.get("cleared_completion_ids", ()):
             self.current_tray = TraySession()
@@ -18874,7 +18802,7 @@ class ContainerAudit:
         def steps():
             if not (yield lambda: self._settle_short_completion_projection(undo["completion_id"])):
                 self.undo_button["state"] = tk.DISABLED
-                self.show_status_message("미달 완료 CSV 저장을 다시 시도하세요.", self.COLOR_DANGER)
+                self.show_status_message('부분 제출 완료 CSV 저장을 다시 시도하세요', self.COLOR_DANGER)
                 return False
             self._short_confirmation_undo = None
             self._cancel_short_confirmation_expiry()
@@ -18891,7 +18819,7 @@ class ContainerAudit:
         contract = self._completion_event_contract_from_state(undo["state"])
         if self._short_confirmation_remaining(contract) <= 0:
             self._check_short_confirmation_expiry()
-            self.show_status_message("미달 확정 취소 시간이 지났습니다. 다음 작업을 계속하세요.", self.COLOR_DANGER)
+            self.show_status_message('부분 제출 뒤에는 되돌릴 수 없습니다\n다음 작업을 계속하세요', self.COLOR_DANGER)
             self._start_warning_beep()
             return False
         def steps():
@@ -18930,10 +18858,10 @@ class ContainerAudit:
                 return record
             record = yield cancel_projection
             if record is None:
-                self.show_status_message("다음 현품표 처리로 미달 취소가 끝났습니다. 완료 저장을 재시도하세요.", self.COLOR_DANGER)
+                self.show_status_message('부분 제출 뒤에는 되돌릴 수 없습니다\n완료 저장을 다시 시도하세요', self.COLOR_DANGER)
                 return False
             if not (yield lambda: self._save_tray_state_snapshot(state)):
-                self.show_status_message("미달 확정 취소 저장을 다시 시도하세요.", self.COLOR_DANGER)
+                self.show_status_message('부분 제출 뒤에는 되돌릴 수 없습니다', self.COLOR_DANGER)
                 return False
             record["undo_applied"] = True
             yield lambda: atomic_write_json(path, record, ensure_ascii=False)
@@ -18950,7 +18878,7 @@ class ContainerAudit:
             self._update_current_item_label()
             self._update_center_display()
             self._start_stopwatch(resume=True)
-            self.show_status_message("미달 확정을 취소했습니다. 제품을 계속 스캔하세요.", self.COLOR_PRIMARY)
+            self.show_status_message('부분 제출 뒤에는 되돌릴 수 없습니다', self.COLOR_PRIMARY)
             return True
         if hasattr(getattr(self, "root", None), "tk"):
             return self._submit_scan_steps(steps())
@@ -19552,9 +19480,7 @@ class ContainerAudit:
             code="transfer.post_review_required",
             title="완료 후 관리자 확인 필요",
             message=(
-                "트레이 완료는 이 PC에 안전하게 저장되었습니다. "
-                "중앙 반영 상태는 관리자 확인이 필요합니다. "
-                "관리자에게 알린 뒤 확인 버튼을 눌러 주세요."
+                '트레이 완료는 이 PC에 저장했지만 회사 서버 반영은 확인이 필요합니다\n현장 관리자에게 알리세요\n자세히: 관리자에게 알린 뒤 확인 단추를 누르세요.'
             ),
             severity=NoticeSeverity.WARNING,
             blocking=True,
@@ -19603,7 +19529,7 @@ class ContainerAudit:
         if case is None:
             self._refresh_transfer_post_review_state()
             messagebox.showinfo(
-                "완료 작업 확인", "재시도할 저장 요청이 없습니다. 전송 상태를 확인해 주세요.",
+                "완료 작업 확인", '재시도할 저장 요청이 없습니다.\n전송 상태를 확인하세요.',
                 parent=self.root,
             )
             return False
@@ -19657,7 +19583,7 @@ class ContainerAudit:
             self._update_action_button_states()
             messagebox.showwarning(
                 "완료 작업 확인 필요",
-                "요청을 처리하지 못했습니다. 관리자 인증과 저장 기록을 확인해 주세요.",
+                '요청을 처리하지 못했습니다.\n관리자 인증과 저장 기록을 확인하세요.',
                 parent=self.root,
             )
 
@@ -20437,9 +20363,7 @@ class ContainerAudit:
             )
         self._show_field_notice(
             "관리자 교체 절차 필요",
-            "현재 작업은 기존 개별 교환 방식으로 처리할 수 없습니다.\n"
-            "교체 대상과 새 양품의 소속을 함께 확인하는 관리자 교체 절차를 이용하세요.\n"
-            "이미 봉인된 이적·포장 작업은 교체할 수 없습니다.",
+            '현재 작업은 개별 교환으로 처리할 수 없습니다\n현장 관리자에게 알리세요\n자세히: 빼는 제품과 넣는 양품의 소속을 확인하는 관리자 교환 절차가 필요합니다. 이미 봉인한 이적·포장은 교환할 수 없습니다.',
         )
         return True
 
@@ -20634,7 +20558,7 @@ class ContainerAudit:
         notice = Notice(
             code=f"status.{severity.value}",
             title=title_by_severity[severity],
-            message=str(message or "상태를 확인해 주세요."),
+            message=str(message or '상태를 확인하세요.'),
             severity=severity,
             blocking=False,
         )
@@ -20795,8 +20719,8 @@ class ContainerAudit:
             if getattr(self, "undo_button", None) is not None:
                 self._update_action_button_states()
             self.show_status_message(
-                "현품표 날짜 교환 확인이 남아 이 트레이를 따로 보관했습니다. 다음 트레이를 계속하세요."
-                if exchange_waiting else "작업을 보류 처리했습니다. 새 현품표를 스캔하세요.", self.COLOR_PRIMARY)
+                '현품표 날짜 교환 확인이 남아 이 트레이를 따로 보관했습니다.\n다음 트레이를 계속하세요.'
+                if exchange_waiting else '작업을 보류 처리했습니다.\n새 현품표를 스캔하세요.', self.COLOR_PRIMARY)
             if exchange_waiting:
                 self.root.after(100, self._schedule_phs_label_exchange_recovery)
             if getattr(self, "success_sound", None):
@@ -20807,7 +20731,7 @@ class ContainerAudit:
             print(f"작업 보류 실패: {e.__class__.__name__}: {e}")
             self._show_field_notice(
                 "작업 보류 실패",
-                "작업을 보류하지 못했습니다. 현재 작업을 유지하고 관리자에게 문의하세요.",
+                '작업을 보류하지 못했습니다.\n현재 작업을 유지하고 현장 관리자에게 알리세요.',
             )
             return False
 
@@ -20898,10 +20822,10 @@ class ContainerAudit:
             temp_evidence = next((row for row in self._parked_store().enumerate_key_evidence()
                                   if row.path == path), None)
             if temp_evidence is None or not self._audit_recovered_atomic_temps((temp_evidence,)):
-                messagebox.showerror("격리 감사 대기", "임시 원본의 격리 감사 기록에 실패했습니다. 원본을 보존하고 다시 확인하세요.", parent=self.root)
+                messagebox.showerror("격리 감사 대기", '임시 원본의 격리 감사 기록에 실패했습니다.\n원본을 보존하고 다시 확인하세요.', parent=self.root)
                 return
             if not temp_evidence.labels and not temp_evidence.digest and not temp_evidence.unidentified:
-                messagebox.showinfo("임시 원본 격리", "임시파일의 원 바이트와 SHA256을 감사 보존했습니다. 현품표 key가 없어 다른 현품표 작업은 계속할 수 있습니다.", parent=self.root)
+                messagebox.showinfo("임시 원본 격리", '임시파일의 원 바이트와 SHA256을 감사 보존했습니다. 현품표 번호가 없어 다른 현품표 작업은 계속할 수 있습니다\n코드: key', parent=self.root)
                 return
         if result.verified and not marker_only and not archived_original and temporary_target is None:
             self._update_parked_trays_list()
@@ -20994,15 +20918,14 @@ class ContainerAudit:
             except ParkedPathTooLong:
                 messagebox.showerror(
                     "보류 기록 대기",
-                    "보류 파일 경로가 Windows 경로 길이 한도(259자)를 넘어 기록하지 못했습니다. 원본은 그대로 두었습니다. "
-                    "이 현품표만 계속 보류하고 다른 현품표 작업은 계속할 수 있습니다. 보류 폴더 경로를 줄이도록 관리자에게 알리세요.",
+                    '보류 파일 경로가 길어 기록하지 못했습니다\n현장 관리자에게 알리세요\n자세히: Windows 경로 한도 259자\n원본은 보존했습니다. 이 현품표만 보류하며 다른 현품표 작업은 계속할 수 있습니다',
                     parent=self.root,
                 )
                 return
             except Exception:
                 messagebox.showerror("보류 기록 대기", "보류 기록을 확인하지 못했습니다. 원본을 계속 보류합니다.", parent=self.root)
                 return
-            messagebox.showinfo("손상 보류 작업", "이 현품표만 보류했습니다. 다른 현품표 작업을 계속하세요.", parent=self.root)
+            messagebox.showinfo("손상 보류 작업", '이 현품표만 보류했습니다.\n다른 현품표 작업을 계속하세요.', parent=self.root)
 
         lane.submit(LaneTask(
             name="damaged-parked-readback",
@@ -21049,8 +20972,7 @@ class ContainerAudit:
         if paired_master_label and self._paired_preflight_blocks_label(paired_master_label):
             self._show_field_notice(
                 "보류 작업 복원 차단",
-                "이 현품표는 짝 인계 보류 중입니다. 원래 보류 파일을 보존하고 "
-                "관리자 인계 목록에서 확인하세요.",
+                '이 현품표는 짝 인계 보류 중입니다.\n원래 보류 파일을 보존하고 관리자 인계 목록에서 확인하세요.',
             )
             return
         try:
@@ -21064,8 +20986,7 @@ class ContainerAudit:
             print(f"손상된 보류 작업 복원 보류: {e.__class__.__name__}; path={filepath}")
             self._show_field_notice(
                 "보류 작업 확인 필요",
-                "보류 작업 정보가 손상되었습니다. 원본을 그대로 보존했습니다. "
-                "보류 목록에서 이 건을 관리자에게 확인받으세요.",
+                '보류 작업 정보를 읽을 수 없습니다\n현장 관리자에게 알리세요\n자세히: 원본을 보존했습니다. 보류 목록에서 이 건만 확인하세요.',
             )
             self._update_parked_trays_list()
             return
@@ -21080,14 +21001,13 @@ class ContainerAudit:
         except Exception:
             exchange_waiting = True
         if exchange_waiting:
-            self.show_status_message("이 트레이는 현품표 날짜 교환 확인 대기 중입니다. 다른 트레이를 계속하세요.",
+            self.show_status_message('이 트레이는 현품표 날짜 교환 확인 대기 중입니다.\n다른 트레이를 계속하세요.',
                                      self.COLOR_DANGER, duration=8000)
             return
         if parked_master_label and self._paired_preflight_blocks_label(parked_master_label):
             self._show_field_notice(
                 "보류 작업 복원 차단",
-                "이 현품표는 짝 인계 보류 중입니다. 원래 보류 파일을 보존하고 "
-                "관리자 인계 목록에서 확인하세요.",
+                '이 현품표는 짝 인계 보류 중입니다.\n원래 보류 파일을 보존하고 관리자 인계 목록에서 확인하세요.',
             )
             return
         if parked_master_label and self._is_completed_tray_state(saved_state):
@@ -21168,9 +21088,7 @@ class ContainerAudit:
                 self.worker_name = ""
                 self._show_field_notice(
                     "보류 작업 복구 기록 대기",
-                    "복원 상태와 감사 outbox는 안전하게 저장했지만 event 투영 또는 "
-                    "source 정리를 끝내지 못했습니다. 다시 로그인해 동일 operation을 "
-                    "복구하고 계속되면 관리자에게 문의하세요.",
+                    '보류 작업은 저장했지만 복구를 마치지 못했습니다\n다시 로그인하세요. 또 안 되면 현장 관리자에게 알리세요\n코드: outbox · event · source · operation',
                 )
                 self._update_parked_trays_list()
                 if hasattr(self, "show_worker_input_screen"):
@@ -21216,7 +21134,7 @@ class ContainerAudit:
             print(f"작업 복원 실패: {e.__class__.__name__}: {e}")
             self._show_field_notice(
                 "작업 복원 실패",
-                "보류 작업을 복원하지 못했습니다. 현재 작업을 유지하고 관리자에게 문의하세요.",
+                '보류 작업을 복원하지 못했습니다.\n현재 작업을 유지하고 현장 관리자에게 알리세요.',
             )
             
     # ####################################################################
@@ -21437,7 +21355,7 @@ class ContainerAudit:
             print(f"자동 테스트 오류: {e}")
             messagebox.showerror(
                 "자동 테스트 실패",
-                "자동 테스트를 완료하지 못했습니다. 관리자용 진단 기록을 확인하세요.",
+                '자동 테스트를 완료하지 못했습니다.\n관리자용 진단 기록을 확인하세요.',
             )
 
     def run(self):
@@ -21603,7 +21521,7 @@ class ContainerAudit:
                 self._update_action_button_states()
                 return
             if not self._log_event('HISTORICAL_REPLACE_START', synchronous=True):
-                messagebox.showerror("교체 시작 기록 실패", "현품표 교체 시작 기록을 남기지 못했습니다. 다시 시도해주세요.")
+                messagebox.showerror("교체 시작 기록 실패", '현품표 교체 시작 기록을 남기지 못했습니다\n다시 시도하세요')
                 return
             self.replacement_context = {"replacement_session_id": uuid.uuid4().hex}
             self._invalidate_pending_scan_callbacks()
@@ -21659,7 +21577,7 @@ class ContainerAudit:
         if self.master_label_replace_state == 'awaiting_old_completed':
             self.replacement_context['old_label'] = barcode
             self.master_label_replace_state = 'awaiting_new_replacement'
-            self.show_status_message("확인. 적용할 '새로운' 현품표를 스캔하세요.", self.COLOR_SUCCESS)
+            self.show_status_message("확인.\n적용할 '새로운' 현품표를 스캔하세요.", self.COLOR_SUCCESS)
             self._update_current_item_label()
 
         elif self.master_label_replace_state == 'awaiting_new_replacement':
@@ -21759,7 +21677,7 @@ class ContainerAudit:
         self.replacement_context['expected_item_code'] = decision.expected_item_code
 
         if decision.action == REPLACEMENT_REJECT_NEW_QTY:
-            messagebox.showwarning("수량 오류", "새 현품표 수량(QT)은 1 이상의 숫자여야 합니다.")
+            messagebox.showwarning("수량 오류", '새 현품표 수량은 1개 이상이어야 합니다\n입력한 값을 확인하세요\n코드: QT')
             self.cancel_master_label_replacement()
             return
         if decision.action == REPLACEMENT_REJECT_OLD_QTY:
@@ -21862,10 +21780,10 @@ class ContainerAudit:
                 removed_items=ctx.get('removed_items') or [],
             )
             if not self._log_event('MASTER_LABEL_REPLACEMENT_APPLIED', detail=correction_payload, synchronous=True):
-                self._show_field_notice("교체 기록 실패", "현품표 교체 correction 이벤트 저장에 실패했습니다. 상태를 유지합니다.")
+                self._show_field_notice("교체 기록 실패", '현품표 교체 기록을 저장하지 못했습니다\n현장 관리자에게 알리세요\n코드: correction')
                 return
 
-            self._show_field_notice("교체 완료", "현품표 교체 증거가 append-only correction 이벤트로 기록되었습니다.")
+            self._show_field_notice("교체 완료", '현품표 교체 기록을 저장했습니다\n코드: append-only · correction')
             self._remember_completed_master_label(ctx['old_label'])
             self._remember_completed_master_label(ctx['new_label'])
             self._update_all_summaries()
@@ -21876,8 +21794,7 @@ class ContainerAudit:
             print(f"현품표 교체 기록 저장 실패: {e.__class__.__name__}: {e}")
             self._show_field_notice(
                 "교체 기록 실패",
-                "현품표 교체 기록을 저장하지 못했습니다. 현재 상태를 유지하고 "
-                "관리자에게 문의하세요.",
+                '현품표 교체 기록을 저장하지 못했습니다.\n현재 상태를 유지하고 현장 관리자에게 알리세요.',
             )
 
     # ==================== 개별 제품 교환 관련 함수들 ====================
@@ -21912,7 +21829,7 @@ class ContainerAudit:
             known = {normalize_barcode(value) for value in tray.known_member_barcodes}
             scanned = {normalize_barcode(value) for value in tray.scanned_barcodes}
             if known and normalized not in known | scanned:
-                self.show_fullscreen_warning("교환 대상 오류", "현재 현품표의 구성원을 스캔하세요.", self.COLOR_DANGER)
+                self.show_fullscreen_warning('빼는 제품을 확인하세요', '현재 현품표의 제품을 스캔하세요.', self.COLOR_DANGER)
                 return False
             self._inline_exchange_target = barcode
             self._inline_exchange_mode = "new"
@@ -21927,7 +21844,7 @@ class ContainerAudit:
             or str(known.get("stage") or "").upper() in {"TRANSFER", "PACKAGING", "PACKAGE", "SHIPPING", "SHIPPED"}
             or str(known.get("bundle_state") or "").upper() in {"SEALED", "PACKAGED", "SHIPPED"}
             or known.get("item_id") not in {None, "", tray.item_code}):
-            self.show_fullscreen_warning("교환 제품 오류", "이 제품은 대체품으로 사용할 수 없습니다.", self.COLOR_DANGER)
+            self.show_fullscreen_warning("교환 제품 오류", '이 제품은 대체 양품으로 사용할 수 없습니다.', self.COLOR_DANGER)
             return False
         state = self._current_tray_state_snapshot()
         after = dict(state)
@@ -21996,7 +21913,7 @@ class ContainerAudit:
                 self.show_status_message("교환은 저장되었습니다. 기록 전송을 다시 확인합니다.", self.COLOR_PRIMARY)
                 return False
             yield lambda: coordinator.store.mark_scan_exchange_projected(row["intent_id"])
-            self.show_status_message("제품 교환 저장됨·회사 서버 확인 중. 계속 스캔하세요.", self.COLOR_PRIMARY)
+            self.show_status_message('제품 교환을 저장했습니다\n계속 스캔하세요\n자세히: 회사 서버에서 확인하는 중입니다', self.COLOR_PRIMARY)
             return True
         return self._submit_scan_steps(steps(), on_idle=settled)
 
@@ -22519,8 +22436,7 @@ class ContainerAudit:
         if status == "conflict":
             self._show_field_notice(
                 "중앙 교체 상태 충돌",
-                "중앙 교체 결과와 현재 트레이 제품 목록이 부분적으로만 일치합니다. "
-                "작업을 중단하고 관리자에게 확인하세요.",
+                '제품 교환 결과가 현재 트레이와 일부만 일치합니다\n현장 관리자에게 알리세요\n자세히: 해당 작업을 중단하고 실물을 보존하세요.',
             )
         elif status == "failed":
             self._show_field_notice(
@@ -22599,13 +22515,12 @@ class ContainerAudit:
             elif status == "apply_failed":
                 self._show_field_notice(
                     "교체 취소 불가",
-                    "회사 서버에서 완료된 제품 교환을 현재 트레이에 먼저 복구해야 합니다. 담당자에게 알리세요.",
+                    '회사 서버에서 완료된 제품 교환을 현재 트레이에 먼저 복구해야 합니다\n현장 관리자에게 알리세요',
                 )
             elif status == "command_pending":
                 self._show_field_notice(
                     "교체 취소 불가",
-                    "회사 서버 제품 교환 완료 여부가 아직 확정되지 않았습니다. "
-                    "네트워크를 확인한 뒤 다시 시도하세요.",
+                    '회사 서버 제품 교환 완료 여부가 아직 확정되지 않았습니다.\n네트워크를 확인한 뒤 다시 시도하세요.',
                 )
 
         def fail(exc: BaseException) -> None:
@@ -22750,8 +22665,7 @@ class ContainerAudit:
                 self.exchange_complete_button.config(state=tk.NORMAL)
                 self._show_field_notice(
                     "중앙 교체 차단",
-                    "현재 현품표에서 중앙 등록 정보를 확인할 수 없습니다. "
-                    "현품표를 다시 확인하고 관리자에게 문의하세요.",
+                    '현재 현품표에서 중앙 등록 정보를 확인할 수 없습니다.\n현품표를 다시 확인하고 현장 관리자에게 알리세요.',
                 )
                 return
             coordinator = self._transfer_member_exchange_runtime()
@@ -22762,8 +22676,7 @@ class ContainerAudit:
                 self.exchange_complete_button.config(state=tk.NORMAL)
                 self._show_field_notice(
                     "중앙 교체 차단",
-                    "현재 트레이의 이적 확인 정보가 없어 제품을 교체할 수 없습니다. "
-                    "현재 트레이를 유지하고 관리자에게 문의하세요.",
+                    '현재 트레이의 이적 확인 정보가 없어 제품을 교체할 수 없습니다.\n현재 트레이를 유지하고 현장 관리자에게 알리세요.',
                 )
                 return
             prepare_arguments = {
@@ -22971,9 +22884,9 @@ def _first_run_onboarding_enabled() -> bool:
 
 
 MACHINE_ONBOARDING_ERROR_MESSAGES = {
-    "RECOVERY_REQUIRED": "설치 주소가 바뀌었습니다. 관리자에게 알려 주세요.",
-    "PENDING_WORKER_SID_MISMATCH": "이 프로그램은 다른 작업자 계정에 설치되었습니다. 지정된 작업자 계정으로 로그인하거나 관리자에게 알려 주세요.",
-    "MACHINE_ONBOARDING_FAILED": "작업자 계정의 설치 마무리를 확인하지 못했습니다. 자료를 보존하고 관리자에게 설치 복구를 요청하세요.",
+    "RECOVERY_REQUIRED": '설치 주소가 바뀌었습니다.\n현장 관리자에게 알리세요.',
+    "PENDING_WORKER_SID_MISMATCH": '이 프로그램은 다른 작업자 계정에 설치되었습니다.\n지정된 작업자 계정으로 로그인하거나 현장 관리자에게 알리세요.',
+    "MACHINE_ONBOARDING_FAILED": '작업자 계정의 설치 마무리를 확인하지 못했습니다\n현장 관리자에게 알리세요',
 }
 
 

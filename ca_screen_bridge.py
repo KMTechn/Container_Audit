@@ -1,19 +1,4 @@
-"""이적 새 화면 처리 층 이음 — 셸 host(owner_main 꼴) · km-app-contract/1(ui/app/ca/contract.json).
-
-w9uiflow1014, APP-SCREENS-1013 ③. 처리 층(Container_Audit.ContainerAudit)의 규칙 · 저장 · 대기열 · 동기화는 그대로 두고
-이 파일은 (1) 화면 한 덩어리 state 를 모으고(present_ca — 읽기만) (2) 화면 요청을 지금 처리 함수로 옮기기만 한다.
-
-주인 스레드 = Tk 스레드(owner_main 이 그 스레드에서 앱을 만들고 root.after 로 bridge.pump()). 아래는 모두 그 스레드에서만 불린다.
-- 스캔 문: 지금 시험과 같은 길 — scan_entry 에 넣고 process_barcode()(빈 Enter · 띠 선택 중 · 경고 중 판정은 처리 층 그대로).
-  빈 Enter(막는 알림 확인)는 command('ack') — 같은 문에 빈 글.
-- 단추: 숨긴 Tk 단추 invoke() — 허용 규칙 · 바뀌는 명령(제출 ↔ 다시 하기)이 지금과 같다. 단추 아닌 것(교환 · 리셋 · 품목 새로 고침 ·
-  관리자 ▾)은 지금 운영 메뉴(_show_operations_menu)를 띄우지 않는 기록 메뉴로 한 번 돌려 그 항목의 켜짐 · 명령을 쓴다.
-- PIN: 인스턴스의 _prompt_blocked_work_admin_pin 을 admin() 인수로 대신(불변식 1 「Tk 모달 PIN → admin()」, 값은 남기지 않음).
-- messagebox · simpledialog · filedialog: 모듈 이름을 화면 어댑터로(불변식 1 「messagebox → push 알림」) — show* = 띠 · 관리자 판 결과,
-  ask* = state.sheet 로 묻고 Tk 변수로 기다림(지금 Tk 대화상자와 같은 기다림), 파일 고르기 = 새 화면에 없음(그만두기).
-- 바뀜 알림: 주인 스레드 0.25초마다 가벼운 지문을 견주어 바뀌면 bridge.push_state(reason='changed').
-- 소리: 지금처럼 처리 층(native_audio)이 낸다 — scan 답 sound=None 이라 셸은 따로 내지 않음.
-"""
+"이적 새 화면 처리 층 이음 — 셸 host(owner_main 꼴) · km-app-contract/1(ui/app/ca/contract.json).\n\nw9uiflow1014, APP-SCREENS-1013 ③. 처리 층(Container_Audit.ContainerAudit)의 규칙 · 저장 · 대기열 · 동기화는 그대로 두고\n이 파일은 (1) 화면 한 덩어리 state 를 모으고(present_ca — 읽기만) (2) 화면 요청을 지금 처리 함수로 옮기기만 한다.\n\n주인 스레드 = Tk 스레드(owner_main 이 그 스레드에서 앱을 만들고 root.after 로 bridge.pump()). 아래는 모두 그 스레드에서만 불린다.\n- 스캔 문: 지금 시험과 같은 길 — scan_entry 에 넣고 process_barcode()(빈 Enter · 띠 선택 중 · 경고 중 판정은 처리 층 그대로).\n  빈 Enter(막는 알림 확인)는 command('ack') — 같은 문에 빈 글.\n- 단추: 숨긴 Tk 단추 invoke() — 허용 규칙 · 바뀌는 명령(제출 ↔ 다시 하기)이 지금과 같다. 단추 아닌 것(교환 · 리셋 · 품목 새로 고침 ·\n  관리자 ▾)은 지금 운영 메뉴(_show_operations_menu)를 띄우지 않는 기록 메뉴로 한 번 돌려 그 항목의 켜짐 · 명령을 쓴다.\n- PIN: 인스턴스의 _prompt_blocked_work_admin_pin 을 admin() 인수로 대신(불변식 1 「Tk 모달 PIN → admin()」, 값은 남기지 않음).\n- messagebox · simpledialog · filedialog: 모듈 이름을 화면 어댑터로(불변식 1 「messagebox → push 알림」) — show* = 띠 · 관리자 판 결과,\n  ask* = state.sheet 로 묻고 Tk 변수로 기다림(지금 Tk 대화상자와 같은 기다림), 파일 선택 = 새 화면에 없음(그만두기).\n- 바뀜 알림: 주인 스레드 0.25초마다 가벼운 지문을 견주어 바뀌면 bridge.push_state(reason='changed').\n- 소리: 지금처럼 처리 층(native_audio)이 낸다 — scan 답 sound=None 이라 셸은 따로 내지 않음.\n"
 
 from __future__ import annotations
 
@@ -49,7 +34,7 @@ CHOICE_IDS = {
     "로그인 화면": "pick_worker", "원본 보존": "preserve", "실물 확인 후 재출력": "f8_reprint",
     "보류하고 이어서 작업": "park_resume", "현재 작업 유지": "keep_current", "꺼냈습니다": "cofill_overflow_ack",
 }
-CHOICE_TEXT = {"로그인 화면": "작업자 고르기"}  # 새 화면엔 로그인 화면이 없다 — 작업자 고르기 화면
+CHOICE_TEXT = {"로그인 화면": '작업자 선택'}  # 새 화면엔 로그인 화면이 없다 — 작업자 고르기 화면
 RESULT_KIND = {NoticeSeverity.SUCCESS: "ok", NoticeSeverity.INFO: "idle", NoticeSeverity.WARNING: "warn", NoticeSeverity.ERROR: "bad"}
 BAND_KIND = {NoticeSeverity.SUCCESS: "quiet", NoticeSeverity.INFO: "quiet", NoticeSeverity.WARNING: "warn", NoticeSeverity.ERROR: "bad"}
 SOUND_TEXT = {"success": "성공음", "completion": "완료음", "error": "오류음"}
@@ -200,7 +185,7 @@ def _alerts(app: Any, presenter_state: Any, notes: List[Dict[str, Any]], now: da
             left = int(app._short_confirmation_remaining(undo.get("contract") or undo))
         except Exception:
             left = 0
-        alerts.append({"kind": "strong", "text": "부족한 채로 확정합니다 — 60초 안에는 「마지막 스캔 취소」로 되돌릴 수 있습니다",
+        alerts.append({"kind": "strong", "text": '수량 부족 — 부분 제출하시겠습니까?\n[부분 제출] [계속 작업]',
                        "tail": f"{left}초 남음"})
     if _attr(app, "is_idle"):
         alerts.append({"kind": "quiet", "text": "휴식 상태 — 스캔하면 작업을 다시 시작합니다", "tail": "7분 넘게 스캔 없음"})
@@ -275,17 +260,17 @@ def _work(app: Any, presenter_state: Any, last_sound: Optional[str], now: dateti
     if done:
         nxt, sub = "완료 — 다음 현품표를 스캔하세요", [{"text": "이 트레이는 끝났습니다"}]
     elif not tag and not checking:
-        nxt, sub = "현품표를 스캔하세요", [{"text": "현품표를 찍으면 품목과 목표 수가 나옵니다"}]
+        nxt, sub = "현품표를 스캔하세요", [{"text": '현품표를 스캔하면 품목과 목표 수가 나옵니다'}]
     elif checking:
-        nxt, sub = "제품을 스캔하세요", [{"text": "현품표 확인 중 — 먼저 찍은 제품은 찍은 순서대로 보관했다가 확인되면 넣습니다"}]
+        nxt, sub = "제품을 스캔하세요", [{"text": '현품표 확인 중 — 먼저 스캔한 제품은 스캔한 순서대로 보관했다가 확인되면 넣습니다'}]
     elif mode == "swap1":
-        nxt, sub = "교환 — 불량 제품을 스캔하세요", [{"text": "① 불량 제품", "on": True}, {"text": "  →  "}, {"text": "② 대체품", "off": True}]
+        nxt, sub = '교환 — 빼는 제품(불량)을 스캔하세요', [{"text": "① 불량 제품", "on": True}, {"text": "  →  "}, {"text": '② 대체 양품', "off": True}]
     elif mode == "swap2":
-        nxt, sub = "대체품을 스캔하세요", [{"text": "① 불량 제품", "off": True}, {"text": "  →  "}, {"text": "② 대체품", "on": True}]
+        nxt, sub = '넣는 제품(양품)을 스캔하세요', [{"text": "① 불량 제품", "off": True}, {"text": "  →  "}, {"text": '② 대체 양품', "on": True}]
     elif short:
-        nxt, sub = "다음 현품표를 스캔하세요", [{"text": "다음 현품표를 찍으면 바로 확정됩니다"}]
+        nxt, sub = "다음 현품표를 스캔하세요", [{"text": '다음 현품표를 스캔하면 바로 확정됩니다'}]
     elif target and count >= target:
-        nxt = "회사 서버 이적 확인 중 — 트레이를 그대로 두세요" if busy else "다 찍었습니다 — 「트레이 제출」 을 누르세요"
+        nxt = "회사 서버 이적 확인 중 — 트레이를 그대로 두세요" if busy else '다 스캔했습니다\n「트레이 제출」 을 누르세요'
         sub = [{"text": f"{item['name'] if item else ''} · {count}개"}]
     else:
         nxt, sub = "제품을 스캔하세요", [{"text": f"목표 {target}개"}]
@@ -309,7 +294,7 @@ def _result(app: Any, presenter_state: Any, tray: Any, count: int, last_sound: O
             if supplement and supplement not in (_attr(app, "_shipping_confirmed_intents", set()) or set()):
                 out = {"kind": "warn", "text": "완료 · 출고 전 관리자 보충 필요", "sub": f"이 PC에 저장 · {completion.item_name} · {completion.scan_count}개"}
             else:
-                out = {"kind": "saved", "text": "완료 · 이 PC에 저장", "sub": "회사 서버로 저절로 다시 보냅니다"}
+                out = {"kind": "saved", "text": '오프라인 저장 — 이 PC에 저장했습니다', "sub": '연결되면 자동 전송합니다'}
         else:
             out = {"kind": RESULT_KIND[notice.severity], "text": notice.title, "sub": _first_line(notice.message)}
     elif notice is not None:
@@ -319,9 +304,9 @@ def _result(app: Any, presenter_state: Any, tray: Any, count: int, last_sound: O
         times = list(_attr(tray, "scan_times") or [])
         at = times[-1].strftime("%H:%M:%S") if times and isinstance(times[-1], datetime.datetime) else ""
         code = compact_scan_value(presenter_state.last_normal_scan, item_code=_attr(tray, "item_code", "")).split(" · ")[-1]
-        out = {"kind": "ok", "text": f"맞음 — {count}번째", "sub": f"{code} · {at}".strip(" ·")}
+        out = {"kind": "ok", "text": f'제품 확인 {count}개', "sub": f"{code} · {at}".strip(" ·")}
     else:
-        out = {"kind": "idle", "text": "아직 찍은 것이 없습니다", "sub": "현품표를 찍으면 품목과 목표 수가 나옵니다"}
+        out = {"kind": "idle", "text": '아직 스캔한 것이 없습니다', "sub": '현품표를 스캔하면 품목과 목표 수가 나옵니다'}
     if sound and out["kind"] != "idle":
         out["sound"] = sound
     if not out.get("sub"):
@@ -372,7 +357,7 @@ def admin_facts(app: Any, name: str) -> List[List[str]]:
         if snapshot is None:
             return []
         held = len(_attr(snapshot, "items", ()) or ())
-        return [["대상", f"현품표 확인 중 보관한 제품 {held}개"], ["따로 둔 뒤", "이 현품표는 관리자 확인 전까지 잠김"]]
+        return [["대상", f"현품표 확인 중 보관한 제품 {held}개"], ["따로 둔 뒤", '이 현품표는 관리자 확인이 필요합니다']]
     if name == "defer_unsettled":
         tray = _attr(app, "current_tray")
         tag = str(_attr(tray, "master_label_code", "") or "")
@@ -381,7 +366,7 @@ def admin_facts(app: Any, name: str) -> List[List[str]]:
         item = " ".join(part for part in (str(_attr(tray, "item_name", "") or ""), str(_attr(tray, "item_spec", "") or "")) if part)
         count = len(_attr(tray, "scanned_barcodes") or [])
         return [["현재 묶음", f"현품표 {tag} · {item} · 스캔 {count}".replace(" ·  · ", " · ")],
-                ["보류 뒤", "같은 현품표는 관리자 확인 전까지 잠김"]]
+                ["보류 뒤", '같은 현품표는 관리자 확인이 필요합니다']]
     if name == "preserve_check" and _attr(app, "_paired_stale_current_blocked"):
         facts = []
         for label, attribute in (("현재 작업 원본", "_paired_stale_current_path"),
@@ -433,7 +418,7 @@ def f8_values(app: Any) -> Dict[str, Any]:
         pass
     sub = sub.replace("서버 교체 지시", "회사 서버 교체 지시").replace(" Pcs", "개")
     if "API" in sub:
-        sub = "현품표 교체를 사용할 수 없습니다 — 관리자에게 알리세요"
+        sub = '현품표 교체를 사용할 수 없습니다\n현장 관리자에게 알리세요'
     # target가 있으면 화면은 완전한 plan도 요구한다. 처리 층에는 지시 받은 시각과
     # 한 덩어리의 전/후 수량·장수가 없어 둘 다 생략하고 기존 판 안내를 그대로 싣는다.
     return {"step": 2 if executing else 1 if loading else 2 if recovery or ready else 0,
@@ -441,7 +426,7 @@ def f8_values(app: Any) -> Dict[str, Any]:
 
 
 def roster_values(app: Any) -> Dict[str, Any]:
-    """작업자 고르기 — 지금 명단 고르기(_worker_selection_names CA:3254) · 안내 글(CA:3268) · 최근 작업자(worker_registry.recent_worker)."""
+    '작업자 선택 — 지금 명단 고르기(_worker_selection_names CA:3254) · 안내 글(CA:3268) · 최근 작업자(worker_registry.recent_worker).'
     labels = [str(label) for label in app._worker_selection_names()][:500]
     try:
         recent = str(app.worker_registry.recent_worker() or "")
@@ -598,7 +583,7 @@ class ScreenDialogs:
 
     # filedialog — 새 화면에 파일 고르기 없음(관리자 일은 관리자 화면에서)
     def askopenfilename(self, *_args: Any, **_kw: Any) -> str:
-        self._note("warn", "파일 고르기", "이 일은 새 화면에서 하지 않습니다 — 관리자에게 알리세요")
+        self._note("warn", '파일 선택', '이 일은 새 화면에서 하지 않습니다\n현장 관리자에게 알리세요')
         return ""
 
     askdirectory = asksaveasfilename = askopenfilename
@@ -769,7 +754,7 @@ class CaProcessor:
                 return {"ok": True, "result": {"kind": "ok", "text": notes[-1]["text"]}}
             return {"ok": True}
         if value is False or (isinstance(value, str) and value):
-            return {"ok": False, "result": {"kind": "warn", "text": "처리하지 못했습니다 — 화면의 상태를 확인하세요"}}
+            return {"ok": False, "result": {"kind": "warn", "text": '처리하지 못했습니다\n화면의 상태를 확인하세요'}}
         return {"ok": False, "result": {"kind": "idle", "text": "처리 결과를 확인하지 못했습니다", "sub": notes[-1]["text"] if notes else "화면의 상태를 확인하세요"}}
 
     def closing(self) -> bool:
@@ -777,7 +762,7 @@ class CaProcessor:
         busy = bool(_attr(self.app, "_completion_lane_busy")) or bool(
             _attr(self.app, "_ui_lane") is not None and self.app._ui_lane.is_busy())
         if busy:
-            self.note({"kind": "warn", "text": "완료 처리 중이라 아직 닫지 않았습니다 — 끝난 뒤 다시 닫으세요"})
+            self.note({"kind": "warn", "text": '완료 처리 중이라 아직 닫지 않았습니다\n끝난 뒤 다시 닫으세요'})
             return False
         return True
 
@@ -809,7 +794,7 @@ class CaProcessor:
         return answer == "yes"
 
     def ask_scan(self, title: str, prompt: str) -> Optional[str]:
-        self.sheet = {"kind": "info", "tag": "스캔", "title": title, "lead": f"{_first_line(prompt)} — 스캐너로 찍으세요",
+        self.sheet = {"kind": "info", "tag": "스캔", "title": title, "lead": f'{_first_line(prompt)} — 스캐너로 스캔하세요',
                       "modal": True, "cancel": "choose:ask_cancel",
                       "actions": [{"text": "그만두기", "go": "command:choose:ask_cancel", "quiet": True}]}
         self._scan_answer = self._new_answer()
@@ -848,7 +833,7 @@ class CaProcessor:
         return credentials
 
     def _no_test_item(self, *_args: Any, **_kw: Any) -> None:
-        self.note({"kind": "warn", "text": "시험 트레이 품목 고르기는 새 화면에 없습니다 — 관리자에게 알리세요"})
+        self.note({"kind": "warn", "text": '시험 트레이 품목 선택은 새 화면에 없습니다\n현장 관리자에게 알리세요'})
         return None
 
     def _enter(self, raw: str) -> None:
@@ -925,7 +910,7 @@ class CaProcessor:
             kind, title = ("server_wait", "서버 확인 대기") if waiting else ("quarantine", "사전조회 격리")
             reason = ("회사 서버 연결을 확인하세요" if waiting else
                       self.app._preflight_failure_guidance(snapshot.error_code, held_retry=False)[0])
-            if reason == "중앙 PHS=2 확인 실패":
+            if reason == '현품표 확인 실패\n코드: PHS=2':
                 reason = "현품표 확인이 필요합니다"
             # Only controlled guidance reaches the screen; paths and error text stay private.
             restricted.append({"id": hashlib.sha256(str(held.path).encode("utf-8")).hexdigest()[:12],
@@ -995,13 +980,13 @@ class CaProcessor:
     def _cmd_restore(self, park_id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
         path = getattr(self, "_park_paths", {}).get(str(park_id or ""))
         if not path:
-            return {"ok": False, "result": {"kind": "warn", "text": "보류 목록이 바뀌었습니다 — 다시 고르세요"}}
+            return {"ok": False, "result": {"kind": "warn", "text": '보류 목록이 바뀌었습니다\n다시 선택하세요'}}
         self.view = None
         return self._run_menu_action(lambda: self.app.restore_parked_tray(path))
 
     def _cmd_reset(self, confirmed: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
         if confirmed != "confirmed":  # 화면 확인 판에서만(지금 코드엔 확인이 없어 새로 생긴 한 번 확인)
-            return {"ok": False, "result": {"kind": "warn", "text": "리셋은 확인 판에서만 합니다"}}
+            return {"ok": False, "result": {"kind": "warn", "text": '현재 작업 취소는 확인 창에서만 할 수 있습니다'}}
         return self._menu("reset")
 
     def _cmd_refresh_items(self, _id: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
@@ -1051,7 +1036,7 @@ class CaProcessor:
     def _cmd_start_work(self, label: Any, _args: Dict[str, Any]) -> Dict[str, Any]:
         entry = _attr(self.app, "worker_entry")
         if entry is None or not label:
-            return {"ok": False, "result": {"kind": "warn", "text": "작업자를 다시 고르세요"}}
+            return {"ok": False, "result": {"kind": "warn", "text": '작업자를 다시 선택하세요'}}
         try:
             entry.set(str(label))
         except AttributeError:
@@ -1064,7 +1049,7 @@ class CaProcessor:
                 self.app._register_worker_name(self._registration_name, existing_worker_id=str(label))
                 self._registration_name = None
             elif str(label) not in self.app._worker_selection_names():
-                return {"ok": False, "result": {"kind": "warn", "text": "이름이 바뀌었습니다 — 다시 등록하세요"}}
+                return {"ok": False, "result": {"kind": "warn", "text": '이름이 바뀌었습니다\n다시 등록하세요'}}
             else:
                 self._registration_name = None
         self.view = None
@@ -1079,7 +1064,7 @@ class CaProcessor:
         candidates = roster.duplicate_workers(name) if roster is not None else []
         existing = str(args.get("existing_worker_id") or "")
         if existing and not any(roster.same_person(row["worker_id"], existing) for row in candidates):
-            return {"ok": False, "result": {"kind": "warn", "text": "이름이 바뀌었습니다 — 다시 등록하세요"}}
+            return {"ok": False, "result": {"kind": "warn", "text": '이름이 바뀌었습니다\n다시 등록하세요'}}
         if candidates and not existing:
             self._registration_name = name
             return {"ok": True}
