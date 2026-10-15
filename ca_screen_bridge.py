@@ -19,7 +19,6 @@ import Container_Audit as ca
 from screen_startup_fallback import ScreenLaunchAttempt, ScreenStartupUnavailable
 from tk_callback_result import invoke_button_callback
 from writer_session_fence import writer_admission
-from scan_display import compact_scan_value
 from warning_presenter import CompletionOutcome, NoticeSeverity
 
 APP_DIR = Path(__file__).resolve().parent
@@ -204,12 +203,10 @@ def _alerts(app: Any, presenter_state: Any, notes: List[Dict[str, Any]], now: da
 def _list(tray: Any, now: datetime.datetime) -> List[Dict[str, Any]]:
     barcodes = list(_attr(tray, "scanned_barcodes") or [])
     times = list(_attr(tray, "scan_times") or [])
-    item_code = _attr(tray, "item_code", "")
     rows = []
     for index in range(len(barcodes) - 1, max(-1, len(barcodes) - 1 - LIST_LIMIT), -1):
-        compact = compact_scan_value(barcodes[index], item_code=item_code)
         at = times[index].strftime("%H:%M:%S") if index < len(times) and isinstance(times[index], datetime.datetime) else ""
-        rows.append({"no": str(index + 1), "code": compact.split(" · ")[-1], "at": at,
+        rows.append({"no": str(index + 1), "code": str(barcodes[index]), "at": at,
                      "st": "new" if index == len(barcodes) - 1 else "ok"})
     return rows
 
@@ -236,7 +233,7 @@ def _work(app: Any, presenter_state: Any, last_sound: Optional[str], now: dateti
     if checking:
         snapshot = _attr(app, "_preflight_hold_snapshot")
         held = list(_attr(snapshot, "items", ()) or ())
-        rows = [{"no": str(h.sequence), "code": compact_scan_value(h.raw_barcode, item_code="").split(" · ")[-1],
+        rows = [{"no": str(h.sequence), "code": str(h.raw_barcode),
                  "at": str(h.admitted_at)[11:19], "st": "held", "tag": "보관"} for h in reversed(held)][:LIST_LIMIT]
     mode = "swap1" if exchange == "old" else "swap2" if exchange == "new" else "short" if short else "done" if done else None
     target_code = str(_attr(app, "_inline_exchange_target", "") or "")
@@ -274,11 +271,25 @@ def _work(app: Any, presenter_state: Any, last_sound: Optional[str], now: dateti
         sub = [{"text": f"{item['name'] if item else ''} · {count}개"}]
     else:
         nxt, sub = "제품을 스캔하세요", [{"text": f"목표 {target}개"}]
+    exchange_state = _exchange(app, tag_out)
     return {
         "tag": tag_out, "item": item, "target": target, "count": count, "remaining": remaining, "left_kind": left_kind,
         "list_count": len(rows) if checking else count, "mode": mode, "checking": checking, "next": nxt, "next_sub": sub,
         "result": _result(app, presenter_state, tray, count, last_sound), "list": rows, "cofill": None,
+        **({"exchange": exchange_state} if exchange_state is not None else {}),
     }
+
+
+def _exchange(app: Any, master_label: Optional[str]) -> Optional[Dict[str, Any]]:
+    mode = _attr(app, "_inline_exchange_mode", "")
+    if mode in {"old", "new"}:
+        return {"phase": "remove" if mode == "old" else "insert",
+                "remove": {"code": str(_attr(app, "_inline_exchange_target", "") or "") or None},
+                "insert": {"code": None}}
+    done = _attr(app, "_last_inline_exchange")
+    if done and done["master_label"] == master_label:
+        return {"phase": "done", "remove": {"code": done["remove"]}, "insert": {"code": done["insert"]}}
+    return None
 
 
 def _result(app: Any, presenter_state: Any, tray: Any, count: int, last_sound: Optional[str]) -> Dict[str, Any]:
@@ -303,7 +314,7 @@ def _result(app: Any, presenter_state: Any, tray: Any, count: int, last_sound: O
     elif presenter_state.last_normal_scan and _attr(tray, "master_label_code"):
         times = list(_attr(tray, "scan_times") or [])
         at = times[-1].strftime("%H:%M:%S") if times and isinstance(times[-1], datetime.datetime) else ""
-        code = compact_scan_value(presenter_state.last_normal_scan, item_code=_attr(tray, "item_code", "")).split(" · ")[-1]
+        code = str(presenter_state.last_normal_scan)
         out = {"kind": "ok", "text": f'제품 확인 {count}개', "sub": f"{code} · {at}".strip(" ·")}
     else:
         out = {"kind": "idle", "text": '아직 스캔한 것이 없습니다', "sub": '현품표를 스캔하면 품목과 목표 수가 나옵니다'}
@@ -449,13 +460,14 @@ def roster_values(app: Any) -> Dict[str, Any]:
 
 
 def today_values(app: Any) -> Dict[str, Any]:
-    """오늘 현황 — 지금 Tk 「금일 작업 현황」(CA:15980–16006)과 같은 원천. 품목별 제품 수는 처리 층에 없어 싣지 않는다."""
+    """오늘 현황 — 완료 기록에서 복구하는 품목별 트레이 수와 실제 제품 수."""
     confirmed = _attr(app, "_shipping_confirmed_intents", set()) or set()
     rows, supply = [], 0
     for _code, data in sorted((_attr(app, "work_summary", {}) or {}).items()):
         name = str(data.get("name", "") or "")
         spec = str(data.get("spec", "") or "")
-        rows.append({"item": f"{name} · {spec}" if spec else name, "trays": max(0, int(data.get("count", 0) or 0))})
+        rows.append({"item": f"{name} · {spec}" if spec else name, "trays": max(0, int(data.get("count", 0) or 0)),
+                     "products": max(0, int(data.get("products", 0) or 0))})
         supply += len(set(data.get("shipping_supplement_intents", set()) or set()) - set(confirmed))
     return {"total_trays": max(0, int(_attr(app, "total_tray_count", 0) or 0)), "rows": rows[:100], "supply": supply}
 
@@ -496,7 +508,7 @@ def present_ca(app: Any, *, view: Optional[str] = None, menu: Optional[Dict[str,
         "alerts": _alerts(app, presenter_state, notes or [], now), "work": work, "allow": _allow(app, menu, work),
         "admin_menu": [{"name": name, "enabled": bool(menu.get(name, (False, None))[0])
                         and (name != "resend_completion" or app._is_preflight_hold_supervisor()),
-                        "facts": admin_facts(app, name)} for name in ADMIN_MENU],
+                        "facts": admin_facts(app, name), "pin": name in ADMIN_PIN} for name in ADMIN_MENU],
         "sheet": sheet,
     }
     state.update(extra or {})
@@ -510,7 +522,8 @@ def fingerprint(app: Any, view: Optional[str], notes: List[Dict[str, Any]], shee
     conn, queue = _conn(app)
     parts = (
         _attr(tray, "master_label_code"), len(_attr(tray, "scanned_barcodes") or []), _attr(tray, "tray_size"),
-        repr(presenter_state), _attr(app, "_inline_exchange_mode"), bool(_attr(app, "_short_confirmation_undo")),
+        repr(presenter_state), _attr(app, "_inline_exchange_mode"), _attr(app, "_last_inline_exchange"),
+        bool(_attr(app, "_short_confirmation_undo")),
         bool(_attr(app, "_master_preflight_pending")), bool(_attr(app, "is_idle")), bool(_attr(app, "_warning_beep_active")),
         [c[0] for c in (_attr(app, "_inline_scan_choices") or [])], _attr(app, "worker_name"), _view(app, view),
         app._is_preflight_hold_supervisor(),

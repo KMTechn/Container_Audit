@@ -324,7 +324,7 @@ def test_held_pane_today_comes_from_the_same_summary_as_tk(flow):
     assert state["view"] == "held" and _schema_errors(state, CONTRACT["state"]) == []
     today = state["today"]
     assert today["total_trays"] == 5 and today["supply"] == 1  # 보충 = 의도 − 확인된 것(지금 「금일 작업 현황」 셈과 같음)
-    assert today["rows"] == [{"item": "시험 품목 · RHD", "trays": 3}, {"item": "다른 품목", "trays": 2}]
+    assert today["rows"] == [{"item": "시험 품목 · RHD", "trays": 3, 'products': 0}, {"item": "다른 품목", "trays": 2, 'products': 0}]
     assert processor.command("close", {}) == {"ok": True} and processor.state()["view"] == "work"
 
 

@@ -878,6 +878,8 @@ def complete_tray_steps(
         self.show_status_message(f"테스트 트레이 완료!", self.COLOR_SUCCESS)
     else:
         self.work_summary[item_code]['count'] += 1
+        self.work_summary[item_code]['products'] = (
+            self.work_summary[item_code].get('products', 0) + len(self.current_tray.scanned_barcodes))
         if supplement_intent:
             self.work_summary[item_code].setdefault(
                 "shipping_supplement_intents", set()

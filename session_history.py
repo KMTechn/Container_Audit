@@ -454,11 +454,13 @@ def load_session_history(
                 "spec": _history_spec(session),
                 "count": 0,
                 "test_count": 0,
+                "products": 0,
             }
         if session.get("is_test_tray", False):
             history.work_summary[item_code]["test_count"] += 1
         else:
             history.work_summary[item_code]["count"] += 1
+            history.work_summary[item_code]["products"] += _session_scan_count(session) or 0
             supplement_intent = shipping_supplement_intent(session)
             if supplement_intent:
                 history.work_summary[item_code].setdefault(

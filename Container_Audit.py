@@ -21812,6 +21812,7 @@ class ContainerAudit:
             return False
         self._inline_exchange_mode = "old"
         self._inline_exchange_target = ""
+        self._last_inline_exchange = None
         self.show_status_message("교환할 불량 제품을 스캔하세요.", self.COLOR_PRIMARY, duration=0)
         return True
 
@@ -21898,6 +21899,8 @@ class ContainerAudit:
             self._restore_tray_from_state(after, preserve_held_scans=True)
             self._inline_exchange_mode = ""
             self._inline_exchange_target = ""
+            self._last_inline_exchange = {"master_label": tray.master_label_code,
+                                          "remove": old, "insert": barcode}
             self._update_current_item_label()
             self._update_center_display()
             if not (yield lambda: self._log_stored_event("PRODUCT_EXCHANGE_COMPLETED", detail={

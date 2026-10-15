@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "cd752c1a2655486b5c080d6bd6cbd1e21e4866c38ecb9e26114aaa3ad0b03de0",
+  "after_inventory_sha256": "68e140896d34c14a94e48ee23f665a23208fc0f4099b0292583e9e8fed0a11e3",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -188,7 +188,7 @@
     {
       "path": "app/Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "201a4033ab326b101ab7b304cb52f6bbdf02c8bbabaf8de1491b2d88a64283ca"
+      "after": "b773164d524f418f6ce5a90d65632eb90731fad1a9bdd75090264746dc5e695c"
     },
     {
       "path": "app/best_time_records.py",
@@ -548,7 +548,7 @@
     {
       "path": "app/session_history.py",
       "before": "4130a8ce9637fe67a1b6e5ee35f8bf2d7bd9b91f7d5a11c20c9fd1e3f33e03b3",
-      "after": "59a794ba48b5bf7bf20741f16847acd49e5f1ce360d6a844c49eb00dab12dc73"
+      "after": "968498de218287efd539c8784c6fe872d3e5a5e86856d04394127d2ca047a188"
     },
     {
       "path": "app/site-packages/certifi/__init__.py",
@@ -1388,7 +1388,7 @@
     {
       "path": "app/tray_completion.py",
       "before": "a04e9d08bf543dfd4e83341f92510491c9a82a477cc5530a9859c55b8d8388a7",
-      "after": "1ed95a704196be88ef2091e2d9d343e549f44fce55217050bf79b958487d22c7"
+      "after": "fb5bdd732a7781224da6e876f710e0e62f1322c9c9ca79fa70808c48b4f630ee"
     },
     {
       "path": "app/tray_state.py",
@@ -1463,7 +1463,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "e9ce4919d2bb4d6f402bf91eaf9347d3b9482b820c547589200bf1ba1b545b21"
+      "after": "000e14adde402129f0bf6251e33dc53fda797e15f8f53d53580e48f015d783a1"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4513,7 +4513,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "5b11e8d945e085cd6bfd83b3edc81ee9bc024ca4d1f512d6e0a4496a6eb7e472"
+      "after": "018f0f4a054c17ad4ada058e0c9dd46f9292483ca944c7eda23320764a2ff61d"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4523,19 +4523,19 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "b9250cab1e771e45338bd6920c613ffe98ebca250136266fc04adc2d08fb6b6c"
+      "after": "b633e8a3912058075cfb16fd3cebd56516ed763fe8e69dbcbbf37dcf22662ade"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "d612ba5dc61424e9009b70f2e1c76bfd005ad8758e37b4f031a84fe569cf3737"
+      "after": "735170761fa1bc65da279f40fa1dc706e5f309e3645078263e9a4af423b6284a"
     }
   ],
   "source_replacements": [
     {
       "path": "Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "201a4033ab326b101ab7b304cb52f6bbdf02c8bbabaf8de1491b2d88a64283ca"
+      "after": "b773164d524f418f6ce5a90d65632eb90731fad1a9bdd75090264746dc5e695c"
     },
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
@@ -4645,7 +4645,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "5b11e8d945e085cd6bfd83b3edc81ee9bc024ca4d1f512d6e0a4496a6eb7e472"
+      "after": "018f0f4a054c17ad4ada058e0c9dd46f9292483ca944c7eda23320764a2ff61d"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4695,7 +4695,7 @@
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "e9ce4919d2bb4d6f402bf91eaf9347d3b9482b820c547589200bf1ba1b545b21"
+      "after": "000e14adde402129f0bf6251e33dc53fda797e15f8f53d53580e48f015d783a1"
     }
   ],
   "hash_provenance": {
