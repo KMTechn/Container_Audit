@@ -55,7 +55,7 @@ foreach($name in @('Full','Same','Sha','Test-JsonPositiveInt32','Test-JsonIntege
  $fn=@($canonical.EndBlock.Statements|Where-Object {$_.Name -ceq $name});if($fn.Count -eq 1){Invoke-Expression $fn[0].Extent.Text}
 }
 foreach($name in @('Test-SamePath','Assert-NoReparsePoint','Write-ContainerSupportedRemovalJournal','Get-ContainerRemovalIoPath',
- 'Assert-ContainerRemovalBoundary','Assert-ContainerRemovalQuiescent','Get-ContainerRemovalTaskNames','Remove-ContainerScheduledTasks',
+ 'Assert-ContainerRemovalBoundary','Assert-ContainerRemovalQuiescent','Resolve-ContainerRemovalTaskSid', 'Get-ContainerRemovalTaskNames','Remove-ContainerScheduledTasks',
  'Test-ContainerRemovalFile','Get-ContainerArtifactFilePlan','Get-ContainerRemovalArtifacts','Remove-ContainerEmptiedParents','Invoke-ContainerConvergentRemoval')){
  $fn=@($lower.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)|Where-Object {$_.Name -ceq $name});if($fn.Count -eq 1){Invoke-Expression $fn[0].Extent.Text}
 }

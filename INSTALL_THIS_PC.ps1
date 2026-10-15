@@ -1868,13 +1868,22 @@ function Assert-ContainerRemovalQuiescent([string]$ApplicationRoot, [int[]]$Excl
     }
 }
 
+function Resolve-ContainerRemovalTaskSid([string]$Identity) {
+    try {
+        if ([string]::IsNullOrWhiteSpace($Identity)) { throw 'REMOVAL_TASK_IDENTITY_UNKNOWN' }
+        if ($Identity -cmatch '^S-1-') {
+            return ([Security.Principal.SecurityIdentifier]::new($Identity)).Value
+        }
+        return ([Security.Principal.NTAccount]::new($Identity)).Translate([Security.Principal.SecurityIdentifier]).Value
+    } catch { throw 'REMOVAL_TASK_IDENTITY_UNKNOWN' }
+}
+
 function Get-ContainerRemovalTaskNames($Folder, [string]$CurrentRoot) {
     $names = @('direct-sync-relay-container-audit','container-audit-isolated-qualification-authority')
     foreach ($task in @($Folder.GetTasks(1))) {
         if ([string]$task.Name -cnotmatch '^KMTech\.ContainerAudit\.StartupUpdate\.[0-9a-f]{24}$') { continue }
         $xml = [xml]$task.Xml
-        $sid = [string]$xml.Task.Triggers.LogonTrigger.UserId
-        if ($sid -cnotmatch '^S-1-(?:[0-9]+-)+[0-9]+$') { throw 'REMOVAL_TASK_IDENTITY_UNKNOWN' }
+        $sid = Resolve-ContainerRemovalTaskSid ([string]$xml.Task.Triggers.LogonTrigger.UserId)
         $raw = [Text.Encoding]::UTF8.GetBytes($CurrentRoot.ToLowerInvariant().Replace('/','\') + "`n" + $sid)
         $hash = [Security.Cryptography.SHA256]::Create()
         try { $suffix = ([BitConverter]::ToString($hash.ComputeHash($raw))).Replace('-','').ToLowerInvariant().Substring(0,24) }
@@ -1885,7 +1894,7 @@ function Get-ContainerRemovalTaskNames($Folder, [string]$CurrentRoot) {
         $command = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
         if (([string]$xml.Task.Actions.Exec.Arguments -cne $expected -and [string]$xml.Task.Actions.Exec.Arguments -cne $previous) -or
             -not (Test-SamePath ([string]$xml.Task.Actions.Exec.Command) $command) -or
-            [string]$xml.Task.Principals.Principal.UserId -cne 'S-1-5-18' -or
+            (Resolve-ContainerRemovalTaskSid ([string]$xml.Task.Principals.Principal.UserId)) -cne 'S-1-5-18' -or
             @($xml.Task.Actions.Exec).Count -ne 1) { throw 'REMOVAL_TASK_IDENTITY_UNKNOWN' }
         $names += [string]$task.Name
     }

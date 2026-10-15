@@ -87,7 +87,7 @@ def test_installer_task_consumers_preserve_exact_previous_action(tmp_path, engin
     source = Path(__file__).resolve().parents[1] / "INSTALL_THIS_PC.ps1"
     expected = tmp_path / "expected.xml"
     expected.write_text(update.logon_task_xml(app_root=root, operator_sid=sid), encoding="utf-8")
-    result = run_functions(tmp_path, source, ["Test-ContainerStartupUpdateTaskIdentity", "Get-ContainerRemovalTaskNames"], r'''
+    result = run_functions(tmp_path, source, ["Test-ContainerStartupUpdateTaskIdentity", "Resolve-ContainerRemovalTaskSid", "Get-ContainerRemovalTaskNames"], r'''
 $root='E:\synthetic\current';$sid='S-1-5-21-1-2-3-1001'
 [xml]$expected=[IO.File]::ReadAllText($env:CA_POLICY_XML)
 [xml]$actual=$expected.CloneNode($true)

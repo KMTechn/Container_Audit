@@ -15,7 +15,7 @@ from tests.powershell_contracts import run_functions
 REPO = Path(__file__).resolve().parents[1]
 NAMES = ['Test-SamePath', 'Get-ContainerRemovalIoPath',
          'Assert-ContainerRemovalBoundary', 'Assert-ContainerRemovalQuiescent',
-         'Get-ContainerRemovalTaskNames', 'Remove-ContainerScheduledTasks',
+         'Resolve-ContainerRemovalTaskSid', 'Get-ContainerRemovalTaskNames', 'Remove-ContainerScheduledTasks',
          'Test-ContainerRemovalFile', 'Get-ContainerArtifactFilePlan',
          'Get-ContainerRemovalArtifacts', 'Remove-ContainerEmptiedParents',
          'Invoke-ContainerConvergentRemoval']

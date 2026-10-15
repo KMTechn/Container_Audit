@@ -10799,7 +10799,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "c07cbdd415ef90092ebf1c3b927c2b0a4555b78018d976d9164641690d64a70a",
+  "inventory_sha256": "d22d35e0f5c8bdc688a0e8be858042a066ae3802bd21a2ef13daa247a094c2e6",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -12149,7 +12149,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "scheduler_com",
-        "line": 1915,
+        "line": 1924,
         "target": "",
         "target_static": false
       },
@@ -12161,7 +12161,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2077,
+        "line": 2086,
         "target": "",
         "target_static": true
       },
@@ -12173,7 +12173,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2104,
+        "line": 2113,
         "target": "",
         "target_static": true
       },
@@ -12185,7 +12185,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2108,
+        "line": 2117,
         "target": "",
         "target_static": true
       },
@@ -12197,7 +12197,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2132,
+        "line": 2141,
         "target": "",
         "target_static": true
       },
@@ -12209,7 +12209,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2134,
+        "line": 2143,
         "target": "",
         "target_static": true
       },
@@ -12221,7 +12221,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "com_wmi_process_create",
-        "line": 2248,
+        "line": 2257,
         "target": "",
         "target_static": false
       },
@@ -12233,7 +12233,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "scheduler_com",
-        "line": 2248,
+        "line": 2257,
         "target": "",
         "target_static": false
       },
@@ -12245,7 +12245,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "call_operator",
-        "line": 2370,
+        "line": 2379,
         "target": "$Action}",
         "target_static": false
       },
@@ -12257,7 +12257,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2459,
+        "line": 2468,
         "target": "",
         "target_static": true
       },
@@ -12269,7 +12269,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2510,
+        "line": 2519,
         "target": "",
         "target_static": true
       },
@@ -12281,7 +12281,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2516,
+        "line": 2525,
         "target": "",
         "target_static": true
       },
@@ -12293,7 +12293,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2521,
+        "line": 2530,
         "target": "",
         "target_static": true
       },
@@ -12305,7 +12305,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2527,
+        "line": 2536,
         "target": "",
         "target_static": true
       },
@@ -12317,7 +12317,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2556,
+        "line": 2565,
         "target": "",
         "target_static": true
       },
@@ -12329,7 +12329,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2614,
+        "line": 2623,
         "target": "",
         "target_static": true
       },
@@ -12341,7 +12341,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2616,
+        "line": 2625,
         "target": "",
         "target_static": true
       },
@@ -12353,36 +12353,12 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2629,
+        "line": 2638,
         "target": "",
         "target_static": true
       },
       {
         "command": "Remove-Item",
-        "file": "INSTALL_THIS_PC.ps1",
-        "function": "",
-        "guard_line": 1552,
-        "guard_name": "Enter-ContainerPlacementWriterFence",
-        "guarded": true,
-        "kind": "filesystem_mutation",
-        "line": 2635,
-        "target": "",
-        "target_static": true
-      },
-      {
-        "command": "Move-Item",
-        "file": "INSTALL_THIS_PC.ps1",
-        "function": "",
-        "guard_line": 1552,
-        "guard_name": "Enter-ContainerPlacementWriterFence",
-        "guarded": true,
-        "kind": "filesystem_mutation",
-        "line": 2640,
-        "target": "",
-        "target_static": true
-      },
-      {
-        "command": "Move-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
         "guard_line": 1552,
@@ -12394,14 +12370,14 @@
         "target_static": true
       },
       {
-        "command": "Remove-Item",
+        "command": "Move-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
         "guard_line": 1552,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2784,
+        "line": 2649,
         "target": "",
         "target_static": true
       },
@@ -12413,19 +12389,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2798,
-        "target": "",
-        "target_static": true
-      },
-      {
-        "command": "Move-Item",
-        "file": "INSTALL_THIS_PC.ps1",
-        "function": "",
-        "guard_line": 1552,
-        "guard_name": "Enter-ContainerPlacementWriterFence",
-        "guarded": true,
-        "kind": "filesystem_mutation",
-        "line": 2803,
+        "line": 2653,
         "target": "",
         "target_static": true
       },
@@ -12437,7 +12401,43 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2815,
+        "line": 2793,
+        "target": "",
+        "target_static": true
+      },
+      {
+        "command": "Move-Item",
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "",
+        "guard_line": 1552,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "kind": "filesystem_mutation",
+        "line": 2807,
+        "target": "",
+        "target_static": true
+      },
+      {
+        "command": "Move-Item",
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "",
+        "guard_line": 1552,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "kind": "filesystem_mutation",
+        "line": 2812,
+        "target": "",
+        "target_static": true
+      },
+      {
+        "command": "Remove-Item",
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "",
+        "guard_line": 1552,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "kind": "filesystem_mutation",
+        "line": 2824,
         "target": "",
         "target_static": true
       },
@@ -12985,7 +12985,7 @@
         "command": ".",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-BootstrapInstallationCommitPoint",
-        "guard_line": 2188,
+        "guard_line": 2197,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "dot_source",
@@ -14371,7 +14371,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2077,
+        "line": 2086,
         "target": "",
         "target_static": true
       },
@@ -14383,7 +14383,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2104,
+        "line": 2113,
         "target": "",
         "target_static": true
       },
@@ -14395,7 +14395,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2108,
+        "line": 2117,
         "target": "",
         "target_static": true
       },
@@ -14407,7 +14407,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2132,
+        "line": 2141,
         "target": "",
         "target_static": true
       },
@@ -14419,7 +14419,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2134,
+        "line": 2143,
         "target": "",
         "target_static": true
       },
@@ -14431,7 +14431,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2459,
+        "line": 2468,
         "target": "",
         "target_static": true
       },
@@ -14443,7 +14443,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2510,
+        "line": 2519,
         "target": "",
         "target_static": true
       },
@@ -14455,7 +14455,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2516,
+        "line": 2525,
         "target": "",
         "target_static": true
       },
@@ -14467,7 +14467,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2521,
+        "line": 2530,
         "target": "",
         "target_static": true
       },
@@ -14479,7 +14479,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2527,
+        "line": 2536,
         "target": "",
         "target_static": true
       },
@@ -14491,7 +14491,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2556,
+        "line": 2565,
         "target": "",
         "target_static": true
       },
@@ -14503,7 +14503,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2614,
+        "line": 2623,
         "target": "",
         "target_static": true
       },
@@ -14515,7 +14515,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2616,
+        "line": 2625,
         "target": "",
         "target_static": true
       },
@@ -14527,36 +14527,12 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2629,
+        "line": 2638,
         "target": "",
         "target_static": true
       },
       {
         "command": "Remove-Item",
-        "file": "INSTALL_THIS_PC.ps1",
-        "function": "",
-        "guard_line": 1552,
-        "guard_name": "Enter-ContainerPlacementWriterFence",
-        "guarded": true,
-        "kind": "filesystem_mutation",
-        "line": 2635,
-        "target": "",
-        "target_static": true
-      },
-      {
-        "command": "Move-Item",
-        "file": "INSTALL_THIS_PC.ps1",
-        "function": "",
-        "guard_line": 1552,
-        "guard_name": "Enter-ContainerPlacementWriterFence",
-        "guarded": true,
-        "kind": "filesystem_mutation",
-        "line": 2640,
-        "target": "",
-        "target_static": true
-      },
-      {
-        "command": "Move-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
         "guard_line": 1552,
@@ -14568,14 +14544,14 @@
         "target_static": true
       },
       {
-        "command": "Remove-Item",
+        "command": "Move-Item",
         "file": "INSTALL_THIS_PC.ps1",
         "function": "",
         "guard_line": 1552,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2784,
+        "line": 2649,
         "target": "",
         "target_static": true
       },
@@ -14587,19 +14563,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2798,
-        "target": "",
-        "target_static": true
-      },
-      {
-        "command": "Move-Item",
-        "file": "INSTALL_THIS_PC.ps1",
-        "function": "",
-        "guard_line": 1552,
-        "guard_name": "Enter-ContainerPlacementWriterFence",
-        "guarded": true,
-        "kind": "filesystem_mutation",
-        "line": 2803,
+        "line": 2653,
         "target": "",
         "target_static": true
       },
@@ -14611,7 +14575,43 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "filesystem_mutation",
-        "line": 2815,
+        "line": 2793,
+        "target": "",
+        "target_static": true
+      },
+      {
+        "command": "Move-Item",
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "",
+        "guard_line": 1552,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "kind": "filesystem_mutation",
+        "line": 2807,
+        "target": "",
+        "target_static": true
+      },
+      {
+        "command": "Move-Item",
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "",
+        "guard_line": 1552,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "kind": "filesystem_mutation",
+        "line": 2812,
+        "target": "",
+        "target_static": true
+      },
+      {
+        "command": "Remove-Item",
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "",
+        "guard_line": 1552,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "kind": "filesystem_mutation",
+        "line": 2824,
         "target": "",
         "target_static": true
       },
@@ -15765,7 +15765,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "scheduler_com",
-        "line": 1915,
+        "line": 1924,
         "target": "",
         "target_static": false
       },
@@ -15777,7 +15777,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "com_wmi_process_create",
-        "line": 2248,
+        "line": 2257,
         "target": "",
         "target_static": false
       },
@@ -15789,7 +15789,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "scheduler_com",
-        "line": 2248,
+        "line": 2257,
         "target": "",
         "target_static": false
       },
@@ -15801,7 +15801,7 @@
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
         "kind": "call_operator",
-        "line": 2370,
+        "line": 2379,
         "target": "$Action}",
         "target_static": false
       },
@@ -16121,7 +16121,7 @@
         "command": ".",
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-BootstrapInstallationCommitPoint",
-        "guard_line": 2188,
+        "guard_line": 2197,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "kind": "dot_source",
@@ -17124,8 +17124,8 @@
           "guard_kind": "delegated_operation",
           "guard_line": 1552,
           "guard_name": "Enter-ContainerPlacementWriterFence",
-          "lifetime_end_line": 2840,
-          "release_line": 2840,
+          "lifetime_end_line": 2849,
+          "release_line": 2849,
           "release_name": "Exit-ContainerWriterAdmission",
           "required": true,
           "valid": true,
@@ -17501,7 +17501,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "scheduler_com",
-            "line": 1915,
+            "line": 1924,
             "target": "",
             "target_static": false
           },
@@ -17513,7 +17513,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2077,
+            "line": 2086,
             "target": "",
             "target_static": true
           },
@@ -17525,7 +17525,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2104,
+            "line": 2113,
             "target": "",
             "target_static": true
           },
@@ -17537,7 +17537,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2108,
+            "line": 2117,
             "target": "",
             "target_static": true
           },
@@ -17549,7 +17549,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2132,
+            "line": 2141,
             "target": "",
             "target_static": true
           },
@@ -17561,7 +17561,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2134,
+            "line": 2143,
             "target": "",
             "target_static": true
           },
@@ -17573,7 +17573,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "com_wmi_process_create",
-            "line": 2248,
+            "line": 2257,
             "target": "",
             "target_static": false
           },
@@ -17585,7 +17585,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "scheduler_com",
-            "line": 2248,
+            "line": 2257,
             "target": "",
             "target_static": false
           },
@@ -17597,7 +17597,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "call_operator",
-            "line": 2370,
+            "line": 2379,
             "target": "$Action}",
             "target_static": false
           },
@@ -17609,7 +17609,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2459,
+            "line": 2468,
             "target": "",
             "target_static": true
           },
@@ -17621,7 +17621,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2510,
+            "line": 2519,
             "target": "",
             "target_static": true
           },
@@ -17633,7 +17633,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2516,
+            "line": 2525,
             "target": "",
             "target_static": true
           },
@@ -17645,7 +17645,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2521,
+            "line": 2530,
             "target": "",
             "target_static": true
           },
@@ -17657,7 +17657,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2527,
+            "line": 2536,
             "target": "",
             "target_static": true
           },
@@ -17669,7 +17669,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2556,
+            "line": 2565,
             "target": "",
             "target_static": true
           },
@@ -17681,7 +17681,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2614,
+            "line": 2623,
             "target": "",
             "target_static": true
           },
@@ -17693,7 +17693,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2616,
+            "line": 2625,
             "target": "",
             "target_static": true
           },
@@ -17705,36 +17705,12 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2629,
+            "line": 2638,
             "target": "",
             "target_static": true
           },
           {
             "command": "Remove-Item",
-            "file": "INSTALL_THIS_PC.ps1",
-            "function": "",
-            "guard_line": 1552,
-            "guard_name": "Enter-ContainerPlacementWriterFence",
-            "guarded": true,
-            "kind": "filesystem_mutation",
-            "line": 2635,
-            "target": "",
-            "target_static": true
-          },
-          {
-            "command": "Move-Item",
-            "file": "INSTALL_THIS_PC.ps1",
-            "function": "",
-            "guard_line": 1552,
-            "guard_name": "Enter-ContainerPlacementWriterFence",
-            "guarded": true,
-            "kind": "filesystem_mutation",
-            "line": 2640,
-            "target": "",
-            "target_static": true
-          },
-          {
-            "command": "Move-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
             "guard_line": 1552,
@@ -17746,14 +17722,14 @@
             "target_static": true
           },
           {
-            "command": "Remove-Item",
+            "command": "Move-Item",
             "file": "INSTALL_THIS_PC.ps1",
             "function": "",
             "guard_line": 1552,
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2784,
+            "line": 2649,
             "target": "",
             "target_static": true
           },
@@ -17765,19 +17741,7 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2798,
-            "target": "",
-            "target_static": true
-          },
-          {
-            "command": "Move-Item",
-            "file": "INSTALL_THIS_PC.ps1",
-            "function": "",
-            "guard_line": 1552,
-            "guard_name": "Enter-ContainerPlacementWriterFence",
-            "guarded": true,
-            "kind": "filesystem_mutation",
-            "line": 2803,
+            "line": 2653,
             "target": "",
             "target_static": true
           },
@@ -17789,7 +17753,43 @@
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guarded": true,
             "kind": "filesystem_mutation",
-            "line": 2815,
+            "line": 2793,
+            "target": "",
+            "target_static": true
+          },
+          {
+            "command": "Move-Item",
+            "file": "INSTALL_THIS_PC.ps1",
+            "function": "",
+            "guard_line": 1552,
+            "guard_name": "Enter-ContainerPlacementWriterFence",
+            "guarded": true,
+            "kind": "filesystem_mutation",
+            "line": 2807,
+            "target": "",
+            "target_static": true
+          },
+          {
+            "command": "Move-Item",
+            "file": "INSTALL_THIS_PC.ps1",
+            "function": "",
+            "guard_line": 1552,
+            "guard_name": "Enter-ContainerPlacementWriterFence",
+            "guarded": true,
+            "kind": "filesystem_mutation",
+            "line": 2812,
+            "target": "",
+            "target_static": true
+          },
+          {
+            "command": "Remove-Item",
+            "file": "INSTALL_THIS_PC.ps1",
+            "function": "",
+            "guard_line": 1552,
+            "guard_name": "Enter-ContainerPlacementWriterFence",
+            "guarded": true,
+            "kind": "filesystem_mutation",
+            "line": 2824,
             "target": "",
             "target_static": true
           }
@@ -18401,7 +18401,7 @@
             "command": ".",
             "file": "tools/bootstrap_integrity.ps1",
             "function": "Get-BootstrapInstallationCommitPoint",
-            "guard_line": 2188,
+            "guard_line": 2197,
             "guard_name": "byte_pinned_installer_caller_closure",
             "guarded": true,
             "kind": "dot_source",
@@ -20236,7 +20236,7 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2243,
+            "line": 2252,
             "non_production_mode": ""
           }
         ],
@@ -20256,7 +20256,7 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2727,
+            "line": 2736,
             "non_production_mode": ""
           }
         ],
@@ -20276,7 +20276,7 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2729,
+            "line": 2738,
             "non_production_mode": ""
           }
         ],
@@ -20296,7 +20296,7 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2258,
+            "line": 2267,
             "non_production_mode": ""
           }
         ],
@@ -20316,25 +20316,25 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2755,
+            "line": 2764,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2777,
+            "line": 2786,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2789,
+            "line": 2798,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2812,
+            "line": 2821,
             "non_production_mode": ""
           }
         ],
@@ -20354,7 +20354,7 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2500,
+            "line": 2509,
             "non_production_mode": ""
           }
         ],
@@ -20374,7 +20374,7 @@
           {
             "caller": "Invoke-ContainerConvergentRemoval",
             "guarded_top_level": false,
-            "line": 2142,
+            "line": 2151,
             "non_production_mode": ""
           }
         ],
@@ -20394,7 +20394,7 @@
           {
             "caller": "Invoke-ContainerConvergentRemoval",
             "guarded_top_level": false,
-            "line": 2111,
+            "line": 2120,
             "non_production_mode": ""
           }
         ],
@@ -20433,13 +20433,13 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2236,
+            "line": 2245,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2756,
+            "line": 2765,
             "non_production_mode": ""
           }
         ],
@@ -20465,13 +20465,13 @@
           {
             "caller": "Invoke-ContainerSupportedActiveVersionPlacement",
             "guarded_top_level": false,
-            "line": 2456,
+            "line": 2465,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2698,
+            "line": 2707,
             "non_production_mode": ""
           }
         ],
@@ -20521,37 +20521,37 @@
           {
             "caller": "Remove-ContainerScheduledTasks",
             "guarded_top_level": false,
-            "line": 1901,
+            "line": 1910,
             "non_production_mode": ""
           },
           {
             "caller": "Invoke-ContainerConvergentRemoval",
             "guarded_top_level": false,
-            "line": 2160,
+            "line": 2169,
             "non_production_mode": ""
           },
           {
             "caller": "Invoke-ContainerSupportedActiveVersionPlacement",
             "guarded_top_level": false,
-            "line": 2472,
+            "line": 2481,
             "non_production_mode": ""
           },
           {
             "caller": "Invoke-ContainerSupportedActiveVersionPlacement",
             "guarded_top_level": false,
-            "line": 2473,
+            "line": 2482,
             "non_production_mode": ""
           },
           {
             "caller": "Invoke-ContainerSupportedActiveVersionPlacement",
             "guarded_top_level": false,
-            "line": 2474,
+            "line": 2483,
             "non_production_mode": ""
           },
           {
             "caller": "Invoke-ContainerSupportedActiveVersionPlacement",
             "guarded_top_level": false,
-            "line": 2488,
+            "line": 2497,
             "non_production_mode": ""
           }
         ],
@@ -20601,19 +20601,19 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2745,
+            "line": 2754,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2765,
+            "line": 2774,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2775,
+            "line": 2784,
             "non_production_mode": ""
           }
         ],
@@ -20742,13 +20742,13 @@
             "caller": "__script__",
             "file": "INSTALL_THIS_PC.ps1",
             "installer_guarded": true,
-            "line": 2528
+            "line": 2537
           },
           {
             "caller": "__script__",
             "file": "INSTALL_THIS_PC.ps1",
             "installer_guarded": true,
-            "line": 2539
+            "line": 2548
           },
           {
             "caller": "Restore-BootstrapWorkerShortcuts",
@@ -20774,7 +20774,7 @@
             "caller": "Invoke-ContainerConvergentRemoval",
             "file": "INSTALL_THIS_PC.ps1",
             "installer_guarded": true,
-            "line": 2164
+            "line": 2173
           },
           {
             "caller": "Update-BootstrapEmergencyRemovalMarker",
@@ -20800,12 +20800,12 @@
             "caller": "__script__",
             "file": "INSTALL_THIS_PC.ps1",
             "installer_guarded": true,
-            "line": 2188
+            "line": 2197
           }
         ],
         "file": "tools/bootstrap_integrity.ps1",
         "function": "Get-BootstrapInstallationCommitPoint",
-        "guard_line": 2188,
+        "guard_line": 2197,
         "guard_name": "byte_pinned_installer_caller_closure",
         "guarded": true,
         "non_production_only": false,
@@ -21216,7 +21216,7 @@
             "caller": "Get-ContainerSupportedInstallContext",
             "file": "INSTALL_THIS_PC.ps1",
             "installer_guarded": true,
-            "line": 2362
+            "line": 2371
           },
           {
             "caller": "Get-InstallationElevationWrapperSource",
@@ -21506,7 +21506,7 @@
             "caller": "__script__",
             "file": "INSTALL_THIS_PC.ps1",
             "installer_guarded": true,
-            "line": 2263
+            "line": 2272
           },
           {
             "caller": "Invoke-CanonicalTransactionCompensation",
@@ -21706,13 +21706,13 @@
             "caller": "Invoke-ContainerSupportedActiveVersionPlacement",
             "file": "INSTALL_THIS_PC.ps1",
             "installer_guarded": true,
-            "line": 2483
+            "line": 2492
           },
           {
             "caller": "__script__",
             "file": "INSTALL_THIS_PC.ps1",
             "installer_guarded": true,
-            "line": 2702
+            "line": 2711
           }
         ],
         "file": "tools/bootstrap_integrity.ps1",
@@ -23410,7 +23410,7 @@
         "guard_line": 1552,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
-        "release_line": 2840,
+        "release_line": 2849,
         "release_name": "Exit-ContainerWriterAdmission",
         "writer_site_count": 44,
         "writer_site_kinds": [
@@ -23473,7 +23473,7 @@
         "guard_line": 1552,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
-        "release_line": 2840,
+        "release_line": 2849,
         "release_name": "Exit-ContainerWriterAdmission",
         "source": "canonical_code_placement",
         "writer_site_count": 44,
@@ -23508,7 +23508,7 @@
       "guard_line": 1552,
       "guard_name": "Enter-ContainerPlacementWriterFence",
       "guarded": true,
-      "release_line": 2840,
+      "release_line": 2849,
       "release_name": "Exit-ContainerWriterAdmission",
       "source": "canonical_code_placement",
       "writer_site_count": 44,
