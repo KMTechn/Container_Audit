@@ -641,6 +641,8 @@ def _write_minimal_inventory_fixture(root: Path, container_source: str) -> None:
         target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("# no scheduled-task mutation\n", encoding="utf-8")
+    # Production facades call the exact atomic backend; mutations below still fail closed.
+    (root / "atomic_replace.py").write_bytes((ROOT / "atomic_replace.py").read_bytes())
 
 
 @pytest.mark.parametrize("mutation", ["remove_guard", "bypass_facade"])

@@ -8,7 +8,7 @@ ROOT=Path(__file__).resolve().parents[1]
 
 @pytest.mark.parametrize('engine', ('powershell.exe','pwsh.exe'))
 def test_escaped_first_failure_and_rotated_journal_remain_valid_and_bounded(tmp_path, engine):
-    result=run_functions(tmp_path,ROOT/'tools/bootstrap_integrity.ps1',[*FUNCTIONS,'Complete-InstallationEvidence'],r'''
+    result=run_functions(tmp_path,ROOT/'tools/bootstrap_integrity.ps1',[*FUNCTIONS,'Complete-InstallationEvidence', "Invoke-ContainerAtomicReplaceOnce", "Invoke-ContainerAtomicReplace"],r'''
 function Set-InstallationEvidenceAcl {param($Path,$Sid)}
 $root=Initialize-InstallationEvidence (Join-Path $env:CA_CONTRACT_ROOT 'bounded') ''
 $message=('가"\'*50000)+' ValueError: final synthetic exception'

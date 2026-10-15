@@ -15,7 +15,7 @@ CANONICAL = ROOT / "INSTALL_CANONICAL_PORTABLE.ps1"
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 def test_full_first_failure_and_child_json_survive_with_secret_bytes_removed(tmp_path, engine):
-    result = run_functions(tmp_path, LIBRARY, [*FUNCTIONS, "Get-InstallationFallbackDiagnostic"], r'''
+    result = run_functions(tmp_path, LIBRARY, [*FUNCTIONS, "Get-InstallationFallbackDiagnostic", "Invoke-ContainerAtomicReplaceOnce", "Invoke-ContainerAtomicReplace"], r'''
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $root=Initialize-InstallationEvidence (Join-Path $env:CA_CONTRACT_ROOT 'evidence') $sid
 $childPath=Join-Path $env:CA_CONTRACT_ROOT 'child.ps1'
@@ -53,7 +53,7 @@ if($ui.Length -gt 300 -or $ui.Contains([Text.Encoding]::UTF8.GetString($needle))
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 def test_original_failure_bound_is_explicit_and_never_claims_full_retention(tmp_path, engine):
-    result = run_functions(tmp_path, LIBRARY, FUNCTIONS, r'''
+    result = run_functions(tmp_path, LIBRARY, [*FUNCTIONS, "Invoke-ContainerAtomicReplaceOnce", "Invoke-ContainerAtomicReplace"], r'''
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $root=Initialize-InstallationEvidence (Join-Path $env:CA_CONTRACT_ROOT 'evidence') $sid
 Write-InstallationCaughtFailure ([Exception]::new(('x'*1100000)))

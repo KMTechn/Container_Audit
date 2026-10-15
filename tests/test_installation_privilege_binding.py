@@ -30,10 +30,15 @@ if((Get-FileSha256 $source) -cne (Get-FileSha256 $target)){throw 'TLS configurat
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 def test_uninstall_and_restore_keep_active_evidence_at_the_same_path(tmp_path, engine):
     helper = SOURCE.with_name("INSTALL_THIS_PC.ps1")
-    result = run_functions(tmp_path, helper, [
+    atomic_source = tmp_path / "startup-publication.ps1"
+    atomic_source.write_text(
+        helper.read_text(encoding="utf-8-sig") + "\n"
+        + (Path(__file__).resolve().parents[1] / "tools/bootstrap_integrity.ps1").read_text(encoding="utf-8-sig"),
+        encoding="utf-8",
+    )
+    result = run_functions(tmp_path, atomic_source, [
         "Save-ContainerStartupUpdatePreimage", "Restore-ContainerStartupUpdatePreimage",
-        "Write-ContainerStartupUpdateRecord",
-    ], r'''
+        "Write-ContainerStartupUpdateRecord", "Invoke-ContainerAtomicReplaceOnce", "Invoke-ContainerAtomicReplace"], r'''
 function Assert-ContainerStartupUpdateTrust {param($Root) if(-not $Root.StartsWith($env:CA_CONTRACT_ROOT)){throw 'escaped owned input'}}
 function Get-StrictFullPath {param($Path,$Purpose) return [IO.Path]::GetFullPath($Path)}
 function Test-PathWithin {param($Child,$Parent) return $Child.StartsWith($Parent+'\',[StringComparison]::OrdinalIgnoreCase)}

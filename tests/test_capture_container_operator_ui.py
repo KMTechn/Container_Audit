@@ -356,7 +356,10 @@ def test_win32_foreground_denial_makes_focus_gate_fail_fast():
     assert '"attach_attempted":false' in str(exc_info.value)
 
 
-def test_show_window_telemetry_records_prior_visibility_not_success():
+def test_show_window_telemetry_records_prior_visibility_not_success(monkeypatch):
+    # Exercise the native implementation solely through the explicitly supplied fake user32.
+    for name in ("restore_capture_window", "invoke_capture_window_api"):
+        monkeypatch.setattr(instance_native, name, inspect.unwrap(getattr(instance_native, name)))
     user32 = _FakeForegroundUser32("hidden_direct_success")
 
     telemetry = capture_tool.acquire_win32_foreground(
