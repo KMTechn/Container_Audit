@@ -488,7 +488,7 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
             preflight_phase="LOOKUP",
             status_variants=(
                 "회사 서버에서 검사 완료 수량과 제품 구성을 확인하고 있습니다.",
-                "현품표 정보를 읽지 못했습니다. 현품표를 확인한 뒤 다시 스캔하세요.",
+                "현품표 정보를 읽지 못했습니다.\n현품표를 확인한 뒤 다시 스캔하세요.",
             ),
         ),
         StateFixture(
