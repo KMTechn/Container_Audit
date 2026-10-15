@@ -1,4 +1,4 @@
-$ErrorActionPreference='Stop'
+﻿$ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 trap {
     $frames=@([regex]::Matches($_.ScriptStackTrace,'at ([\w-]+), .*?: line (\d+)') | ForEach-Object {@{function=$_.Groups[1].Value;line=[int]$_.Groups[2].Value}})
@@ -68,7 +68,12 @@ try{
     [IO.File]::WriteAllText($foreign,'foreign')
     $paths=@(Get-CanonicalMachineArtifactPaths $env:CA_CONTRACT_ROOT $root)
     if($paths.Count -ne 2){throw 'foreign directory entered recovery journal'}
-    New-CanonicalMachineShortcut $root $programs -WarningAction SilentlyContinue
+$foreignPublicationRefused=$false
+try {     New-CanonicalMachineShortcut $root $programs -WarningAction SilentlyContinue } catch {
+    if($_.Exception.Message -cne 'EMERGENCY_SHORTCUT_PUBLICATION_BLOCKED'){throw}
+    $foreignPublicationRefused=$true
+}
+if(-not $foreignPublicationRefused){throw 'Foreign emergency publication was accepted.'}
     if(Test-Path -LiteralPath $emergency){throw 'foreign directory changed'}
     if([IO.File]::ReadAllText($foreign) -cne 'foreign'){throw 'foreign data changed'}
 }finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}

@@ -14,8 +14,8 @@ def test_actual_machine_shortcut_functions_create_readback_and_remove(tmp_path, 
         ['New-CanonicalMachineShortcut', 'Get-CanonicalMachineShortcutArguments',
          'Remove-CanonicalMachineArtifacts', 'Get-CanonicalMachineArtifactPaths',
          'Get-CanonicalMachineArtifactPreimage', 'Restore-CanonicalMachineArtifacts'],
-        (ROOT / 'tests/ca_machine_emergency_probe.ps1').read_text(encoding='utf-8-sig'),
-        engine=engine, values={'CA_BOOTSTRAP_SOURCE': str(ROOT / 'tools/bootstrap_integrity.ps1')},
+        ". '" + str(ROOT / 'tools/bootstrap_integrity.ps1').replace("'", "''") + "'\n" + (ROOT / 'tests/ca_machine_emergency_probe.ps1').read_text(encoding='utf-8-sig'),
+        engine=engine, values=dict({'CA_BOOTSTRAP_SOURCE': str(ROOT / 'tools/bootstrap_integrity.ps1')}, KMTECH_TEST_CA_WORKER_SHORTCUT_ROOT=str(tmp_path / "shortcuts")),
     )
     assert result.returncode == 0
     assert 'MACHINE_EMERGENCY_PASS' in result.stdout

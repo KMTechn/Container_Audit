@@ -10,6 +10,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def run_shortcut_contract(tmp_path, engine, script, **values):
     source = str(ROOT / 'tools/bootstrap_integrity.ps1').replace("'", "''")
+    # Publication refusal is an error contract; retain the existing foreign-data
+    # assertions while observing the actual exception as a distinct result.
+    script = script.replace('Install-BootstrapEmergencyShortcut ', 'Invoke-ExpectedEmergencyPublication ')
+    script = script.replace('PRESERVED_FOREIGN', 'PUBLICATION_REFUSED')
+    script = ". '" + source + "'\n" + r'''
+function Invoke-ExpectedEmergencyPublication([string]$InstallRoot) {
+    try{return Install-BootstrapEmergencyShortcut $InstallRoot}
+    catch{
+        if($_.Exception.Message -cne 'EMERGENCY_SHORTCUT_PUBLICATION_BLOCKED'){throw}
+        return [pscustomobject]@{status='PUBLICATION_REFUSED'}
+    }
+}
+''' + script
     return run_functions(
         tmp_path, ROOT / 'tools/bootstrap_integrity.ps1', ['Install-BootstrapWorkerShortcuts'],
         f". '{source}'\n" + r'''

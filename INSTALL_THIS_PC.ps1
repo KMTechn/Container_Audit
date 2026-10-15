@@ -231,7 +231,7 @@ function Install-CurrentUserTlsCaBootstrap([string]$SourcePath, [string]$LocalAp
     New-Item -ItemType Directory -Path $targetParent -Force | Out-Null
     Assert-NoReparsePoint $targetParent "TLS CA bootstrap directory"
     Assert-NoReparsePoint $target "TLS CA bootstrap target" -PathOnly
-    Copy-Item -LiteralPath $source -Destination $target -Force; Assert-NoReparsePoint $target "TLS CA bootstrap target"
+    Copy-BootstrapPreparedFile $source $target; Assert-NoReparsePoint $target "TLS CA bootstrap target"
     if ((Get-FileSha256 $target) -cne (Get-FileSha256 $source)) { throw "TLS CA bootstrap exact readback failed." }
     return $target
 }
@@ -2525,7 +2525,7 @@ try {
         if ($relative.Equals($IntegrityFileName, [StringComparison]::OrdinalIgnoreCase)) { continue }
         $destination = Join-Path $stagingRoot $relative
         New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-        Copy-Item -LiteralPath $file.FullName -Destination $destination -Force
+        Copy-BootstrapPreparedFile $file.FullName $destination
     }
     $stagedInventory = @(Get-CodeInventory $stagingRoot)
     $stagedAggregate = Get-InventoryAggregate $stagedInventory
@@ -2536,7 +2536,7 @@ try {
         -Root $stagingRoot `
         -CodeRootIdentity $installRootFull)
     if ($RestoreUninstallRecordPath) {
-        Copy-Item -LiteralPath $RestoreUninstallRecordPath -Destination (Join-Path $stagingRoot $IntegrityFileName) -Force
+        Copy-BootstrapPreparedFile $RestoreUninstallRecordPath (Join-Path $stagingRoot $IntegrityFileName)
         if ((Get-FileSha256 (Join-Path $stagingRoot $IntegrityFileName)) -cne $ExpectedUninstallRecordSha256) {
             throw 'Uninstall recovery staging record readback failed.'
         }

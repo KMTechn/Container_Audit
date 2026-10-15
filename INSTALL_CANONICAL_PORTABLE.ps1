@@ -71,7 +71,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = 'e7a8d3cefb66408fb08ec9ea29e6178ca031ef731d9c4b9ea061c51c076ee1ac'
+$ExpectedBootstrapIntegritySha256 = 'cb4c9e945c8762c1798ad33cfdf9390f92172005e305b887c7d3b42deddee0a2'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -3713,6 +3713,10 @@ function Remove-CanonicalMachineArtifacts([string]$Root,$Worker,[string[]]$Paths
         catch [IO.IOException]{$emergencyFailure=$_}
         catch [UnauthorizedAccessException]{$emergencyFailure=$_}
     }
+    if($null -ne $emergencyFailure){
+        try {Update-BootstrapEmergencyRemovalMarker $Root $emergencyFailure}
+        catch {$emergencyFailure.Exception.Data['emergency_marker_failure_type']=$_.Exception.GetType().FullName}
+    }
     $followingFailure=$null
     try {
     if (Test-Path -LiteralPath $pending) {
@@ -3740,31 +3744,52 @@ function Remove-CanonicalMachineArtifacts([string]$Root,$Worker,[string[]]$Paths
     Complete-BootstrapEmergencyCleanup $Root $emergencyFailure $followingFailure
 }
 function New-CanonicalMachineShortcut([string]$Root,[string]$Directory='') {
-    if (-not $Directory) { $Directory=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms) }
-    $directory=$Directory
-    if (-not $directory) { throw 'Machine start menu is unavailable.' }
-    $path=Join-Path $directory 'KMTech 이적 검사.lnk'
-    $existing=Test-Path -LiteralPath $path
-    if ($existing -and -not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Machine shortcut prestate is unknown.' }
+    if(-not $Directory){$Directory=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)}
+    $path=Join-Path $Directory 'KMTech 이적 검사.lnk'
+    Assert-BootstrapWorkerShortcutPath $path
+    [void][IO.Directory]::CreateDirectory($Directory)
     $target=Join-Path $Root 'runtime\pythonw.exe'
     $arguments=Get-CanonicalMachineShortcutArguments $Root
-    $workingDirectory=Join-Path $Root 'app'
+    $working=Join-Path $Root 'app'
+    $location='start_menu'
+    foreach($folder in @(Get-BootstrapWorkerShortcutFolders)){
+        if(Same $Directory ([string]$folder.path)){$location=[string]$folder.location}
+    }
+    if([IO.File]::Exists($path)){
+        $shell=New-Object -ComObject WScript.Shell
+        try{$published=Get-BootstrapPublishedShortcut $shell $path $location}
+        finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}
+        if(-not(Same $published.target_path $target) -or $published.arguments -cne $arguments -or
+            -not(Same $published.working_directory $working)){throw 'Machine shortcut prestate is unknown.'}
+    }else{$published=Write-BootstrapShortcut $path $target $arguments $working '이적 검사' '' $location}
+    $emergency=Install-BootstrapEmergencyShortcut $Root
+    return [pscustomobject]@{status='PASS';published=@($published)+@($emergency.published)}
+}
+
+function Set-CanonicalPublishedShortcuts($Audit,[object[]]$Results) {
+    $published=@();$seen=@{}
     $shell=New-Object -ComObject WScript.Shell
-    try {
-        $link=$shell.CreateShortcut($path)
-        if ($existing) {
-            if (-not (Same ([string]$link.TargetPath) $target) -or [string]$link.Arguments -cne $arguments -or
-                -not (Same ([string]$link.WorkingDirectory) $workingDirectory)) { throw 'Machine shortcut prestate is unknown.' }
-            [void](Install-BootstrapEmergencyShortcut $Root)
-            return
+    try{
+        foreach($result in $Results){
+            if($null -eq $result -or $null -eq $result.published){throw 'SHORTCUT_PUBLICATION_READBACK_REQUIRED'}
+            foreach($entry in @($result.published)){
+                if(-not (Test-ExactPropertySet $entry @('location','shortcut_path','target_path','arguments','working_directory'))){throw 'SHORTCUT_PUBLICATION_FIELDS_DIFFER'}
+                $readback=Get-BootstrapPublishedShortcut $shell ([string]$entry.shortcut_path) ([string]$entry.location)
+                if($readback.target_path -ine [string]$entry.target_path -or $readback.arguments -cne [string]$entry.arguments -or
+                    $readback.working_directory -ine [string]$entry.working_directory){throw 'SHORTCUT_PUBLICATION_READBACK_DIFFERS'}
+                $path=[string]$entry.shortcut_path
+                if($seen.ContainsKey($path)){
+                    if([string]$seen[$path].location -cne [string]$entry.location){throw 'SHORTCUT_PUBLICATION_LOCATION_DIFFERS'}
+                    continue
+                }
+                $seen[$path]=$readback;$published+=@($readback)
+            }
         }
-        $link.TargetPath=$target
-        $link.Arguments=$arguments
-        $link.WorkingDirectory=$workingDirectory
-        $link.Save()
-    } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) }
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Machine shortcut readback failed.' }
-    [void](Install-BootstrapEmergencyShortcut $Root)
+    }finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}
+    if($published.Count -eq 0){throw 'SHORTCUT_PUBLICATION_READBACK_REQUIRED'}
+    if(-not $Audit.Contains('shortcuts')){$Audit['shortcuts']=[ordered]@{published=@()}}
+    if($Audit.shortcuts -is [Collections.IDictionary]){$Audit.shortcuts['published']=@($published)}
+    else{$Audit.shortcuts|Add-Member -NotePropertyName published -NotePropertyValue @($published) -Force}
 }
 
 function Get-CanonicalWorkerPreparationPaths($Worker) {
@@ -4274,7 +4299,8 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
                 server_base_url=$onboardingServerBaseUrl;secret_values_recorded=$false}
             Save $pending $marker
             Set-InstallationEvidenceAcl $pending 'S-1-5-32-545'
-            New-CanonicalMachineShortcut $Root
+            $shortcutPublication=New-CanonicalMachineShortcut $Root
+            Set-CanonicalPublishedShortcuts $audit @($shortcutPublication)
             $audit.status='PASS_MACHINE_WORKER_PENDING'
         }
         Save $path $audit
@@ -5761,6 +5787,9 @@ $enteredPlacementTry = $true
         $commonRecord=Get-BootstrapWorkerShortcutCommonRecordPath $install
         $audit['common_worker_shortcuts']=Install-BootstrapWorkerShortcuts $install $commonRecord 'Common'
     }
+    $shortcutResults=@($audit.worker_shortcuts)
+    if($audit.Contains('common_worker_shortcuts')){$shortcutResults+=@($audit.common_worker_shortcuts)}
+    Set-CanonicalPublishedShortcuts $audit $shortcutResults
     $audit.status=$terminalStatus
     $audit.completed_at=(Get-Date).ToUniversalTime().ToString('o')
     Save $auditPath $audit
@@ -5769,7 +5798,10 @@ $enteredPlacementTry = $true
         $transactionOutcome=Complete-InstallationTransaction $canonicalTransactionJob 'COMMIT'
         if([string]$transactionOutcome.status -cne 'COMMITTED'){throw 'Canonical transaction commit acknowledgement differs.'}
         $audit['common_worker_shortcuts']=$transactionOutcome.worker_shortcuts
+        Set-CanonicalPublishedShortcuts $audit @($audit.worker_shortcuts,$audit.common_worker_shortcuts)
         $audit.persistent_helper.status='COMMITTED'
+        Save $auditPath $audit
+        if($evidenceFull){Save $evidenceFull $audit}
     }
     (ConvertTo-KmtechRedactedSinkText -Text ([string]("install_status=$terminalStatus")))
     (ConvertTo-KmtechRedactedSinkText -Text ([string]("install_root=$install")))
