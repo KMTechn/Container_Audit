@@ -128,3 +128,7 @@ TLS CA와 staging 파일, 바로 가기 원본 복원은 준비 사본을 검증
 일반 작업자 설치는 기존 relay의 PID·생성 시각·명령·실행 파일·SID·비상승 Medium·같은 세션을 확인하고, 다른 제품 writer를 거절한 뒤 정식 정지 요청을 보낸다. 정지 전 preimage를 감사에 보존하고 fence 게시 전에 실제 프로세스 종료를 확인한다. 성공 및 복구 뒤에는 native identity와 새 runtime 상태를 기한 안에 되읽는다. 관리자 SSH/Session 0 machine-worker 길은 다른 작업자 세션의 relay를 실행하지 않으며, 자동 복원 사실·미증명 상태와 첫 일반 실행 안내를 남긴다(관리자 12:39 예외).
 
 `audit.shortcuts.published`에는 이번 설치가 실제 게시한 링크의 Save 뒤 readback만 넣는다. 기존 링크를 그대로 둔 경우는 `preserved`에 기록하며 무관한 표준 이름·사라진 대상 링크·관리용 폴더의 다른 파일은 보존하고 설치 실패로 세지 않는다. 표준 이름을 남이 쓰면 빈 대체 이름으로 우리 링크를 CreateNew 게시한다. 우리 링크의 Save·게시·readback 실패는 설치 실패다.
+
+11/1 준비된 업데이트의 실행 길은 `tools/apply_prepared_update.ps1:301` → `auto_update.py:1917` 패킷 검증 → `auto_update.py:1931` 서명된 정확한 양방향 전이 쌍 승인 → `auto_update.py:1954` 포인터 전환이다. `installed_release_preimages` 및 `INSTALLED_WRITER_SEMANTICS_DIFFER`는 정본 설치기의 판정이며 이 자동 적용 길에서는 호출하지 않는다.
+
+빌드 입력 정본은 `work/program/w9mgrweb/field-update-feed-1015/container_audit.auto-update-settings.json` 파일 그대로(`--auto-update-settings`, SHA256 `1b9372bd13d7b7ffc1d5e155cc1a984f12bea47453e1be0c9252e30ed3de5359`)다. ZIP의 `app/auto-update-settings.json`은 이 파일의 내용과 feed_url·channel·profile_auth를 대조한다. approved_transitions의 107 승인도 1차가 정본 입력에서 준비하며 값을 복사해 수동 재작성하지 않는다.
