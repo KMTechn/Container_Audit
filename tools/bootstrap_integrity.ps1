@@ -218,10 +218,12 @@ function Get-BootstrapEmergencyShortcutPath([string]$InstallRoot) {
 
 function Test-BootstrapEmergencyShortcutDirectory([string]$Path) {
     $directory=Split-Path -Parent $Path
-    Assert-BootstrapWorkerShortcutPath $directory
+    # Inspect a foreign directory entry without following a junction at that entry.
+    Assert-BootstrapWorkerShortcutPath (Split-Path -Parent $directory)
     if(-not (Test-Path -LiteralPath $directory)){return $true}
     $item=Get-Item -LiteralPath $directory -Force -ErrorAction Stop
     if(-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){return $false}
+    Assert-BootstrapWorkerShortcutPath $directory
     # Even an owned link is left alone when this directory contains foreign data.
     foreach($entry in @(Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop)){
         if($entry.FullName -ine $Path -or $entry.PSIsContainer -or
@@ -248,8 +250,9 @@ function Install-BootstrapEmergencyShortcut([string]$InstallRoot) {
         return [pscustomobject]@{status='PRESERVED_FOREIGN';published=@();preserved=@([pscustomobject]@{shortcut_path=$path;status='FOREIGN_DIRECTORY_PRESERVED'})}
     }
     $directory=Split-Path -Parent $path
-    $shell=New-Object -ComObject WScript.Shell
+    $shell=$null
     try{
+        $shell=New-Object -ComObject WScript.Shell
         if(Test-Path -LiteralPath $path){
             Assert-BootstrapNoReparsePoint $path 'emergency shortcut prestate' -PathOnly
             try{$link=$shell.CreateShortcut($path)}catch{
@@ -272,7 +275,9 @@ function Install-BootstrapEmergencyShortcut([string]$InstallRoot) {
         }
         $published=Write-BootstrapShortcut $path $launcher '--ui tk' $root 'KMTech.ContainerAudit.EmergencyTk.v1' $icon 'emergency' -CreateNew:($status -ceq 'CREATED')
         return [pscustomobject]@{status=$status;published=@($published);preserved=@()}
-    }finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}
+    }catch{
+        throw [InvalidOperationException]::new('EMERGENCY_SHORTCUT_PUBLICATION_BLOCKED',$_.Exception)
+    }finally{if($null -ne $shell){[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)}}
 }
 
 function Remove-BootstrapEmergencyShortcut([string]$InstallRoot) {

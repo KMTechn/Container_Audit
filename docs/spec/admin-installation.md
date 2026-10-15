@@ -131,4 +131,4 @@ TLS CA와 staging 파일, 바로 가기 원본 복원은 준비 사본을 검증
 
 11/1 준비된 업데이트의 실행 길은 `tools/apply_prepared_update.ps1:301` → `auto_update.py:1917` 패킷 검증 → `auto_update.py:1931` 서명된 정확한 양방향 전이 쌍 승인 → `auto_update.py:1954` 포인터 전환이다. `installed_release_preimages` 및 `INSTALLED_WRITER_SEMANTICS_DIFFER`는 정본 설치기의 판정이며 이 자동 적용 길에서는 호출하지 않는다.
 
-빌드 입력 정본은 `work/program/w9mgrweb/field-update-feed-1015/container_audit.auto-update-settings.json` 파일 그대로(`--auto-update-settings`, SHA256 `1b9372bd13d7b7ffc1d5e155cc1a984f12bea47453e1be0c9252e30ed3de5359`)다. ZIP의 `app/auto-update-settings.json`은 이 파일의 내용과 feed_url·channel·profile_auth를 대조한다. approved_transitions의 107 승인도 1차가 정본 입력에서 준비하며 값을 복사해 수동 재작성하지 않는다.
+빌드 입력 정본은 `work/program/w9mgrweb/field-update-feed-1015/container_audit.auto-update-settings.json` 파일 그대로(`--auto-update-settings`, SHA256 `1b9372bd13d7b7ffc1d5e155cc1a984f12bea47453e1be0c9252e30ed3de5359`)다. ZIP의 `app/auto-update-settings.json`은 이 파일의 내용과 feed_url·channel·profile_auth를 대조한다. 설정 파일의 빈 approved_transitions 배열은 그대로 둔다. 107 → 109 전이 승인은 1차가 묶음 때 만드는 서명된 외부 manifest의 approved_transitions에서 정확한 writer inventory 짝으로 확인한다(auto_update.py:396–398). 설정 값을 수동 재작성하지 않는다.

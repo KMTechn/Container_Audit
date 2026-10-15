@@ -71,7 +71,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '71aa7a6033018ce67b8e1b620b2c6fac835129b5d0bf54738da7d5a1c23c1d3d'
+$ExpectedBootstrapIntegritySha256 = '96e5a000ebb1be513f2464ac86cee2cbd740052ba9fa71e8803d08446e03894d'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -3626,7 +3626,8 @@ function Get-CanonicalMachineHelperReason([string]$Stdout,[string]$Code='') {
         'STARTUP_UPDATE_OPERATOR_BINDING_DIFFERS','STARTUP_UPDATE_OPERATOR_DIFFERS','STARTUP_UPDATE_DURABLE_RECORD_FAILED',
         'STARTUP_UPDATE_PREIMAGE_PATH_INVALID','STARTUP_UPDATE_PREIMAGE_READBACK_FAILED','STARTUP_UPDATE_WRITER_HELPER_PIN_DIFFERS',
         'STARTUP_UPDATE_TASK_SPEC_FAILED','STARTUP_UPDATE_TASK_SPEC_INVALID','STARTUP_UPDATE_OWNED_TASK_DIFFERS',
-        'STARTUP_UPDATE_TASK_IS_RUNNING','STARTUP_UPDATE_TASK_READBACK_FAILED')
+        'STARTUP_UPDATE_TASK_IS_RUNNING','STARTUP_UPDATE_TASK_READBACK_FAILED',
+        'EMERGENCY_SHORTCUT_PUBLICATION_BLOCKED')
     if (-not $Code) {
         $lines=@(([string]$Stdout) -split '\r?\n' | Where-Object { $_ -clike 'installation_failure_summary=*' })
         if ($lines.Count) {
@@ -3641,7 +3642,8 @@ function Get-CanonicalMachineFailureReason($Failure) {
     $known=@(@('CONTAINER_WRITER_FENCE_ALREADY_ACTIVE','PRIOR_INSTALL_UNFINISHED'),
         @('Existing worker deployment requires recovery.','WORKER_INSTALL_UNFINISHED'),
         @('Machine installation requires an already privileged token.','ADMINISTRATOR_REQUIRED'),
-        @('CODE_PRESTATE_WRITER_SEMANTICS_DIFFER','INSTALLED_WRITER_SEMANTICS_DIFFER'))
+        @('CODE_PRESTATE_WRITER_SEMANTICS_DIFFER','INSTALLED_WRITER_SEMANTICS_DIFFER'),
+        @('EMERGENCY_SHORTCUT_PUBLICATION_BLOCKED','EMERGENCY_SHORTCUT_PUBLICATION_BLOCKED'))
     $exception=if($Failure -is [Exception]){$Failure}elseif($null -ne $Failure){$Failure.Exception}else{$null}
     for ($depth=0; $null -ne $exception -and $depth -lt 8; $depth++) {
         if ($exception.Data.Contains('canonical_machine_helper_reason')) {
