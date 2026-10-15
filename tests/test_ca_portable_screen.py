@@ -95,7 +95,7 @@ def test_packet_new_screen_and_forced_close_keep_the_accepted_shell(tmp_path):
     receipt = builder._assert_screen_bundle(ROOT, app)
     assert receipt["shell_ready_match"] == "PASS"
     assert receipt["shell_file_count"] == 20
-    assert receipt["ui_manifest_file_count"] == 72
+    assert receipt["ui_manifest_file_count"] == 86
     assert_packet_screen_entry(app)
     (app / "shell/host.py").write_bytes(b"changed")
     with pytest.raises(builder.PortableBuildError):

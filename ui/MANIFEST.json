@@ -1,22 +1,22 @@
 {
  "schema": "ui-parts/1",
  "source": "WorkerAnalysisGUI-web",
- "commit": "a1b37ce25a28f4147f15b3e58b4cc900c8be6f97",
+ "commit": "ab74e3487aa819c2b33ca9c4cd74a16ecea18921",
  "dirty": false,
  "app": "ca",
- "parts_fingerprint": "9e55cd69691411d4",
+ "parts_fingerprint": "98898e03f376a0b6",
  "files": [
   {
    "path": "app/ca/ca.css",
-   "sha256": "f073f266b7a5273b4374bd016f013a80e87f1d91f20ba8804e5e85d4773a8ac4",
-   "bytes": 16047,
-   "gzip": 3941
+   "sha256": "ceb9e195484ccedabc82dc86c1227d8e582f2673e7c4397d21d9b56c4663bf74",
+   "bytes": 16025,
+   "gzip": 4006
   },
   {
    "path": "app/ca/ca.js",
-   "sha256": "1efa8d5f283d9636ce7f79db98fb8aa39e69bdb5d0bbd3cb725d5a86778fdbae",
-   "bytes": 19435,
-   "gzip": 7063
+   "sha256": "8781f64d8d96981b3d0a454d3073143828a384955bb0c6dbdd0642844f201b50",
+   "bytes": 19895,
+   "gzip": 7238
   },
   {
    "path": "app/ca/contract.json",
@@ -416,15 +416,15 @@
   },
   {
    "path": "app/ca/fixtures/today-products.json",
-   "sha256": "02d4c76ae5d98aa36c3f88f0b8b0a3f28dc8d640a0b588b0b7057f0d478883b3",
-   "bytes": 9839,
-   "gzip": 2121
+   "sha256": "8ac30f35879430f2d5b300c1a372e74d04ddc036049dfeb12e1180b956b93e91",
+   "bytes": 9644,
+   "gzip": 2069
   },
   {
    "path": "app/ca/fixtures/today-trays-only.json",
-   "sha256": "b5bb9109299dd3d5362d40b36344fed70dafb027d80bc35740f91df3d7bab086",
-   "bytes": 9786,
-   "gzip": 2108
+   "sha256": "85e3ac5b7597e7a1321965bec49a7bca041cb1b67fcfe29833f3fb2860bf8765",
+   "bytes": 9591,
+   "gzip": 2055
   },
   {
    "path": "app/ca/fixtures/update.json",
@@ -458,9 +458,9 @@
   },
   {
    "path": "app/ca/index.html",
-   "sha256": "74c9c48d6429af98f69f02d7bf95ec69e369bdd1ceb32446dab10d63f96b0395",
-   "bytes": 10227,
-   "gzip": 3209
+   "sha256": "c12a6b611ed4408d658f7ebf58b8f38b0150ad0707865382f1ddd4ed9d0f35dd",
+   "bytes": 10169,
+   "gzip": 3187
   },
   {
    "path": "app/frame.css",

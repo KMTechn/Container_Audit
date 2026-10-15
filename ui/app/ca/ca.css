@@ -20,6 +20,7 @@
 .ca-count__fig { display: grid; gap: 10px; margin: auto 0; }
 .ca-count__item { font-size: var(--s5); font-weight: 600; line-height: 1.3; }
 .ca-count__meta { color: var(--ink-2); font-weight: 400; }
+.ca-count__detail { display: inline-block; white-space: nowrap; }
 .ca-count__n {
   font-family: var(--f-num);
   font-size: calc(clamp(80px, 19vh, 220px) * var(--app-font-scale));
@@ -126,11 +127,10 @@
 .ca-park li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; padding: 12px 14px; border-radius: var(--r-card); background: var(--sunk); }
 .ca-park__item { font-size: var(--s4); font-weight: 600; }
 .ca-park__meta { grid-column: 1; font-size: var(--s3); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+/* CA owns these phrase boundaries; shared text wrappers inherit the surrounding rule. */
+.ca-park .text-join, .ca-today h3 .text-join { white-space: inherit; }
 .ca-park .act { grid-column: 2; grid-row: 1 / span 2; height: 44px; }
 .ca-today__supply { padding: 10px 12px; border-radius: var(--r-card); background: var(--amber-soft); color: var(--amber-text); font-size: var(--s3); font-weight: 600; }
-.ca-stats { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: var(--s4); }
-.ca-stats dt { color: var(--ink-2); }
-.ca-stats dd { margin: 0; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
 .ca-tray { margin: 6px 0 0; display: grid; gap: 6px; }
 .ca-tray svg { display: block; width: 100%; height: auto; }
 .ca-tray .frame { fill: var(--surface); stroke: var(--dash); stroke-width: 1.5; }

@@ -93,6 +93,13 @@
     AppFrame.menu($('[data-admin]'), flags.length ? Object.fromEntries(flags.map(i => [i.name, i.pin])) : null);
   }
 
+  // A normal space may wrap before the separator; each following phrase stays whole.
+  function itemDetails(parts, wholeFirst = false) {
+    return parts.flatMap((text, i) => i
+      ? [' ', el('span', 'ca-count__detail', `· ${text}`)]
+      : [wholeFirst ? el('span', 'ca-count__detail', text) : text]);
+  }
+
   function renderWork(s) {
     const w = s.work;
     const swapping = w.mode === 'swap1' || w.mode === 'swap2';
@@ -108,7 +115,9 @@
     card.classList.toggle('ca-count--short', w.mode === 'short');
     card.classList.toggle('ca-count--none', !w.item);
     card.classList.toggle('ca-count--stale', !!(w.cofill && w.cofill.total_age_s > 5));
-    $('[data-item]').replaceChildren(...(w.item ? [w.item.name, el('span', 'ca-count__meta', ` · ${w.item.spec} · ${w.item.code}`)] : ['품목 —']));
+    const details = el('span', 'ca-count__meta');
+    if (w.item) details.append(...itemDetails(['', w.item.spec, w.item.code]));
+    $('[data-item]').replaceChildren(...(w.item ? [w.item.name, details] : ['품목 —']));
     renderCofill(w.cofill);
     $('[data-count]').replaceChildren(String(w.count), el('span', '', w.target ? `/ ${w.target}` : w.item ? '/ …' : '/ —'));
     $('[data-bar] i').style.width = w.target ? `${Math.min(100, (100 * w.count) / w.target)}%` : '0%'; // 막대 길이만(글 수는 처리 층 값)
@@ -188,8 +197,11 @@
         li.append(el('span', 'ca-park__meta', '관리자: 옛 화면에서 복원'));
         return li;
       }
-      li.append(el('span', 'ca-park__item', p.item), button('act', '이어 하기', `command:restore:${p.id}`),
-        el('span', 'ca-park__meta', [p.tag && `현품표 ${p.tag}`, p.target ? `${p.count} / ${p.target}` : `스캔한 제품 ${p.count}개`, p.at && `보류 ${p.at}`].filter(Boolean).join(' · ')));
+      const name = el('span', 'ca-park__item');
+      name.append(...itemDetails(p.item.split(' · ')));
+      const meta = el('span', 'ca-park__meta');
+      meta.append(...itemDetails([p.tag && `현품표 ${p.tag}`, p.target ? `${p.count} / ${p.target}` : `스캔한 제품 ${p.count}개`, p.at && `보류 ${p.at}`].filter(Boolean), true));
+      li.append(name, button('act', '이어 하기', `command:restore:${p.id}`), meta);
       return li;
     }));
     if (s.overflow) {
@@ -210,12 +222,12 @@
       table.before(cards, details); details.append(el('summary', '', '목록 보기'), table);
     }
     AppFrame.today(cards, today.rows);
+    for (const name of cards.querySelectorAll('h3')) name.replaceChildren(...itemDetails(name.textContent.split(' · ')));
     const supply = $('[data-today-supply]');
     supply.hidden = !today.supply;
     supply.textContent = `출고 전 관리자 보충 필요 ${today.supply}건`;
-    $('[data-stats]').replaceChildren(...(s.stats || []).flatMap(([k, v]) => [el('dt', '', k), el('dd', '', v)]));
     drawTray($('[data-tray]'), 8, 5, s.work.count);
-    $('[data-tray-cap]').textContent = s.work.item ? `트레이 그림 · ${s.work.item.name} ${s.work.item.spec} — 품목별 사진 자리` : '트레이 그림 — 품목별 사진 자리';
+    $('[data-tray-cap]').textContent = s.work.item ? `${s.work.item.name} ${s.work.item.spec}` : '트레이 그림 — 품목별 사진 자리';
   }
   function drawTray(svg, cols, rows, filled) {
     const shape = (attrs) => {
