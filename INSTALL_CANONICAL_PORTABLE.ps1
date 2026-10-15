@@ -71,7 +71,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '96e5a000ebb1be513f2464ac86cee2cbd740052ba9fa71e8803d08446e03894d'
+$ExpectedBootstrapIntegritySha256 = 'c69adf6b64ed2906138b803942ad328ae993e45b4d5c584bc52927ad39e92bfb'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -1032,15 +1032,16 @@ function Invoke-CanonicalRollbackRuntimePreimage($Before,[switch]$RemovalAlready
                     }
                 }
                 'product_removal' {
-                    if(-not $RemovalAlreadyProven -and (Test-Path -LiteralPath $install -ErrorAction Stop)){Product $install '--remove-current-user-setup'}
+                    if(-not $RemovalAlreadyProven -and (Test-Path -LiteralPath $install -ErrorAction Stop)){Product $install '--remove-current-user-setup' -Rollback}
                     [void](Assert-RollbackRelayPreimage -ExpectedRelays @())
                 }
                 'run_preimage' {
+                    Assert-CanonicalRollbackStopCleanup
                     Restore $Before
                     $check=Snapshot
                     if([bool]$check.exists -ne [bool]$Before.exists -or [string]$check.kind -cne [string]$Before.kind -or [string]$check.data -cne [string]$Before.data){throw 'registry restore failed'}
                 }
-                'stop_marker' {if(Test-Path -LiteralPath $stop){Remove-Item -LiteralPath $stop -ErrorAction Stop};if(Test-Path -LiteralPath $stop){throw 'stop marker remains'}}
+                'stop_marker' {Assert-CanonicalRollbackStopCleanup;if(Test-Path -LiteralPath $stop){Remove-Item -LiteralPath $stop -ErrorAction Stop};if(Test-Path -LiteralPath $stop){throw 'stop marker remains'}}
             }
         }catch{$failure=Get-InstallationFailureDetails $_;Write-InstallationCaughtFailure $_}
         $record=[ordered]@{step=$name;status=if($null -eq $failure){'PROVEN'}else{'FAILED'};reused_completed_removal=($name -ceq 'product_removal' -and $RemovalAlreadyProven.IsPresent);failure=$failure}
@@ -1670,6 +1671,13 @@ function Wait-CanonicalRelayReady($Identity,[DateTime]$StartedAt,[string]$Previo
             $process=Get-CimInstance Win32_Process -Filter "ProcessId = $($processes[0].ProcessId)" -ErrorAction SilentlyContinue
             if($null -ne $process) {
                 $security=Get-CanonicalRelaySecurity ([int]$process.ProcessId)
+                $candidateTransaction=[string](Get-Variable -Name CanonicalWriterFenceTransactionId -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+                if($candidateTransaction -cmatch '^[0-9a-f]{32}$' -and $snapshot.settled -and
+                    $null -ne $process.PSObject.Properties['CreationDate'] -and $process.CreationDate -is [DateTime] -and
+                    ([DateTime]$process.CreationDate).ToUniversalTime() -ge $StartedAt.ToUniversalTime() -and
+                    (Test-BootstrapRelayReadback $Identity $process $security $caller)){
+                    Save-CanonicalRollbackRelayCandidate $process $security $caller $StartedAt
+                }
                 if($snapshot.settled -and (Test-BootstrapRelayReadback $Identity $process $security $caller $status $StartedAt $PreviousStatusSha256 $statusSha)) {
                     $confirmed=Get-BootstrapRelayReadinessSnapshot $Identity
                     if(-not $confirmed.settled -or [string]$confirmed.identity.source_commit -cne [string]$Identity.source_commit){continue}
@@ -1764,7 +1772,77 @@ function Assert-CanonicalRuntimePreimage(
         stop_marker_absent=$true
     }
 }
-function Product([string]$Root,[string]$Mode,[string]$AppRoot='') {
+function Save-CanonicalRollbackRelayCandidate($Process,$Security,$Caller,[DateTime]$StartedAt) {
+    $transaction=[string](Get-Variable -Name CanonicalWriterFenceTransactionId -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+    if($Process.CreationDate -isnot [DateTime] -or [bool]$Security.elevated -or [int]$Security.integrity_level -ne 8192 -or
+        [int]$Caller.session_id -le 0 -or [int]$Security.session_id -ne [int]$Caller.session_id -or
+        [string]$Security.sid -cne [string]$Caller.sid -or
+        ([DateTime]$Process.CreationDate).ToUniversalTime() -lt $StartedAt.ToUniversalTime()){throw 'ROLLBACK_RELAY_CANDIDATE_UNPROVEN'}
+    if($transaction -cnotmatch '^[0-9a-f]{32}$'){throw 'ROLLBACK_RELAY_CANDIDATE_ROUND_INVALID'}
+    $candidate=[ordered]@{schema='container-audit-installer-relay-candidate-v1';transaction_id=$transaction;
+        round_started_at_utc=$StartedAt.ToUniversalTime().ToString('o');process_id=[int]$Process.ProcessId;
+        created_at_utc=([DateTime]$Process.CreationDate).ToUniversalTime().ToString('o');
+        executable_path=[string]$Process.ExecutablePath;command_line=[string]$Process.CommandLine;
+        sid=[string]$Security.sid;session_id=[int]$Security.session_id}
+    $previous=Get-Variable -Name CanonicalRollbackRelayCandidate -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if($null -ne $previous -and ($previous|ConvertTo-Json -Compress) -ceq ($candidate|ConvertTo-Json -Compress)){return}
+    $Script:CanonicalRollbackRelayCandidate=$candidate
+    $currentAudit=Get-Variable -Name audit -ValueOnly -ErrorAction SilentlyContinue
+    $currentPath=[string](Get-Variable -Name auditPath -ValueOnly -ErrorAction SilentlyContinue)
+    if($null -ne $currentAudit -and $currentPath){
+        $currentAudit['rollback_relay_candidate']=$candidate
+        Save $currentPath $currentAudit $true
+    }
+}
+
+function Assert-CanonicalRollbackRelayCandidate {
+    # Refusal remains sticky for marker cleanup later in the same compensation.
+    $Script:CanonicalRollbackRelayStopRefused=$true
+    $actual=@(Relays)
+    if($actual.Count -eq 0){$Script:CanonicalRollbackRelayStopRefused=$false;return}
+    if($actual.Count -ne 1){throw 'ROLLBACK_RELAY_CANDIDATE_UNPROVEN'}
+    $candidate=Get-Variable -Name CanonicalRollbackRelayCandidate -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if($null -eq $candidate){
+        $configuration=Get-Variable -Name InstallationTransactionConfiguration -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if($null -ne $configuration){
+            $parentPath=[string]$configuration.context.auditPath
+            Assert-BootstrapNoReparsePoint $parentPath 'rollback candidate audit' -PathOnly
+            if((Get-Item -LiteralPath $parentPath).Length -gt 1048576){throw 'ROLLBACK_RELAY_CANDIDATE_UNPROVEN'}
+            $parent=Get-Content -LiteralPath $parentPath -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson
+            if([string]$parent.schema -cne 'container-audit-canonical-portable-install-v2' -or
+                [string]$parent.run_id -cne [string]$configuration.context.runId){throw 'ROLLBACK_RELAY_CANDIDATE_UNPROVEN'}
+            if($null -ne $parent.PSObject.Properties['rollback_relay_candidate']){$candidate=$parent.rollback_relay_candidate}
+        }
+    }
+    $transaction=[string](Get-Variable -Name CanonicalWriterFenceTransactionId -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+    $caller=Get-CanonicalOperatorSecurity
+    if($null -eq $candidate -or [string]$candidate.schema -cne 'container-audit-installer-relay-candidate-v1' -or
+        $transaction -cnotmatch '^[0-9a-f]{32}$' -or [string]$candidate.transaction_id -cne $transaction -or
+        [int]$caller.session_id -le 0 -or [string]$candidate.sid -cne [string]$caller.sid -or
+        [int]$candidate.session_id -ne [int]$caller.session_id -or
+        [int]$actual[0].ProcessId -ne [int]$candidate.process_id){throw 'ROLLBACK_RELAY_CANDIDATE_UNPROVEN'}
+    $process=Get-CimInstance Win32_Process -Filter ('ProcessId = '+[int]$candidate.process_id) -ErrorAction Stop
+    if($null -eq $process -or $process.CreationDate -isnot [DateTime] -or
+        ([DateTime]$process.CreationDate).ToUniversalTime().ToString('o') -cne [string]$candidate.created_at_utc -or
+        ([DateTime]$process.CreationDate).ToUniversalTime() -lt ([DateTime]$candidate.round_started_at_utc).ToUniversalTime() -or
+        [string]$process.CommandLine -cne [string]$candidate.command_line -or
+        -not(Same ([string]$process.ExecutablePath) ([string]$candidate.executable_path))){throw 'ROLLBACK_RELAY_CANDIDATE_UNPROVEN'}
+    $security=Get-CanonicalRelaySecurity ([int]$process.ProcessId)
+    $identity=[pscustomobject]@{executable=[string]$candidate.executable_path;command=[string]$candidate.command_line;operator_sid=[string]$caller.sid}
+    if([int]$security.integrity_level -ne 8192 -or -not(Test-BootstrapRelayReadback $identity $process $security $caller)){
+        throw 'ROLLBACK_RELAY_CANDIDATE_UNPROVEN'
+    }
+    $Script:CanonicalRollbackRelayStopRefused=$false
+}
+
+function Assert-CanonicalRollbackStopCleanup {
+    if([bool](Get-Variable -Name CanonicalRollbackRelayStopRefused -Scope Script -ValueOnly -ErrorAction SilentlyContinue)){
+        throw 'ROLLBACK_RELAY_CANDIDATE_UNPROVEN'
+    }
+}
+
+function Product([string]$Root,[string]$Mode,[string]$AppRoot='',[switch]$Rollback) {
+    if($Rollback -and $Mode -ceq '--remove-current-user-setup'){Assert-CanonicalRollbackRelayCandidate}
     if ($Mode -ceq '--onboard-current-user' -and [Diagnostics.Process]::GetCurrentProcess().SessionId -le 0) {
         throw '작업자 첫 설정은 대화형 사용자 세션에서 실행하세요.'
     }
@@ -6215,6 +6293,7 @@ catch {
                     if (-not $uninstallStopSha256 -or (Sha $stop) -cne $uninstallStopSha256) {
                         throw 'RETIREMENT_ACTIVE_STOP_OWNERSHIP_UNKNOWN_RUNTIME_REMAINS_FENCED'
                     }
+                    Assert-CanonicalRollbackStopCleanup
                     Remove-Item -LiteralPath $stop -Force
                 }
                 if (Test-Path -LiteralPath $stop) { throw 'Uninstall stop preimage restore failed.' }
@@ -6327,7 +6406,7 @@ catch {
                 -TargetSid $operatorSid -LocalAppDataRoot $lad -DataRoot $activeDataRoot -HelperRoot $source
             Set-InstallationEvidenceStage 'rollback.code_replacement' 'rollback'
             Sync-CanonicalWriterFenceInventory $Script:ContainerWriterFenceInventorySha256
-            if($supportedPlacement){Product $source '--remove-current-user-setup' (Join-Path $install 'app')}else{Product $install '--remove-current-user-setup'}
+            if($supportedPlacement){Product $source '--remove-current-user-setup' (Join-Path $install 'app') -Rollback}else{Product $install '--remove-current-user-setup' -Rollback}
             if ((Snapshot).exists -or @(Relays).Count -ne 0) {
                 throw 'Replacement rollback runtime quiescence failed.'
             }
@@ -6411,7 +6490,7 @@ catch {
         # attempts. A refused code restore must not suppress the latter stages.
         try {
             Sync-CanonicalWriterFenceInventory $currentTreeInventorySha256
-            if (Test-Path -LiteralPath $install) { Product $install '--remove-current-user-setup' }
+            if (Test-Path -LiteralPath $install) { Product $install '--remove-current-user-setup' -Rollback }
             [void](Assert-RollbackRelayPreimage -ExpectedRelays @())
             Record-CanonicalRollbackStep 'runtime_quiescence' 'PASS' ''
         }
@@ -6430,6 +6509,7 @@ catch {
             Record-CanonicalRollbackStep 'run_restore_attempt' 'FAILED' $autostartRollbackFailure
         }
         try {
+            Assert-CanonicalRollbackStopCleanup
             if (Test-Path -LiteralPath $stop) { Remove-Item -LiteralPath $stop -Force }
             Record-CanonicalRollbackStep 'stop_marker_restore' 'PASS' ''
         }

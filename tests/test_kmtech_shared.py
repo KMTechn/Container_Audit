@@ -231,6 +231,15 @@ print('PASS: isolated portable imports and one shared identity')
 
 
 def test_builder_rejects_shared_pin_drift_before_runtime_or_output(tmp_path, monkeypatch):
+    from tests.release_feed_fixture import canonical_release_settings
+    from tests.native_process_fixtures import native_python_environment, native_python_executable
+    native_run = subprocess.run
+    def guarded_shared_check(command, **kwargs):
+        assert command[1:3] == ['-I', '-B']
+        assert Path(command[3]).name == 'check_kmtech_shared.py'
+        kwargs['env'] = native_python_environment()
+        return native_run([str(native_python_executable()), '-B', *command[3:]], **kwargs)
+    monkeypatch.setattr(subprocess, 'run', guarded_shared_check)
     source = tmp_path / "source"
     shutil.copytree(ROOT / "kmtech_shared", source / "kmtech_shared")
     for name in ("kmtech_shared.manifest.json", "kmtech_shared.lock.json", "qualification/check_kmtech_shared.py"):
@@ -243,7 +252,7 @@ def test_builder_rejects_shared_pin_drift_before_runtime_or_output(tmp_path, mon
     output = tmp_path / "output"
     with pytest.raises(builder.PortableBuildError, match="shared source pin check failed"):
         builder.build(source, tmp_path / "unavailable-runtime", output,
-                      update_manifest_public_key_config="")
+                      update_manifest_public_key_config="", auto_update_settings=canonical_release_settings(tmp_path))
     assert not output.exists()
 
 

@@ -776,6 +776,43 @@ def _release_data_metadata(repo_root: Path, compatible_min_version: str | None) 
             "data_compatible_min_version": "v" + ".".join(map(str, floor))}
 
 
+RELEASE_AUTO_UPDATE_SETTINGS_SHA256 = "1b9372bd13d7b7ffc1d5e155cc1a984f12bea47453e1be0c9252e30ed3de5359"
+
+
+def _release_auto_update_settings(path: Path | None) -> bytes:
+    """Admit the approved field feed before creating any release output."""
+    from auto_update import policy_from_settings
+
+    if not isinstance(path, (str, os.PathLike)):
+        raise PortableBuildError("RELEASE_AUTO_UPDATE_SETTINGS_REQUIRED")
+    try:
+        path = Path(path)
+        if not path.is_file() or not 0 < path.stat().st_size <= 65536:
+            raise ValueError
+        raw = path.read_bytes()
+        settings = json.loads(raw.decode("utf-8-sig"))
+        if not isinstance(settings, dict) or not settings:
+            raise ValueError
+        policy = policy_from_settings(settings)
+        if (not isinstance(settings.get("feed_url"), str) or not settings["feed_url"].strip()
+                or not settings["feed_url"].startswith("https://")
+                or settings.get("channel") != "stable" or settings.get("profile_auth") is not True
+                or not policy.get("feed_url") or policy.get("profile_auth") is not True):
+            raise ValueError
+        if hashlib.sha256(raw).hexdigest() != RELEASE_AUTO_UPDATE_SETTINGS_SHA256:
+            raise ValueError
+    except (OSError, ValueError, TypeError, UnicodeError) as exc:
+        raise PortableBuildError("RELEASE_AUTO_UPDATE_SETTINGS_INVALID") from exc
+    return raw
+
+
+def _write_release_auto_update_settings(app_root: Path, raw: bytes) -> None:
+    target = app_root / "auto-update-settings.json"
+    target.write_bytes(raw)
+    if target.read_bytes() != raw:
+        raise PortableBuildError("RELEASE_AUTO_UPDATE_SETTINGS_READBACK_FAILED")
+
+
 def build(
     repo_root: Path,
     python_home: Path,
@@ -785,11 +822,9 @@ def build(
     data_compatible_min_version: str | None = None,
     data_generation_update_manifest: Path | None = None,
     data_generation_update_signature: Path | None = None,
-    auto_update_settings: dict[str, object] | None = None,
+    auto_update_settings: Path | None = None,
 ) -> dict[str, object]:
-    from auto_update import policy_from_settings
-
-    startup_policy = policy_from_settings(auto_update_settings or {})
+    startup_settings_bytes = _release_auto_update_settings(auto_update_settings)
     repo_root = repo_root.resolve()
     if update_manifest_public_key_config is None:
         public_configuration = json.loads((repo_root / UPDATE_KEY_CONFIG_FILENAME).read_text(encoding="utf-8"))
@@ -847,9 +882,7 @@ def build(
         app_root,
         update_manifest_public_key_config,
     )
-    (app_root / "auto-update-settings.json").write_text(
-        json.dumps(startup_policy, sort_keys=True, indent=2) + "\n", encoding="utf-8",
-    )
+    _write_release_auto_update_settings(app_root, startup_settings_bytes)
     site_packages = app_root / "site-packages"
     site_packages.mkdir()
     versions = _copy_third_party(site_packages)
@@ -954,7 +987,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--data-compatible-min-version", help="Release data floor; portable installers still require a verified signed binding before trusting a lower floor")
     parser.add_argument("--data-generation-update-manifest", type=Path)
     parser.add_argument("--data-generation-update-signature", type=Path)
-    parser.add_argument("--auto-update-settings", type=Path)
+    parser.add_argument("--auto-update-settings", type=Path, required=True)
     return parser.parse_args(argv)
 
 
@@ -968,7 +1001,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         data_compatible_min_version=args.data_compatible_min_version,
         data_generation_update_manifest=args.data_generation_update_manifest,
         data_generation_update_signature=args.data_generation_update_signature,
-        auto_update_settings=(json.loads(args.auto_update_settings.read_text(encoding="utf-8-sig")) if args.auto_update_settings else None),
+        auto_update_settings=args.auto_update_settings,
     )
     print(json.dumps(result, ensure_ascii=True, sort_keys=True))
     return 0

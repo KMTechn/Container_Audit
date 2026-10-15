@@ -143,6 +143,7 @@ if ($RecoveryCase -ceq 'g-unknown') {
     [IO.Directory]::CreateDirectory((Join-Path $activeDataRoot 'control')) | Out-Null
     [IO.File]::WriteAllText((Join-Path $activeDataRoot 'data-generation.json'), 'invalid isolated generation marker')
 }
+if($RecoveryCase -clike 'relay-*'){. (Join-Path $PSScriptRoot 'ca_rollback_relay_candidate_fixture.ps1')}
 $errorType=''
 if ($RecoveryCase -cin @('audit-save-failure','evidence-save-failure')) {
  $auditPath=Join-Path $Root 'recovery-audit.json'
@@ -151,5 +152,6 @@ if ($RecoveryCase -cin @('audit-save-failure','evidence-save-failure')) {
 try {. ([ScriptBlock]::Create("try {throw 'Product mode failed: --onboard-current-user/2'} catch "+$body))}
 catch {$errorType=$_.Exception.GetType().Name}
 $result=@{rollback_status=$audit.status;commit_point_status=$audit.rollback.commit_point_status;generation_readback=$audit.rollback.steps.generation_readback.status;operator_notice_saved=[bool]$audit.rollback.operator_message;support_procedure=$audit.rollback.support_recovery_procedure;rollback_steps=$audit.rollback.steps;recovery_verified=$rollbackRecoveryVerified;actual_g_error_id=$script:actualGErrorId;actual_g_command=$script:actualGCommand;actual_g_calls=$script:actualGCalls;actual_g_passed=$script:actualGPassed;actual_g_blocked=$script:actualGBlocked;state_restored=(@($script:state.Values|Where-Object {$_ -cne 'before'}).Count -eq 0);observed=$script:observed;fence_active_after=$canonicalWriterFenceActive;child_locator_reads=$childResult.locator_reads;child_payload_reads=$childResult.observed.input_reads;child_changes=$childResult.changed_file_count;child_status=$childResult.status;error_type=$errorType;code_rollback_failure=$codeRollbackFailure;autostart_rollback_failure=$autostartRollbackFailure;full_installer_executed=$false;actual_host_lifecycle_calls=0;changes_before_child=@('code','Run','task','relay')}
+if($RecoveryCase -clike 'relay-*'){$result['relay_candidate']=Get-RelayCandidateFixtureObservation}
 $result|ConvertTo-Json -Depth 5|Set-Content -LiteralPath $Output -Encoding utf8
 $result|ConvertTo-Json -Depth 5 -Compress

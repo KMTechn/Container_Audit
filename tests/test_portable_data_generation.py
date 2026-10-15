@@ -1,3 +1,4 @@
+from tests.release_feed_fixture import canonical_release_settings
 """A stock Python packet must verify its code entrypoint without a frozen EXE."""
 import json
 from pathlib import Path
@@ -256,9 +257,18 @@ def metadata_build(tmp_path, monkeypatch, signed_proof):
         monkeypatch.setattr(module, "_app_native_inventory", lambda root: [])
         monkeypatch.setattr(module, "_git_value", lambda root, expression: "b" * 40 if "tree" in expression else "a" * 40)
 
+        if hasattr(module, '_assert_screen_bundle'):
+            monkeypatch.setattr(module, '_assert_screen_bundle', lambda *args: {})
+        for name in ('_assert_runtime_import_closure',
+                     '_assert_native_payloads', '_assert_installer_unsigned_pins'):
+            if hasattr(module, name):
+                monkeypatch.setattr(module, name, lambda *args: None)
+        if hasattr(module, '_build_environment'):
+            monkeypatch.setattr(module, '_build_environment', lambda root: {})
+
     prepare(builder)
     return SimpleNamespace(builder=builder, source=source, prepare=prepare,
-        runtime=tmp_path / "runtime-home", configuration=json.dumps(configuration),
+        settings=canonical_release_settings(tmp_path), runtime=tmp_path / "runtime-home", configuration=json.dumps(configuration),
         manifest=manifest_path, signature=signature_path)
 
 
@@ -279,11 +289,27 @@ def test_builder_without_proof_preserves_baseline_metadata_bytes(tmp_path, metad
     baseline = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(baseline)
     metadata_build.prepare(baseline)
+    settings = metadata_build.settings
+    # Compare the unchanged metadata contract after aligning the newly required
+    # approved settings bytes in the isolated historical output fixture.
+    baseline_metrics = baseline._tree_metrics
+    def aligned_baseline_metrics(path):
+        app = path / 'app'
+        if app.is_dir():
+            (app / 'auto-update-settings.json').write_bytes(settings.read_bytes())
+        return baseline_metrics(path)
+    baseline._tree_metrics = aligned_baseline_metrics
     outputs = [tmp_path / "baseline", tmp_path / "current"]
     for module, output in zip((baseline, metadata_build.builder), outputs):
         module.build(metadata_build.source, metadata_build.runtime, output,
                      update_manifest_public_key_config=metadata_build.configuration,
-                     data_compatible_min_version=floor)
+                     data_compatible_min_version=floor, auto_update_settings=settings if module is metadata_build.builder else json.loads(settings.read_bytes()))
+    # This historical builder predates build-environment metadata. Its isolated
+    # assembly has the same independently fixed empty environment fixture.
+    baseline_manifest = outputs[0] / 'portable-manifest.json'
+    expected = json.loads(baseline_manifest.read_bytes())
+    expected['build_environment'] = {}
+    baseline_manifest.write_text(json.dumps(expected, ensure_ascii=True, indent=2, sort_keys=True) + '\n', encoding='utf-8', newline='\n')
     identical = ((outputs[0] / "portable-manifest.json").read_bytes()
                  == (outputs[1] / "portable-manifest.json").read_bytes())
     assert identical, "no-proof metadata differs from committed baseline bytes"
@@ -314,7 +340,7 @@ def test_builder_embeds_validated_signed_floor(tmp_path, metadata_build):
     metadata = build.builder.build(build.source, build.runtime, output,
         update_manifest_public_key_config=build.configuration,
         data_generation_update_manifest=build.manifest,
-        data_generation_update_signature=build.signature)
+        data_generation_update_signature=build.signature, auto_update_settings=build.settings)
     assert metadata["data_compatible_min_version"] == "v2.0.98"
     matches = (metadata["data_generation_signed_manifest"] == json.loads(build.manifest.read_bytes())
                and metadata["data_generation_signature_hex"] == build.signature.read_bytes().hex())
@@ -341,7 +367,7 @@ def test_builder_rejects_invalid_proof_before_creating_output(tmp_path, metadata
         build.builder.build(build.source, build.runtime, output,
             update_manifest_public_key_config=build.configuration,
             data_generation_update_manifest=None if case == "signature_only" else build.manifest,
-            data_generation_update_signature=None if case == "manifest_only" else build.signature)
+            data_generation_update_signature=None if case == "manifest_only" else build.signature, auto_update_settings=build.settings)
     assert not output.exists()
 
 
@@ -350,7 +376,7 @@ def test_builder_parses_signed_floor_arguments(tmp_path):
 
     args = builder.parse_args(["--output", str(tmp_path / "built"),
         "--data-generation-update-manifest", str(tmp_path / "manifest.json"),
-        "--data-generation-update-signature", str(tmp_path / "manifest.sig")])
+        "--data-generation-update-signature", str(tmp_path / "manifest.sig"), '--auto-update-settings', str(tmp_path / 'feed.json')])
     assert args.data_generation_update_manifest == tmp_path / "manifest.json"
     assert args.data_generation_update_signature == tmp_path / "manifest.sig"
 
@@ -366,7 +392,7 @@ def test_builder_rejects_signed_metadata_above_reader_bound(tmp_path, metadata_b
         build.builder.build(build.source, build.runtime, tmp_path / "oversized-packet",
             update_manifest_public_key_config=json.dumps(configuration),
             data_generation_update_manifest=build.manifest,
-            data_generation_update_signature=build.signature)
+            data_generation_update_signature=build.signature, auto_update_settings=build.settings)
 
 
 def test_crypto_api_failure_keeps_business_open(tmp_path, signed_packet, monkeypatch, caplog):
@@ -436,7 +462,7 @@ def test_real_feed_floor_builder_integrity_and_runtime(tmp_path, metadata_build,
     output = tmp_path / "real-feed-packet"
     metadata = build.builder.build(build.source, build.runtime, output,
         update_manifest_public_key_config=json.dumps(configuration),
-        data_generation_update_manifest=build.manifest, data_generation_update_signature=build.signature)
+        data_generation_update_manifest=build.manifest, data_generation_update_signature=build.signature, auto_update_settings=build.settings)
     assert {"artifact", "archive", "install", "rollout"} <= metadata["data_generation_signed_manifest"].keys()
     assert (output / "portable-manifest.json").stat().st_size <= 65536
     literal = str(output).replace("'", "''")

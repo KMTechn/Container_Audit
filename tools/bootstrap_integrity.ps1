@@ -1932,7 +1932,7 @@ function Invoke-CanonicalTransactionCompensation($Configuration,$Placement,$Leas
                     Sync-CanonicalWriterFenceInventory $Script:ContainerWriterFenceInventorySha256
                     if(Test-Path -LiteralPath $install){
                         [void](Assert-BootstrapIntegrityRecord $installedCodeRoot)
-                        if($supportedPlacement){Product $source '--remove-current-user-setup' (Join-Path $install 'app')}else{Product $install '--remove-current-user-setup'}
+                        if($supportedPlacement){Product $source '--remove-current-user-setup' (Join-Path $install 'app') -Rollback}else{Product $install '--remove-current-user-setup' -Rollback}
                     }
                     [void](Assert-CanonicalTransactionRelayPreimage $Configuration)
                     if((Snapshot).exists){throw 'Transaction runtime Run quiescence is unproven.'}
@@ -1993,6 +1993,7 @@ function Invoke-CanonicalTransactionCompensation($Configuration,$Placement,$Leas
                     [void](Restore-BootstrapWorkerShortcuts $install $shortcutRecord 'Common')
                 }
                 'run_preimage' {
+                    Assert-CanonicalRollbackStopCleanup
                     Restore $before
                     if(Test-Path -LiteralPath $stop){Remove-Item -LiteralPath $stop -ErrorAction Stop}
                     $check=Snapshot

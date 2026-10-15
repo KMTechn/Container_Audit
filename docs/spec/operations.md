@@ -515,7 +515,9 @@ READY/trial 읽기 경합은 last_ready_error에 종류만 기록하고 정상 �
 
 builder `--auto-update-settings <JSON>`은 HTTPS `feed_url`, `channel`,
 `approved_transitions`, `profile_auth`, `apply_during_work`를 받는다.
-설정이 없으면 feed와 승인은 비어 있고 갱신 없이 기존 사용자 동작으로 시작한다.
+출하 빌더는 이 입력을 필수로 받고 설정 생략·빈 object·빈 feed·승인 정본 SHA 불일치를
+출력 생성 전에 거절한다. 승인 파일을 재직렬화하지 않고 원본 바이트로 게시·되읽는다.
+실행기의 개발용 빈 설정 동작은 출하 빌더의 입력 승인과 별개다.
 `profile_auth=true`는 현재 사용자의 기존 물류 profile을 쓰되 feed와 같은 인증 원본에만
 bearer를 전달한다. redirect·cookie 재사용은 거절한다. 새 credential 저장소를 만들지 않는다.
 실제 feed·인증은 코디네이터가 정한 뒤 보호된 설치 입력으로 제공한다.
@@ -533,8 +535,8 @@ writer 및 데이터/API 계약이 같은 판은 추가 승인 없이 기존 호
 수행하고, 자동 갱신으로 우회하지 않는다.
 writer 의미가 바뀌는 첫 지원 설치에는 실제 old packet의 `source_commit`과
 `writer_sink_inventory_contract_sha256`, 새 source SHA와 새 inventory 계약 해시로 만든
-정방향·역방향 `approved_transitions`를 builder 입력에 제공한다. 새 SHA를 wildcard로
-대체하지 않으며 기본 빌드는 빈 목록을 유지한다. 정확한 사후 코드 복원은 같은 successor
+정방향·역방향 `approved_transitions`를 서명된 외부 manifest에 제공한다. 새 SHA를 wildcard로
+대체하지 않으며 정본 설정의 빈 목록은 그대로 유지한다. 정확한 사후 코드 복원은 같은 successor
 packet의 역방향 승인과 원 replacement receipt를 함께 사용한다. 핀은 코드 전이만 허용하며
 사용자 자료·신원·장부를 과거 snapshot으로 되돌리지 않는다.
 옛 releases/latest 경로를 켜지 않는다.

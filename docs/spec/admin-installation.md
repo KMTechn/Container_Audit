@@ -134,3 +134,5 @@ TLS CA와 staging 파일, 바로 가기 원본 복원은 준비 사본을 검증
 빌드 입력 정본은 `work/program/w9mgrweb/field-update-feed-1015/container_audit.auto-update-settings.json` 파일 그대로(`--auto-update-settings`, SHA256 `1b9372bd13d7b7ffc1d5e155cc1a984f12bea47453e1be0c9252e30ed3de5359`)다. ZIP의 `app/auto-update-settings.json`은 이 파일의 내용과 feed_url·channel·profile_auth를 대조한다. 설정 파일의 빈 approved_transitions 배열은 그대로 둔다. 107 → 109 전이 승인은 1차가 묶음 때 만드는 서명된 외부 manifest의 approved_transitions에서 from_commit·to_commit와 각 contract_sha256의 정방향·역방향 정확한 쌍(2행)으로 확인한다(auto_update.py:387–398). 설정 값을 수동 재작성하지 않는다.
 
 전이의 contract_sha256은 version_identity가 각 판의 `tools/container_writer_session_contract.json`과 `tools/container_writer_sink_inventory.json` 경로 및 실제 파일 해시를 순서대로 묶어 산출한다(auto_update.py:327·347–365).
+
+출하 빌더의 CLI와 API는 설정 생략·빈 object·빈 feed·정본 SHA 불일치를 출력 생성 전에 거절하며, 승인 파일을 원본 바이트로 게시하고 되읽는다. 되돌림의 작업자 설정 제거도 현재 회차에서 확인한 같은 세션의 relay 후보에만 정지를 요청한다. 후보의 PID·생성 시각·실행 파일·명령·SID·세션이 달라지면 정지와 후속 stop 표지 정리를 거절하고 복구 미증명 상태를 유지한다.

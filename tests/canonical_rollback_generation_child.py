@@ -47,6 +47,10 @@ external = root / 'external'
 external.mkdir(exist_ok=True)
 if scenario == 'tls-onboarding-default':
     os.environ.pop('CONTAINER_AUDIT_DATA_ROOT', None)
+import runtime_instance_win32
+# Keep the authoritative machine deny boundary inside this isolated fixture;
+# the audit hook still rejects any accidental native host known-folder lookup.
+runtime_instance_win32.known_program_data = lambda: root / 'machine-program-data'
 paths = onboarding.resolve_current_user_onboarding_paths(source)
 data = paths.data_root
 data.mkdir(parents=True, exist_ok=True)
