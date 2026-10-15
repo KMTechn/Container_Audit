@@ -101,7 +101,9 @@ if($env:CA_BAD_PIN -ceq 'true'){
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 def test_code_and_inventory_failure_still_attempt_exact_run_preimage(tmp_path, engine):
-    result = run_functions(tmp_path, CANONICAL, ["Record-CanonicalRollbackStep"], r'''
+    result = run_functions(tmp_path, CANONICAL, [
+        "Record-CanonicalRollbackStep", "Assert-CanonicalRollbackStopCleanup",
+    ], r'''
 # sub-420 split runtime recovery into independent stages. Select its exact
 # production branch and execute every stage; preserve the original assertions.
 $blocks=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.IfStatementAst] -and $n.Clauses.Count -eq 1 -and $n.Clauses[0].Item1.Extent.Text -ceq '$mutated' -and $n.Clauses[0].Item2.Extent.Text.Contains("Record-CanonicalRollbackStep 'runtime_quiescence'") -and $n.Clauses[0].Item2.Extent.Text.Contains("Record-CanonicalRollbackStep 'run_restore_attempt'")},$true))
