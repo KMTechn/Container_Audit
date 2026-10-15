@@ -149,7 +149,36 @@ def _business_case(monkeypatch, tmp_path, action, transport=None, *, separate_ow
             app._active_blocking_completion_snapshot = lambda: {"blocked": True}
             app._current_transfer_member_exchange_attempt = lambda: None
             invoke = lambda: app._defer_blocked_current_tray_for_supervisor(confirm=False)
+    app._test_pin_prompts = []
+    prompt = app._prompt_blocked_work_admin_pin
+    def counted_prompt(**kwargs):
+        app._test_pin_prompts.append(True)
+        return prompt(**kwargs)
+    app._prompt_blocked_work_admin_pin = counted_prompt
     return app, server, audits, original, label, invoke
+
+
+def _assert_worker_pin_zero(app, server, intent):
+    from container_admin_pin import fingerprint, operator_local_id
+    assert app._test_pin_prompts == []
+    assert server.calls == []
+    assert intent["authorization_mode"] == "WORKER"
+    assert intent["admin_id"] == intent["verification_id"] == ""
+    assert intent["operator_raw"] == app.worker_name
+    assert intent["operator"]["local_id"] == operator_local_id(app.worker_name)
+    assert intent["source_evidence_sha256"] == fingerprint(intent["source_snapshot"])
+    import csv
+    import json
+    with (Path(app.local_events_folder) / "business.csv").open(encoding="utf-8", newline="") as stream:
+        rows = [(row["event"], json.loads(row["details"])) for row in csv.DictReader(stream)]
+    worker_rows = [detail for event, detail in rows
+                   if event.startswith("WORKER_ACTION_")
+                   and detail.get("operation_key") == intent["operation_key"]]
+    assert worker_rows
+    assert all(row["operator_raw"] == app.worker_name for row in worker_rows)
+    assert all(row["authorization_mode"] == "WORKER" for row in worker_rows)
+    assert all(row["approving_supervisor"] == row["approving_role"] == row["verification_id"] == ""
+               for row in worker_rows)
 
 
 @pytest.mark.parametrize("action,source_name,held_name,separate_owner_file", [
@@ -180,7 +209,17 @@ def test_changed_bytes_need_new_pin_at_each_boundary(
             original.write_bytes(changed)
             injected.append(True)
 
-    if timing == "redemption":
+    worker = action in {"CA.PRECHECK_HOLD", "CA.PAIR_RETRY"}
+    if worker and timing == "redemption":
+        from container_admin_pin import AdminPinIntentStore
+        transition = AdminPinIntentStore.transition
+        def consumed(store, intent, state, **kwargs):
+            result = transition(store, intent, state, **kwargs)
+            if state == "CONSUMED":
+                mutate()
+            return result
+        monkeypatch.setattr(AdminPinIntentStore, "transition", consumed)
+    elif timing == "redemption":
         def transport(path, body, headers):
             reply = server(path, body, headers)
             if path.endswith("/redemptions"):
@@ -191,7 +230,7 @@ def test_changed_bytes_need_new_pin_at_each_boundary(
         real_audit = app._log_event
         def audit(event, **kwargs):
             result = real_audit(event, **kwargs)
-            if event == "ADMIN_PIN_CONSUMED":
+            if event == ("WORKER_ACTION_AUTHORIZED" if worker else "ADMIN_PIN_CONSUMED"):
                 mutate()
             return result
         app._log_event = audit
@@ -208,7 +247,9 @@ def test_changed_bytes_need_new_pin_at_each_boundary(
     assert intent["state"] == "TARGET_CHANGED"
     assert original.read_bytes() == changed
     assert "ADMIN_PIN_APPLIED" not in audits
-    assert len([path for path, _ in server.calls if path.endswith("/redemptions")]) == 1
+    assert len([path for path, _ in server.calls if path.endswith("/redemptions")]) == (0 if worker else 1)
+    if worker:
+        _assert_worker_pin_zero(app, server, intent)
     app._recheck_admin_pin_intents()
     # Normal scanner mutations still wait for the changed target's new approval.
     if action == "CA.TRAY_HOLD":
@@ -221,8 +262,16 @@ def test_changed_bytes_need_new_pin_at_each_boundary(
     assert fresh["operation_key"] != intent["operation_key"]
     moved = next(row for row in fresh["moving"] if row["source"] == str(original.resolve()))
     assert Path(moved["target"]).read_bytes() == changed
-    assert not original.exists() and audits.count("ADMIN_PIN_APPLIED") == 1
-    assert len([path for path, _ in server.calls if path.endswith("/redemptions")]) == 2
+    applied_event = "WORKER_ACTION_APPLIED" if fresh.get("authorization_mode") == "WORKER" else "ADMIN_PIN_APPLIED"
+    assert not original.exists() and audits.count(applied_event) == 1
+    # The existing mutation changes ownership: C02 must now use the admin path.
+    expected_redemptions = (1 if action == "CA.PRECHECK_HOLD" else 0) if worker else 2
+    assert len([path for path, _ in server.calls if path.endswith("/redemptions")]) == expected_redemptions
+    if worker and action == "CA.PRECHECK_HOLD":
+        assert fresh.get("authorization_mode") != "WORKER"
+        assert len(app._test_pin_prompts) == 1
+    elif worker:
+        _assert_worker_pin_zero(app, server, fresh)
     if foreign_bytes is not None:
         assert foreign.read_bytes() == foreign_bytes
         app._preflight_hold_snapshot = None
@@ -240,6 +289,7 @@ def test_move_journal_recovers_each_interruption(
     from types import SimpleNamespace
     import pin_file_move
     import tray_state
+    worker = action in {"CA.PRECHECK_HOLD", "CA.PAIR_RETRY"}
     from tests.test_container_admin_pin import assert_other_phs2_starts
 
     app, server, audits, original, label, invoke = _business_case(monkeypatch, tmp_path, action)
@@ -304,21 +354,28 @@ def test_move_journal_recovers_each_interruption(
     app._recheck_admin_pin_intents()
     saved = app._admin_pin_store().read(intent["operation_key"])
     assert saved["moving"][:len(moves)] == moves
+    assert saved["source_snapshot"] == intent["source_snapshot"]
+    assert saved["target"] == intent["target"]
+    assert saved["operation_key"] == intent["operation_key"]
+    assert saved["operator"] == intent["operator"]
+    if worker:
+        _assert_worker_pin_zero(app, server, saved)
     if changed:
         assert saved["state"] == "TARGET_CHANGED"
         assert original.read_bytes() == changed_bytes
         assert not held.exists()
         assert "ADMIN_PIN_APPLIED" not in audits
+        assert "WORKER_ACTION_APPLIED" not in audits
     else:
         assert saved["state"] == "APPLIED"
         assert not original.exists() and held.read_bytes() == raw
-        assert audits.count("ADMIN_PIN_APPLIED") == 1
+        assert audits.count("WORKER_ACTION_APPLIED" if worker else "ADMIN_PIN_APPLIED") == 1
         if action == "CA.PAIR_RETRY":
             # Preserve-only is followed by the existing supervisor hold command.
             assert app._continue_after_paired_stale_current() is True
         assert_other_phs2_starts(app, label)
     assert len([path for path, body in server.calls if path.endswith("/redemptions")
-                and body["operation_key"] == intent["operation_key"]]) == 1
+                and body["operation_key"] == intent["operation_key"]]) == (0 if worker else 1)
 
 
 @pytest.mark.parametrize("action,source_name,held_name", ACTIONS)
@@ -332,6 +389,7 @@ def test_offline_detachment_resumes_journal_destination(
 
     def offline(*_args):
         raise TimeoutError("offline")
+    worker = action in {"CA.PRECHECK_HOLD", "CA.PAIR_RETRY"}
     app, _server, audits, original, label, invoke = _business_case(
         monkeypatch, tmp_path, action, transport=offline)
     raw = original.read_bytes()
@@ -355,18 +413,34 @@ def test_offline_detachment_resumes_journal_destination(
         with pytest.raises(KeyboardInterrupt):
             invoke()
     intent = app._admin_pin_store().list_pending()[0]
-    assert intent["state"] == "UNVERIFIED_DETACHING"
+    assert intent["state"] == ("CONSUMED" if worker else "UNVERIFIED_DETACHING")
+    if worker:
+        owner = app.worker_name
+        app.worker_name = "different-resuming-worker"
+        app._admin_pin_resume_unverified_detachments(startup=True)
+        assert app._admin_pin_store().read(intent["operation_key"]) == intent
+        assert app._test_pin_prompts == [] and _server.calls == []
+        app.worker_name = owner
     moves = intent["moving"]
     fixed += datetime.timedelta(seconds=2)
     app._admin_pin_login_epoch = uuid.uuid4().hex
     app._admin_pin_resume_unverified_detachments(startup=True)
     saved = app._admin_pin_store().read(intent["operation_key"])
-    assert saved["state"] == "UNVERIFIED_OPERATOR_HOLD"
+    assert saved["state"] == ("APPLIED" if worker else "UNVERIFIED_OPERATOR_HOLD")
+    assert saved["source_snapshot"] == intent["source_snapshot"]
+    assert saved["target"] == intent["target"]
+    assert saved["operation_key"] == intent["operation_key"]
+    assert saved["operator"] == intent["operator"]
+    if worker:
+        _assert_worker_pin_zero(app, _server, saved)
     assert saved["moving"][:len(moves)] == moves
     assert not original.exists()
     assert Path(moves[0]["target"]).read_bytes() == raw
-    assert audits.count("ADMIN_PIN_UNVERIFIED_HOLD") == 1
+    assert audits.count("WORKER_ACTION_APPLIED" if worker else "ADMIN_PIN_UNVERIFIED_HOLD") == 1
     assert "ADMIN_PIN_APPLIED" not in audits
+    if worker and action == "CA.PAIR_RETRY":
+        assert app._continue_after_paired_stale_current() is True
+        _assert_worker_pin_zero(app, _server, saved)
     assert_other_phs2_starts(app, label)
 
 
@@ -393,8 +467,8 @@ def test_precheck_restore_releases_only_its_original_fifo(monkeypatch, tmp_path,
     with monkeypatch.context() as crash:
         if boundary == "after_move":
             restore = PreflightScanHoldStore.restore_quarantined
-            def stopped(store, path):
-                restore(store, path)
+            def stopped(store, path, *args, **kwargs):
+                restore(store, path, *args, **kwargs)
                 raise KeyboardInterrupt(boundary)
             crash.setattr(PreflightScanHoldStore, "restore_quarantined", stopped)
         elif boundary == "after_audit":
@@ -602,6 +676,7 @@ def test_applied_readback_failure_resumes_completion(
     from container_admin_pin import AdminPinIntentStore
     from tests.test_container_admin_pin import assert_other_phs2_starts
 
+    worker = action in {"CA.PRECHECK_HOLD", "CA.PAIR_RETRY"}
     app, server, audits, original, label, invoke = _business_case(monkeypatch, tmp_path, action)
     raw = original.read_bytes()
     read = AdminPinIntentStore.read
@@ -645,13 +720,19 @@ def test_applied_readback_failure_resumes_completion(
     assert Path(move["target"]).read_bytes() == raw
     saved = app._admin_pin_store().read(intent["operation_key"])
     assert saved["moving"] == intent["moving"] and saved["state"] == "APPLIED"
+    assert saved["source_snapshot"] == intent["source_snapshot"]
+    assert saved["target"] == intent["target"]
+    assert saved["operation_key"] == intent["operation_key"]
+    assert saved["operator"] == intent["operator"]
+    if worker:
+        _assert_worker_pin_zero(app, server, saved)
     effect = {"CA.PRECHECK_HOLD": "PHS2_PREFLIGHT_HOLD_QUARANTINED",
               "CA.PAIR_HANDOFF": "PHS2_PAIRED_PREFLIGHT_DEFERRED",
               "CA.TRAY_HOLD": "TRAY_PARKED",
               "CA.PAIR_RETRY": "PHS2_PAIRED_STALE_CURRENT_PRESERVATION_REQUESTED"}[action]
     assert audits.count(effect) == 1
     assert len([body for path, body in server.calls if path.endswith("/redemptions")
-                and body["operation_key"] == intent["operation_key"]]) == 1
+                and body["operation_key"] == intent["operation_key"]]) == (0 if worker else 1)
 
 
 @pytest.mark.parametrize("action", ("CA.PRECHECK_HOLD", "CA.PAIR_HANDOFF"))
