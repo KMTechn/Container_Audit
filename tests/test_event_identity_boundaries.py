@@ -31,10 +31,11 @@ class IdentitySites(ast.NodeVisitor):
 
 EVENT_SITES = {
     ('Container_Audit.py', '_audit_recovered_atomic_temps', '_log_event', 'PHS2_ATOMIC_TEMP_QUARANTINED', 1): 'new',
-    ('Container_Audit.py', '_quarantine_preflight_hold_for_supervisor', '_log_event', 'PHS2_PREFLIGHT_HOLD_QUARANTINED', 1): 'new',
-    ('Container_Audit.py', 'restore_quarantined_preflight_hold', '_log_event', 'PHS2_PREFLIGHT_HOLD_RESTORED', 1): 'new',
+    ('Container_Audit.py', '_quarantine_preflight_hold_steps', '_log_event', 'PHS2_PREFLIGHT_HOLD_QUARANTINED', 1): 'new',
+    ('Container_Audit.py', '_restore_quarantined_preflight_hold_steps', '_log_event', 'PHS2_PREFLIGHT_HOLD_RESTORED', 1): 'new',
     ('Container_Audit.py', '_selected_worker_identity', 'record_identity', '<dynamic>', 1): 'read',
     ('Container_Audit.py', '_worker_record_context', 'record_identity', '<dynamic>', 1): 'read',
+    ('Container_Audit.py', '_owns_worker_record', 'record_identity', '<dynamic>', 1): 'read',
     ('Container_Audit.py', 'change_worker', '_log_event', 'WORK_PAUSE', 1): 'new',
     ('Container_Audit.py', '_checkpoint_audit_event', '_worker_record_context', '<dynamic>', 1): 'bridge',
     ('Container_Audit.py', '_checkpoint_audit_event', '_prepare_event_log_entry', '<dynamic>', 1): 'bridge',
@@ -96,6 +97,7 @@ EVENT_SITES = {
     ('Container_Audit.py', '_process_barcode_steps', '_log_event', '<dynamic>', 5): 'new',
     ('Container_Audit.py', '_process_barcode_steps', '_log_event', 'SCAN_FAIL_FORMAT', 1): 'new',
     ('Container_Audit.py', '_process_barcode_steps', '_checkpoint_audit_event', 'SCAN_OK', 1): 'new',
+    ('Container_Audit.py', '_process_barcode_steps', '_checkpoint_audit_event', 'SCAN_OK', 2): 'new',
     ('Container_Audit.py', '_process_barcode_steps', '_project_stored_audit_event', '<dynamic>', 1): 'existing',
     ('Container_Audit.py', '_process_barcode_steps', '_log_event', 'SCAN_OK', 1): 'new',
     ('Container_Audit.py', '_completion_event_contract', '_worker_record_context', '<dynamic>', 1): 'new',
@@ -113,10 +115,15 @@ EVENT_SITES = {
     ('Container_Audit.py', '_log_event', '_write_event_log_entry', '<dynamic>', 1): 'bridge',
     ('Container_Audit.py', '_log_stored_event', '_log_event', '<dynamic>', 1): 'bridge',
     ('Container_Audit.py', '_write_event_log_entry', 'stage', '<dynamic>', 1): 'existing',
+    ('Container_Audit.py', '_event_log_writer', '_worker_record_context', '<dynamic>', 1): 'new',
+    ('Container_Audit.py', '_event_log_writer', '_prepare_event_log_entry', 'APP_CLOSE_DELAY', 1): 'new',
+    ('Container_Audit.py', '_recover_ui_lane_fault', '_log_event', 'UI_LANE_FAULT', 1): 'new',
+    ('Container_Audit.py', '_poll_app_stop_request.record', '_log_event', 'APP_STOP_DEFERRED', 1): 'new',
     ('Container_Audit.py', '_retry_precommand_operator_review_completion', '_log_event', 'TRANSFER_SEAL_PREFLIGHT_RETRY_REQUESTED', 1): 'new',
     ('Container_Audit.py', '_settle_short_completion_projection', '_log_stored_event', 'TRAY_COMPLETE', 1): 'existing',
-    ('Container_Audit.py', '_undo_short_confirmation.steps.cancel_projection', '_checkpoint_stored_audit_event', 'TRAY_COMPLETE', 1): 'existing',
-    ('Container_Audit.py', '_undo_short_confirmation.steps.cancel_projection', '_checkpoint_audit_event', 'TRAY_SHORT_CONFIRMATION_UNDONE', 1): 'new',
+    # M125 P4/P6: confirmed shortages release immediately; there is no undo event.
+    # Keep saved-identity replay coverage at the durable held-scan resume boundary.
+    ('Container_Audit.py', '_resume_operation_lease_held_scans.steps', '_project_stored_audit_event', '<dynamic>', 1): 'existing',
     ('Container_Audit.py', '_scanonly_completion_context', 'record_identity', '<dynamic>', 1): 'read',
     ('Container_Audit.py', '_scanonly_completion_context', '_worker_record_context', '<dynamic>', 1): 'new',
     ('Container_Audit.py', '_schedule_scanonly_transport.transport_work', '_log_stored_event', 'PRODUCT_EXCHANGE_COMPLETED', 1): 'existing',
@@ -241,7 +248,7 @@ def test_each_saved_identity_operand_survives_signal_flip(site, enabled, flow, w
         event.pop('worker_record')
         contract = {}
     bindings = {name: contract for name in ('contract', 'undo_attempt', 'reset_attempt', 'context', 'attempt')}
-    bindings.update(event=event, held_audit=event, head=SimpleNamespace(audit_event=event),
+    bindings.update(event=event, held_audit=event, item={'audit_event': event}, head=SimpleNamespace(audit_event=event),
                     row={'intent_id': 'identity-site'}, payload={'worker_record': record if enabled is not None else {}},
                     coordinator=SimpleNamespace(store=SimpleNamespace(scan_exchange_context=lambda _: contract)))
     call = identity_sites()[site]
@@ -293,6 +300,8 @@ def test_legacy_completion_contract_retry_does_not_invent_identity(flow, windows
         return result
     monkeypatch.setattr(app, '_completion_event_contract', capture)
     public_scan(app, ITEM + '-SERIAL-001')
+    public_scan(app, COMPACT_QR + '|QT=3')
+    # M125 P2/P3: the first repeat asks; the second repeat confirms submission.
     public_scan(app, COMPACT_QR + '|QT=3')
     assert captures
     kwargs, contract = captures[-1]

@@ -2310,8 +2310,11 @@ class ContainerAudit:
             for row in intents:
                 (yield lambda: pin_store.write(dict(row, restoration={"state": "RESTORING", "source": str(path),
                                                         "hold_sha256": digest})))
-            restored = store.load() if resuming_restore else (yield lambda: store.restore_quarantined(filepath))
-        except (OSError, PreflightHoldError) as exc:
+            restored = store.load() if resuming_restore else (yield lambda: store.restore_quarantined(
+                filepath, expected_sha256=digest,
+                move=lambda source, target, expected: self._admin_pin_move(
+                    restore_approval, source, target, expected)))
+        except (OSError, PreflightHoldError, PinnedMoveError) as exc:
             self._set_preflight_scan_input_locked(
                 self._preflight_context_blocks_mutation()
             )
@@ -9432,6 +9435,22 @@ class ContainerAudit:
                         {"operation_key": intent["operation_key"]},
                         self._admin_pin_recovered_effect):
                     self._admin_pin_release_completed_work(intent, startup=startup)
+            elif (intent.get("authorization_mode") == "WORKER"
+                    and intent.get("state") == "CONSUMED"):
+                base = self._authorize_blocked_work_supervisor()
+                if (base is None or (base["role"] == "WORKER"
+                        and persistent_operator_name(base["operator"])
+                        != persistent_operator_name(intent.get("operator_raw") or ""))):
+                    continue
+                intent = self._admin_pin_record_resumer(intent)
+                if not self._admin_pin_check_moves(intent):
+                    continue
+                if ((self._admin_pin_recovered_effect(intent)
+                        or self._admin_pin_resume_intermediate(intent))
+                        and self._admin_pin_complete(
+                            {"operation_key": intent["operation_key"]},
+                            self._admin_pin_recovered_effect)):
+                    self._admin_pin_release_completed_work(intent, startup=startup)
             elif intent.get("state") in {"UNVERIFIED_DETACHING", "UNVERIFIED_OPERATOR_HOLD"}:
                 self._admin_pin_finish_unverified_detachment(intent, startup=startup)
 
@@ -10102,6 +10121,8 @@ class ContainerAudit:
                     continue
                 intent = yield lambda: self._admin_pin_record_resumer(intent)
                 if intent.get("state") not in {"CONSUMED", "APPLIED"}:
+                    continue
+                if not (yield lambda: self._admin_pin_check_moves(intent)):
                     continue
                 complete = yield lambda: self._admin_pin_recovered_effect(intent)
                 if not complete:

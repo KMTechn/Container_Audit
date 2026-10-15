@@ -684,7 +684,7 @@ def test_preflight_failure_preserves_held_fifo_until_same_master_retry(
         f"회사 서버 조회 실패 · 보류 {len(failed.items)}건 (삭제되지 않음)"
     )
     assert app.current_item_label["foreground"] == app.COLOR_DANGER
-    assert app.warnings and app.warnings[-1][0] == "중앙 PHS=2 확인 실패"
+    assert app.warnings and app.warnings[-1][0] == "현품표 확인 실패\n코드: PHS=2"
     assert _offline_retry_job(app.root) is None
 
     client.error = None
@@ -765,8 +765,8 @@ def test_offline_preflight_keeps_scanning_and_auto_retry_drains_with_scan_rules(
     assert app.current_tray.master_label_code == ""
     assert app.current_item_label["text"].startswith("서버 연결 끊김")
     outage_notice = app.statuses[-1][0]
-    assert "서버 연결 끊김" in outage_notice
-    assert "계속 스캔" in outage_notice
+    assert "회사 서버와 연결이 끊겼습니다" in outage_notice
+    assert "제품은 계속 스캔하세요" in outage_notice
     assert "자동" in outage_notice
     assert "관리자 인증" not in outage_notice
     assert error.__class__.__name__ not in outage_notice
@@ -835,7 +835,7 @@ def test_offline_preflight_keeps_scanning_and_auto_retry_drains_with_scan_rules(
     for (_title, message), barcode in zip(shown, (first, wrong_item, over_quantity)):
         assert f"바코드: {barcode}" in message
     assert "한 개만" in shown[0][1]
-    assert all("상자에서 빼세요" in message for _title, message in shown[1:])
+    assert all("트레이에서 빼세요" in message for _title, message in shown[1:])
     assert _offline_retry_job(app.root) is None
 
 
@@ -895,7 +895,7 @@ def test_label_already_in_a_hold_is_durably_rejected_and_drain_continues(tmp_pat
     # A format rejection never echoes the raw input; the hold order names it.
     assert f"보류 {label.sequence}번째 스캔" in message
     assert "LBL-COMPACT-002" not in message
-    assert "상자에 있으면 빼세요" in message
+    assert "트레이에 있으면 빼세요" in message
 
 
 def test_stale_preflight_result_settles_to_failed_hold_without_clearing_fifo(
@@ -1299,7 +1299,7 @@ def test_compact_phs2_network_failure_never_starts_sixty_piece_fallback(tmp_path
     assert app.current_tray.master_label_code == ""
     assert app.current_tray.tray_size == app.TRAY_SIZE
     assert app.warnings == []
-    assert "서버 연결 끊김" in app.statuses[-1][0]
+    assert "회사 서버와 연결이 끊겼습니다" in app.statuses[-1][0]
     assert "PHS2_PREFLIGHT_UNAVAILABLE" not in app.statuses[-1][0]
     assert app.events[-1][0] == "MASTER_LABEL_PREFLIGHT_FAILED"
     assert app.events[-1][1]["error_code"] == "PHS2_PREFLIGHT_UNAVAILABLE"
@@ -1418,7 +1418,7 @@ def test_legacy_or_noncompact_phs2_is_rejected_before_network_or_qt_fallback(
     assert app.warnings
     assert expected_code not in app.warnings[-1][1]
     assert app.warnings[-1][1] == (
-        "현품표 정보를 읽지 못했습니다. 현품표를 확인한 뒤 다시 스캔하세요."
+        "현품표 정보를 읽지 못했습니다.\n현품표를 확인한 뒤 다시 스캔하세요."
     )
 
 
@@ -1590,7 +1590,7 @@ def test_offline_queue_next_label_preserves_original_bytes_and_audit(tmp_path, m
     assert sum(row["event"] == "PHS2_PREFLIGHT_HOLD_QUARANTINED" for row in audit_rows) == 1
     assert [row["scan_payload"] for row in client.identities] == [COMPACT_QR, OTHER_LABEL]
     assert "대기 1개" in app.current_item_label["text"]
-    assert any("연결되면 그 현품표를 다시 스캔" in status[0] for status in app.statuses)
+    assert any("연결되면 대기 현품표를 다시 스캔하세요" in status[0] for status in app.statuses)
 
 
 @pytest.mark.parametrize("before_snapshot", [False, True])

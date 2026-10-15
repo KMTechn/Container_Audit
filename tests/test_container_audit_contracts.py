@@ -3839,10 +3839,9 @@ def test_app_load_session_state_warns_and_keeps_readable_records(
     assert app.status_messages == [], "읽기 오류에 성공 문구를 표시하면 안 됩니다."
     assert warnings == [(
         ("작업 현황 확인 필요",
-         "금일 작업 현황을 모두 확인하지 못했습니다.\n"
-         "작업 기록 읽기 오류: 1건\n"
-         "표시된 수량에 누락이 있을 수 있습니다.\n"
-         "관리자에게 작업 기록 확인을 요청해 주세요."),
+         "작업 현황에 누락이 있을 수 있습니다\n"
+         "현장 관리자에게 알리세요\n"
+         "자세히: 작업 기록 읽기 오류 1건"),
         {"parent": app.root},
     )]
     assert str(bad_path) in capsys.readouterr().out
@@ -3888,7 +3887,7 @@ def test_app_load_session_state_distinguishes_empty_from_folder_error(
         assert capsys.readouterr().out == ""
     else:
         assert len(warnings) == 1
-        assert "작업 기록 읽기 오류: 1건" in warnings[0][0][1]
+        assert "자세히: 작업 기록 읽기 오류 1건" in warnings[0][0][1]
         assert str(folder) not in warnings[0][0][1]
         assert "internal" not in warnings[0][0][1]
         assert str(folder) in capsys.readouterr().out
@@ -8320,7 +8319,7 @@ def test_park_current_tray_does_not_overwrite_existing_qr_parked_file(tmp_path, 
     assert app.current_tray.master_label_code == label
     assert app.current_tray.scanned_barcodes == ["NEW-BC"]
     assert errors
-    assert errors[0][1] == "작업을 보류하지 못했습니다. 현재 작업을 유지하고 관리자에게 문의하세요."
+    assert errors[0][1] == "작업을 보류하지 못했습니다.\n현재 작업을 유지하고 현장 관리자에게 알리세요."
     assert "작업 보류 중 오류" not in errors[0][1]
     assert "parked tray already exists for master label" in capsys.readouterr().out
 
@@ -8530,9 +8529,9 @@ def test_restore_parked_tray_preserves_outbox_when_restore_audit_log_fails(tmp_p
     assert errors == [
         (
             "보류 작업 복구 기록 대기",
-            "복원 상태와 감사 outbox는 안전하게 저장했지만 event 투영 또는 "
-            "source 정리를 끝내지 못했습니다. 다시 로그인해 동일 operation을 "
-            "복구하고 계속되면 관리자에게 문의하세요.",
+            "보류 작업은 저장했지만 복구를 마치지 못했습니다\n"
+            "다시 로그인하세요. 또 안 되면 현장 관리자에게 알리세요\n"
+            "코드: outbox · event · source · operation",
         )
     ]
 
