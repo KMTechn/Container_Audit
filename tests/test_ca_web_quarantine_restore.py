@@ -3,6 +3,7 @@ import hashlib
 import json
 import threading
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -45,6 +46,7 @@ def restore_case(monkeypatch, tmp_path):
     processor.install()
     case = SimpleNamespace()
     case.app, case.server, case.audits = app, server, audits
+    case.label = label
     case.original, case.held, case.original_bytes = original, held, original_bytes
     case.root, case.processor, case.pin, case.threads = root, processor, pin, threads
     try:
@@ -93,6 +95,7 @@ def test_web_confirmation_gets_a_separate_pin_and_restores_exact_bytes(restore_c
     assert case.processor._credentials is None
     _settle(case)
     assert case.original.read_bytes() == case.original_bytes and not case.held.exists()
+    assert not case.app._paired_preflight_blocks_label(case.label)
     assert [path.rsplit("/", 1)[-1] for path, _ in case.server.calls] == ["verifications", "redemptions"]
     assert set(case.threads) == {case.app._ui_lane.worker_thread_id}
     assert case.processor.sheet is None
@@ -104,6 +107,48 @@ def test_web_confirmation_gets_a_separate_pin_and_restores_exact_bytes(restore_c
     before = len(case.server.calls)
     assert not case.processor.admin("list_paired", _credentials(case, target=target))["ok"]
     assert len(case.server.calls) == before
+
+
+@pytest.mark.parametrize("timing", ("restore", "rename"))
+def test_web_restore_rejects_changed_bytes_at_the_move_boundary(restore_case, monkeypatch, timing):
+    from preflight_scan_hold import PreflightScanHoldStore
+
+    case = restore_case
+    target = _confirm(case)
+    payload = json.loads(case.original_bytes)
+    payload["scan_epoch"] += 1
+    changed = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    restore = PreflightScanHoldStore.restore_quarantined
+
+    injected = []
+
+    def change():
+        assert case.server.consumed
+        case.held.write_bytes(changed)
+        injected.append(True)
+
+    if timing == "restore":
+        def change_before_move(store, path, *args, **kwargs):
+            change()
+            return restore(store, path, *args, **kwargs)
+
+        monkeypatch.setattr(PreflightScanHoldStore, "restore_quarantined", change_before_move)
+    else:
+        rename = Path.rename
+
+        def change_before_rename(path, target):
+            if path == case.held:
+                change()
+            return rename(path, target)
+
+        monkeypatch.setattr(Path, "rename", change_before_rename)
+
+    assert case.processor.admin("list_paired", _credentials(case, target=target))["ok"]
+    _settle(case)
+    assert injected == [True]
+    assert not case.original.exists()
+    assert case.held.read_bytes() == changed
+    assert case.app._paired_preflight_blocks_label(case.label)
 
 
 @pytest.mark.parametrize("credential", ["missing", "wrong"])
@@ -154,18 +199,19 @@ def test_web_consumed_restore_resumes_the_same_request_without_another_pin(resto
     restore = PreflightScanHoldStore.restore_quarantined
     stopped = []
 
-    def interrupted(store, path):
+    def interrupted(store, path, *args, **kwargs):
         if not stopped:
             stopped.append(True)
             if after_move:
-                restore(store, path)
+                restore(store, path, *args, **kwargs)
             raise OSError("injected interruption after PIN consumption")
-        return restore(store, path)
+        return restore(store, path, *args, **kwargs)
 
     monkeypatch.setattr(PreflightScanHoldStore, "restore_quarantined", interrupted)
     case.processor.admin("list_paired", _credentials(case, target=target))
     _settle(case)
     assert case.server.consumed
+    assert case.app._paired_preflight_blocks_label(case.label)
     preserved = case.original if after_move else case.held
     assert preserved.read_bytes() == case.original_bytes
     intent = next(row for row in case.app._admin_pin_store().list_pending()
@@ -183,5 +229,6 @@ def test_web_consumed_restore_resumes_the_same_request_without_another_pin(resto
     saved = case.app._admin_pin_store().read(operation_key)
     assert saved["state"] == "APPLIED"
     assert case.original.read_bytes() == case.original_bytes and not case.held.exists()
+    assert not case.app._paired_preflight_blocks_label(case.label)
     assert sum(path.endswith("/verifications") for path, _ in case.server.calls) == 1
     assert sum(path.endswith("/redemptions") for path, _ in case.server.calls) == 1

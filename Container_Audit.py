@@ -2322,8 +2322,11 @@ class ContainerAudit:
             for row in intents:
                 (yield lambda: pin_store.write(dict(row, restoration={"state": "RESTORING", "source": str(path),
                                                         "hold_sha256": digest})))
-            restored = store.load() if resuming_restore else (yield lambda: store.restore_quarantined(filepath))
-        except (OSError, PreflightHoldError) as exc:
+            restored = store.load() if resuming_restore else (yield lambda: store.restore_quarantined(
+                filepath, expected_sha256=digest,
+                move=lambda source, target, expected: self._admin_pin_move(
+                    restore_approval, source, target, expected)))
+        except (OSError, PreflightHoldError, PinnedMoveError) as exc:
             self._set_preflight_scan_input_locked(
                 self._preflight_context_blocks_mutation()
             )

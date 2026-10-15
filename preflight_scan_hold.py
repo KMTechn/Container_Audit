@@ -467,6 +467,9 @@ class PreflightScanHoldStore:
     def restore_quarantined(
         self,
         quarantined_path: str | os.PathLike[str],
+        *,
+        expected_sha256: str | None = None,
+        move=None,
     ) -> PreflightHoldSnapshot:
         from atomic_replace import atomic_replace
         with self._lock:
@@ -474,7 +477,11 @@ class PreflightScanHoldStore:
             snapshot = self.load_path(source)
             snapshot_hash = self.snapshot_hash(snapshot)
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            if self.exists():
+            if expected_sha256 is not None:
+                if move is None:
+                    raise PreflightHoldError("PIN move journal is required")
+                move(source, self.path, expected_sha256)
+            elif self.exists():
                 existing = self.load()
                 if self.snapshot_hash(existing) != snapshot_hash:
                     raise PreflightHoldConflict(
