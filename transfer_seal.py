@@ -1690,6 +1690,7 @@ class TransferSealCoordinator:
         item_id: str,
         scanned_barcodes: list[str],
         short_confirmed: bool = False,
+        allow_expired_completion: bool = False,
     ) -> tuple[dict[str, Any], TransferSourcePreflight]:
         manager = self.operation_lease_manager
         if manager is None or self.client is None:
@@ -1732,6 +1733,9 @@ class TransferSealCoordinator:
                 lease_id,
                 expected=binding,
                 now=verification_time,
+                # Only a durable completion's bound command may ask the server
+                # to resume its original lease. Preparation still rejects expiry.
+                allow_expired=allow_expired_completion and prior_completion is not None,
             )
             source = snapshot.get("work_group_source")
             if not isinstance(source, Mapping):
@@ -2425,6 +2429,7 @@ class TransferSealCoordinator:
             item_id=str(row["item_id"]),
             scanned_barcodes=list(json.loads(row["scanned_barcodes_json"])),
             short_confirmed=bool((context.get("payload") or {}).get("short_confirmed")),
+            allow_expired_completion=True,
         )
         assert self.operation_lease_manager is not None
         artifact = self.operation_lease_manager.store.artifact(lease_id)

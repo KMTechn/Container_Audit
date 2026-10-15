@@ -897,7 +897,10 @@ class TransferSealStore:
         terminal_client_error = (
             400 <= error.status_code < 500
             and error.status_code != 404
-            and not error.retryable
+            and (
+                not error.retryable
+                or error.code == "OPERATION_LEASE_MACHINE_SCOPE_FORBIDDEN"
+            )
         )
         local_contract_error = (
             error.code.upper().startswith("PHS2_")
