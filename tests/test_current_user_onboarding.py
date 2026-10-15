@@ -23,6 +23,21 @@ from direct_sync_push import manifest_hash
 from tools import register_container_audit_worker_pc as registration
 from tests.lifecycle_children import owned_relay
 
+
+@pytest.fixture(autouse=True)
+def _isolate_onboarding_control_root(isolate_product_state, tmp_path, monkeypatch):
+    """Keep iwrun's fixed writer root from sharing generation markers across tests."""
+    import writer_session_fence as fence
+
+    if getattr(fence, "__kmtech_test_ca_writer_isolated__", False):
+        import data_generation_guard as generation_guard
+
+        root = tmp_path / "onboarding-control"
+        canonical_root = lambda environ=None: root
+        monkeypatch.setattr(fence, "canonical_control_root", canonical_root)
+        monkeypatch.setattr(generation_guard, "canonical_control_root", canonical_root)
+        monkeypatch.setenv("KMTECH_TEST_CA_WRITER_ROOT", str(root))
+
 TEST_POSSESSION_FINGERPRINT = "EIEjk1nsv9vwrOp-3GrBvZz2WZPvy48vdViRVd6Llvg"
 TEST_INSTALL_ID = "container-audit-install-1"
 TEST_SOURCE_HOST_ID = registration.derive_install_bound_identity_id(

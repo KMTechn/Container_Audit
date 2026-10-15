@@ -348,6 +348,8 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 <a id="ca-startup-update"></a>
 ## 로그온 자동 갱신 운영
 
+스케줄러가 SYSTEM 이름/동의어 또는 boolean 숫자 표현을 반환해도 같은 소유 작업으로 확인한다. SID 해석 실패·빈 주체·사용자/그룹 주체·다른 RunLevel/action은 기존 복구 거절을 유지한다. 실제 작업 등록과 원본 XML 복원은 변경하지 않는다.
+
 PowerShell 관측·ACL·고정 helper·새 SYSTEM 로그온 action은 자식 인수에 `-ExecutionPolicy Bypass`를 명시한다. 관리자 기계 배치·작업자 준비의 기존/배치된 코드 무결성 확인과 지원 제거 자식에도 적용한다. OS·레지스트리·GPO 정책은 변경하지 않는다. 작업 관측·설치·제거는 정확한 이전 무정책 action과 새 action만 인정하며 원본 복원 XML을 보존한다. GPO 강제 및 실제 현장 실행은 별도 수용 항목이다.
 
 첫 실행은 자료·원장·자동 시작 준비의 writer admission을 끝낸 뒤 relay를 시작한다. 시작 결과 확인 뒤 admission을 다시 얻어 시도·소유 자료를 재확인하고 환경과 READY 보고를 적용한다. UNKNOWN·실패·canonical 연기의 판정은 유지한다.
@@ -366,7 +368,10 @@ READY 실패 뒤 `update-control/transition.json`의 `retained_candidate=true`�
 확인한다. 판정 불가에서는 candidate도 기존 guard가 UNKNOWN으로 중단하며 기동을
 보장하지 않는다. 다음 시도에도 같은 고정 지원 복구 안내를 내고 자료와 판정 기록을
 보존한다. 임의 옛 판 복귀·marker 삭제·자료 복원으로 우회하지 않는다.
-세대가 변하지 않았고 옛 판이 허용된 경우만 이미 확인된 옛 판으로 `ROLLED_BACK` 복귀한다.
+세대가 변하지 않았고 옛 판이 허용된 경우만 옛 포인터를 복원하고 `ROLLBACK_PENDING_READY`로 기다린다.
+복원 판의 새 일반 사용자 GUI/relay READY를 실제 프로세스와 대조한 뒤에만 `ROLLED_BACK`과 confirmed_at을 기록한다.
+재시작·다른 감독도 기존 rollback_at 기준 120초 창을 이어 가며, 완료 전이와 후보 실패 목록·옛 포인터·자료는 보존한다.
+READY 부재·위조·다른 사용자/판·단순 생존은 완료 증거가 아니며, 시간 초과에는 기존 FAILED/지원 복구 정책을 유지한다.
 GUI와 relay는 같은 판정 함수를 사용한다.
 이전 실행이 남긴 업데이트 확인을 이어받으면 자료가 그대로일 때 정상 새 판도 이전 판으로 돌아갈 수 있다. 자동 갱신이 켜져 있으면 다음 시작 때 새 판을 감독하며 다시 적용한다.
 10/14 이후에는 PC마다 실제로 실행 중인 판을 확인한다.

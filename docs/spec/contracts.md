@@ -269,9 +269,14 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 <a id="ca-startup-update"></a>
 ## 로그온 자동 갱신 계약
 
+작업 되읽기는 SYSTEM 계정 이름을 Windows SID `S-1-5-18`로 해석하고 XML boolean의 `true/false`(대소문자 무관)·`1/0`을 같은 값으로 비교한다. Python과 PowerShell lifecycle 소비자는 같은 판정을 사용하며, 다른 주체·실행 수준·작업 명령은 거절한다.
+
 `auto_update.py`의 프로토콜 1은 `PREPARED → APPLIED_PENDING_READY → CONFIRMED`와
-실패 시 `ROLLBACK_PENDING → ROLLED_BACK`을 기록한다. 복귀 대상은 이미 확인된 이전
-판이므로 READY 재시험을 요구하지 않는다(기존 ROLLBACK_PENDING_READY도 정착 가능).
+실패 시 `ROLLBACK_PENDING → ROLLBACK_PENDING_READY → ROLLED_BACK`을 기록한다.
+이전 판 포인터를 복원한 뒤에도 새 일반 사용자 GUI/relay의 같은 SHA·nonce·거래·시각과
+실제 프로세스 대조를 통과한 READY가 있어야 confirmed_at과 ROLLED_BACK을 기록한다.
+기존 protocol 1의 phase/필드만 사용하며, 중단 뒤에는 같은 nonce·rollback_at 창을 이어 간다.
+기존 120초 안에 준비되지 않으면 완료를 쓰지 않고 기존 FAILED/지원 복구 정책을 유지한다.
 시험 기동 실패는 정상 writer 종료 뒤 실제 공통 SID 자료 세대를 다시 읽어 판정한다.
 PREPARED의 before와 같고 옛 판 guard가 ALLOW일 때만 복귀한다. candidate 세대가
 기록됐거나 before/after가 미확인이면 candidate를 유지하고 DEFERRED에

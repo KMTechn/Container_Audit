@@ -581,6 +581,7 @@ def test_enrollment_transport_ignores_environment_ca_and_passes_explicit_verify(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="CurrentUser DPAPI is Windows-only")
+@pytest.mark.skipif("IWRUN_CONFIG" in os.environ, reason="Native DPAPI access is excluded on the headless host")
 def test_worker_pc_registration_current_user_dpapi_roundtrip():
     protected = registration._dpapi_protect_current_user("PRODUCER-USER-SECRET")
 
