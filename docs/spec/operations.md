@@ -1655,6 +1655,7 @@ Registration retains string profile-path arguments after shared resolution. Inva
 onboarding/removal/lifecycle의 사용자 경로와 update-control에는 작업 사용자·관리자만 읽는다는 기존 ACL 증명이 없다. 공개 실패 줄은 `REPORT_UNAVAILABLE`을 표시하고 원문을 새 파일에 쓰지 않는다. 혼합 상태 보고서는 같은 키·타입을 유지하며 자유 진단 필드만 `SUPPORT_FAILURE`로 저장한다. 실패 보고서와 공개 줄은 원인 예외의 형식 이름과 가장 안쪽 앱 프레임의 모듈·함수·줄 번호를 보존한다. 원인 예외에 traceback이 없으면 바깥 예외의 앱 프레임을 사용하며, 예외 문장·지역 변수·파일 경로는 위치 필드에 넣지 않는다. 보고서 게시 실패에도 공개 줄의 위치 정보는 유지한다. identity/profile/credential/receipt/queue/lease/status와 설치기 인증·재개 bindings는 원 값을 보존한다. 알려진 비밀 값이 machine metadata에 섞이면 기존 공통 검사로 temp를 열기 전에 거절한다. preflight는 진단 보고서를 만들려고 자료를 변경하지 않는다.
 
 설치기 private evidence는 기존 `Initialize-InstallationEvidence`/`Set-InstallationEvidenceAcl`의 보호 root를 같은 프로세스와 같은 시도에서 재사용한다. 원문은 공통 가림과 UTF-8 64 KiB 상한 뒤 임시 파일에 쓰고 flush·기존 ACL 검증·원자 이름 변경·실제 바이트 SHA256 readback을 마친다. 해당 writer가 만든 객체와 같은 참조일 때만 공개 `report_path`/`report_sha256`을 포함한다. caller가 예외 Data에 넣은 경로·옛 참조·게시 실패에는 `REPORT_UNAVAILABLE`을 표시한다. 새 ACL 위치나 새 ACL 증명 함수는 만들지 않는다.
+진단 게시 경로는 같은 프로세스·같은 설치 시도의 기존 보호 installation-evidence root에 결속하며, 공개 참조는 그 root에서 게시·되읽기한 바이트만 가리킨다.
 
 보호 진단 JSON의 65,536바이트 상한은 이스케이프·필수 필드·writer가 덧붙이는 LF까지 포함한 최종 UTF-8 저장 바이트로 판정한다. Python `serialize_json_for_sink`와 PowerShell `Write-InstallationOriginalFailure`/private `ConvertTo-CanonicalAuditJson`은 직렬화 크기를 확인하며 진단 문자열만 더 줄여 유효 JSON·앞뒤 원인 맥락·잘림 표식을 유지한다. 상태·인증 metadata는 이 진단 상한의 대상이 아니며 원 바이트와 비밀 검사를 유지한다. onboarding의 replace/create-new 실패 보고서는 원 예외 대신 기존 `SUPPORT_FAILURE` 코드와 원 metadata를 기록한다.
 
