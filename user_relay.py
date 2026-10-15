@@ -528,8 +528,13 @@ def request_user_relay_stop(
     publication_deadline: float | None = None,
     request_id: str | None = None,
 ) -> dict[str, Any]:
-    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
-    write_deadline = deadline if publication_deadline is None else min(time.monotonic() + 1.5, publication_deadline)
+    timeout_seconds = max(0.0, float(timeout_seconds))
+    deadline = time.monotonic() + timeout_seconds
+    # A zero timeout requests publication without waiting for the relay to exit.
+    if publication_deadline is None:
+        write_deadline = deadline if timeout_seconds > 0 else time.monotonic() + 1.5
+    else:
+        write_deadline = min(time.monotonic() + 1.5, publication_deadline)
     root = Path(direct_sync_root).expanduser().resolve()
     stop_path = user_relay_stop_path(root)
     request_id = uuid.uuid4().hex if request_id is None else request_id
@@ -710,7 +715,8 @@ def request_app_stop(
     wait: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     root = Path(direct_sync_root).expanduser().resolve()
-    deadline = time.monotonic() + min(150.0, max(0.0, float(timeout_seconds)))
+    timeout_seconds = min(150.0, max(0.0, float(timeout_seconds)))
+    deadline = time.monotonic() + timeout_seconds
     tracker = AppProcessTracker(app_root or Path(__file__).resolve().parent,
                                 data_root or root, own_pid=os.getpid())
     # Capture the live parent chain before either stop marker can be consumed.
@@ -719,14 +725,16 @@ def request_app_stop(
         initial_observable = True
     except (OSError, ValueError, TypeError, KeyError):
         initial_observable = False
+    # Start the request-only publication budget after the initial observation.
+    publication_deadline = deadline if timeout_seconds > 0 else time.monotonic() + 1.5
     request_id = uuid.uuid4().hex
     path = app_stop_path(root)
     _write_json_atomic(path, {
         "schema_version": APP_STOP_SCHEMA,
         "request_id": request_id,
         "requested_at": datetime.now(timezone.utc).isoformat(),
-    }, deadline=deadline)
-    relay = request_user_relay_stop(root, timeout_seconds=0, publication_deadline=deadline)
+    }, deadline=publication_deadline)
+    relay = request_user_relay_stop(root, timeout_seconds=0, publication_deadline=publication_deadline)
     result = {
         "status": "REQUESTED",
         "request_id": request_id,

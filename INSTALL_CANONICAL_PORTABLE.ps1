@@ -4445,7 +4445,14 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
     }
     $workerPreparation=$null
     # User paths and HKCU are prepared by the ordinary interactive worker first run.
-    if ($PlanOnly) { Write-Output 'install_status=PLAN_ONLY'; return }
+    if ($PlanOnly) {
+        # Validate the caller's scope without preparing user data or HKCU.
+        if ([bool]$Worker.same_caller -and -not $Uninstall -and -not $RestoreVerifiedReplacement) {
+            [void](Get-CanonicalWorkerPreparationPaths $Worker)
+        }
+        Write-Output 'install_status=PLAN_ONLY'
+        return
+    }
     $Script:ContainerMachineInstallControlRoot=$control
     $Script:ContainerWriterFenceAdmissionProductionRoot=$control
     $Script:CanonicalWriterFenceDelegationToken=[Guid]::NewGuid().ToString('N')+[Guid]::NewGuid().ToString('N')
