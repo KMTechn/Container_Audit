@@ -8,19 +8,42 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("engine", ("powershell", "pwsh"))
-@pytest.mark.parametrize("case", ("normal", "absent", "foreign_sid", "other_session", "elevated", "reused_pid", "other_writer", "stop_failed"))
+@pytest.mark.parametrize("case", ("normal", "absent", "foreign_sid", "other_session", "elevated", "reused_pid", "other_writer", "stop_failed", "caller-integrity", "relay-integrity", "relay-elevated", "session-zero", "missing-caller-level", "missing-relay-level"))
 def test_installer_ordinary_relay_stop_boundary(tmp_path, engine, case):
     result = run_functions(tmp_path, ROOT / "INSTALL_CANONICAL_PORTABLE.ps1", [
-        "Stop-CanonicalInstallerRelayPreimage",
+        "Stop-CanonicalInstallerRelayPreimage", "Test-CanonicalOrdinaryRelaySecurity",
+        "Read-CanonicalInstallerOwnedStopMarker", "Full", "Same", "Sha",
     ], r'''
 Set-StrictMode -Version Latest
+Initialize-BootstrapRelaySecurity
+$Script:CanonicalWriterFenceTransactionId='1234567890abcdef1234567890abcdef'
+. (Join-Path (Split-Path -Parent $env:CA_CONTRACT_SOURCE) 'tools/container_writer_fence.ps1')
+if($env:CA_STOP_FIELD_MUTATION -ceq '1'){
+ $body=(Get-Command Test-CanonicalOrdinaryRelaySecurity).ScriptBlock.ToString().Replace('integrity_level','integrity_rid')
+ Set-Item -LiteralPath Function:Test-CanonicalOrdinaryRelaySecurity -Value ([scriptblock]::Create($body))
+}
 $script:called=0;$script:events=[Collections.Generic.List[object]]::new()
 $script:CanonicalInstallerRelayStopAttempted=$false
 $script:process=[pscustomobject]@{ProcessId=4001;CreationDate=[DateTime]'2026-10-15T01:00:00Z';ExecutablePath='X:\current\runtime\pythonw.exe';CommandLine='relay'}
 $expected=[pscustomobject]@{ProcessId=4001;CreationDate=$script:process.CreationDate;ExecutablePath=$script:process.ExecutablePath;CommandLine='relay'}
-$script:caller=[pscustomobject]@{sid='S-1-5-21-1-2-3-1001';session_id=1;elevated=$false;integrity_rid=8192}
-$script:security=[pscustomobject]@{sid=$script:caller.sid;session_id=1;elevated=$false;integrity_rid=8192}
+$script:caller=[KMTechBootstrapRelaySecurity+Security]::new()
+$script:caller.sid='S-1-5-21-1-2-3-1001'
+$script:caller.session_id=1
+$script:caller.elevated=$false
+$script:caller.integrity_level=8192
+$script:security=[KMTechBootstrapRelaySecurity+Security]::new()
+$script:security.sid=$script:caller.sid
+$script:security.session_id=1
+$script:security.elevated=$false
+$script:security.integrity_level=8192
+$subjectSid=$script:caller.sid
 switch($env:CA_STOP_CASE){
+ 'caller-integrity' {$script:caller.integrity_level=12288}
+ 'relay-integrity' {$script:security.integrity_level=4096}
+ 'relay-elevated' {$script:security.elevated=$true}
+ 'session-zero' {$script:caller.session_id=0}
+ 'missing-caller-level' {$script:caller=[pscustomobject]@{sid=$subjectSid;session_id=4;elevated=$false}}
+ 'missing-relay-level' {$script:security=[pscustomobject]@{sid=$subjectSid;session_id=4;elevated=$false}}
  'foreign_sid' {$script:security.sid='S-1-5-21-1-2-3-1002'}
  'other_session' {$script:security.session_id=2}
  'elevated' {$script:caller.elevated=$true}
@@ -43,6 +66,9 @@ function Get-BootstrapStringSha256($text){
 function Invoke-InstallationEvidenceChild($name,$exe,$arguments){
  if($script:events.Count -ne 1 -or $script:events[0].event -cne 'INSTALLER_RELAY_PREIMAGE'){throw 'preimage order differs'}
  if($arguments[0] -cne '-I' -or $arguments[1] -cne '-B' -or $arguments[2] -cne '-c' -or $arguments[-1] -cne $script:state){throw 'stop command differs'}
+ $marker=Join-Path $script:state 'control/container_audit_user_relay.stop.json'
+ [void][IO.Directory]::CreateDirectory((Split-Path -Parent $marker))
+ [IO.File]::WriteAllText($marker,(@{schema_version='container-audit-user-relay-stop-v1';request_id=[string]$arguments[6]}|ConvertTo-Json -Compress))
  $script:called++
  return [pscustomobject]@{ExitCode=if($env:CA_STOP_CASE -eq 'stop_failed'){4}else{0};EvidenceFailure=$null;Stdout='installer_relay_stop=ABSENT'}
 }
@@ -52,7 +78,7 @@ $script:state=Join-Path $env:CA_CONTRACT_ROOT 'state'
 $code=Join-Path $env:CA_CONTRACT_ROOT 'packet'
 $current=Join-Path $env:CA_CONTRACT_ROOT 'current'
 $refused=$false;$proof=$null
-try{$proof=Stop-CanonicalInstallerRelayPreimage $rows $script:state $code $current $script:caller.sid @{exists=$true}}catch{$refused=$true}
+try{$proof=Stop-CanonicalInstallerRelayPreimage $rows $script:state $code $current $subjectSid @{exists=$true}}catch{$refused=$true}
 if($env:CA_STOP_CASE -in @('normal','absent')){
  if($refused -or $proof.status -cne 'ABSENT'){throw 'ordinary stop failed'}
  if($script:called -ne [int]($env:CA_STOP_CASE -eq 'normal')){throw 'stop count differs'}
@@ -61,7 +87,7 @@ if($env:CA_STOP_CASE -in @('normal','absent')){
  if($script:called -ne [int]($env:CA_STOP_CASE -eq 'stop_failed')){throw 'unsafe child started'}
 }
 'PASS'
-''', engine=engine, values={"CA_STOP_CASE": case})
+''', engine=engine, values={"CA_STOP_CASE": case, "CA_STOP_FIELD_MUTATION": "0"})
     assert result.returncode == 0
     assert result.stdout.strip() == "PASS"
 
@@ -118,3 +144,14 @@ if([int]$env:CA_READY_DELAY){
 ''', engine=engine, values={"CA_READY_DELAY": str(delay)})
     assert result.returncode == 0
     assert result.stdout.strip() == "PASS"
+
+
+@pytest.mark.parametrize('engine', ('powershell', 'pwsh'))
+def test_missing_native_integrity_field_mutation_fails_allow_oracle(tmp_path, engine, monkeypatch):
+    native_run = run_functions
+    def mutated(*args, **kwargs):
+        kwargs['values']['CA_STOP_FIELD_MUTATION'] = '1'
+        return native_run(*args, **kwargs)
+    monkeypatch.setitem(globals(), 'run_functions', mutated)
+    with pytest.raises(AssertionError):
+        test_installer_ordinary_relay_stop_boundary(tmp_path, engine, 'normal')

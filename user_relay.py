@@ -526,12 +526,16 @@ def request_user_relay_stop(
     wait: Callable[[float], None] = time.sleep,
     lease_factory: Callable[[str | os.PathLike[str]], Any] = acquire_runtime_instance,
     publication_deadline: float | None = None,
+    request_id: str | None = None,
 ) -> dict[str, Any]:
     deadline = time.monotonic() + max(0.0, float(timeout_seconds))
     write_deadline = deadline if publication_deadline is None else min(time.monotonic() + 1.5, publication_deadline)
     root = Path(direct_sync_root).expanduser().resolve()
     stop_path = user_relay_stop_path(root)
-    request_id = uuid.uuid4().hex
+    request_id = uuid.uuid4().hex if request_id is None else request_id
+    if (not isinstance(request_id, str) or len(request_id) != 32
+            or any(character not in '0123456789abcdef' for character in request_id)):
+        raise ValueError('relay stop request identity is invalid')
     _write_json_atomic(
         stop_path,
         {

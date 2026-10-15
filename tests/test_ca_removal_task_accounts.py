@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("engine", ("powershell", "pwsh"))
-@pytest.mark.parametrize("case", ("sid", "account", "foreign_trigger", "foreign_principal", "unresolved"))
+@pytest.mark.parametrize("case", ("sid", "account", "local_dot", "short_name", "upn", "system_nt", "system_short", "system_localized", "foreign_trigger", "foreign_principal", "unresolved"))
 def test_removal_task_identity_forms(tmp_path, engine, case):
     result = run_functions(tmp_path, ROOT / "INSTALL_THIS_PC.ps1", [
         "Resolve-ContainerRemovalTaskSid", "Get-ContainerRemovalTaskNames",
@@ -23,7 +23,29 @@ $hash=[Security.Cryptography.SHA256]::Create()
 try{$suffix=([BitConverter]::ToString($hash.ComputeHash($bytes))).Replace('-','').ToLowerInvariant().Substring(0,24)}finally{$hash.Dispose()}
 $name='KMTech.ContainerAudit.StartupUpdate.'+$suffix
 $trigger=$sid;$principal='S-1-5-18'
+$parts=$identity.Name.Split('\')
+$localAccount=($parts.Count -eq 2 -and $parts[0] -ieq [Environment]::MachineName)
+if($env:CA_ACCOUNT_CASE -in @('local_dot','short_name') -and -not $localAccount){'UNPROVEN_LOCAL_ACCOUNT';return}
+if($env:CA_ACCOUNT_CASE -ceq 'upn'){
+ if(-not ('KMTechRemovalFixtureAccountName' -as [type])){
+  Add-Type -TypeDefinition @'
+using System; using System.Text; using System.Runtime.InteropServices;
+public static class KMTechRemovalFixtureAccountName {
+ [DllImport("secur32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
+ public static extern bool GetUserNameExW(int format,StringBuilder name,ref uint size);
+}
+'@
+ }
+ $upn=[Text.StringBuilder]::new(1024);$upnSize=[uint32]1024
+ if(-not [KMTechRemovalFixtureAccountName]::GetUserNameExW(8,$upn,[ref]$upnSize)){'UNPROVEN_UPN';return}
+ $trigger=$upn.ToString()
+}
 switch($env:CA_ACCOUNT_CASE){
+ 'local_dot' {$trigger='.\'+$parts[-1]}
+ 'short_name' {$trigger=$parts[-1]}
+ 'system_nt' {$principal='NT AUTHORITY\SYSTEM'}
+ 'system_short' {$principal='SYSTEM'}
+ 'system_localized' {$principal=([Security.Principal.SecurityIdentifier]::new('S-1-5-18')).Translate([Security.Principal.NTAccount]).Value}
  'account' {$trigger=$identity.Name;$principal=([Security.Principal.SecurityIdentifier]::new('S-1-5-18')).Translate([Security.Principal.NTAccount]).Value}
  'foreign_trigger' {$trigger='S-1-5-18'}
  'foreign_principal' {$principal=$sid}
@@ -46,6 +68,8 @@ if($env:CA_ACCOUNT_CASE -in @('foreign_principal','unresolved')){
 'PASS'
 ''', engine=engine, values={"CA_ACCOUNT_CASE": case})
     assert result.returncode == 0
+    if result.stdout.strip() in {'UNPROVEN_UPN', 'UNPROVEN_LOCAL_ACCOUNT'}:
+        pytest.skip('UNPROVEN: current native identity does not provide this account form')
     assert result.stdout.strip() == "PASS"
 
 

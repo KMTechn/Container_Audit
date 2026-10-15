@@ -136,3 +136,5 @@ TLS CA와 staging 파일, 바로 가기 원본 복원은 준비 사본을 검증
 전이의 contract_sha256은 version_identity가 각 판의 `tools/container_writer_session_contract.json`과 `tools/container_writer_sink_inventory.json` 경로 및 실제 파일 해시를 순서대로 묶어 산출한다(auto_update.py:327·347–365).
 
 출하 빌더의 CLI와 API는 설정 생략·빈 object·빈 feed·정본 SHA 불일치를 출력 생성 전에 거절하며, 승인 파일을 원본 바이트로 게시하고 되읽는다. 되돌림의 작업자 설정 제거도 현재 회차에서 확인한 같은 세션의 relay 후보에만 정지를 요청한다. 후보의 PID·생성 시각·실행 파일·명령·SID·세션이 달라지면 정지와 후속 stop 표지 정리를 거절하고 복구 미증명 상태를 유지한다.
+
+정지 관문은 실제 native 보안 객체의 `integrity_level`과 정확한 Medium·SID·세션·비상승을 확인한다. 배치 전 정지는 표지의 원래 부재, 이번 transaction과 미리 고른 request ID, 게시 뒤 SHA를 결속한다. 조기 실패에서는 이 소유 증명과 Run preimage를 다시 확인한 뒤 이번 표지만 되돌리고 이전 코드 relay의 새 PID·생성 시각·상태 READY를 되읽는다. 표지가 달라졌거나 READY가 미증명이면 보호 감사와 공개 reason에 `RECOVERY_REQUIRED`를 남긴다. 관리자 machine-worker의 다른 세션 relay 실행 금지와 첫 일반 실행 안내는 그대로 적용한다.

@@ -324,6 +324,15 @@ function Write-CanonicalPreparationAdmissionFailure([string]$AuditPathValue, [st
         preparation_failure=$typedFailure
         rollback=[ordered]@{status='NOT_REQUIRED';available=$false;applied=$false;runtime_restored=$false}
     }
+    $relayRecovery=Get-Variable -Name CanonicalInstallerEarlyRecovery -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if($null -ne $relayRecovery){
+        $record.installer_relay_recovery=$relayRecovery
+        $record.rollback.status=[string]$relayRecovery.status
+        $record.rollback.available=$true
+        $record.rollback.applied=[bool]$relayRecovery.stop_preimage_restored
+        $record.rollback.runtime_restored=[bool]$relayRecovery.ready_proven
+        if([string]$relayRecovery.status -ceq 'RECOVERY_REQUIRED'){$record.preparation_failure.code='RECOVERY_REQUIRED'}
+    }
     try {
         if (-not $AuditPathValue) {
             $root = Full $env:LOCALAPPDATA 'LOCALAPPDATA'
@@ -401,6 +410,10 @@ function Write-CanonicalInstallationPublicRecord($Failure=$null,[int]$ExitCode=0
         $fields.install_status='FAILED_ROLLED_BACK'
         $fields.runtime_restored=$true
     }
+    $relayRecovery=Get-Variable -Name CanonicalInstallerEarlyRecovery -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if($ExitCode -ne 0 -and $null -ne $relayRecovery -and [string]$relayRecovery.status -ceq 'RECOVERY_REQUIRED'){
+        $fields.reason_code='RECOVERY_REQUIRED';$fields.recovery_status='RECOVERY_REQUIRED'
+    }
     if($Failure){
         $exception=if($Failure -is [Exception]){$Failure}else{$Failure.Exception}
         $fields.exception_type=$exception.GetType().FullName
@@ -421,7 +434,7 @@ function Write-CanonicalInstallationPublicRecord($Failure=$null,[int]$ExitCode=0
         }
     }
     if(Get-Command ConvertTo-KmtechPublicRecord -ErrorAction SilentlyContinue){
-        $fields=ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes @('PASS','FAILED','canonical_install','INSTALLER_CANONICAL_FAILURE','INSTALLER_CHILD_RESULT','REPORT_UNAVAILABLE','CONTAINER_PLACEMENT_ELEVATION_FAILED','FAILED_ROLLED_BACK') -SafeMessages @($guidance)
+        $fields=ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes @('RECOVERY_REQUIRED','PASS','FAILED','canonical_install','INSTALLER_CANONICAL_FAILURE','INSTALLER_CHILD_RESULT','REPORT_UNAVAILABLE','CONTAINER_PLACEMENT_ELEVATION_FAILED','FAILED_ROLLED_BACK') -SafeMessages @($guidance)
     }
     Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+($fields|ConvertTo-Json -Depth 4 -Compress))
 }
@@ -1553,6 +1566,90 @@ function Get-CanonicalInstallerProductWriters([string]$Root) {
              ([string]$_.CommandLine).IndexOf('app\main.py',[StringComparison]::OrdinalIgnoreCase) -ge 0))
     })
 }
+function Test-CanonicalOrdinaryRelaySecurity($Security,[string]$SubjectSid) {
+    if($null -eq $Security){return $false}
+    foreach($name in @('sid','session_id','integrity_level','elevated')){
+        if($null -eq $Security.PSObject.Properties[$name]){return $false}
+    }
+    return ($Security.sid -is [string] -and [string]$Security.sid -ceq $SubjectSid -and
+        (Test-BootstrapJsonInteger $Security.session_id) -and [int]$Security.session_id -gt 0 -and
+        (Test-BootstrapJsonInteger $Security.integrity_level) -and [int]$Security.integrity_level -eq 8192 -and
+        $Security.elevated -is [bool] -and -not $Security.elevated)
+}
+
+function Read-CanonicalInstallerOwnedStopMarker($Proof,[switch]$BindHash,[switch]$AllowAbsent) {
+    $transaction=[string](Get-Variable -Name CanonicalWriterFenceTransactionId -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+    if($null -eq $Proof -or [string]$Proof.schema -cne 'container-audit-installer-stop-preimage-v1' -or
+        $transaction -cnotmatch '^[0-9a-f]{32}$' -or [string]$Proof.transaction_id -cne $transaction -or
+        $Proof.preimage_absent -isnot [bool] -or -not $Proof.preimage_absent -or
+        [string]$Proof.request_id -cnotmatch '^[0-9a-f]{32}$'){
+        throw 'INSTALLER_RELAY_STOP_OWNERSHIP_UNPROVEN'
+    }
+    $path=Full ([string]$Proof.path) 'installer stop marker'
+    if(-not(Same $path (Join-Path ([string]$Proof.state_root) 'control\container_audit_user_relay.stop.json'))){
+        throw 'INSTALLER_RELAY_STOP_OWNERSHIP_UNPROVEN'
+    }
+    Assert-BootstrapNoReparsePoint $path 'installer stop marker' -PathOnly
+    if(-not(Test-Path -LiteralPath $path)){
+        if($AllowAbsent){return 'ABSENT'}
+        throw 'INSTALLER_RELAY_STOP_OWNERSHIP_UNPROVEN'
+    }
+    $item=Get-Item -LiteralPath $path -ErrorAction Stop
+    if($item.PSIsContainer -or $item.Length -le 0 -or $item.Length -gt 4096){throw 'INSTALLER_RELAY_STOP_OWNERSHIP_UNPROVEN'}
+    $sha=Sha $path
+    $marker=Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson
+    if([string]$marker.schema_version -cne 'container-audit-user-relay-stop-v1' -or
+        [string]$marker.request_id -cne [string]$Proof.request_id -or (Sha $path) -cne $sha -or
+        ([string]$Proof.sha256 -and [string]$Proof.sha256 -cne $sha)){
+        throw 'INSTALLER_RELAY_STOP_OWNERSHIP_UNPROVEN'
+    }
+    if($BindHash){$Proof.sha256=$sha}
+    return $sha
+}
+
+function Restore-CanonicalInstallerStopPreimage {
+    $proof=Get-Variable -Name CanonicalInstallerRelayStopOwnership -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    $sha=Read-CanonicalInstallerOwnedStopMarker $proof -AllowAbsent
+    if($sha -cne 'ABSENT'){
+        $path=Full ([string]$proof.path) 'installer stop marker'
+        Assert-BootstrapNoReparsePoint $path 'installer stop marker' -PathOnly
+        if((Read-CanonicalInstallerOwnedStopMarker $proof) -cne $sha){throw 'INSTALLER_RELAY_STOP_OWNERSHIP_UNPROVEN'}
+        Remove-Item -LiteralPath $path -ErrorAction Stop
+        if(Test-Path -LiteralPath $path){throw 'INSTALLER_RELAY_STOP_PREIMAGE_RESTORE_UNPROVEN'}
+    }
+    return [ordered]@{status='ABSENT';preimage_absent=$true;owned_request_restored=$true}
+}
+
+function Restore-CanonicalInstallerEarlyRuntime($Before,[object[]]$Old,[string]$Root) {
+    if($null -eq (Get-Variable -Name CanonicalInstallerEarlyRecovery -Scope Script -ValueOnly -ErrorAction SilentlyContinue)){
+        $Script:CanonicalInstallerEarlyRecovery=[ordered]@{status='RECOVERY_REQUIRED';stop_preimage_restored=$false;run_preimage_proven=$false;ready_proven=$false}
+    }
+    try {
+        $current=Snapshot
+        if($Old.Count -ne 1 -or [bool]$current.exists -ne [bool]$Before.exists -or
+            [string]$current.kind -cne [string]$Before.kind -or [string]$current.data -cne [string]$Before.data -or
+            @(Relays).Count -ne 0){throw 'INSTALLER_EARLY_RUNTIME_PREIMAGE_UNPROVEN'}
+        $Script:CanonicalInstallerEarlyRecovery.run_preimage_proven=$true
+        [void](Restore-CanonicalInstallerStopPreimage)
+        $Script:CanonicalInstallerEarlyRecovery.stop_preimage_restored=$true
+        $proof=Start-CanonicalRelayAfterFenceRelease -Root $Root -RunCommand ([string]$Before.data)
+        $ready=Get-Variable -Name CanonicalRelayProof -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if(-not(Test-BootstrapJsonInteger $proof) -or [int]$proof -le 0 -or
+            $null -eq $ready -or [string]$ready.status -cne 'PROVEN' -or [int]$ready.process_id -ne [int]$proof){
+            throw 'INSTALLER_EARLY_RELAY_READY_UNPROVEN'
+        }
+        [void](Assert-RollbackRelayPreimage -ExpectedRelays $Old)
+        $Script:CanonicalInstallerEarlyRecovery.ready_proven=$true
+        $Script:CanonicalInstallerEarlyRecovery.status='RESTORED'
+        Write-InstallationEvidenceEvent ([ordered]@{event='INSTALLER_EARLY_RELAY_RESTORED';ready_proven=$true;stop_preimage_restored=$true})
+        return $Script:CanonicalInstallerEarlyRecovery
+    }catch{
+        $Script:CanonicalInstallerEarlyRecovery.status='RECOVERY_REQUIRED'
+        Write-InstallationCaughtFailure $_
+        throw 'RECOVERY_REQUIRED'
+    }
+}
+
 function Stop-CanonicalInstallerRelayPreimage([object[]]$Expected,[string]$StateRoot,[string]$CodeRoot,[string]$InstalledRoot,[string]$SubjectSid,$RunPreimage) {
     # Other product writers must exit themselves. Only one admitted ordinary
     # resident in this caller's session is eligible for the normal stop request.
@@ -1564,35 +1661,43 @@ function Stop-CanonicalInstallerRelayPreimage([object[]]$Expected,[string]$State
     if($Expected.Count -eq 0){return [ordered]@{status='ABSENT';preimage_count=0}}
     if($Expected.Count -ne 1){throw 'INSTALLER_RELAY_PREIMAGE_INVALID'}
     $caller=Get-CanonicalOperatorSecurity
-    if([string]$caller.sid -cne $SubjectSid -or [int]$caller.session_id -le 0 -or [bool]$caller.elevated -or
-        [int]$caller.integrity_rid -ne 8192){throw 'INSTALLER_RELAY_ORDINARY_SESSION_REQUIRED'}
+    if(-not(Test-CanonicalOrdinaryRelaySecurity $caller $SubjectSid)){throw 'INSTALLER_RELAY_ORDINARY_SESSION_REQUIRED'}
     $live=@(Assert-RollbackRelayPreimage $Expected)
     $security=Get-CanonicalRelaySecurity ([int]$live[0].ProcessId)
     if($live[0].ProcessId -ne $Expected[0].ProcessId -or
         ([DateTime]$live[0].CreationDate).ToUniversalTime() -ne ([DateTime]$Expected[0].CreationDate).ToUniversalTime() -or
-        [string]$security.sid -cne $SubjectSid -or [int]$security.session_id -ne [int]$caller.session_id -or
-        [bool]$security.elevated -or [int]$security.integrity_rid -ne 8192){throw 'INSTALLER_RELAY_NATIVE_PREIMAGE_DIFFERS'}
+        -not(Test-CanonicalOrdinaryRelaySecurity $security $SubjectSid) -or
+        [int]$security.session_id -ne [int]$caller.session_id){throw 'INSTALLER_RELAY_NATIVE_PREIMAGE_DIFFERS'}
     $Script:CanonicalInstallerRelayPreimage=@(Get-CanonicalGlobalRelayPreimage)
     Write-InstallationEvidenceEvent ([ordered]@{event='INSTALLER_RELAY_PREIMAGE';relays=$Script:CanonicalInstallerRelayPreimage;run_preimage=$RunPreimage})
+    $markerPath=Full (Join-Path $StateRoot 'control\container_audit_user_relay.stop.json') 'installer stop marker'
+    Assert-BootstrapNoReparsePoint $markerPath 'installer stop marker' -PathOnly
+    if(Test-Path -LiteralPath $markerPath){throw 'INSTALLER_RELAY_STOP_PREIMAGE_PRESENT'}
+    $transaction=[string](Get-Variable -Name CanonicalWriterFenceTransactionId -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+    if($transaction -cnotmatch '^[0-9a-f]{32}$'){throw 'INSTALLER_RELAY_STOP_ROUND_INVALID'}
+    $Script:CanonicalInstallerRelayStopOwnership=[ordered]@{schema='container-audit-installer-stop-preimage-v1';
+        transaction_id=$transaction;state_root=(Full $StateRoot 'installer relay state');path=$markerPath;
+        preimage_absent=$true;request_id=[Guid]::NewGuid().ToString('N');sha256=''}
     $probe=@'
 import pathlib, sys
 root, state = map(pathlib.Path, sys.argv[1:3])
 sys.path[:0] = [str(root / 'app'), str(root / 'app/site-packages')]
 from user_relay import request_user_relay_stop
-proof = request_user_relay_stop(state, timeout_seconds=15.0)
+proof = request_user_relay_stop(state, timeout_seconds=15.0, request_id=sys.argv[3])
 if proof['status'] != 'ABSENT':
     raise RuntimeError('installer relay stop unproven')
 print('installer_relay_stop=ABSENT')
 '@
     $probe=$probe.Replace("`r`n","`n").TrimEnd("`n")+"`n"
-    if((Get-BootstrapStringSha256 $probe) -cne '9aa9aa50614146e5edbbae992946ccfab8d549ffccec7931be309f563299f2a6'){
+    if((Get-BootstrapStringSha256 $probe) -cne 'fa22b7d085661a5833406f690613775fa6b2c29adf35d7454548cb50b14af709'){
         throw 'INSTALLER_RELAY_STOP_PROBE_DIFFERS'
     }
     $Script:CanonicalInstallerRelayStopAttempted=$true
-    $result=Invoke-InstallationEvidenceChild 'installer-normal-relay-stop' (Join-Path $CodeRoot 'runtime\python.exe') @('-I','-B','-c',$probe,$CodeRoot,$StateRoot)
+    $result=Invoke-InstallationEvidenceChild 'installer-normal-relay-stop' (Join-Path $CodeRoot 'runtime\python.exe') @('-I','-B','-c',$probe,$CodeRoot,$StateRoot,[string]$Script:CanonicalInstallerRelayStopOwnership.request_id)
     if($result.ExitCode -ne 0 -or $null -ne $result.EvidenceFailure -or $result.Stdout.Trim() -cne 'installer_relay_stop=ABSENT'){
         throw 'INSTALLER_RELAY_NORMAL_STOP_UNPROVEN'
     }
+    [void](Read-CanonicalInstallerOwnedStopMarker $Script:CanonicalInstallerRelayStopOwnership -BindHash)
     $deadline=[DateTime]::UtcNow.AddSeconds(15)
     do {
         if(@(Relays).Count -eq 0){
@@ -1774,8 +1879,10 @@ function Assert-CanonicalRuntimePreimage(
 }
 function Save-CanonicalRollbackRelayCandidate($Process,$Security,$Caller,[DateTime]$StartedAt) {
     $transaction=[string](Get-Variable -Name CanonicalWriterFenceTransactionId -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
-    if($Process.CreationDate -isnot [DateTime] -or [bool]$Security.elevated -or [int]$Security.integrity_level -ne 8192 -or
-        [int]$Caller.session_id -le 0 -or [int]$Security.session_id -ne [int]$Caller.session_id -or
+    if($Process.CreationDate -isnot [DateTime] -or
+        -not(Test-CanonicalOrdinaryRelaySecurity $Caller ([string]$Caller.sid)) -or
+        -not(Test-CanonicalOrdinaryRelaySecurity $Security ([string]$Caller.sid)) -or
+        [int]$Security.session_id -ne [int]$Caller.session_id -or
         [string]$Security.sid -cne [string]$Caller.sid -or
         ([DateTime]$Process.CreationDate).ToUniversalTime() -lt $StartedAt.ToUniversalTime()){throw 'ROLLBACK_RELAY_CANDIDATE_UNPROVEN'}
     if($transaction -cnotmatch '^[0-9a-f]{32}$'){throw 'ROLLBACK_RELAY_CANDIDATE_ROUND_INVALID'}
@@ -1818,7 +1925,7 @@ function Assert-CanonicalRollbackRelayCandidate {
     $caller=Get-CanonicalOperatorSecurity
     if($null -eq $candidate -or [string]$candidate.schema -cne 'container-audit-installer-relay-candidate-v1' -or
         $transaction -cnotmatch '^[0-9a-f]{32}$' -or [string]$candidate.transaction_id -cne $transaction -or
-        [int]$caller.session_id -le 0 -or [string]$candidate.sid -cne [string]$caller.sid -or
+        -not(Test-CanonicalOrdinaryRelaySecurity $caller ([string]$caller.sid)) -or [string]$candidate.sid -cne [string]$caller.sid -or
         [int]$candidate.session_id -ne [int]$caller.session_id -or
         [int]$actual[0].ProcessId -ne [int]$candidate.process_id){throw 'ROLLBACK_RELAY_CANDIDATE_UNPROVEN'}
     $process=Get-CimInstance Win32_Process -Filter ('ProcessId = '+[int]$candidate.process_id) -ErrorAction Stop
@@ -1829,7 +1936,7 @@ function Assert-CanonicalRollbackRelayCandidate {
         -not(Same ([string]$process.ExecutablePath) ([string]$candidate.executable_path))){throw 'ROLLBACK_RELAY_CANDIDATE_UNPROVEN'}
     $security=Get-CanonicalRelaySecurity ([int]$process.ProcessId)
     $identity=[pscustomobject]@{executable=[string]$candidate.executable_path;command=[string]$candidate.command_line;operator_sid=[string]$caller.sid}
-    if([int]$security.integrity_level -ne 8192 -or -not(Test-BootstrapRelayReadback $identity $process $security $caller)){
+    if(-not(Test-CanonicalOrdinaryRelaySecurity $security ([string]$caller.sid)) -or -not(Test-BootstrapRelayReadback $identity $process $security $caller)){
         throw 'ROLLBACK_RELAY_CANDIDATE_UNPROVEN'
     }
     $Script:CanonicalRollbackRelayStopRefused=$false
@@ -4873,6 +4980,8 @@ foreach ($name in $canonicalWriterFenceEnvironmentNames) {
 }
 $canonicalWriterFenceAuthority = $null
 $Script:CanonicalInstallerRelayStopAttempted=$false
+$Script:CanonicalInstallerRelayStopOwnership=$null
+$Script:CanonicalInstallerEarlyRecovery=$null
 $Script:CanonicalInstallerRelayPreimage=$null
 $legacyRelayBefore=if($testMode -or $Uninstall -or $RestoreVerifiedReplacement){$null}else{Get-CanonicalOfficialLegacyRelayAdmission -ReportPath $EvidencePath}
 $installationEvidenceRoot=if($null -eq $abandonedPending){Initialize-InstallationEvidence $auditPath $operatorSid @($Script:CanonicalWriterFenceDelegationToken)}else{''}
@@ -6104,6 +6213,9 @@ catch {
         }
     }
     if (-not $enteredPlacementTry) {
+        if($Script:CanonicalInstallerRelayStopAttempted){
+            $Script:CanonicalInstallerEarlyRecovery=[ordered]@{status='RECOVERY_REQUIRED';stop_preimage_restored=$false;run_preimage_proven=$false;ready_proven=$false}
+        }
         if ($retirementResume -and $canonicalWriterFenceActive) {
             throw 'RETIREMENT_RESUME_JOURNAL_UNKNOWN_FENCE_RETAINED'
         }
@@ -6134,20 +6246,19 @@ catch {
  throw (ConvertTo-KmtechRedactedSinkText -Text ([string]("CANONICAL_WRITER_FENCE_EARLY_ABORT_FAILED: $($_.Exception.GetType().Name)")) -UserLine) }
         }
         if (Test-Path -LiteralPath $canonicalWriterFencePreparedPath) {
-            Remove-Item -LiteralPath $canonicalWriterFencePreparedPath -Force
+            Remove-Item -LiteralPath $canonicalWriterFencePreparedPath -ErrorAction Stop
             if (Test-Path -LiteralPath $canonicalWriterFencePreparedPath) {
                 throw 'CANONICAL_WRITER_FENCE_EARLY_RECEIPT_CLEANUP_FAILED'
             }
         }
-        if (($earlyFenceMatches -or $Script:CanonicalInstallerRelayStopAttempted) -and $old.Count -gt 0) {
+        if($Script:CanonicalInstallerRelayStopAttempted){
+            [void](Restore-CanonicalInstallerEarlyRuntime -Before $before -Old $old -Root $install)
+        }
+        elseif ($earlyFenceMatches -and $old.Count -gt 0) {
             if (@(Relays).Count -eq 0) {
                 [void](Start-CanonicalRelayAfterFenceRelease -Root $install -RunCommand ([string]$before.data))
             }
             [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
-        }
-        if($Script:CanonicalInstallerRelayStopAttempted){
-            $earlyRelayProof=Get-Variable -Name CanonicalRelayProof -Scope Script -ValueOnly -ErrorAction SilentlyContinue
-            Write-InstallationEvidenceEvent ([ordered]@{event='INSTALLER_EARLY_RELAY_RESTORED';ready_proven=($null -ne $earlyRelayProof -and [string]$earlyRelayProof.status -ceq 'PROVEN')})
         }
         Write-CanonicalInstallerRelayGuidance
         $publicFailure=[InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text $original.Exception.Message -UserLine),$original.Exception);$publicFailure.Data['original_type']=$original.Exception.GetType().FullName;$publicRecord=[Management.Automation.ErrorRecord]::new($publicFailure,'CanonicalInstallationFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null);throw $publicRecord

@@ -10,7 +10,7 @@ if($clauses.Count -ne 1){throw 'exact catch not found'}
 $script:RollbackPython=$Python
 $script:RollbackChild=$Child
 # Commit-point decisions remain actual product code, alongside actual G.
-$readerDefinitions=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalFailureDetails','Assert-CanonicalWriterRestoreReadback','Get-CanonicalInstallationCommitPoint','Get-CanonicalRollbackSuccessStatus')},$true)
+$readerDefinitions=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Get-CanonicalOnboardingInputBinding','ConvertTo-CanonicalSafeDiagnostic','Get-CanonicalFailureDetails','Assert-CanonicalWriterRestoreReadback','Assert-CanonicalRollbackStopCleanup','Get-CanonicalInstallationCommitPoint','Get-CanonicalRollbackSuccessStatus')},$true)
 foreach($definition in $readerDefinitions) {
     $readerBody=$definition.Extent.Text
     if($definition.Name -ceq 'Get-CanonicalOnboardingInputBinding') {

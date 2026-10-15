@@ -5,9 +5,9 @@ trap {
 }
 $candidateDefinitions=$ast.FindAll({param($n)
     $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @(
-        'Product','Save-CanonicalRollbackRelayCandidate','Assert-CanonicalRollbackRelayCandidate','Assert-CanonicalRollbackStopCleanup')
+        'Product','Test-CanonicalOrdinaryRelaySecurity','Save-CanonicalRollbackRelayCandidate','Assert-CanonicalRollbackRelayCandidate','Assert-CanonicalRollbackStopCleanup')
 },$true)
-if($candidateDefinitions.Count -ne 4){throw 'candidate fixture functions differ'}
+if($candidateDefinitions.Count -ne 5){throw 'candidate fixture functions differ'}
 foreach($definition in $candidateDefinitions){Invoke-Expression $definition.Extent.Text}
 $Script:CanonicalWriterFenceTransactionId='1234567890abcdef1234567890abcdef'
 $script:CandidateCaller=[pscustomobject]@{sid=$operatorSid;session_id=1;elevated=$false;integrity_level=8192}
