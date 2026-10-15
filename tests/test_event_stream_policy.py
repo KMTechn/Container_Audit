@@ -24,6 +24,8 @@ EXPECTED_AUDITED_OUT_OF_CATALOG_EVENTS = frozenset(
         "ADMIN_PIN_UNVERIFIED_HOLD",
         "ACTIVE_TRAY_PHS2_SCAN_INTERCEPTED",
         "ACTIVE_TRAY_PHS2_SCAN_REJECTED",
+        "APP_CLOSE_DELAY",
+        "APP_STOP_DEFERRED",
         "HISTORICAL_REPLACE_CANCEL",
         "HISTORICAL_REPLACE_START",
         "IDLE_END",
@@ -44,6 +46,7 @@ EXPECTED_AUDITED_OUT_OF_CATALOG_EVENTS = frozenset(
         "PHS2_PAIRED_STALE_CURRENT_PRESERVATION_REQUESTED",
         "PHS2_STALE_HOLD_RECHECKED",
         "PHS2_PREFLIGHT_HOLD_CLOSE_HANDOFF",
+        "PHS2_PREFLIGHT_HOLD_OFFLINE_QUEUEING",
         "PHS2_PREFLIGHT_HOLD_QUARANTINED",
         "PHS2_PREFLIGHT_HOLD_RESTORED",
         "PHS_LABEL_ACTIVE_REFRESHED",
@@ -69,6 +72,7 @@ EXPECTED_AUDITED_OUT_OF_CATALOG_EVENTS = frozenset(
         "TRAY_STATE_DISCARDED_AFTER_COMPLETION",
         "TRAY_TAKEOVER",
         "WORK_PAUSE",
+        "UI_LANE_FAULT",
     }
 )
 
@@ -78,7 +82,7 @@ def test_audited_container_csv_values_have_one_exhaustive_disposition():
         EXPECTED_AUDITED_OUT_OF_CATALOG_EVENTS
     )
     assert len(CONTRACT_CANDIDATE_EVENT_TYPES) == 14
-    assert len(LOCAL_ONLY_EVENT_TYPES) == 41
+    assert len(LOCAL_ONLY_EVENT_TYPES) == 45
     assert not FORBIDDEN_EVENT_TYPES
     assert not (CONTRACT_CANDIDATE_EVENT_TYPES & LOCAL_ONLY_EVENT_TYPES)
 
@@ -130,7 +134,7 @@ def test_production_emitters_are_closed_by_catalog_or_reviewed_policy():
         for call in ast.walk(container_tree)
         if isinstance(call, ast.Call)
         and isinstance(call.func, ast.Attribute)
-        and call.func.attr == "_log_event"
+        and call.func.attr in {"_log_event", "_prepare_event_log_entry"}
         and call.args
         and isinstance(call.args[0], ast.Constant)
         and isinstance(call.args[0].value, str)

@@ -1989,9 +1989,26 @@ class ContainerAudit:
             self._preflight_hold_quarantine_directory()
         ) if self._is_offline_preflight_hold(held.snapshot))
 
-    def _automatic_offline_hold_audited(self, held: QuarantinedPreflightHold) -> bool:
-        """Use the existing durable ownership audit, without a new hold format."""
-        found = False
+    def _preflight_hold_ownership_audits(self) -> Optional[list[tuple[str, dict]]]:
+        """Read durable originals before CSV, including unprojected audit rows."""
+        events = {"PHS2_PREFLIGHT_HOLD_QUARANTINED", "PHS2_PREFLIGHT_HOLD_OFFLINE_QUEUEING",
+                  "PHS2_PREFLIGHT_HOLD_RESTORED"}
+        rows = []
+        save_folder = str(getattr(self, "save_folder", "") or "")
+        if save_folder:
+            for path in (Path(save_folder) / "_event_outbox").glob("*.json"):
+                try:
+                    with path.open("r", encoding="utf-8") as stream:
+                        payload = json.load(stream)
+                    entry = payload.get("log_entry", {})
+                    if entry.get("event") in events:
+                        detail = json.loads(entry.get("details") or "{}")
+                        if isinstance(detail, dict):
+                            rows.append((entry["event"], detail))
+                except FileNotFoundError:
+                    continue  # Projection publishes CSV before deleting its original.
+                except (OSError, UnicodeError, ValueError, AttributeError, TypeError):
+                    return None
         folders = {str(getattr(self, name, "") or "")
                    for name in ("local_events_folder", "save_folder")}
         for folder_name in folders - {""}:
@@ -2001,27 +2018,82 @@ class ContainerAudit:
                     with path.open("r", encoding="utf-8-sig", newline="") as stream:
                         for row in csv.DictReader(stream):
                             event = row.get("event")
-                            if event not in {"PHS2_PREFLIGHT_HOLD_QUARANTINED",
-                                             "PHS2_PREFLIGHT_HOLD_OFFLINE_QUEUEING"}:
+                            if event not in events:
                                 continue
                             detail = json.loads(row.get("details") or "{}")
-                            if not isinstance(detail, dict):
-                                continue
-                            if detail.get("preflight_id") != held.snapshot.preflight_id:
-                                continue
-                            if event == "PHS2_PREFLIGHT_HOLD_QUARANTINED":
-                                if detail.get("quarantine_file") != held.path.name:
-                                    continue
-                            elif detail.get("snapshot_hash") != held.snapshot_hash:
-                                continue
-                            if (detail.get("reason") != "offline_next_label"
-                                    or detail.get("worker") != held.snapshot.worker
-                                    or detail.get("snapshot_hash") != held.snapshot_hash):
-                                return False
-                            found = True
+                            if isinstance(detail, dict):
+                                rows.append((event, detail))
                 except (OSError, UnicodeError, ValueError, csv.Error):
-                    return False
+                    return None
+        return rows
+
+    def _automatic_offline_hold_audited(self, held: QuarantinedPreflightHold) -> bool:
+        """Use the existing durable ownership audit, without a new hold format."""
+        rows = self._preflight_hold_ownership_audits()
+        if rows is None:
+            return False
+        found = False
+        for event, detail in rows:
+            if event not in {"PHS2_PREFLIGHT_HOLD_QUARANTINED", "PHS2_PREFLIGHT_HOLD_OFFLINE_QUEUEING"}:
+                continue
+            if detail.get("preflight_id") != held.snapshot.preflight_id:
+                continue
+            if event == "PHS2_PREFLIGHT_HOLD_QUARANTINED":
+                if detail.get("quarantine_file") != held.path.name:
+                    continue
+            elif detail.get("snapshot_hash") != held.snapshot_hash:
+                continue
+            if (detail.get("reason") != "offline_next_label"
+                    or detail.get("worker") != held.snapshot.worker
+                    or detail.get("snapshot_hash") != held.snapshot_hash):
+                return False
+            found = True
         return found
+
+    def _recover_automatic_offline_return_audit(self, snapshot, store) -> bool:
+        """Finish only the audit of an already returned, unchanged local owner."""
+        if not self._is_offline_preflight_hold(snapshot) or not self._owns_worker_record(snapshot.to_payload()):
+            return True
+        rows = self._preflight_hold_ownership_audits()
+        if rows is None:
+            return False
+        fingerprint = store.snapshot_hash(snapshot)
+        matching = [(event, detail) for event, detail in rows
+                    if detail.get("preflight_id") == snapshot.preflight_id
+                    and detail.get("worker") == snapshot.worker
+                    and detail.get("snapshot_hash") == fingerprint]
+        if any(event == "PHS2_PREFLIGHT_HOLD_RESTORED" for event, _ in matching):
+            return True
+        quarantined = [detail for event, detail in matching
+                       if event == "PHS2_PREFLIGHT_HOLD_QUARANTINED"
+                       and detail.get("reason") == "offline_next_label"]
+        if not quarantined:
+            return True  # An intent cut before quarantine has no return to audit.
+        try:
+            digest = file_sha256(store.path)
+            target_id = hashlib.sha256(canonical_master_label_key(snapshot.master_raw).encode("utf-8")).hexdigest()
+            pin_store = self._admin_pin_store()
+            if (any((row.get("source_snapshot") or {}).get("preflight_id") == snapshot.preflight_id
+                    for row in pin_store.pending("CA.PRECHECK_HOLD", target_id, include_applied=True))
+                    or pin_store.pending("CA.PRECHECK_HOLD", "restore-" + digest, include_applied=True)):
+                return True  # C12 intents retain their own recovery/approval path.
+            filename = str(quarantined[-1].get("quarantine_file") or "")
+            if not filename or Path(filename).name != filename:
+                return False
+            source = self._preflight_hold_quarantine_directory() / filename
+            if source.exists() or store.snapshot_hash(store.load()) != fingerprint:
+                return False
+            if not self._owns_worker_record(snapshot.to_payload()):
+                return False
+            return bool(self._log_event(
+                "PHS2_PREFLIGHT_HOLD_RESTORED",
+                detail=self._preflight_hold_ownership_detail(
+                    snapshot, snapshot_hash=fingerprint, reason="offline_label_rescan", quarantine_path=source),
+                synchronous=True, deduplicate=True,
+                idempotency_key=f"preflight-hold-restore:{snapshot.preflight_id}:{fingerprint}",
+            ))
+        except (OSError, ValueError, TypeError, KeyError, PreflightHoldError):
+            return False
 
     def _offline_preflight_quarantine_blocked(self) -> bool:
         if getattr(self, "_preflight_offline_error_code", ""):
@@ -2348,6 +2420,17 @@ class ContainerAudit:
                     or not self._automatic_offline_hold_audited(offline_return)
                     or file_sha256(path) != digest):
                 raise PreflightHoldError("automatic offline return original changed")
+            # Also complete a queue cut after rename but before its audit. This
+            # is durable proof for a later return-rename cut, with the same key.
+            if not self._log_event(
+                "PHS2_PREFLIGHT_HOLD_QUARANTINED",
+                detail=self._preflight_hold_ownership_detail(
+                    snapshot, snapshot_hash=offline_return.snapshot_hash, reason="offline_next_label",
+                    quarantine_path=path),
+                synchronous=True, deduplicate=True,
+                idempotency_key=f"preflight-hold-quarantine:{snapshot.preflight_id}:{offline_return.snapshot_hash}",
+            ):
+                raise PreflightHoldError("offline quarantine completion audit failed")
             restored = store.restore_quarantined(
                 filepath, expected_snapshot_hash=offline_return.snapshot_hash)
             if file_sha256(store.path) != digest:
@@ -14482,6 +14565,12 @@ class ContainerAudit:
             self.show_status_message('다른 작업자 보류 1건 있음\n다른 현품표를 스캔하세요.',
                 self.COLOR_PRIMARY, duration=0)
             return True
+        if not self._recover_automatic_offline_return_audit(snapshot, store):
+            self._preflight_hold_snapshot = snapshot
+            self._set_preflight_scan_input_locked(True)
+            self.show_status_message("자동 복귀 감사 확인 대기 · 원본을 보존하고 같은 현품표를 다시 확인하세요.",
+                                     self.COLOR_DANGER, duration=0)
+            return False
         self._preflight_hold_snapshot = snapshot
         self._set_preflight_scan_input_locked(True)
         if snapshot.state == HOLD_DRAINING:

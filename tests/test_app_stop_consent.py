@@ -1,5 +1,6 @@
 """A remote request keeps live input open until the worker consents."""
 import datetime
+import csv
 import json
 from pathlib import Path
 import threading
@@ -42,7 +43,13 @@ def settle(app):
 
 
 def deferred_rows(app):
-    return [row for row in rows(app) if row["event"] == "APP_STOP_DEFERRED"]
+    from event_stream_policy import local_only_event_log_path
+    path = local_only_event_log_path(
+        app.log_file_path, local_events_dir=getattr(app, "local_events_folder", None))
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8-sig", newline="") as stream:
+        return [row for row in csv.DictReader(stream) if row["event"] == "APP_STOP_DEFERRED"]
 
 
 def test_idle_request_uses_immediate_normal_close(stop_app):
