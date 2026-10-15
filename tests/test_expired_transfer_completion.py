@@ -177,6 +177,14 @@ def test_refusals_preserve_original_completion_and_require_explicit_retry(
     assert len(audits) == 1
     assert server.posts[0] == server.posts[1]
     assert coordinator.drain_pending() == []
+    if code != "OPERATION_LEASE_FENCE_EXPIRED":
+        # An upgraded server cannot revive a released lease or undo an actual
+        # ownership/snapshot conflict. Preserve these denials for reconciliation.
+        assert manager.store.state(artifact["lease_id"]) == "OPERATOR_REVIEW"
+        assert _immutable(coordinator.store.load(intent_id)) == before
+        assert dict(manager.store.completion(artifact["lease_id"])) == completion
+        assert server.effects == 0
+        return
     # The upgraded server can accept the exact command the old server refused.
     server.failure = None
     assert coordinator.retry_operator_review(
