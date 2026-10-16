@@ -708,6 +708,22 @@ def test_deferred_recovery_precedes_next_signed_hotfix(endpoint, monkeypatch, ph
     monkeypatch.setattr(updates, "process_snapshot", lambda *_: restored_ready_processes(control, endpoint[1]))
     written = updates.write_json_durable
     decisions = []
+    hot_writes = []
+    def observe_recovery(path, value):
+        written(path, value)
+        if path == control / "transition.json" and value.get("failure_decision"):
+            decisions.append(value["failure_decision"]["selected_sha"])
+        if path == control / "active.json" and value.get("sha") == hot:
+            hot_writes.append(value)
+    monkeypatch.setattr(updates, "write_json_durable", observe_recovery)
+    assert updates.apply_prepared(control) == 0
+    settled = updates.read_json(control / "transition.json")
+    assert settled["phase"] == "ROLLED_BACK"
+    assert updates.read_json(control / "active.json")["sha"] == OLD
+    assert decisions and set(decisions) == {OLD}
+    assert hot_writes == []
+    policy = updates.read_json(control / "policy.json")
+    assert updates.prepared_pending(control, policy, settled)
     def observe(path, value):
         written(path, value)
         if path == control / "transition.json" and value.get("failure_decision"):
