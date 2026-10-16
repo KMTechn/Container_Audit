@@ -1709,6 +1709,17 @@ transition·active·apply claim·trial·startup support 기록은 그대로 보�
 GUI의 업무 흐름은 relay 요청 PID를 비동기로 받고 bootstrap 종료 코드를 기다리지 않는다.
 direct-sync가 startup gate를 통해 같은 relay bootstrap으로 재진입하는 경우도 같은 판정을 쓴다.
 
+relay만 살아 있어 복구 화면이 숨는 경우에는 FAILED/UNKNOWN, DEFERRED+recovery_pending의
+정착 claim(NONE/ABSENT), 감독 잃은 APPLIED_PENDING_READY/ROLLBACK_PENDING_READY의
+ABSENT claim에서만 일반 GUI 하나를 시작한다. 같은 active·작업자·일반 권한·G ALLOW를
+실제 관측과 복구 증명으로 확인하고, relay의 검증된 생성 시각을 자식 경계로 물려준다.
+GUI가 이미 있으면 추가 실행하지 않으며, 다른 writer·relay 둘·불명/미래 시각·관측 실패는 막는다.
+이 길은 상태/지원 기록을 쓰거나 trial nonce를 부여하지 않는다. 일반 복구 GUI는 READY 영수증을
+게시하지 않는다. APPLIED의 일반 writer는 다음 SYSTEM에서 DEFERRED+recovery_pending으로
+보존되고, writer가 모두 닫힌 뒤 기존 세대 판정으로 정착한다(UNCHANGED는 이전 판·새 rollback 창,
+ADVANCED는 후보 유지). ROLLBACK_PENDING의 감독 소실 잔류는 이번 허용 범위 밖이다.
+화면이 안 뜨면 지원에 연락한다. 실행 중 업무나 relay를 사용자가 강제로 종료하는 절차를 추가하지 않는다.
+
 Rollback continuation의 기록된 owner PID가 현재 프로세스에 있어도 UTC 시작 시각이 기록과 다르면 PID 재사용으로 보고 재개한다(R-PID, 1차 결정 2026-10-08). 같은 시작 시각이면 기존 AllowLiveOwner·Depth 0 조건에서만 허용하고, 그 밖에는 `ROLLBACK_OWNER_ALIVE`로 거부한다. 시작 시각을 읽을 수 없으면 `ROLLBACK_OWNER_START_UNREADABLE`로 거부한다. 고정 코드와 보호 보고서 규칙을 적용하며 lineage·receipt·manifest 검증은 그대로 유지한다.
 
 관리자 원격 설치는 [관리자 설치 받기 v0](admin-installation.md)을 따른다. 키트의 READY inventory와 대상 계정이 없으면 거절한다. 기계 배치 뒤 작업자 첫 onboarding이 필요하며, 옛 앱 Rollback·랩 VM 실제 설치 수용은 제품 격리 시험과 별도로 판정한다.

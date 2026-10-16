@@ -312,8 +312,19 @@ G가 오르지 않았으면 이전 판, 올랐으면 candidate를 선택하고 �
 통과하면 검증한 무리의 relay를 재사용하거나 원 경계 그대로 relay 하나를 실행한다.
 경계가 없으면 같은 active/G/operator의 일반 relay가 관측될 때만 재사용하고 새로 실행하지 않는다.
 관측·증명·실행 실패는 기존 진행 안내와 20이며, 지원 기록을 포함한 상태 파일을 쓰지 않는다.
-GUI 중복 실행 판정, SYSTEM의 writer 부재 검사, nonce trial과 startup gate의 허가는 유지한다.
+이 relay 복구 길은 GUI 중복 실행 판정, SYSTEM의 writer 부재 검사와 nonce trial 허가를 유지한다.
 direct-sync 모드가 startup gate에서 같은 relay bootstrap으로 재진입하면 이 계약을 적용한다.
+GUI 요청의 일반 복구는 FAILED·UNKNOWN, DEFERRED+recovery_pending의 claim NONE/ABSENT와
+APPLIED_PENDING_READY·ROLLBACK_PENDING_READY의 claim ABSENT에만 적용한다.
+관측 가능한 relay 정확히 하나가 active SHA·operator·일반 권한·G ALLOW를 증명하면,
+그 relay의 검증된 생성 시각을 경계로 일반 GUI 하나를 실행한다. 현재 시각으로 경계를 만들지 않는다.
+재관측한 증명 행도 같은 PID·생성 시각의 relay 하나여야 하며, 미래·불명 시각이나 증명 실패는
+진행 안내+20으로 막는다. GUI가 이미 있으면 추가 실행 없이 0이다.
+ROLLBACK_PENDING·PREPARED와 감독 있는 대기 상태(claim LIVE/NONE)는 기존 길을 유지한다.
+ROLLBACK_PENDING_READY의 일반 자식 gate는 GUI 역할·claim ABSENT와 같은 일반 복구 증명을
+다시 요구한다. 이 실행에는 trial nonce가 없고 READY·CONFIRMED·포인터·claim 쓰기 권한을 주지 않는다.
+일반 GUI/relay의 trial_context 부재는 trial READY 게시를 만들지 않는다. SYSTEM과 READY 소비자는
+기존 bound PID·생성 시각·nonce·receipt·정확히 하나의 trial relay 판정을 그대로 사용한다.
 canonical 교체 전 HKCU Run·실행 중 relay는 설치된 판의 정확한 명령으로 검증한다.
 Run이 `current/app/auto_update.py --bootstrap --role relay --`이면 실행 중 relay의
 실제 경로는 보호된 active 포인터와 해당 version의 manifest·bootstrap aggregate에서 구한다.
