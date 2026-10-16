@@ -13,10 +13,12 @@ from tests.test_auto_update_recovery_relay import recovery, CREATED, NOW, SHA
 def gui_recovery(recovery, monkeypatch):
     r = recovery
     r.parent['role'] = 'relay'
+    r.state['phase'] = 'FAILED'
     r.claim_state = ['NONE']
     monkeypatch.delenv('KMTECH_CA_UPDATE_DEFERRED_AT')
     monkeypatch.setattr(updates, 'apply_claim_status', lambda *_: r.claim_state[0])
     monkeypatch.setattr(updates, 'prepared_pending', lambda *_: False)
+    monkeypatch.setattr(updates.time, 'sleep', lambda seconds: r.clock.__setitem__(0, r.clock[0] + max(seconds, 0.1)))
 
     def launch(command, **options):
         assert r.held.depth > 0
@@ -45,7 +47,7 @@ def test_relay_only_recovery_launches_gui_with_relay_birth_boundary(gui_recovery
     assert len(r.launches) == 1
     _, options = r.launches[0]
     assert options['env']['KMTECH_CA_UPDATE_DEFERRED_AT'] == CREATED
-    assert 'KMTECH_CA_UPDATE_NONCE' not in options['env']
+    assert 'KMTECH_CA_UPDATE_TRIAL_NONCE' not in options['env']
     with monkeypatch.context() as child:
         child.setenv('KMTECH_CA_UPDATE_DEFERRED_AT', options['env']['KMTECH_CA_UPDATE_DEFERRED_AT'])
         assert updates.startup_gate(r.tmp_path / 'app', [], role='gui') is None
@@ -119,4 +121,17 @@ def test_existing_gui_is_reused_without_launch(gui_recovery):
     r.rows.append({**r.parent, 'pid': r.parent['pid'] + 100, 'role': 'gui'})
     assert r.gui() == 0
     assert not r.launches
+    r.unchanged()
+
+
+@pytest.mark.parametrize('claim', ['LIVE', 'NONE', 'UNKNOWN'])
+def test_rollback_ordinary_child_gate_requires_absent_supervisor(gui_recovery, monkeypatch, claim):
+    r = gui_recovery
+    r.state['phase'] = 'ROLLBACK_PENDING_READY'
+    r.claim_state[0] = claim
+    monkeypatch.setenv('KMTECH_CA_UPDATE_DEFERRED_AT', CREATED)
+    requested = []
+    monkeypatch.setattr(updates, 'request_bootstrap', lambda *a, **k: requested.append(True))
+    assert updates.startup_gate(r.tmp_path / 'app', [], role='gui') == 0
+    assert requested and not r.launches
     r.unchanged()

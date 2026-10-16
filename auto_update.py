@@ -2730,9 +2730,11 @@ def startup_gate(app_root: Path, arguments: list[str], *, role: str = "gui") -> 
                 if claim and claim.get("nonce") == state["nonce"] and claim.get("transition_id") == state["transition_id"] and (role == "relay" or claim.get("pid") == os.getpid()):
                     return None
         deferred_at = os.environ.get("KMTECH_CA_UPDATE_DEFERRED_AT")
-        if sha == active["sha"] and deferred_at and (not state or state["phase"] in {"PREPARED", "CONFIRMED", "ROLLED_BACK", "DEFERRED", "FAILED", "UNKNOWN", "APPLIED_PENDING_READY"}):
+        rollback_recovery_gui = bool(state and state["phase"] == "ROLLBACK_PENDING_READY"
+                                     and role == "gui" and apply_claim_status(control) == "ABSENT")
+        if sha == active["sha"] and deferred_at and (not state or state["phase"] in {"PREPARED", "CONFIRMED", "ROLLED_BACK", "DEFERRED", "FAILED", "UNKNOWN", "APPLIED_PENDING_READY"} or rollback_recovery_gui):
             _utc(deferred_at)
-            if state and state["phase"] in {"PREPARED", "FAILED", "UNKNOWN", "APPLIED_PENDING_READY"}:
+            if state and state["phase"] in {"PREPARED", "FAILED", "UNKNOWN", "APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"}:
                 assert_ordinary_recovery(control, policy, sha, deferred_at)
             # Ordinary active-code admission only. The unchanged G guard still
             # runs before data access; this grants no pointer or trial authority.
@@ -2829,6 +2831,39 @@ def _launch_bootstrap_version(control: Path, sha: str, arguments: list[str], *, 
             if time.monotonic() >= deadline:
                 raise
 
+
+
+def _bootstrap_recovery_gui(control: Path, policy: Mapping[str, Any], state, active, arguments,
+                            *, claim_status: str, deadline: float) -> int | None:
+    """Caller owns the update lock; only a settled ordinary relay admits a GUI."""
+    phase = (state or {}).get("phase")
+    eligible = (phase in {"FAILED", "UNKNOWN"}
+                or phase == "DEFERRED" and state.get("recovery_pending") is True
+                or phase in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"} and claim_status == "ABSENT")
+    if not eligible or claim_status not in {"NONE", "ABSENT"}:
+        return None
+    try:
+        writers = writer_processes(process_snapshot(control), own_pid=os.getpid())
+        if not writers:
+            return None
+        if any(row.get("role") == "gui" for row in writers):
+            return 0
+        if len(writers) != 1 or writers[0].get("role") != "relay":
+            raise ValueError("GUI recovery requires exactly one ordinary relay")
+        relay = writers[0]
+        boundary = relay.get("created_at")
+        if _utc(boundary) > _utc(now_utc()):
+            raise ValueError("relay creation time is in the future")
+        proved = assert_ordinary_recovery(control, policy, active["sha"], boundary)
+        if (len(proved) != 1 or proved[0].get("role") != "relay"
+                or proved[0].get("pid") != relay.get("pid")
+                or proved[0].get("created_at") != boundary):
+            raise ValueError("relay observation changed during recovery proof")
+        _launch_bootstrap_version(control, active["sha"], arguments, deadline=deadline, deferred_at=boundary)
+        return 0
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError):
+        emit_progress_guidance()
+        return 20
 
 
 def _bootstrap_existing_writers(control: Path, policy: Mapping[str, Any], active, arguments,
@@ -2947,6 +2982,11 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                 action = startup_action(state, prepared_present=prepared)
                 active = read_json(control / "active.json")
                 gui_arguments = arguments[1:] if role == "relay" and arguments[:1] == ["--container-audit-user-relay"] else arguments
+                if role == "gui":
+                    recovery_gui = _bootstrap_recovery_gui(control, policy, state, active, arguments,
+                                                           claim_status=claim_status, deadline=deadline)
+                    if recovery_gui is not None:
+                        return recovery_gui
                 if state and state["phase"] == "DEFERRED" and state.get("retained_candidate") is True:
                     if active["sha"] != recovery_sha(state, pointer_sha=active["sha"]):
                         action = "WAIT_FOR_RECOVERY"
