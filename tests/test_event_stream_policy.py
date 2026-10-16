@@ -1,4 +1,3 @@
-import ast
 import json
 from pathlib import Path
 
@@ -72,6 +71,10 @@ EXPECTED_AUDITED_OUT_OF_CATALOG_EVENTS = frozenset(
         "TRAY_STATE_DISCARDED_AFTER_COMPLETION",
         "TRAY_TAKEOVER",
         "WORK_PAUSE",
+        "PHS_REPLACEMENT_WAITING_MARK_FAILED",
+        "WORKER_ACTION_AUTHORIZED",
+        "WORKER_ACTION_RESUMED",
+        "WORKER_ACTION_APPLIED",
         "UI_LANE_FAULT",
     }
 )
@@ -82,7 +85,7 @@ def test_audited_container_csv_values_have_one_exhaustive_disposition():
         EXPECTED_AUDITED_OUT_OF_CATALOG_EVENTS
     )
     assert len(CONTRACT_CANDIDATE_EVENT_TYPES) == 14
-    assert len(LOCAL_ONLY_EVENT_TYPES) == 45
+    assert len(LOCAL_ONLY_EVENT_TYPES) == 49
     assert not FORBIDDEN_EVENT_TYPES
     assert not (CONTRACT_CANDIDATE_EVENT_TYPES & LOCAL_ONLY_EVENT_TYPES)
 
@@ -123,32 +126,23 @@ def test_headless_fallback_uses_a_non_recursive_child_directory(tmp_path):
 
 def test_production_emitters_are_closed_by_catalog_or_reviewed_policy():
     root = Path(__file__).resolve().parents[1]
-    container_tree = ast.parse(
-        (root / "Container_Audit.py").read_text(encoding="utf-8-sig")
-    )
-    product_scan_tree = ast.parse(
-        (root / "product_scan.py").read_text(encoding="utf-8-sig")
-    )
-    literal_log_events = {
-        call.args[0].value
-        for call in ast.walk(container_tree)
-        if isinstance(call, ast.Call)
-        and isinstance(call.func, ast.Attribute)
-        and call.func.attr in {"_log_event", "_prepare_event_log_entry"}
-        and call.args
-        and isinstance(call.args[0], ast.Constant)
-        and isinstance(call.args[0].value, str)
-    }
-    decision_events = {
-        keyword.value.value
-        for call in ast.walk(product_scan_tree)
-        if isinstance(call, ast.Call)
-        for keyword in call.keywords
-        if keyword.arg == "event_name"
-        and isinstance(keyword.value, ast.Constant)
-        and isinstance(keyword.value.value, str)
-        and keyword.value.value
-    }
+    from event_emitter_audit import collect_emitters
+    import subprocess
+
+    paths = subprocess.check_output(
+        ["git", "ls-files", "*.py"], cwd=root, text=True
+    ).splitlines()
+    paths = [p for p in paths if not p.startswith((
+        "tests/", "vendor/", "kmtech_factory_contracts/", "kmtech_shared/"
+    ))]
+    emitters = []
+    unresolved = []
+    for path in paths:
+        rows, dynamic = collect_emitters(
+            (root / path).read_text(encoding="utf-8-sig"), path
+        )
+        emitters.extend(rows)
+        unresolved.extend(dynamic)
     catalog = json.loads(
         (
             root
@@ -170,5 +164,67 @@ def test_production_emitters_are_closed_by_catalog_or_reviewed_policy():
         | set(ADJACENT_CONTRACT_CANDIDATE_EVENT_TYPES)
     )
 
-    assert literal_log_events | decision_events <= reviewed
+    missing = [row for row in emitters if row["event"] not in reviewed]
+    assert not missing, "Unclassified event emitters: " + "; ".join(
+        f"{row['event']} {row['path']}:{row['line']} ({row['shape']})"
+        for row in missing
+    )
     assert not (set(stream["raw_event_names"]) & LOCAL_ONLY_EVENT_TYPES)
+    # Forwarding boundaries are reviewed separately from finite event names.
+    # A new/changed unresolved expression must fail instead of disappearing.
+    from collections import Counter
+    expected_dynamic = json.loads(
+        (root / "tests/fixtures/event_emitter_dynamic_sources.json").read_text()
+    )
+    key = lambda row: (row["path"], row["scope"], row["expression"])
+    assert Counter(map(key, unresolved)) == Counter(map(key, expected_dynamic)), (
+        "Unreviewed dynamic event forwarding sites: " + repr(unresolved)
+    )
+
+
+def test_collector_resolves_alias_partial_constants_and_keyword_arguments():
+    from event_emitter_audit import collect_emitters
+
+    source = """
+import functools
+from functools import partial as bind
+PREFIX = "ASSEMBLED_"
+class App:
+    def emit(self):
+        name = PREFIX + "EVENT"
+        logger = getattr(self, "_log_event", None)
+        logger(name)
+        direct = self._log_event
+        direct(event="KEYWORD_EVENT")
+        bound = functools.partial(self._log_event, event_type="PARTIAL_EVENT")
+        bound(detail={})
+        positional = functools.partial(logger, "POSITIONAL_EVENT")
+        positional()
+        chosen = "TRUE_EVENT" if self.ready else "FALSE_EVENT"
+        self._log_event(event_type=chosen)
+        joined = f"{PREFIX}FORMATTED"
+        self._log_event(joined)
+        names = {"a": "MAPPED_A", "b": "MAPPED_B"}
+        self._log_event(names[self.choice])
+        other = bind(direct, event="RENAMED_PARTIAL")
+        other()
+"""
+    rows, unresolved = collect_emitters(source)
+    assert {row["event"] for row in rows} == {
+        "ASSEMBLED_EVENT", "KEYWORD_EVENT", "PARTIAL_EVENT",
+        "POSITIONAL_EVENT", "TRUE_EVENT", "FALSE_EVENT",
+        "ASSEMBLED_FORMATTED", "MAPPED_A", "MAPPED_B", "RENAMED_PARTIAL",
+    }
+    assert not unresolved
+
+
+def test_collector_preserves_unresolved_dynamic_calls_for_review():
+    from event_emitter_audit import collect_emitters
+
+    rows, unresolved = collect_emitters(
+        "def emit(self, name):\n    alias = self._log_event\n    alias(event_type=name)\n"
+    )
+    assert rows == []
+    assert len(unresolved) == 1
+    assert unresolved[0]["scope"] == "emit"
+    assert unresolved[0]["shape"] == "alias"
