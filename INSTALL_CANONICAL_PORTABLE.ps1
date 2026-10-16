@@ -71,7 +71,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = 'c69adf6b64ed2906138b803942ad328ae993e45b4d5c584bc52927ad39e92bfb'
+$ExpectedBootstrapIntegritySha256 = '43b67845c82983e01ab5b412ce9947bc3f1b240595d590099f4e507e8110c86e'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -4445,7 +4445,14 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
     }
     $workerPreparation=$null
     # User paths and HKCU are prepared by the ordinary interactive worker first run.
-    if ($PlanOnly) { Write-Output 'install_status=PLAN_ONLY'; return }
+    if ($PlanOnly) {
+        # Validate the caller's scope without preparing user data or HKCU.
+        if ([bool]$Worker.same_caller -and -not $Uninstall -and -not $RestoreVerifiedReplacement) {
+            [void](Get-CanonicalWorkerPreparationPaths $Worker)
+        }
+        Write-Output 'install_status=PLAN_ONLY'
+        return
+    }
     $Script:ContainerMachineInstallControlRoot=$control
     $Script:ContainerWriterFenceAdmissionProductionRoot=$control
     $Script:CanonicalWriterFenceDelegationToken=[Guid]::NewGuid().ToString('N')+[Guid]::NewGuid().ToString('N')

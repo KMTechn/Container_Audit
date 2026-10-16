@@ -2,6 +2,10 @@
 
 10/15 화면 동작: 부분 제출 확인은 재시작 때 채우는 중으로 돌아가며, 이미 저장된 결정은 유예 없이 같은 키로 복구·확정한다. C02–C07·검증된 C09는 자기 작업에 한해 PIN 없이 처리하고 C08·수동 결속·격리 복원은 관리자 PIN을 요구한다. 실제 창 동작·장면 판정과 부분 제출/PIN 독립 검토는 통합 뒤 별도 수용한다.
 
+자동 오프라인 복귀 중 재기동은 원본 FIFO를 새 store에서 되읽고 누락된 로컬 복귀 감사만 일회 보충한다. CSV에 아직 없더라도 durable outbox 원본을 확인하며, 원본 지문·작업자·기존 C12 경계는 유지한다. 종료 미룸·종료 지연·UI lane 오류 감사도 local_events에 남기고 현장 relay 대상 CSV에서는 제외한다.
+
+자동 오프라인 보관 원본은 같은 작업자가 재스캔하고 자동 보관 사유와 원본 지문이 동기 감사와 일치할 때만 PIN 없이 FIFO를 복구한다. 관리자 격리 원본·다른 작업자·지문 불일치와 공개 C12 복원은 기존 PIN 경계를 유지한다.
+
 자동 업데이트 출발판은 v2.0.104 이상이다. 업데이트 후보는 설치된 판의 `tools/apply_prepared_update.ps1`이 판정한다. v2.0.103처럼 unsigned 목록이 빈 판만 받는 옛 helper가 깔린 PC는 v2.0.104 이후 자동 업데이트를 `STARTUP_UPDATE_PORTABLE_MANIFEST_DIFFERS`로 거절하며 업무를 멈추지 않는다. 그런 PC는 정식 제거 뒤 새로 설치한다. 자료꼴 호환 하한 v2.0.103은 업데이트 출발판을 뜻하지 않는다.
 
 설치 자식의 fallback 진단은 객체·schema·정수 exit_code를 확인한 뒤 읽는다. 누락·null·배열·손상·64 KiB 초과·미지 형식은 「진단 형식 모름」으로 따로 기록한다. 자식의 원 종료값·출력·이유·최초 실패 참조는 유지하며, 진단 parser 예외가 original_failure를 선점하지 않는다. 정상 옛 fallback은 자식 종료값이 일치할 때만 선택한다. 증거 writer 실패와 task 부재·UNKNOWN 거절은 그대로다.
@@ -348,6 +352,8 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 <a id="ca-startup-update"></a>
 ## 로그온 자동 갱신 운영
 
+스케줄러가 SYSTEM 이름/동의어 또는 boolean 숫자 표현을 반환해도 같은 소유 작업으로 확인한다. SID 해석 실패·빈 주체·사용자/그룹 주체·다른 RunLevel/action은 기존 복구 거절을 유지한다. 실제 작업 등록과 원본 XML 복원은 변경하지 않는다.
+
 PowerShell 관측·ACL·고정 helper·새 SYSTEM 로그온 action은 자식 인수에 `-ExecutionPolicy Bypass`를 명시한다. 관리자 기계 배치·작업자 준비의 기존/배치된 코드 무결성 확인과 지원 제거 자식에도 적용한다. OS·레지스트리·GPO 정책은 변경하지 않는다. 작업 관측·설치·제거는 정확한 이전 무정책 action과 새 action만 인정하며 원본 복원 XML을 보존한다. GPO 강제 및 실제 현장 실행은 별도 수용 항목이다.
 
 첫 실행은 자료·원장·자동 시작 준비의 writer admission을 끝낸 뒤 relay를 시작한다. 시작 결과 확인 뒤 admission을 다시 얻어 시도·소유 자료를 재확인하고 환경과 READY 보고를 적용한다. UNKNOWN·실패·canonical 연기의 판정은 유지한다.
@@ -366,7 +372,10 @@ READY 실패 뒤 `update-control/transition.json`의 `retained_candidate=true`�
 확인한다. 판정 불가에서는 candidate도 기존 guard가 UNKNOWN으로 중단하며 기동을
 보장하지 않는다. 다음 시도에도 같은 고정 지원 복구 안내를 내고 자료와 판정 기록을
 보존한다. 임의 옛 판 복귀·marker 삭제·자료 복원으로 우회하지 않는다.
-세대가 변하지 않았고 옛 판이 허용된 경우만 이미 확인된 옛 판으로 `ROLLED_BACK` 복귀한다.
+세대가 변하지 않았고 옛 판이 허용된 경우만 옛 포인터를 복원하고 `ROLLBACK_PENDING_READY`로 기다린다.
+복원 판의 새 일반 사용자 GUI/relay READY를 실제 프로세스와 대조한 뒤에만 `ROLLED_BACK`과 confirmed_at을 기록한다.
+재시작·다른 감독도 기존 rollback_at 기준 120초 창을 이어 가며, 완료 전이와 후보 실패 목록·옛 포인터·자료는 보존한다.
+READY 부재·위조·다른 사용자/판·단순 생존은 완료 증거가 아니며, 시간 초과에는 기존 FAILED/지원 복구 정책을 유지한다.
 GUI와 relay는 같은 판정 함수를 사용한다.
 이전 실행이 남긴 업데이트 확인을 이어받으면 자료가 그대로일 때 정상 새 판도 이전 판으로 돌아갈 수 있다. 자동 갱신이 켜져 있으면 다음 시작 때 새 판을 감독하며 다시 적용한다.
 10/14 이후에는 PC마다 실제로 실행 중인 판을 확인한다.
@@ -1656,6 +1665,7 @@ Registration retains string profile-path arguments after shared resolution. Inva
 onboarding/removal/lifecycle의 사용자 경로와 update-control에는 작업 사용자·관리자만 읽는다는 기존 ACL 증명이 없다. 공개 실패 줄은 `REPORT_UNAVAILABLE`을 표시하고 원문을 새 파일에 쓰지 않는다. 혼합 상태 보고서는 같은 키·타입을 유지하며 자유 진단 필드만 `SUPPORT_FAILURE`로 저장한다. 실패 보고서와 공개 줄은 원인 예외의 형식 이름과 가장 안쪽 앱 프레임의 모듈·함수·줄 번호를 보존한다. 원인 예외에 traceback이 없으면 바깥 예외의 앱 프레임을 사용하며, 예외 문장·지역 변수·파일 경로는 위치 필드에 넣지 않는다. 보고서 게시 실패에도 공개 줄의 위치 정보는 유지한다. identity/profile/credential/receipt/queue/lease/status와 설치기 인증·재개 bindings는 원 값을 보존한다. 알려진 비밀 값이 machine metadata에 섞이면 기존 공통 검사로 temp를 열기 전에 거절한다. preflight는 진단 보고서를 만들려고 자료를 변경하지 않는다.
 
 설치기 private evidence는 기존 `Initialize-InstallationEvidence`/`Set-InstallationEvidenceAcl`의 보호 root를 같은 프로세스와 같은 시도에서 재사용한다. 원문은 공통 가림과 UTF-8 64 KiB 상한 뒤 임시 파일에 쓰고 flush·기존 ACL 검증·원자 이름 변경·실제 바이트 SHA256 readback을 마친다. 해당 writer가 만든 객체와 같은 참조일 때만 공개 `report_path`/`report_sha256`을 포함한다. caller가 예외 Data에 넣은 경로·옛 참조·게시 실패에는 `REPORT_UNAVAILABLE`을 표시한다. 새 ACL 위치나 새 ACL 증명 함수는 만들지 않는다.
+진단 게시 경로는 같은 프로세스·같은 설치 시도의 기존 보호 installation-evidence root에 결속하며, 공개 참조는 그 root에서 게시·되읽기한 바이트만 가리킨다.
 
 보호 진단 JSON의 65,536바이트 상한은 이스케이프·필수 필드·writer가 덧붙이는 LF까지 포함한 최종 UTF-8 저장 바이트로 판정한다. Python `serialize_json_for_sink`와 PowerShell `Write-InstallationOriginalFailure`/private `ConvertTo-CanonicalAuditJson`은 직렬화 크기를 확인하며 진단 문자열만 더 줄여 유효 JSON·앞뒤 원인 맥락·잘림 표식을 유지한다. 상태·인증 metadata는 이 진단 상한의 대상이 아니며 원 바이트와 비밀 검사를 유지한다. onboarding의 replace/create-new 실패 보고서는 원 예외 대신 기존 `SUPPORT_FAILURE` 코드와 원 metadata를 기록한다.
 

@@ -109,9 +109,12 @@ def test_startup_failure_returns_to_previous_code_only_after_writer_absence():
     rollback = updates.rollback_transition(state, writers_absent=True, previous_verified=True, durable_rollback=True, nonce="8" * 32, now=LATER)
     assert rollback["trial_sha"] is None
     assert rollback["trial_started_at"] is None
-    # D-16/E6: the confirmed previous version requires no second READY trial.
     assert updates.recovery_sha(rollback, pointer_sha=NEW) == OLD
-    result = rollback
+    assert rollback["phase"] == "ROLLBACK_PENDING_READY"
+    assert "confirmed_at" not in rollback
+    restored = updates.bind_trial(rollback, sha=OLD, pid=44, ordinary_user=True, now=LATER)
+    result = updates.confirm_transition(restored, {**ready(restored), "sha": OLD},
+                                        process_matches=True, relay_matches=True, now=LATER)
     assert result["phase"] == "ROLLED_BACK"
     assert result["failed_shas"] == [NEW]
     with pytest.raises(ValueError, match="failed version"):
@@ -355,9 +358,9 @@ def test_engine_candidate_exit_selects_generation_compatible_code_without_revert
     assert result["failed_shas"] == [NEW]
     assert updates.read_json(control / "active.json")["sha"] == (OLD if generation_case == "unchanged" else NEW)
     if generation_case == "unchanged":
-        # E6 removes the old READY trial; only candidate was trial-launched.
-        assert len(nonces) == (1 if failure_kind == "exit" else 0)
-        assert result["trial_sha"] is None
+        assert len(nonces) == (2 if failure_kind == "exit" else 1)
+        assert result["trial_sha"] == OLD
+        assert result["confirmed_at"] == LATER
     else:
         assert result["retained_candidate"] is True
         assert result["failure_decision"]["code"] == ("TRIAL_GENERATION_ADVANCED" if generation_case == "advanced" else "TRIAL_GENERATION_UNKNOWN")

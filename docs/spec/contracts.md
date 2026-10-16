@@ -1,5 +1,9 @@
 ﻿10/15 화면 계약(M124·M125): `work.list[].code`는 원문, `work.exchange={phase,remove,insert}`는 교환 중·직후에만 제공, `today.rows[].products`는 내구 완료 제품 수 정수, `admin_menu[].pin`은 boolean이다. C02–C07·검증된 같은 원본 C09는 작업자와 원 소유권·지문·멱등 키·CAS를 유지하고 승인자 칸을 비운다. C08 목록과 C10·C11 수동 결속·C12 격리 복원은 PIN 경계를 유지한다.
 
+자동 오프라인 보관 원본의 복귀는 같은 작업자·동기 감사의 자동 보관 사유·원본 지문이 모두 맞는 내부 스캔 경로에서만 PIN 없이 처리한다. 관리자 격리 원본의 복원과 공개 C12 진입은 기존 관리자 PIN을 요구한다. 자동 보관 의도는 이동 전에 기존 CSV 형식으로 동기 기록해 이동 직후 중단에도 같은 조건을 증명한다.
+
+자동 오프라인 보관 의도·격리·복귀 감사는 LOCAL_ONLY이며 CSV 투영 전의 durable outbox 원본도 같은 소유권·지문 확인에 쓴다. 복귀 rename 뒤 중단하면 새 app/store에서 원 작업자·원 지문·자동 격리 감사·격리 원본 부재를 확인하고 같은 idempotency key로 RESTORED 감사를 마친다. C12 intent의 복구는 기존 PIN 길에 남긴다. APP_STOP_DEFERRED·APP_CLOSE_DELAY·UI_LANE_FAULT는 업무 수량 event가 아닌 로컬 종료·오류 진단으로 서버 CSV에 싣지 않는다.
+
 > 2026-10-01 w9scanonly 현재 계약: 7칸 QT=1–9999 즉시 시작, snapshot 구성원 수 우선, 로컬 intent/checkpoint/TRAY_COMPLETE → 표시 → 독립 배경 교환 ACK/lease/seal. 공통 payload는 scan_payload/local_completion_id/local_completed_at/deferred_reflection/short_confirmed/exchange_idempotency_keys다. short는 전체 topology 증거와 스캔 subset을 보내고 exact 잔량을 검증한다. UPSTREAM_COMPLETION_PENDING 409는 retry, COMPLETION_REVIEW_REQUIRED는 해당 intent review다. 유효 PHS2_LOCAL_ONLY도 같은 대기열로 보내며 옛 13자리 현품표는 기존 과도기 기록만 유지한다.
 
 새 화면의 업무 동작은 명시 True/boolean ok만 성공으로 돌려준다. False·오류 글·거절 안내는 실패, None은 결과 모름(idle·ok=False)이며 재전송이 실패를 성공으로 덮지 않는다. 관리자 ID/PIN 빈 입력은 실행 전에 거절하고 재인증 필요는 웹 결과로 표시한다. 등록은 같은 원장 함수로 직접 가고 PIN·내부 시험 입력은 기존 인스턴스 대체를 사용해 Tk Toplevel·grab·wait_window를 만들지 않는다. 옛 화면 모달과 업무 자료·인증 계약은 유지한다.
@@ -269,9 +273,14 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 <a id="ca-startup-update"></a>
 ## 로그온 자동 갱신 계약
 
+작업 되읽기는 SYSTEM 계정 이름을 Windows SID `S-1-5-18`로 해석하고 XML boolean의 `true/false`(대소문자 무관)·`1/0`을 같은 값으로 비교한다. Python과 PowerShell lifecycle 소비자는 같은 판정을 사용하며, 다른 주체·실행 수준·작업 명령은 거절한다.
+
 `auto_update.py`의 프로토콜 1은 `PREPARED → APPLIED_PENDING_READY → CONFIRMED`와
-실패 시 `ROLLBACK_PENDING → ROLLED_BACK`을 기록한다. 복귀 대상은 이미 확인된 이전
-판이므로 READY 재시험을 요구하지 않는다(기존 ROLLBACK_PENDING_READY도 정착 가능).
+실패 시 `ROLLBACK_PENDING → ROLLBACK_PENDING_READY → ROLLED_BACK`을 기록한다.
+이전 판 포인터를 복원한 뒤에도 새 일반 사용자 GUI/relay의 같은 SHA·nonce·거래·시각과
+실제 프로세스 대조를 통과한 READY가 있어야 confirmed_at과 ROLLED_BACK을 기록한다.
+기존 protocol 1의 phase/필드만 사용하며, 중단 뒤에는 같은 nonce·rollback_at 창을 이어 간다.
+기존 120초 안에 준비되지 않으면 완료를 쓰지 않고 기존 FAILED/지원 복구 정책을 유지한다.
 시험 기동 실패는 정상 writer 종료 뒤 실제 공통 SID 자료 세대를 다시 읽어 판정한다.
 PREPARED의 before와 같고 옛 판 guard가 ALLOW일 때만 복귀한다. candidate 세대가
 기록됐거나 before/after가 미확인이면 candidate를 유지하고 DEFERRED에

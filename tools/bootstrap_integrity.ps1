@@ -570,6 +570,18 @@ function Get-BootstrapTaskTriggerIdentityStatus([xml]$Task,[string]$OperatorSid)
     return 'DIFFERS'
 }
 
+function Test-BootstrapTaskReadbackValue([string]$Field,[string]$Actual,[string]$Expected) {
+    if([string]::IsNullOrWhiteSpace($Actual) -or $Actual -cne $Actual.Trim()){return $false}
+    if($Field -ceq '/t:Task/t:Principals/t:Principal/t:UserId'){
+        try{return (ConvertTo-BootstrapPrincipalSid $Actual) -ceq 'S-1-5-18'}catch{return $false}
+    }
+    if($Field -cin @('/t:Task/t:Settings/t:AllowHardTerminate','/t:Task/t:Settings/t:Hidden')){
+        if($Expected -ceq 'true'){return $Actual.ToLowerInvariant() -cin @('true','1')}
+        return $Actual.ToLowerInvariant() -cin @('false','0')
+    }
+    return $Actual -ceq $Expected
+}
+
 function Test-BootstrapPrivilegedOwnerSid([string]$Sid) {
     return $Sid -cin @(
         'S-1-5-18', 'S-1-5-32-544',
@@ -4091,8 +4103,9 @@ function Get-BootstrapSupportedLifecycleContext([string]$Root,[string]$Operation
                 $nodes=$taskXml.SelectNodes($field,$names)
                 if($nodes.Count -ne 1){throw 'lifecycle_task_absence_or_unknown'}
                 $node=$nodes[0]
+                if($node.ChildNodes.Count -ne 1 -or $node.ChildNodes[0].NodeType -notin @([Xml.XmlNodeType]::Text,[Xml.XmlNodeType]::CDATA)){throw 'lifecycle_task_absence_or_unknown'}
                 if($field -ceq '/t:Task/t:Actions/t:Exec/t:Arguments' -and $node.InnerText -ceq $previousArguments){continue}
-                if($node.InnerText -cne $wanted[$field]){throw 'lifecycle_task_absence_or_unknown'}
+                if(-not(Test-BootstrapTaskReadbackValue $field $node.InnerText $wanted[$field])){throw 'lifecycle_task_absence_or_unknown'}
             }
             $after=@($records|ForEach-Object {Read-BootstrapLifecycleJson $_})
             for($index=0;$index -lt 3;$index++){

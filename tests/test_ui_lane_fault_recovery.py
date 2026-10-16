@@ -1,6 +1,7 @@
 """Fault recovery preserves UNKNOWN originals before accepting another tray."""
 import copy
 import datetime
+import csv
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -47,6 +48,16 @@ def break_after_work(app, *, barcode=None, work=lambda: None):
     return lane, admission.handle, lane.last_task
 
 
+def _fault_audit_rows(app):
+    from event_stream_policy import local_only_event_log_path
+    path = local_only_event_log_path(
+        app.log_file_path, local_events_dir=getattr(app, "local_events_folder", None))
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8-sig", newline="") as stream:
+        return list(csv.DictReader(stream))
+
+
 def test_fault_preserves_original_unknown_and_accepts_next_tray(recovery_app):
     app = recovery_app
     app.current_tray.scanned_barcodes = [ITEM + uuid.uuid4().hex]
@@ -71,7 +82,7 @@ def test_fault_preserves_original_unknown_and_accepts_next_tray(recovery_app):
     assert fault["held_scans"] == [held_barcode] and not app._scans_behind_save
     assert saved["scanned_barcodes"] == json.loads(original)["scanned_barcodes"]
     assert (app.work_summary, app.total_tray_count, app.completed_master_labels) == before
-    durable = [json.loads(row["details"]) for row in rows(app) if row["event"] == "UI_LANE_FAULT"]
+    durable = [json.loads(row["details"]) for row in _fault_audit_rows(app) if row["event"] == "UI_LANE_FAULT"]
     assert len(durable) == 1 and durable[0]["result"] == "UNKNOWN"
     assert app.parked_summaries and "관리자 확인 대기" in app.parked_summaries[0].item_name
     assert not app._scan_entry_admission_block_reason()
@@ -273,7 +284,7 @@ def test_fault_during_shutdown_records_but_does_not_resume(recovery_app):
     old, _, _ = break_after_work(app)
     assert app._ui_task_lane() is old and old.state == serial.LANE_BROKEN
     assert source.read_bytes() == original and app._ui_lane_fault_blocked
-    assert any(row["event"] == "UI_LANE_FAULT" for row in rows(app))
+    assert any(row["event"] == "UI_LANE_FAULT" for row in _fault_audit_rows(app))
 
 
 @pytest.mark.parametrize("pending", ["write", "result"])

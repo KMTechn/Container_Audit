@@ -74,6 +74,8 @@ class OwnedRelay:
 
 @pytest.fixture
 def owned_relay(tmp_path):
+    if "IWRUN_CONFIG" in os.environ:
+        pytest.skip('real relay runtime is excluded on the headless host')
     if os.name != 'nt':
         pytest.skip('real relay absence proof requires the Windows runtime mutex')
     relay = OwnedRelay(tmp_path)

@@ -4,6 +4,16 @@
 
 11/1 첫 업데이트(v2.0.113) — 작업 임대 갱신(앱+서버 계약, w9mgrweb 과 같이): 지금 이적은 현품표 스캔 때 한 번 발급하며 갱신 길은 없다. v2.0.112는 원 임대 만료 뒤 로컬 완료를 원 명령·실제 시각으로 보내 서버의 안전 재개를 받는 범위다.
 
+10/16 sub-145 후속: 자동 보관 선행 의도와 기존 종료/오류 진단 세 종류를 LOCAL_ONLY로 닫았다. 세 재시작 경계×CSV/outbox 조건은 새 app/store로 검증하며, 복귀 rename 직후 누락 감사와 outbox-only provenance를 기존 형식으로 복구한다. 서버 catalog 변경은 없다.
+
+10/16 G09: 자동 오프라인 보관의 같은 작업자 복귀는 감사 사유·원본 지문을 확인하는 내부 스캔 경로에서 PIN 없이 이어진다. 관리자 격리 원본의 C12 PIN은 유지한다. 기존 FIFO·반환 거절·이동 중단 회귀와 PIN 경계 음성 시험으로 확인한다.
+
+11/1 첫 업데이트 — 작업 임대 갱신(앱+서버 계약, w9mgrweb 과 같이): 지금 이적은 현품표 스캔 때 한 번 발급(Container_Audit.py·transfer_seal.py), 갱신 길 없음, 확인 창·채우는 중이 서버 TTL 을 넘으면 만료
+
+11/1 첫 업데이트 — 공개 -PlanOnly 입구의 실제 실증 시험(관리자 sub-143 P3).
+
+11/1 첫 업데이트 — timeout 0 공유 게시 예산 소진·둘째 게시 실패·중단 장면 시험(관리자 sub-143 P3).
+
 회사 서버 앞단 대응: 고정 User-Agent 공통 적용, 비JSON 403·5xx 코드 안내와 requests 압축 읽기를
 오프라인 transport 시험으로 검증한다. 실제 회사 서버 통과·화면 확인은 별도 수용 대상이다.
 
@@ -562,6 +572,10 @@ portable direct-sync 자식은 기존 relay startup gate와 writer sink를 거�
 
 <a id="ca-g19"></a>
 ## CA-G19 로그온 자동 갱신 실기 수용
+
+sub-238은 같은 소유 scheduler의 SYSTEM/boolean 되읽기와 복원 relay READY 전 완료를 고친다.
+격리 helper 회귀는 실제 task 등록·로그온·앞 판 relay 기동·현장 수용을 대신하지 않는다.
+저장 protocol 1·기존 phase/필드와 writer admission 불변식은 유지하며 새 설치/배포 권한은 추가하지 않는다.
 
 [읽기 전용 시작 확인](startup-check.md)의 headless 시험은 실물 HDD 10초 상한·로그온 작업·
 실제 작업자 계정·원격 알림 수용을 대신하지 않는다. 이 수용은 설치 키트/현장 lane에서 남는다.

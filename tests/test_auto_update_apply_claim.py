@@ -163,6 +163,8 @@ def test_system_restart_supervises_only_a_window_it_opens(endpoint, monkeypatch,
     control, _, _, state, _, _ = endpoint
     updates.write_json_durable(control/'transition.json', {**state, 'phase': 'FAILED'})
     updates.write_json_durable(control/'active.json', {'sha': OLD})
+    # A fresh packet starts after the restored pair has completed its READY window.
+    assert updates.apply_prepared(control) == 0
     hot = hotfix_packet(endpoint, monkeypatch)
     written = updates.write_json_durable
     def crash(path, value):
