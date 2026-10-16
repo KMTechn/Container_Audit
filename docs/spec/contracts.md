@@ -327,6 +327,7 @@ ROLLBACK_PENDING_READY의 일반 자식 gate는 GUI 역할·claim ABSENT와 같�
 기존 bound PID·생성 시각·nonce·receipt·정확히 하나의 trial relay 판정을 그대로 사용한다.
 미결 claim의 PID가 재사용되어도 READY 시각은 새 trial_started_at보다 앞설 수 없다.
 과거 receipt는 새 생성 시각으로 관측상 bind된 일반 GUI를 확정하는 증거가 되지 않는다.
+Observe는 설치기가 Run에 적는 고정 bootstrap 줄(GUI·relay)을 기존 bootstrap 판정으로 역할 분류 전에 빼 행으로 내지 않는다 — READY relay 셈·census 밖이다. 실제 relay가 둘이면 지금처럼 확인하지 않는다(G46).
 canonical 교체 전 HKCU Run·실행 중 relay는 설치된 판의 정확한 명령으로 검증한다.
 Run이 `current/app/auto_update.py --bootstrap --role relay --`이면 실행 중 relay의
 실제 경로는 보호된 active 포인터와 해당 version의 manifest·bootstrap aggregate에서 구한다.

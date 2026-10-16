@@ -1,5 +1,7 @@
 ﻿## 목표 명세 고칠 목록(10/11)
 
+10/17 sub-276 G46 닫음: Observe가 기존 bootstrap 판정에 맞는 GUI·relay launcher를 소유자 조회·역할 분류 전에 제외한다. 되돌림 READY는 실제 relay 하나로만 확인하며 실제 relay 둘·relay 부재는 확인하지 않는다. READY·census 판정 본문과 G41 동시 relay 요청의 단일 실행을 유지한다.
+
 10/17 sub-268 G41·G45: 복구 GUI의 relay 소실과 relay만 살아 있을 때의 GUI 막힘 P1을 수정했다. relay 요청은 원 시작 경계, GUI 요청은 허용 상태·정착 claim·검증된 relay 하나의 생성 경계를 사용한다. 일반 복구 증명·상태 보존·안내+20을 유지하며 SYSTEM guard/READY 소비자와 세대 정착을 격리 회귀로 확인한다. 실제 로그온·pythonw 수용은 별도다.
 
 11/1 P2(sub-268, 정적 잔류): 감독 잃은 ROLLBACK_PENDING에 relay가 남으면 GUI 요청은 ABSENT에서 기존 0, NONE에서 SYSTEM의 writer 거절 뒤 240초 한도로 끝나 화면을 못 띄울 수 있다. 이번 고침 범위 밖이며 안내 문안은 「화면이 안 뜨면 지원에 연락」이다.
