@@ -29,7 +29,8 @@ def recovery(tmp_path, monkeypatch):
     control.mkdir()
     stage.mkdir()
     policy = {"operator_sid": uuid.uuid4().hex, "staging_root": str(stage)}
-    state = {"schema": updates.SCHEMA, "phase": "APPLIED_PENDING_READY", "trial_pid": 42}
+    state = {"schema": updates.SCHEMA, "phase": "APPLIED_PENDING_READY", "trial_pid": 42,
+             "nonce": uuid.uuid4().hex}
     records = {
         control / "policy.json": policy,
         control / "active.json": {"sha": SHA},

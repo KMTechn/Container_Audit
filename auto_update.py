@@ -2797,18 +2797,20 @@ def current_generation_status(control: Path, policy: Mapping[str, Any], sha: str
         return "UNKNOWN"
 
 
-def assert_ordinary_recovery(control: Path, policy: Mapping[str, Any], sha: str, started_at: str) -> None:
+def assert_ordinary_recovery(control: Path, policy: Mapping[str, Any], sha: str, started_at: str) -> list[Mapping[str, Any]]:
     """Caller owns the update lock; native process creation registers writers."""
     if read_json(control / "active.json")["sha"] != sha:
         raise ValueError("ordinary recovery code is not the active version")
     if current_generation_status(control, policy, sha) != "ALLOW":
         raise ValueError("ordinary recovery requires current data generation allowance")
     started = _utc(started_at)
-    for row in writer_processes(process_snapshot(control), own_pid=os.getpid()):
+    writers = writer_processes(process_snapshot(control), own_pid=os.getpid())
+    for row in writers:
         if (row.get("sha") != sha or row.get("sid") != policy["operator_sid"]
                 or row.get("ordinary_user") is not True or row.get("role") not in {"gui", "relay"}
                 or _utc(row.get("created_at")) < started):
             raise ValueError("an earlier or unrelated writer prevents ordinary recovery")
+    return writers
 
 
 def _launch_bootstrap_version(control: Path, sha: str, arguments: list[str], *, deadline: float, **kwargs) -> int:
@@ -2826,6 +2828,46 @@ def _launch_bootstrap_version(control: Path, sha: str, arguments: list[str], *, 
             time.sleep(min(0.1, remaining))
             if time.monotonic() >= deadline:
                 raise
+
+
+
+def _bootstrap_existing_writers(control: Path, policy: Mapping[str, Any], active, arguments,
+                                *, role: str, deadline: float) -> int | None:
+    """Caller owns the update lock; relay success requires launch or live proof."""
+    try:
+        writers = writer_processes(process_snapshot(control), own_pid=os.getpid())
+        if not writers:
+            return None
+        if role != "relay":
+            return 0
+        sha = active["sha"]
+        deferred_at = os.environ.get("KMTECH_CA_UPDATE_DEFERRED_AT")
+        if deferred_at:
+            if _utc(deferred_at) >= _utc(now_utc()):
+                raise ValueError("ordinary recovery boundary must precede this request")
+            # Return the exact observation that passed the existing cohort proof.
+            writers = assert_ordinary_recovery(control, policy, sha, deferred_at)
+        else:
+            # A logon request has no inherited boundary. It may reuse a proven
+            # ordinary relay, but cannot create a new cohort beside a writer.
+            if read_json(control / "active.json")["sha"] != sha or current_generation_status(control, policy, sha) != "ALLOW":
+                raise ValueError("ordinary relay reuse requires the active allowed version")
+            for row in writers:
+                if (row.get("sha") != sha or row.get("sid") != policy["operator_sid"]
+                        or row.get("ordinary_user") is not True or row.get("role") not in {"gui", "relay"}):
+                    raise ValueError("an unrelated writer prevents ordinary relay reuse")
+                _utc(row.get("created_at"))
+        if any(row.get("role") == "relay" for row in writers):
+            return 0
+        if not deferred_at:
+            raise ValueError("ordinary relay launch requires the inherited boundary")
+        _launch_bootstrap_version(control, sha, arguments, deadline=deadline, deferred_at=deferred_at)
+        return 0
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError):
+        if role != "relay":
+            raise
+        emit_progress_guidance()
+        return 20
 
 
 def start_current(control: Path, policy: Mapping[str, Any], state, active, arguments, *, code: str, report_once: bool = False, deadline: float | None = None) -> int:
@@ -2920,8 +2962,9 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                         code = "UPDATE_TERMINAL_RECOVERED"
                     return start_current(control, policy, state, active, arguments, code=code, deadline=deadline)
                 if claim_status == "ABSENT":
-                    if writer_processes(process_snapshot(control), own_pid=os.getpid()):
-                        return 0
+                    existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline)
+                    if existing is not None:
+                        return existing
                     if current_generation_status(control, policy, active["sha"]) != "ALLOW":
                         emit_progress_guidance()
                         return 20
@@ -2933,8 +2976,9 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                     return 0
                 if state and state["phase"] in {"UNKNOWN", "FAILED"}:
                     if claim_status not in {"LIVE", "UNKNOWN"}:
-                        if writer_processes(process_snapshot(control), own_pid=os.getpid()):
-                            return 0  # The existing single application writer owns work.
+                        existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline)
+                        if existing is not None:
+                            return existing
                         if current_generation_status(control, policy, active["sha"]) == "ALLOW" and not prepared:
                             return start_current(control, policy, state, active, arguments, code="UPDATE_TERMINAL_RECOVERED", deadline=deadline)
                 if action in {"REQUEST_APPLY", "REQUEST_TRIAL", "WAIT_FOR_RECOVERY", "WAIT_FOR_TRIAL"} and not requested:
@@ -2947,8 +2991,10 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                             requested = True
                             continue
                         if not state or state["phase"] in {"PREPARED", "CONFIRMED", "ROLLED_BACK", "DEFERRED", "FAILED", "UNKNOWN", "APPLIED_PENDING_READY"}:
-                            if state and state["phase"] == "APPLIED_PENDING_READY" and writer_processes(process_snapshot(control), own_pid=os.getpid()):
-                                return 0
+                            if state and state["phase"] == "APPLIED_PENDING_READY":
+                                existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline)
+                                if existing is not None:
+                                    return existing
                             code = "UPDATE_SUPERVISION_UNAVAILABLE" if state and state["phase"] == "APPLIED_PENDING_READY" else "UPDATE_APPLY_REQUEST_FAILED"
                             return start_current(control, policy, state, active, arguments, code=code, deadline=deadline)
                         raise
@@ -2978,8 +3024,10 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                 if requested and progress_deadline is not None:
                     claim_status = apply_claim_status(control)
                     if claim_status == "ABSENT":
-                        if state and state["phase"] == "APPLIED_PENDING_READY" and writer_processes(process_snapshot(control), own_pid=os.getpid()):
-                            return 0
+                        if state and state["phase"] == "APPLIED_PENDING_READY":
+                            existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline)
+                            if existing is not None:
+                                return existing
                         return start_current(control, policy, state, active, arguments, code="UPDATE_SUPERVISION_UNAVAILABLE", report_once=True, deadline=deadline)
                     if claim_status in {"LIVE", "UNKNOWN"}:
                         apply_started = True
@@ -3005,8 +3053,9 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                 if stale_claim and apply_claim_status(control) == "UNKNOWN":
                     state = optional_record(control / "transition.json")
                     active = read_json(control / "active.json")
-                    if writer_processes(process_snapshot(control), own_pid=os.getpid()):
-                        return 0
+                    existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline)
+                    if existing is not None:
+                        return existing
                     if current_generation_status(control, policy, active["sha"]) == "ALLOW" and not prepared_pending(control, policy, state):
                         return start_current(control, policy, state, active, arguments, code="UPDATE_SUPERVISION_UNAVAILABLE", report_once=True, deadline=deadline)
         except RuntimeError as error:
