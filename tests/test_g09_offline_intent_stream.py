@@ -70,7 +70,7 @@ def test_local_diagnostics_leave_catalogued_business_csv_acknowledgeable(tmp_pat
     assert all(Path(p).resolve().is_relative_to(tmp_path.resolve())
                for p in (app.save_folder, app.local_events_folder, app.log_file_path))
     app._trigger_session_direct_sync = lambda *_a, **_k: None
-    diagnostics = {"PHS2_PREFLIGHT_HOLD_OFFLINE_QUEUEING", "APP_STOP_DEFERRED", "UI_LANE_FAULT", "APP_CLOSE_DELAY"}
+    diagnostics = {"PHS2_PREFLIGHT_HOLD_OFFLINE_QUEUEING", "APP_STOP_DEFERRED", "UI_LANE_FAULT", "APP_CLOSE_DELAY", "WORKER_ACTION_AUTHORIZED", "WORKER_ACTION_RESUMED", "WORKER_ACTION_APPLIED"}
     for event in sorted(diagnostics):
         assert helpers.ContainerAudit._log_event(app, event, detail={}, synchronous=True)
     assert helpers.ContainerAudit._log_event(

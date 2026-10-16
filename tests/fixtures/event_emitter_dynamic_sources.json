@@ -1,0 +1,122 @@
+[
+  {
+    "path": "Container_Audit.py",
+    "line": 4183,
+    "scope": "_checkpoint_audit_event",
+    "shape": "self._prepare_event_log_entry",
+    "expression": "event_type",
+    "review": "Finite names at _checkpoint_audit_event and _checkpoint_stored_audit_event callers; both inventoried sinks."
+  },
+  {
+    "path": "Container_Audit.py",
+    "line": 4193,
+    "scope": "_checkpoint_stored_audit_event",
+    "shape": "self._checkpoint_audit_event",
+    "expression": "event_type",
+    "review": "Finite names at inventoried _checkpoint_stored_audit_event callers."
+  },
+  {
+    "path": "Container_Audit.py",
+    "line": 4338,
+    "scope": "_project_activation_event_contract",
+    "shape": "self._log_stored_event",
+    "expression": "str(contract['event_type'])",
+    "review": "_activation_event_contract event_type= callers; durable activation contract validation."
+  },
+  {
+    "path": "Container_Audit.py",
+    "line": 4462,
+    "scope": "_project_audit_event_contract",
+    "shape": "self._log_stored_event",
+    "expression": "str(contract['event_type'])",
+    "review": "_audit_event_contract event_type= callers; work_session_state validates WORK_START/WORK_END."
+  },
+  {
+    "path": "Container_Audit.py",
+    "line": 9138,
+    "scope": "_admin_pin_audit",
+    "shape": "self._log_event",
+    "expression": "event",
+    "review": "Finite _admin_pin_audit callers, including WORKER_ACTION_* lifecycle audit; no authorization logic changed."
+  },
+  {
+    "path": "Container_Audit.py",
+    "line": 14216,
+    "scope": "_durably_reject_preflight_hold_head",
+    "shape": "self._checkpoint_audit_event",
+    "expression": "decision.event_name",
+    "review": "product_scan/product_identity_port event_name constructors inventoried."
+  },
+  {
+    "path": "Container_Audit.py",
+    "line": 15724,
+    "scope": "_process_barcode_steps",
+    "shape": "self._log_event",
+    "expression": "scan_decision.event_name",
+    "review": "product_scan/product_identity_port event_name constructors inventoried."
+  },
+  {
+    "path": "Container_Audit.py",
+    "line": 15741,
+    "scope": "_process_barcode_steps",
+    "shape": "self._log_event",
+    "expression": "scan_decision.event_name",
+    "review": "product_scan/product_identity_port event_name constructors inventoried."
+  },
+  {
+    "path": "Container_Audit.py",
+    "line": 15755,
+    "scope": "_process_barcode_steps",
+    "shape": "self._log_event",
+    "expression": "scan_decision.event_name",
+    "review": "product_scan/product_identity_port event_name constructors inventoried."
+  },
+  {
+    "path": "Container_Audit.py",
+    "line": 15760,
+    "scope": "_process_barcode_steps",
+    "shape": "self._log_event",
+    "expression": "scan_decision.event_name",
+    "review": "product_scan/product_identity_port event_name constructors inventoried."
+  },
+  {
+    "path": "Container_Audit.py",
+    "line": 15779,
+    "scope": "_process_barcode_steps",
+    "shape": "self._log_event",
+    "expression": "catalog_decision.event_name",
+    "review": "product_scan/product_identity_port event_name constructors inventoried."
+  },
+  {
+    "path": "Container_Audit.py",
+    "line": 18026,
+    "scope": "_log_event",
+    "shape": "self._prepare_event_log_entry",
+    "expression": "event_type",
+    "review": "All _log_event callers inventoried; forwarding only."
+  },
+  {
+    "path": "Container_Audit.py",
+    "line": 18035,
+    "scope": "_log_stored_event",
+    "shape": "self._log_event",
+    "expression": "event_type",
+    "review": "All _log_stored_event callers inventoried; forwarding only."
+  },
+  {
+    "path": "Container_Audit.py",
+    "line": 20728,
+    "scope": "finish",
+    "shape": "self._log_event",
+    "expression": "event_type",
+    "review": "_schedule_transfer_exchange_block_receipt event_type= callers inventoried."
+  },
+  {
+    "path": "Container_Audit.py",
+    "line": 20830,
+    "scope": "_log_cancel_event",
+    "shape": "self._log_stored_event",
+    "expression": "event_type",
+    "review": "All _log_cancel_event callers inventoried; forwarding only."
+  }
+]
