@@ -164,7 +164,7 @@ def test_concurrent_requests_ignore_waiting_bootstraps_and_reuse_real_relay(reco
     r = recovery
     errors = []
     def trace(frame, event, arg):
-        if event == "exception" and Path(frame.f_code.co_filename).name == "auto_update.py":
+        if event == "exception" and Path(frame.f_code.co_filename).name in {"auto_update.py", Path(__file__).name}:
             errors.append({"function": frame.f_code.co_name, "line": frame.f_lineno, "type": arg[0].__name__})
         return trace
     def invoke(_):
