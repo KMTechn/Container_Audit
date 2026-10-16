@@ -25,6 +25,10 @@ def observe(tmp_path):
     script.write_text(r'''
 param([string]$Root,[string]$InputFile,[string]$OutputFile)
 $ErrorActionPreference='Stop'
+trap {
+    @{error_type=$_.Exception.GetType().Name;line=$_.InvocationInfo.ScriptLineNumber} | ConvertTo-Json -Compress | Set-Content -LiteralPath ($OutputFile + '.error.json') -Encoding UTF8
+    exit 1
+}
 Add-Type 'public static class KMTechStartupUpdateToken { public static bool Ordinary(uint pid) { return pid != 3003; } }'
 $inputRows=@(Get-Content -LiteralPath $InputFile -Raw | ConvertFrom-Json)
 $script:ownerCalls=@()
@@ -94,7 +98,8 @@ def test_bootstrap_does_not_supply_or_duplicate_ready_relay(observe, tmp_path, m
         tmp_path, policy, state, rows, None, receipt, deadline=time.monotonic() + 60)
     assert confirmed is (real_relays == 1)
     assert not exited
-    assert final["phase"] == ("CONFIRMED" if phase == "APPLIED_PENDING_READY" else "ROLLED_BACK") if confirmed else final["phase"] == phase
+    expected = ("CONFIRMED" if phase == "APPLIED_PENDING_READY" else "ROLLED_BACK") if confirmed else phase
+    assert final["phase"] == expected
     assert [row["pid"] for row in rows if row["role"] == "gui"] == [state["trial_pid"]]
     assert len(updates.writer_processes(rows, own_pid=-1)) == real_relays + 1
 
