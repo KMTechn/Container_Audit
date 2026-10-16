@@ -1,5 +1,6 @@
 """A proven ordinary relay must not hide the recovery GUI."""
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 import subprocess
 
@@ -135,3 +136,31 @@ def test_rollback_ordinary_child_gate_requires_absent_supervisor(gui_recovery, m
     assert updates.startup_gate(r.tmp_path / 'app', [], role='gui') == 0
     assert requested and not r.launches
     r.unchanged()
+
+
+def test_concurrent_gui_recovery_launches_only_one_gui(gui_recovery):
+    r=gui_recovery
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert list(pool.map(lambda _:r.gui(),range(2)))==[0,0]
+    assert len(r.launches)==1
+    r.unchanged()
+
+
+@pytest.mark.parametrize('appearing_role',['gui','relay'])
+def test_changed_proof_observation_never_launches_an_extra_gui(gui_recovery, monkeypatch, appearing_role):
+    r=gui_recovery; calls=[]
+    def snapshot(*_):
+        calls.append(True)
+        if len(calls)==2:r.rows.append({**r.parent,'pid':r.parent['pid']+100,'role':appearing_role,'created_at':NOW})
+        return list(r.rows)
+    monkeypatch.setattr(updates,'process_snapshot',snapshot)
+    r.gui()
+    assert not r.launches
+    r.unchanged()
+
+
+def test_gui_launch_failure_reports_failure_without_state_writes(gui_recovery, monkeypatch):
+    def denied(*a,**k):raise OSError('launch unavailable')
+    monkeypatch.setattr(subprocess,'Popen',denied)
+    assert gui_recovery.gui()==20 and not gui_recovery.launches
+    gui_recovery.unchanged()

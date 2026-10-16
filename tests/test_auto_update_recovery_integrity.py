@@ -198,12 +198,13 @@ def test_logon_relay_then_late_system_then_gui_is_recoverable(world):
     assert w.launches[-1][1]['env']['KMTECH_CA_UPDATE_DEFERRED_AT']==w.rows[0]['created_at']
 
 
-def test_recovery_admission_cannot_create_same_epoch_bound_trial_mix(world):
+@pytest.mark.parametrize('inherited_boundary',[False,True])
+def test_recovery_admission_cannot_create_same_epoch_bound_trial_mix(world, inherited_boundary):
     w=world;w.seed('APPLIED_PENDING_READY',active=w.candidate)
     gui=w.row('gui',6001,born=w.at(990))
     w.state().update(trial_pid=6001,trial_started_at=gui['created_at'])
     w.rows=[gui]
-    updates.os.environ['KMTECH_CA_UPDATE_DEFERRED_AT']=w.at(995)
+    if inherited_boundary:updates.os.environ['KMTECH_CA_UPDATE_DEFERRED_AT']=w.at(995)
     assert w.relay()==20 and not w.launches
     w.rows.append(w.row('relay',5001,born=w.at(995)))
     assert w.gui()==0 and not w.launches
