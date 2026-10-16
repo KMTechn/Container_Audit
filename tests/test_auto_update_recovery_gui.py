@@ -67,7 +67,8 @@ def test_deferred_live_claim_must_settle_before_gui_admission(gui_recovery, monk
 
 
 @pytest.mark.parametrize('phase', ['FAILED', 'DEFERRED', 'APPLIED_PENDING_READY', 'ROLLBACK_PENDING_READY'])
-@pytest.mark.parametrize('defect', ['sha', 'sid', 'ordinary_user', 'role', 'observable', 'created_at', 'future', 'two', 'generation', 'unreadable'])
+@pytest.mark.parametrize('defect', ['sha', 'sid', 'ordinary_user', 'role', 'observable', 'created_at', 'future', 'two', 'generation', 'unreadable',
+                                  'pid_missing','pid_boolean','pid_text','pid_zero','pid_negative'])
 def test_any_missing_relay_proof_keeps_gui_blocked(gui_recovery, monkeypatch, phase, defect):
     r = gui_recovery
     r.state.update(phase=phase, recovery_pending=phase == 'DEFERRED', deferred_at=CREATED)
@@ -80,6 +81,8 @@ def test_any_missing_relay_proof_keeps_gui_blocked(gui_recovery, monkeypatch, ph
         r.parent['created_at'] = (datetime.fromisoformat(NOW) + timedelta(seconds=1)).isoformat()
     elif defect == 'two':
         r.rows.append({**r.parent, 'pid': r.parent['pid'] + 100})
+    elif defect.startswith('pid_'):
+        r.parent['pid']={'pid_missing':None,'pid_boolean':True,'pid_text':'unproved','pid_zero':0,'pid_negative':-1}[defect]
     elif defect == 'generation':
         monkeypatch.setattr(updates, 'current_generation_status', lambda *_: 'UNKNOWN')
     else:

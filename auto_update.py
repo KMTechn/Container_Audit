@@ -2851,11 +2851,14 @@ def _bootstrap_recovery_gui(control: Path, policy: Mapping[str, Any], state, act
         if len(writers) != 1 or writers[0].get("role") != "relay":
             raise ValueError("GUI recovery requires exactly one ordinary relay")
         relay = writers[0]
+        if type(relay.get("pid")) is not int or relay["pid"] <= 0:
+            raise ValueError("relay process identity is unreadable")
         boundary = relay.get("created_at")
         if _utc(boundary) > _utc(now_utc()):
             raise ValueError("relay creation time is in the future")
         proved = assert_ordinary_recovery(control, policy, active["sha"], boundary)
         if (len(proved) != 1 or proved[0].get("role") != "relay"
+                or type(proved[0].get("pid")) is not int
                 or proved[0].get("pid") != relay.get("pid")
                 or proved[0].get("created_at") != boundary):
             raise ValueError("relay observation changed during recovery proof")

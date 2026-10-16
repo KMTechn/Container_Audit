@@ -318,7 +318,7 @@ GUI 요청의 일반 복구는 FAILED·UNKNOWN, DEFERRED+recovery_pending의 cla
 APPLIED_PENDING_READY·ROLLBACK_PENDING_READY의 claim ABSENT에만 적용한다.
 관측 가능한 relay 정확히 하나가 active SHA·operator·일반 권한·G ALLOW를 증명하면,
 그 relay의 검증된 생성 시각을 경계로 일반 GUI 하나를 실행한다. 현재 시각으로 경계를 만들지 않는다.
-재관측한 증명 행도 같은 PID·생성 시각의 relay 하나여야 하며, 미래·불명 시각이나 증명 실패는
+PID는 양의 정수여야 한다. 재관측한 증명 행도 같은 PID·생성 시각의 relay 하나여야 하며, 미래·불명 시각이나 증명 실패는
 진행 안내+20으로 막는다. GUI가 이미 있으면 추가 실행 없이 0이다.
 ROLLBACK_PENDING·PREPARED와 감독 있는 대기 상태(claim LIVE/NONE)는 기존 길을 유지한다.
 ROLLBACK_PENDING_READY의 일반 자식 gate는 GUI 역할·claim ABSENT와 같은 일반 복구 증명을
