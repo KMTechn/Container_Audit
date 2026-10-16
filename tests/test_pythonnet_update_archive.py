@@ -54,8 +54,11 @@ def test_record_bound_pythonnet_files_are_accepted_repeatedly():
 
 @pytest.mark.parametrize('name', NAMES)
 def test_each_pythonnet_hash_mismatch_is_rejected(name):
-    with pythonnet_packet(lambda files: files.__setitem__(RUNTIME + name, b'changed')) as archive:
-        with pytest.raises(ValueError):
+    def change(files):
+        data = files[RUNTIME + name]
+        files[RUNTIME + name] = bytes([data[0] ^ 1]) + data[1:]
+    with pythonnet_packet(change) as archive:
+        with pytest.raises(ValueError, match='pythonnet runtime hash differs'):
             service.validate_update_archive(archive, POLICY)
 
 
@@ -104,10 +107,10 @@ def test_actual_next_release_uses_real_archive_validator(tmp_path, mutation):
         for entry in original.infolist():
             data = original.read(entry)
             if mutation == 'hash' and entry.filename == RUNTIME + NAMES[0]:
-                data += b'changed'
+                data = bytes([data[0] ^ 1]) + data[1:]
             changed.writestr(entry, data)
         if mutation == 'extra':
             changed.writestr(RUNTIME + 'fourth.dll', b'extra')
     with zipfile.ZipFile(copy) as archive:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='pythonnet runtime hash differs' if mutation == 'hash' else 'pythonnet runtime membership differs'):
             service.validate_update_archive(archive, POLICY)
