@@ -390,6 +390,7 @@ APPLIED 후 감독이 없고 trial 자식도 없으면 후보를 일반 실행�
 writer 때문에 미룬 DEFERRED는 recovery_pending=true와 원 phase·실패 코드를 보존한다.
 writer 부재 뒤 원 G 결정을 한 번 재개한다. G가 그대로면 이전 판, 올랐으면 후보를
 일반 실행하며 정착(false) 전에는 새 prepared를 적용하지 않는다. 재실행은 같은 정착을 유지한다.
+미룬 복구가 되돌림 READY 대기로 ROLLED_BACK 에 정착한 SYSTEM 실행은 그 자리에서 끝나고(`auto_update.py` `_apply_prepared` 가 `wait_for_rollback_ready` 결과를 그대로 돌려줌), 그때 준비돼 있던 signed hotfix 는 다음 SYSTEM 실행이 적용한다(ROLLED_BACK + prepared_pending → 적용 길). 순서는 늘 복구 먼저이고 hotfix 는 다음 SYSTEM 실행까지 늦어질 수 있다(계약 — 관리자 10/17, 같은 실행에서 이어 가기는 BACKLOG 11/1).
 사용자 staging의 `startup-support.json`은 허용 코드 `transition_code`와
 `retained_candidate`를 포함한다. 예외 문장·외부 입력값을 공개 보고서에 넣지 않는다.
 
