@@ -225,3 +225,19 @@ def test_ordinary_gui_and_relay_cannot_publish_trial_readiness(world, monkeypatc
     assert updates.publish_gui_ready(w.control/'app') is True
     assert 'update_nonce' not in updates.relay_ready_metadata(w.control/'app')
     assert w.files==before and w.stage/'ready.json' not in w.files
+
+
+@pytest.mark.parametrize('phase',['APPLIED_PENDING_READY','ROLLBACK_PENDING_READY'])
+def test_reused_unbound_claim_pid_cannot_consume_an_old_ready_receipt(world, phase):
+    w=world;w.seed(phase,active=w.candidate if phase=='APPLIED_PENDING_READY' else w.previous)
+    state=w.state()
+    w.files[w.stage/'trial.json']={'pid':5000,'nonce':state['nonce'],'transition_id':state['transition_id']}
+    w.files[w.stage/'ready.json']=dict(pid=5000,sha=w.active(),nonce=state['nonce'],transition_id=state['transition_id'],
+        ready_at=w.at(990),**{name:True for name in updates.READY_CHECKS})
+    w.rows=[w.row('relay',5001)]
+    assert w.gui()==0 and w.rows[-1]['pid']==5000
+    assert w.system()==20
+    assert w.state()['phase'] in ('UNKNOWN','FAILED')
+    assert w.state()['trial_pid']==5000 and w.state()['trial_started_at']==w.at(1000)
+    assert updates._utc(w.files[w.stage/'ready.json']['ready_at'])<updates._utc(w.state()['trial_started_at'])
+    assert w.system()==0 and w.state()['phase']=='DEFERRED' and w.state()['recovery_pending'] is True
