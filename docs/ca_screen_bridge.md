@@ -27,6 +27,7 @@
 | 관리자 판 사실 줄 | 보관 제품 · 현재 트레이만, 나머지는 동작 뒤 안내 | `preserve_check` 는 현재 작업 원본 · 보존 사본 이름, `resend_completion` 은 기존 명령이 고르는 첫 `command_bound` 건의 품목 · 수량. 사본 존재 · 보존 성공은 단언하지 않음 | `test_preserve_check_facts…` · `test_resend_completion_facts…` |
 
 ## 3. 바뀜 알림 · 수량
+- 112 개인 통계: 「지금 트레이 N분」·「오늘 평균」·「30일 최고」 세 줄을 보내지 않는다. `CaProcessor._held_values`는 `park`·`held_count`·`overflow`·`today`만 돌려주며 빈 배열을 포함한 `stats` 칸 자체를 생략한다. `today`의 트레이·실제 제품·보충 필요 수와 `work`의 스캔·목표·원문은 유지한다. `test_screen_state_omits_all_three_personal_rows_and_preserves_business_fields`가 전체 화면 state와 고정 계약의 호환성을 대조한다. UI 사본·SHA·다른 다리 칸은 이 확인에서 변경하지 않는다.
 - 주인 스레드 0.25초마다 가벼운 지문(트레이 · 알림 · 선택 · 연결 · 보류 수 · 단추 상태)을 견주어 바뀌면 `bridge.push_state(reason='changed')`. 운영 메뉴 · 파일 읽기는 지문에 넣지 않고 `state()` 때만.
 - 화면이 보이는 수는 모두 처리 층 값(`work.count · target · remaining · left_kind · list_count`) — 화면은 셈하지 않는다(불변식 6).
 
