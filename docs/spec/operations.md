@@ -1013,6 +1013,8 @@ prepared checkpoint → 기존 중앙 attempt → 완료 계약/CSV ACK → stat
 | 봉인 전 제품 교체 중 종료/경쟁 | 1~2쌍 CAS·intent·exact receipt 후 로컬 적용 | 전체 구성원/원본 label identity와 중앙·로컬 일치 확인. 부분 로컬 교체 금지. [CA-10](README.md#ca-10) |
 | 출력 일부 성공·결과 불명 | print journal·artifact·중앙 exchange 재조회/확인 | 재출력 필요와 이미 출력/활성화 여부 확인, 종이까지 별도 대조. [CA-11](README.md#ca-11) |
 
+112 시험에서는 만료 뒤 완료의 정상 수용(`CONSUMED + resumed_completion`), 만료 전 완료의 늦은 도착(`late_reflection`), 재개 충돌(`409 OPERATION_LEASE_FENCE_EXPIRED`/`resumption_conflict`), 관리자 해제 뒤 원 요청 거절(`NOT_ACTIVE` 또는 다른 fence의 `EVIDENCE_MISMATCH`)을 각각 구분한다. 로컬 만료로 seal POST가 없던 14d4e6b의 기대를 112에 적용하지 않는다. 서버 반영 직후 응답이 끊겨도 원 요청 재생으로 확인하며 새 완료·새 키·새 임대로 원 건을 덮지 않는다. headless 계약 대역 검증은 실제 서버·현장 창 검증으로 세지 않는다.
+
 장애 인계의 완료 기준은 미해결 상태마다 업무 ID·마지막 내구 경계·중앙 확인 여부·담당·다음 행동이 남고, 복구 후 중복 효과/분실 없이 허용 상태에 도달하는 것이다. 허용 대기시간·교대 인계 책임자·장애 알림 수준은 [CA-G06](BACKLOG.md#ca-g06)의 미정 요구다. 실행 검증은 [CA-G04](BACKLOG.md#ca-g04)와 별개로 추적한다.
 
 <a id="ca-o05"></a>

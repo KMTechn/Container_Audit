@@ -462,6 +462,8 @@ lease는 서명·keyring·binding·기간·membership 검증을 요구한다. �
 
 v2.0.112의 늦은 완료는 원 임대의 내구 완료에 결속된 명령에서만 로컬 만료 상한 검사를 서버에 맡긴다. 서명·keyring·신원·fence·snapshot 검증, 원 완료 ID·멱등 키·명령 바이트·실제 완료 시각을 유지하며 새 임대를 발급하지 않는다. `payload.operation_lease`는 원 증거 다섯 키이고 `resumed_completion` 요청 필드는 없다. 409의 `OPERATION_LEASE_NOT_ACTIVE`·`OPERATION_LEASE_EVIDENCE_MISMATCH`·`OPERATION_LEASE_DEVICE_MISMATCH`·`OPERATION_LEASE_RECONCILIATION_REQUIRED`·`OPERATION_LEASE_FENCE_EXPIRED`·`OPERATION_LEASE_SNAPSHOT_CONFLICT`·`IDEMPOTENCY_CONFLICT`와 403 `OPERATION_LEASE_MACHINE_SCOPE_FORBIDDEN`은 각각 보존한 `OPERATOR_REVIEW`이며 자동 전송에서 제외한다. C06은 M124 권한·감사 아래 `retry_operator_review`로 원 명령만 재전송하고, 응답 없음·5xx·시간 초과의 기존 재시도는 유지한다.
 
+서버 e6f5a03a의 `operation_lease/service.py:798–870,981–1015`에 따라 만료 뒤 완료의 안전 재개는 서버 임대 기록에 `CONSUMED + resumed_completion`으로 남는다. 만료 전 완료의 늦은 도착은 `late_reflection`이며 재개 완료로 바꾸어 세지 않는다. 두 표시는 서버 `consume_result_json`에만 남고 앱이 받는 exact 소비 영수증에는 추가하지 않는다. 서버 반영 뒤 응답 유실·동시 재전송도 저장된 같은 명령과 키로 receipt를 재생하여 봉인 효과 1회를 유지한다. 이미 원 임대에 묶인 완료는 관리자 해제 뒤에도 새 deferred 임대로 바꾸지 않으며, 원 요청의 서버 거절과 자료를 보존한다. 임대 없이 처음 저장한 로컬 완료의 deferred 발급 경로는 별도다. `tests/test_expired_transfer_completion.py`는 실제 coordinator·store를 거쳐 서버만 계약 대역으로 이 경계를 확인한다.
+
 완료 orchestration은 [tray_completion](../../tray_completion.py)의 명시 owner 함수로 위임한다.
 기존 완료 signature·prepared attempt 객체·generator yield 순서를 유지하고, 최종 state 적용과
 notice를 구분한다. scanner/held 감사 ACK·동기 복구·coordinator transaction은 원 소유다.
