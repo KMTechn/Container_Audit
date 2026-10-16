@@ -1053,12 +1053,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2748,
+      "line": 2750,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 2752,
+          "line": 2754,
           "operation": "subprocess.Popen",
           "writer_admission_sources": []
         }
@@ -1105,12 +1105,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2756,
+      "line": 2758,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 2760,
+          "line": 2762,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -1154,12 +1154,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2768,
+      "line": 2770,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 2782,
+          "line": 2784,
           "operation": "subprocess.Popen",
           "writer_admission_sources": []
         }
@@ -10798,7 +10798,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "9cf45b8300f5c2979925352cd8afe3cf402bc4fd9de48a3fb6c65c79d6290790",
+  "inventory_sha256": "e427c683ee69981247100ea38e45565a1ca2900a328c7daa3c2e90962ceffcc8",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -23753,7 +23753,7 @@
         ],
         "file": "auto_update.py",
         "function": "auto_update.request_apply_task",
-        "line": 2759
+        "line": 2761
       },
       {
         "commands": [
@@ -24106,7 +24106,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.launch_version",
-      "line": 2768,
+      "line": 2770,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -24138,7 +24138,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.request_apply_task",
-      "line": 2756,
+      "line": 2758,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -24146,7 +24146,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.request_bootstrap",
-      "line": 2748,
+      "line": 2750,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
