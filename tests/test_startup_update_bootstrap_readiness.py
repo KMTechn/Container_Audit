@@ -30,7 +30,7 @@ trap {
     exit 1
 }
 Add-Type 'public static class KMTechStartupUpdateToken { public static bool Ordinary(uint pid) { return pid != 3003; } }'
-$inputRows=@(Get-Content -LiteralPath $InputFile -Raw | ConvertFrom-Json)
+$inputRows=Get-Content -LiteralPath $InputFile -Raw | ConvertFrom-Json
 $script:ownerCalls=@()
 function Get-CimInstance { param($ClassName,$Filter,$ErrorAction) return $inputRows }
 function Invoke-CimMethod {
