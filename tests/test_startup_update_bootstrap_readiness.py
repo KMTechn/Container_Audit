@@ -3,6 +3,7 @@ import contextlib
 import json
 from pathlib import Path
 import subprocess
+from subprocess import Popen
 import time
 import uuid
 
@@ -69,12 +70,13 @@ $rows=Get-StartupUpdateProcesses $Root
     def run(processes):
         input_file, output_file = tmp_path / "processes.json", tmp_path / "observed.json"
         input_file.write_text(json.dumps(processes), encoding="utf-8")
-        result = subprocess.run([
+        process = Popen([
             "powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
             "-ExecutionPolicy", "Bypass", "-File", str(script), "-Root", str(root),
             "-InputFile", str(input_file), "-OutputFile", str(output_file)],
-            capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
-        assert result.returncode == 0
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW)
+        process.communicate()
+        assert process.returncode == 0
         return json.loads(output_file.read_text(encoding="utf-8-sig"))
 
     return type("Observation", (), {"row": staticmethod(row), "run": staticmethod(run), "owner": owner})()
@@ -160,19 +162,7 @@ def test_unobservable_foreign_and_elevated_rows_are_preserved(observe):
 
 def test_concurrent_requests_ignore_waiting_bootstraps_and_reuse_real_relay(recovery, observe, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
-    import sys
     r = recovery
-    errors = []
-    def trace(frame, event, arg):
-        if event == "exception" and Path(frame.f_code.co_filename).name in {"auto_update.py", Path(__file__).name}:
-            errors.append({"function": frame.f_code.co_name, "line": frame.f_lineno, "type": arg[0].__name__})
-        return trace
-    def invoke(_):
-        sys.settrace(trace)
-        try:
-            return r.invoke()
-        finally:
-            sys.settrace(None)
     def snapshot(*_):
         processes = [observe.row(row["pid"], row["role"], sha=row["sha"],
                                  sid=row["sid"], born=row["created_at"]) for row in r.rows]
@@ -180,8 +170,7 @@ def test_concurrent_requests_ignore_waiting_bootstraps_and_reuse_real_relay(reco
         return observe.run(processes)["rows"]
     monkeypatch.setattr(updates, "process_snapshot", snapshot)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(invoke, range(2)))
-    (r.tmp_path / "concurrent-errors.json").write_text(json.dumps(errors), encoding="utf-8")
+        results = list(pool.map(lambda _: r.invoke(), range(2)))
     assert results == [0, 0]
     assert len(r.launches) == 1
     r.unchanged()
