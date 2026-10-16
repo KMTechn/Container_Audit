@@ -811,6 +811,10 @@ current 부재/코드 복원 실패와 독립적으로 원 G가 허용할 때만
 현장 배포 수용은 NOT TESTED다. 검증/stock 판정은
 [sub-273 REPORT](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-273/REPORT.md)를 따른다.
 
+## pythonnet 업데이트 검증 sub-254 (2026-10-16)
+
+canonical 업데이트 ZIP의 pythonnet/runtime 정본 세 파일만 기존 signed packet SHA에 결속된 dist-info/RECORD의 정확한 경로·SHA256·크기로 허용한다. 맨 위 runtime inventory·서명/신뢰·판 하한·PC 허용·전이 승인·디스크 형식은 유지한다. 실제 110 ZIP과 변조/추가 파일 회귀 및 남은 실물 배포 확인은 sub-254 RESULT에 기록한다.
+
 ## 설치 launcher 길이 sub-265 (2026-10-05)
 
 통합 시작 45192a6의 상승/finite helper/일반 producer 전달을 private 파일 두 개와

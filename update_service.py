@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
+import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -33,6 +36,11 @@ DEFAULT_MAX_UPDATE_ARCHIVE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 RUNTIME_FILE_INVENTORY_FILENAME = "runtime-file-inventory.json"
 RUNTIME_FILE_INVENTORY_SCHEMA = "container-audit-runtime-file-inventory-v1"
 DEFAULT_MAX_RUNTIME_FILE_INVENTORY_BYTES = 1024 * 1024
+PYTHONNET_RUNTIME_PREFIX = "Container_Audit/app/site-packages/pythonnet/runtime/"
+PYTHONNET_RUNTIME_FILES = frozenset(
+    PYTHONNET_RUNTIME_PREFIX + name
+    for name in ("Python.Runtime.dll", "Python.Runtime.deps.json", "Python.Runtime.xml")
+)
 DENIED_UPDATE_ARCHIVE_PATH_SEGMENTS = frozenset(
     {
         ".syncthing",
@@ -737,7 +745,9 @@ def _runtime_local_archive_member_issue(member_name: str, runtime_files: frozens
         member_name.endswith("/") and any(name.startswith(normalized + "/") for name in runtime_files)
     )
     for index, segment in enumerate(lowered_parts[1:], 1):
-        if index == 1 and segment == "runtime" and runtime_bound:
+        if segment == "runtime" and runtime_bound and (
+            index == 1 or (index == 4 and parts[:4] == ["Container_Audit", "app", "site-packages", "pythonnet"])
+        ):
             continue
         if segment in DENIED_UPDATE_ARCHIVE_PATH_SEGMENTS:
             return f"runtime-local path segment is not allowed: {segment}"
@@ -844,6 +854,56 @@ def _read_canonical_runtime_file_inventory(zip_ref: zipfile.ZipFile, stock: Any,
     return inventory["files"]
 
 
+def _validated_pythonnet_runtime_files(zip_ref: zipfile.ZipFile, stock: Mapping[str, Any]) -> frozenset[str]:
+    """The authenticated packet also binds the packaged distribution RECORD."""
+    actual = {entry.filename for entry in zip_ref.infolist()
+              if not entry.is_dir() and entry.filename.startswith(PYTHONNET_RUNTIME_PREFIX)}
+    if not actual:
+        return frozenset()
+    if actual != PYTHONNET_RUNTIME_FILES:
+        raise ValueError("canonical pythonnet runtime membership differs")
+    versions = stock.get("third_party_versions")
+    version = versions.get("pythonnet") if isinstance(versions, dict) else None
+    if not isinstance(version, str) or re.fullmatch(r"[0-9]+(?:\.[0-9]+){2}", version) is None:
+        raise ValueError("canonical pythonnet distribution version is invalid")
+    try:
+        record = zip_ref.getinfo("Container_Audit/app/site-packages/pythonnet-" + version + ".dist-info/RECORD")
+    except KeyError as exc:
+        raise ValueError("canonical pythonnet RECORD is missing") from exc
+    if record.file_size > DEFAULT_MAX_RUNTIME_FILE_INVENTORY_BYTES:
+        raise ValueError("canonical pythonnet RECORD is oversized")
+    expected = {}
+    prefix = "Container_Audit/app/site-packages/"
+    try:
+        rows = csv.reader(io.StringIO(zip_ref.read(record).decode("utf-8")), strict=True)
+        for row in rows:
+            if len(row) != 3:
+                raise ValueError("canonical pythonnet RECORD row is invalid")
+            name = prefix + row[0]
+            if name not in PYTHONNET_RUNTIME_FILES:
+                continue
+            if (name in expected or re.fullmatch(r"sha256=[A-Za-z0-9_-]{43}", row[1]) is None
+                    or re.fullmatch(r"[0-9]+", row[2]) is None):
+                raise ValueError("canonical pythonnet RECORD digest/path is invalid")
+            expected[name] = (row[1], row[2])
+    except (UnicodeError, csv.Error) as exc:
+        raise ValueError("canonical pythonnet RECORD is invalid") from exc
+    if set(expected) != PYTHONNET_RUNTIME_FILES:
+        raise ValueError("canonical pythonnet RECORD membership differs")
+    for name, (digest, size) in expected.items():
+        entry = zip_ref.getinfo(name)
+        if entry.file_size > DEFAULT_MAX_UPDATE_ARCHIVE_MEMBER_BYTES or str(entry.file_size) != size:
+            raise ValueError("canonical pythonnet runtime size differs")
+        actual_digest = hashlib.sha256()
+        with zip_ref.open(entry) as source:
+            for chunk in iter(lambda: source.read(65536), b""):
+                actual_digest.update(chunk)
+        encoded = base64.urlsafe_b64encode(actual_digest.digest()).decode("ascii").rstrip("=")
+        if "sha256=" + encoded != digest:
+            raise ValueError("canonical pythonnet runtime hash differs")
+    return PYTHONNET_RUNTIME_FILES
+
+
 def validate_update_archive(zip_ref: zipfile.ZipFile, archive_policy: Mapping[str, Any] | None = None) -> None:
     """Canonical runtime exceptions require exact stock paths and actual hashes.
 
@@ -897,7 +957,7 @@ def validate_update_archive(zip_ref: zipfile.ZipFile, archive_policy: Mapping[st
                     actual_digest.update(chunk)
             if actual_digest.hexdigest() != digest:
                 raise ValueError("canonical stock runtime hash differs")
-        runtime_files = frozenset(declared)
+        runtime_files = frozenset(declared) | _validated_pythonnet_runtime_files(zip_ref, stock)
     validate_update_archive_layout(names, archive_policy, runtime_files=runtime_files)
 
 

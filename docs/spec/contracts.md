@@ -353,6 +353,7 @@ manifest의 필드는 `runtime_file_inventory_sha256`·`runtime_file_inventory_b
 같은 검사를 사용한다. 미배포 inline `runtime_files` 형식은 거절한다.
 목록 밖 runtime 파일·루트 파일·중복 경로와 runtime 아래 장부·로그·credential은 거절한다.
 runtime 목록이 없는 옛 stock에는 이 예외를 적용하지 않는다.
+중첩 `app/site-packages/pythonnet/runtime/`은 서명된 packet SHA에 결속된 해당 pythonnet 배포본의 `dist-info/RECORD` 경로·SHA256·크기와 실제 ZIP이 일치하는 `Python.Runtime.dll`·`Python.Runtime.deps.json`·`Python.Runtime.xml` 세 파일만 허용하며 다른 위치·파일·추가 파일은 거절한다.
 CONFIRMED 전 실패는 원래 policy를 보존하고, 확인 뒤에만 역방향 승인 감사를
 보호 policy에 기록한다. 설치 설정의 핀은 관리자 canonical 교체용이며 자동 갱신
 승인을 대신하지 않는다.
