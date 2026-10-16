@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "3c415c886dd30a673ed6b52afaa72b145721da3e517c877f8e094f92df032f8f",
+  "after_inventory_sha256": "a8eb5eda085590c94767b1d9c743755dbe7827fd87c3a42f1d8723e5312de553",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -178,7 +178,7 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "40c9b854984e9c3670c466188a1b555f296c4a1ade0f98cc9523504efa22fa6b"
+      "after": "2f01de4ccd65e5e827ec0e86814c002c1106cff1f11927ed614988bd79bc4ddc"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -188,7 +188,7 @@
     {
       "path": "app/Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "8ba57a1a913e693438e6c95a750274e99c827502fa336ae4b56803cf57429515"
+      "after": "75983105c7fd4d00f40de6d75ff912da4940c4aeb211fa3efb3370695e59605c"
     },
     {
       "path": "app/best_time_records.py",
@@ -263,7 +263,7 @@
     {
       "path": "app/event_stream_policy.py",
       "before": "00784202b11176830a36680a509cd686b72e02f037e08799710fd8c311f99b3b",
-      "after": "62439ca253e2cbfcadc5a0962f8ceb640759b8806f24e3a22110903764df021d"
+      "after": "49c2db847085affb1bf0e69c1a5661968ed866ba553805e890ddaaa63f29e900"
     },
     {
       "path": "app/isolated_qualification.py",
@@ -478,7 +478,7 @@
     {
       "path": "app/preflight_scan_hold.py",
       "before": "110d571e0168f48ffea2c4222bf98a7600b324c10c731311a37b88b162baf6f4",
-      "after": "7dbee62ed05f38a94e38e7da1df47a6c51c16f0a282e82a15bcc434a580bbafa"
+      "after": "dbd0eeb2a93bd2641083126d4a4c56b4b1bed5c886d6226d526121353b87a18c"
     },
     {
       "path": "app/producer_runtime_client.py",
@@ -1403,7 +1403,7 @@
     {
       "path": "app/user_relay.py",
       "before": "3d9be9672556e284cfd62d7bfa28c1bcbd8c90688a9f13bc08c5894bfd1750fd",
-      "after": "439b5034662809305ecdc7df0b4d2b6c1b48b692a682b59bcbe1274d37364a2b"
+      "after": "a46d37f303a8cdb6fd9e1271462f267eefc9f4ba06d158a66252a891137f939e"
     },
     {
       "path": "app/vendor/__init__.py",
@@ -1463,7 +1463,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "7c18e63dcc874542621020b511dd563c1677b798c61692f9e985609967c49bcd"
+      "after": "8a3b69724957b928953b0e3d9c95d8bef89361927b5192a5e060f22e346877b0"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4508,12 +4508,12 @@
     {
       "path": "tools/bootstrap_integrity.ps1",
       "before": "01919751911b37dea315a412585c85ec397e479ca02df36554ca7309a27fa9ba",
-      "after": "c69adf6b64ed2906138b803942ad328ae993e45b4d5c584bc52927ad39e92bfb"
+      "after": "43b67845c82983e01ab5b412ce9947bc3f1b240595d590099f4e507e8110c86e"
     },
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "393447b352ebdda5493ea92176e87fec34d96602f004db508496fa644fe30d2d"
+      "after": "3b73d87f9ba2a84e1eceaed37729fb48b2a331295e7182120aa0f23aa34cc750"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4523,24 +4523,24 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "003c2767ca4e2672f71e9777c2eb0ab663228adbde61fa674724ecce9f0c4110"
+      "after": "640b3c4c8e77521aa673801de33a031bcdd3beaeaeefa97ebc79f8d81188678a"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "bcb4262ba64471db0a17f425abc6d78ca83849719632f0f14238c7fe59fb9921"
+      "after": "13ed0e60c902e17b57f7ab83a46a50beaa09d01bee6486a8750fc84c02ab51f3"
     }
   ],
   "source_replacements": [
     {
       "path": "Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "8ba57a1a913e693438e6c95a750274e99c827502fa336ae4b56803cf57429515"
+      "after": "75983105c7fd4d00f40de6d75ff912da4940c4aeb211fa3efb3370695e59605c"
     },
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "40c9b854984e9c3670c466188a1b555f296c4a1ade0f98cc9523504efa22fa6b"
+      "after": "2f01de4ccd65e5e827ec0e86814c002c1106cff1f11927ed614988bd79bc4ddc"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -4630,7 +4630,7 @@
     {
       "path": "tools/build_portable_release_candidate.py",
       "before": "e6ab630ccf3fb366ab866dd29b137b5dee9188a64c80ef34cc04d790e8fc4650",
-      "after": "612da5fce304885d0b9bd0a436192e31702adeb06f8b6f650ac6e9b786e8c010"
+      "after": "af7a852e2e729ac3fe4472e735356d5ab6b4d78afeb1d9ba08ac83dceedaff64"
     },
     {
       "path": "tools/check_logistics_runtime_profile.py",
@@ -4645,7 +4645,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "393447b352ebdda5493ea92176e87fec34d96602f004db508496fa644fe30d2d"
+      "after": "3b73d87f9ba2a84e1eceaed37729fb48b2a331295e7182120aa0f23aa34cc750"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4690,12 +4690,12 @@
     {
       "path": "user_relay.py",
       "before": "3d9be9672556e284cfd62d7bfa28c1bcbd8c90688a9f13bc08c5894bfd1750fd",
-      "after": "439b5034662809305ecdc7df0b4d2b6c1b48b692a682b59bcbe1274d37364a2b"
+      "after": "a46d37f303a8cdb6fd9e1271462f267eefc9f4ba06d158a66252a891137f939e"
     },
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "7c18e63dcc874542621020b511dd563c1677b798c61692f9e985609967c49bcd"
+      "after": "8a3b69724957b928953b0e3d9c95d8bef89361927b5192a5e060f22e346877b0"
     }
   ],
   "hash_provenance": {

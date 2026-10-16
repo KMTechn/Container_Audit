@@ -219,3 +219,36 @@
   .ca-today .today-items__card { padding: 10px 12px; gap: 6px; }
   .ca-today .today-timeline > summary { padding-top: 6px; padding-bottom: 6px; }
 }
+
+@media (max-width: 1365px) {
+  :root[data-text-level] .work { padding: 2px 10px; gap: 2px 8px; }
+  .top { padding-top: 2px; padding-bottom: 2px; }
+  .bands { margin-top: 2px; gap: 2px; }
+  .band { padding: 4px 8px; line-height: 1.25; }
+  .ca-actions .act { padding-top: 0; padding-bottom: 0; }
+  :root[data-text-level] .work--side-list { grid-template-columns: minmax(0, 1.45fr) minmax(0, .55fr) 330px; }
+  :root[data-text-level] .ca-count { padding: 2px; gap: 0 8px; }
+  :root[data-text-level] .ca-cofill { padding-top: 0; padding-bottom: 0; line-height: 1.25; }
+  .ca-count__item, .ca-count__left { min-width: 0; }
+  .work > .result.ca-result { padding: 2px 4px; gap: 4px; }
+  .work > .result.ca-result > svg { width: 40px; height: 40px; padding: 8px; }
+  .ca-row { gap: 4px; padding: 4px 8px; grid-template-columns: 2ch minmax(0, 1fr) auto auto; }
+  .ca-row__tag { overflow-wrap: anywhere; }
+  .ca-row:has(.ca-row__tag:not(:empty)) { grid-template-columns: 2ch minmax(0, 1fr) auto; }
+  .ca-row:has(.ca-row__tag:not(:empty)) .ca-row__no { grid-row: 1 / span 2; }
+  .ca-row:has(.ca-row__tag:not(:empty)) .ca-row__code { grid-column: 2; grid-row: 1; }
+  .ca-row:has(.ca-row__tag:not(:empty)) .ca-row__at { grid-column: 2; grid-row: 2; }
+  .ca-row:has(.ca-row__tag:not(:empty)) .ca-row__tag { grid-column: 3; grid-row: 1 / span 2; }
+  .ca-list { padding: 8px 0 6px; }
+  .ca-list__head { padding: 0 8px 4px; line-height: 1.25; }
+  .ca-list__empty { padding: 4px 8px; line-height: 1.25; }
+  .ca-list__more:empty { display: none; }
+  .ca-held { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.1fr) minmax(0, .8fr); gap: 10px; }
+  .ca-held .ca-card { padding: 10px; gap: 6px; }
+  .ca-today .today-items { gap: 6px; }
+  .ca-today .today-items__card { padding: 4px 8px; gap: 2px; }
+  .ca-today .today-items__bar { height: 8px; }
+  .ca-today__supply { padding: 6px 8px; }
+  .ca-today__supply, .ca-today .today-timeline > summary { overflow-wrap: anywhere; }
+  .ca-today__supply .text-join, .ca-today .today-timeline > summary .text-join { white-space: normal; }
+}
