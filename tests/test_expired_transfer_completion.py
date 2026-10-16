@@ -1,7 +1,9 @@
 """Original-lease seal transport against the audited HTTP contract, offline."""
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import Lock
 
 import pytest
 import requests
@@ -28,8 +30,16 @@ class ContractServer:
         self.receipts = {}
         self.effects = 0
         self.failure = None
+        self.expires_at = None
+        self.consume_result = None
+        self._lock = Lock()
 
     def __call__(self, call):
+        # The real server checks/replays the receipt in its write transaction.
+        with self._lock:
+            return self._seal(call)
+
+    def _seal(self, call):
         assert call["url"].endswith("/transfers/seal")
         command = call["json"]
         self.posts.append(json.dumps(command, sort_keys=True, separators=(",", ":")))
@@ -44,7 +54,7 @@ class ContractServer:
             return FakeResponse(200, {"ok": True, "status": "committed", "data": self.receipts[key]})
         if self.failure == "timeout":
             raise requests.Timeout("<timeout>")
-        if self.failure is not None:
+        if self.failure is not None and self.failure != "lost_ack":
             status, code, retryable = self.failure
             return FakeResponse(status, {"ok": False, "status": "error",
                 "retryable": retryable, "committed": False, "error": {
@@ -53,6 +63,17 @@ class ContractServer:
         receipt = _consumed_receipt(command)
         self.receipts[key] = receipt
         self.effects += 1
+        # e6f5a03a operation_lease/service.py:798–870,981–986: these marks
+        # stay in the server lease row, outside the exact consumption receipt.
+        self.consume_result = dict(receipt["data"]["operation_lease_consumption"])
+        completed = datetime.fromisoformat(evidence["operation_completed_at"].replace("Z", "+00:00"))
+        if completed > self.expires_at:
+            self.consume_result["resumed_completion"] = True
+        if transfer_seal.datetime.now(timezone.utc) > self.expires_at + timedelta(seconds=60):
+            self.consume_result["late_reflection"] = True
+        if self.failure == "lost_ack":
+            self.failure = None
+            raise requests.Timeout("<response lost after commit>")
         return FakeResponse(200, {"ok": True, "status": "committed", "data": receipt})
 
 
@@ -74,6 +95,7 @@ def _scan_completion(tmp_path, monkeypatch, *, timely=False):
     )
     artifact = manager.store.artifact("original-lease-placeholder")
     expires = datetime.fromisoformat(artifact["expires_at"].replace("Z", "+00:00"))
+    server.expires_at = expires
     completed = expires + timedelta(seconds=-1 if timely else 1)
     scan_context = {"local_completed_at": utc_text(completed), "short_confirmed": False}
     fields = _fields_from_compact_qr(scan_payload)
@@ -126,6 +148,9 @@ def test_original_lease_completion_arrives_after_expiry(tmp_path, monkeypatch, t
     assert json.loads(coordinator.store.load(intent_id)["receipt_json"])["data"][
         "operation_lease_consumption"]["status"] == "CONSUMED"
     assert server.effects == 1
+    assert server.consume_result["status"] == "CONSUMED"
+    assert server.consume_result["late_reflection"] is True
+    assert ("resumed_completion" in server.consume_result) is not timely
     assert coordinator.attempt(intent_id).status == "ACKED"
     assert len(server.posts) == 1
     # A lost ACK replay uses the original receipt and has no second business effect.
@@ -211,6 +236,49 @@ def test_network_retry_restarts_with_the_same_bound_command(tmp_path, monkeypatc
     server.failure = None
     assert coordinator.drain_pending()[0].status == "ACKED"
     assert server.posts[0] == server.posts[1]
+    assert _immutable(coordinator.store.load(intent_id)) == before
+    assert manager.store.state(artifact["lease_id"]) == "ACKED"
+    assert server.effects == 1
+
+
+def test_restart_after_server_commit_replays_receipt_without_second_effect(tmp_path, monkeypatch):
+    server, coordinator, manager, _, db_path, intent_id, artifact, _ = _scan_completion(tmp_path, monkeypatch)
+    server.failure = "lost_ack"
+    assert coordinator.attempt(intent_id).status == "RETRY_WAIT"
+    assert server.effects == 1
+    before = _immutable(coordinator.store.load(intent_id))
+    completion = dict(manager.store.completion(artifact["lease_id"]))
+
+    coordinator, manager = _restart(coordinator, manager, db_path)
+    assert coordinator.drain_pending()[0].status == "ACKED"
+    assert len(server.posts) == 2 and server.posts[0] == server.posts[1]
+    assert server.effects == 1
+    assert _immutable(coordinator.store.load(intent_id)) == before
+    assert dict(manager.store.completion(artifact["lease_id"])) == completion
+    assert manager.store.state(artifact["lease_id"]) == "ACKED"
+    with coordinator.store._connect() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM transfer_completion_ledger WHERE intent_id=?", (intent_id,)
+        ).fetchone()[0] == 1
+
+
+def test_concurrent_replays_of_expired_completion_have_one_server_effect(tmp_path, monkeypatch):
+    server, coordinator, manager, _, db_path, intent_id, artifact, _ = _scan_completion(tmp_path, monkeypatch)
+    server.failure = "timeout"
+    assert coordinator.attempt(intent_id).status == "RETRY_WAIT"
+    before = _immutable(coordinator.store.load(intent_id))
+    command = json.loads(coordinator.store.load(intent_id)["command_json"])
+    server.failure = None
+    # Transport may redeliver concurrently; the coordinator/store still have
+    # their existing single owner. Do not weaken that admission rule for a test.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        replies = list(pool.map(coordinator.client.seal_transfer, [command, command]))
+    assert replies[0] == replies[1]
+    assert server.effects == 1
+    assert len(set(server.posts)) == 1
+
+    coordinator, manager = _restart(coordinator, manager, db_path)
+    assert coordinator.drain_pending()[0].status == "ACKED"
     assert _immutable(coordinator.store.load(intent_id)) == before
     assert manager.store.state(artifact["lease_id"]) == "ACKED"
     assert server.effects == 1

@@ -7,10 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from Container_Audit import ContainerAudit, TraySession
-from ca_screen_bridge import CaProcessor
+from ca_screen_bridge import CaProcessor, today_values
 from event_payloads import build_tray_complete_detail
 from session_history import load_session_history
-from tests.test_ca_screen_bridge import _app, _idle
+from tests.test_ca_screen_bridge import CONTRACT, _app, _idle, _schema_errors
 from tests.operation_lease_fixtures import fixed_operation_lease_clock  # noqa: F401
 from tests.test_w9scanonly_workflow import flow  # noqa: F401
 from tray_state import tray_session_from_state, tray_session_to_state, validate_tray_state
@@ -183,3 +183,23 @@ def test_held_pane_omits_personal_statistics(flow):
     assert "stats" not in values
     assert "today" in values
     assert "park" in values
+
+
+def test_screen_state_omits_all_three_personal_rows_and_preserves_business_fields(flow):
+    app = _app(flow)
+    app.total_tray_count = 2
+    app.work_summary = {"A": {"name": "시험 품목", "count": 2, "products": 6,
+                              "shipping_supplement_intents": {"pending-placeholder"}}}
+    app._shipping_confirmed_intents = set()
+    app.completed_tray_times = [300.0]
+    app.best_time_records = {"historical-date-placeholder": 200.0}
+    processor = CaProcessor(app)
+    work = processor.state()["work"]
+    assert processor.command("open", {"id": "held"}) == {"ok": True}
+    state = processor.state()
+    assert "stats" not in state
+    assert state["today"] == today_values(app)
+    assert state["today"] == {"total_trays": 2, "rows": [{"item": "시험 품목", "trays": 2, "products": 6}], "supply": 1}
+    assert state["work"] == work
+    assert state["park"] == [] and state["held_count"] == 0 and state["overflow"] is False
+    assert _schema_errors(state, CONTRACT["state"]) == []
