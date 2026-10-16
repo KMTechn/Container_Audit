@@ -160,7 +160,19 @@ def test_unobservable_foreign_and_elevated_rows_are_preserved(observe):
 
 def test_concurrent_requests_ignore_waiting_bootstraps_and_reuse_real_relay(recovery, observe, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
+    import sys
     r = recovery
+    errors = []
+    def trace(frame, event, arg):
+        if event == "exception" and Path(frame.f_code.co_filename).name == "auto_update.py":
+            errors.append({"function": frame.f_code.co_name, "line": frame.f_lineno, "type": arg[0].__name__})
+        return trace
+    def invoke(_):
+        sys.settrace(trace)
+        try:
+            return r.invoke()
+        finally:
+            sys.settrace(None)
     def snapshot(*_):
         processes = [observe.row(row["pid"], row["role"], sha=row["sha"],
                                  sid=row["sid"], born=row["created_at"]) for row in r.rows]
@@ -168,6 +180,8 @@ def test_concurrent_requests_ignore_waiting_bootstraps_and_reuse_real_relay(reco
         return observe.run(processes)["rows"]
     monkeypatch.setattr(updates, "process_snapshot", snapshot)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        assert list(pool.map(lambda _: r.invoke(), range(2))) == [0, 0]
+        results = list(pool.map(invoke, range(2)))
+    (r.tmp_path / "concurrent-errors.json").write_text(json.dumps(errors), encoding="utf-8")
+    assert results == [0, 0]
     assert len(r.launches) == 1
     r.unchanged()
