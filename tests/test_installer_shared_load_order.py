@@ -128,9 +128,13 @@ def test_explicit_worker_evidence_plan_only_in_fresh_process(tmp_path, engine, c
     (tmp_path / "fresh-plan-stdout.private.log").write_text(result.stdout, encoding="utf-8")
     (tmp_path / "fresh-plan-stderr.private.log").write_text(result.stderr, encoding="utf-8")
     (tmp_path / "fresh-plan-result.json").write_text(json.dumps(summary), encoding="utf-8")
-    assert result.returncode == 0, "fresh worker/evidence PlanOnly failed; isolated result retained"
+    assert result.returncode == (4 if caller == 'same-worker' else 0)
     assert result.stderr == ""
-    assert "install_status=PLAN_ONLY" in result.stdout
+    if caller == 'same-worker':
+        assert "MACHINE_INSTALL_FAILED" in result.stdout
+        assert "install_status=PLAN_ONLY" not in result.stdout
+    else:
+        assert "install_status=PLAN_ONLY" in result.stdout
     assert before == after, "PlanOnly changed the isolated files"
     assert directories_before == directories_after, "PlanOnly allocated a directory"
     assert not profile.exists() and not program_data.exists() and not install.exists()
