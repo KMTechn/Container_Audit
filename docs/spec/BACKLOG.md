@@ -4,6 +4,8 @@
 
 10/16 sub-145 후속: 자동 보관 선행 의도와 기존 종료/오류 진단 세 종류를 LOCAL_ONLY로 닫았다. 세 재시작 경계×CSV/outbox 조건은 새 app/store로 검증하며, 복귀 rename 직후 누락 감사와 outbox-only provenance를 기존 형식으로 복구한다. 서버 catalog 변경은 없다.
 
+10/16 identity 분류 보완: 자동 보관 선행 의도 `PHS2_PREFLIGHT_HOLD_OFFLINE_QUEUEING`와 재시작 복구의 RESTORED·QUARANTINED 감사 호출 세 자리를 기존 같은 종류의 감사와 동일하게 등록한다. 현재 작업자 감사·LOCAL_ONLY 정책과 저장된 identity 재생의 필수 인수 검사를 유지한다.
+
 10/16 G09: 자동 오프라인 보관의 같은 작업자 복귀는 감사 사유·원본 지문을 확인하는 내부 스캔 경로에서 PIN 없이 이어진다. 관리자 격리 원본의 C12 PIN은 유지한다. 기존 FIFO·반환 거절·이동 중단 회귀와 PIN 경계 음성 시험으로 확인한다.
 
 11/1 첫 업데이트 — 작업 임대 갱신(앱+서버 계약, w9mgrweb 과 같이): 지금 이적은 현품표 스캔 때 한 번 발급(Container_Audit.py·transfer_seal.py), 갱신 길 없음, 확인 창·채우는 중이 서버 TTL 을 넘으면 만료
