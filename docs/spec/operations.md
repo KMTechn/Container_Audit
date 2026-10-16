@@ -1700,6 +1700,15 @@ Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종�
 
 Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRITER_GATE_TIMEOUT`만 기존 240초 창에서 0.1초씩 쉬며 재시도한다. 각 시도는 기존 launch_version의 admission을 다시 얻으며 시도 사이에는 admission을 보유하지 않는다. 상한은 240초 + 마지막 admission 대기 최대 5초이며 마감 뒤에는 기존 실패 출구를 유지한다. fence 확정·버려진 소유권 등 다른 거절과 GUI 실행 자체의 timeout은 재시도하지 않는다. 포인터·trial claim·READY·CONFIRMED·G 허가·cohort·잠금 순서는 유지한다. bootstrap 밖의 relay launcher admission과 실제 로그온/pythonw 수용은 별도 범위다.
 
+복구 GUI가 relay를 다시 요청하면 부모 GUI가 있다는 사실만으로 성공 처리하지 않는다.
+같은 잠금 안에서 원 `KMTECH_CA_UPDATE_DEFERRED_AT` 경계와 기존 일반 복구 증명을
+확인하고, 같은 무리의 살아 있는 relay를 재사용하거나 그 경계를 물려 relay 하나를 실행한다.
+새 현재 시각으로 경계를 만들지 않는다. 경계 없이 들어온 요청은 검증된 일반 relay의
+재사용만 허용한다. 증명이나 실행을 확인하지 못하면 기존 진행 안내와 20을 반환하며,
+transition·active·apply claim·trial·startup support 기록은 그대로 보존한다.
+GUI의 업무 흐름은 relay 요청 PID를 비동기로 받고 bootstrap 종료 코드를 기다리지 않는다.
+direct-sync가 startup gate를 통해 같은 relay bootstrap으로 재진입하는 경우도 같은 판정을 쓴다.
+
 Rollback continuation의 기록된 owner PID가 현재 프로세스에 있어도 UTC 시작 시각이 기록과 다르면 PID 재사용으로 보고 재개한다(R-PID, 1차 결정 2026-10-08). 같은 시작 시각이면 기존 AllowLiveOwner·Depth 0 조건에서만 허용하고, 그 밖에는 `ROLLBACK_OWNER_ALIVE`로 거부한다. 시작 시각을 읽을 수 없으면 `ROLLBACK_OWNER_START_UNREADABLE`로 거부한다. 고정 코드와 보호 보고서 규칙을 적용하며 lineage·receipt·manifest 검증은 그대로 유지한다.
 
 관리자 원격 설치는 [관리자 설치 받기 v0](admin-installation.md)을 따른다. 키트의 READY inventory와 대상 계정이 없으면 거절한다. 기계 배치 뒤 작업자 첫 onboarding이 필요하며, 옛 앱 Rollback·랩 VM 실제 설치 수용은 제품 격리 시험과 별도로 판정한다.

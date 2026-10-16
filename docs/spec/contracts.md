@@ -305,6 +305,15 @@ DEFERRED한다. 보호 journal의 recovery_pending과 원 phase·원 실패 코�
 writer 부재 뒤 같은 failure_decision으로 한 번 정착하고 recovery_pending=false를 내구 저장한다.
 G가 오르지 않았으면 이전 판, 올랐으면 candidate를 선택하고 그 뒤에만 새 prepared를 처리한다.
 감독 소실은 `UPDATE_SUPERVISION_UNAVAILABLE` 코드로 보고한다.
+복구 GUI가 요청한 `--bootstrap --role relay`의 기존 writer fallback 다섯 곳은
+같은 update 잠금 안에서 relay 실행 또는 생존을 증명해야만 0을 반환한다.
+물려받은 `KMTECH_CA_UPDATE_DEFERRED_AT`이 유효하고 현재보다 앞선 경계이며,
+기존 일반 복구 증명(active SHA·G ALLOW·같은 operator·비승격 GUI/relay·경계 뒤 생성)을
+통과하면 검증한 무리의 relay를 재사용하거나 원 경계 그대로 relay 하나를 실행한다.
+경계가 없으면 같은 active/G/operator의 일반 relay가 관측될 때만 재사용하고 새로 실행하지 않는다.
+관측·증명·실행 실패는 기존 진행 안내와 20이며, 지원 기록을 포함한 상태 파일을 쓰지 않는다.
+GUI 중복 실행 판정, SYSTEM의 writer 부재 검사, nonce trial과 startup gate의 허가는 유지한다.
+direct-sync 모드가 startup gate에서 같은 relay bootstrap으로 재진입하면 이 계약을 적용한다.
 canonical 교체 전 HKCU Run·실행 중 relay는 설치된 판의 정확한 명령으로 검증한다.
 Run이 `current/app/auto_update.py --bootstrap --role relay --`이면 실행 중 relay의
 실제 경로는 보호된 active 포인터와 해당 version의 manifest·bootstrap aggregate에서 구한다.
