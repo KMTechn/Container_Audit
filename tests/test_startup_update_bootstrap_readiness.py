@@ -150,7 +150,23 @@ def test_similar_commands_keep_existing_classification(observe, variant):
     assert result["owner_calls"] == [601]
 
 
-def test_unobservable_foreign_and_elevated_rows_are_preserved(observe):
+@pytest.mark.parametrize("role", ["relay", "gui"])
+def test_unobservable_fixed_bootstrap_matches_observable_bootstrap(observe, tmp_path, monkeypatch, role):
+    successful = observe.run([observe.row(601, role, bootstrap=True)])
+    failed = observe.run([observe.row(3004, role, bootstrap=True)])
+    results = []
+    for observation in (successful, failed):
+        rows = observation["rows"]
+        assert rows == []
+        assert updates.writer_processes(rows, own_pid=-1) == []
+        monkeypatch.setattr(updates, "process_snapshot", lambda *_: rows)
+        results.append(updates._bootstrap_existing_writers(
+            tmp_path, {}, {}, [], role=role, deadline=time.monotonic() + 60))
+    assert results == [None, None]
+    assert failed == successful
+
+
+def test_unobservable_foreign_and_elevated_rows_are_preserved(observe, tmp_path, monkeypatch):
     processes = [observe.row(3003, "relay"), observe.row(3004, "relay"),
                  observe.row(3005, "relay", sid=uuid.uuid4().hex)]
     rows = observe.run(processes)["rows"]
@@ -158,6 +174,15 @@ def test_unobservable_foreign_and_elevated_rows_are_preserved(observe):
     assert rows[0]["ordinary_user"] is False
     assert rows[1]["observable"] is False
     assert rows[2]["sid"] != observe.owner
+    with pytest.raises(ValueError):
+        updates.writer_processes([rows[1]], own_pid=-1)
+    monkeypatch.setattr(updates, "process_snapshot", lambda *_: [rows[1]])
+    monkeypatch.setattr(updates, "emit_progress_guidance", lambda: None)
+    assert updates._bootstrap_existing_writers(
+        tmp_path, {}, {}, [], role="relay", deadline=time.monotonic() + 60) == 20
+    for row in (rows[0], rows[2]):
+        assert not updates.process_matches_trial(
+            row, state=trial(), sha=OLD, sid=observe.owner, role="relay")
 
 
 def test_concurrent_requests_ignore_waiting_bootstraps_and_reuse_real_relay(recovery, observe, monkeypatch):
