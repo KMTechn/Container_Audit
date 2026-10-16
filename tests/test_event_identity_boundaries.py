@@ -85,6 +85,7 @@ EVENT_SITES = {
     ('Container_Audit.py', '_persist_existing_held_scan_audit', 'record_identity', '<dynamic>', 1): 'read',
     ('Container_Audit.py', '_persist_existing_held_scan_audit', '_write_event_log_entry', '<dynamic>', 1): 'existing',
     ('Container_Audit.py', '_persist_existing_held_scan_audit', '_log_stored_event', 'SCAN_OK', 1): 'existing',
+    ('Container_Audit.py', '_queue_offline_preflight_hold.move', '_log_event', 'PHS2_PREFLIGHT_HOLD_OFFLINE_QUEUEING', 1): 'new',
     ('Container_Audit.py', '_queue_offline_preflight_hold.move', '_log_event', 'PHS2_PREFLIGHT_HOLD_QUARANTINED', 1): 'new',
     ('Container_Audit.py', '_begin_active_phs_label_refresh.finish', '_log_event', 'PHS_LABEL_ACTIVE_REFRESHED', 1): 'new',
     ('Container_Audit.py', '_intercept_active_tray_phs2_scan', '_log_event', 'ACTIVE_TRAY_PHS2_SCAN_REJECTED', 1): 'new',
@@ -161,6 +162,8 @@ EVENT_SITES = {
     ('tray_state.py', 'tray_session_from_state', 'record_identity', '<dynamic>', 1): 'read',
     ('worker_roster.py', 'record_owner_matches', 'record_identity', '<dynamic>', 1): 'read',
     ('work_session_state.py', 'validate_work_session_state', 'record_identity', '<dynamic>', 1): 'read',
+    ('Container_Audit.py', '_recover_automatic_offline_return_audit', '_log_event', 'PHS2_PREFLIGHT_HOLD_RESTORED', 1): 'new',
+    ('Container_Audit.py', '_restore_quarantined_preflight_hold_steps.restore_automatic_return', '_log_event', 'PHS2_PREFLIGHT_HOLD_QUARANTINED', 1): 'new',
 }
 
 def identity_sites(trees=None):
