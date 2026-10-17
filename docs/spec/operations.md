@@ -1674,6 +1674,8 @@ onboarding/removal/lifecycle의 사용자 경로와 update-control에는 작업 
 
 현장 지원 도구의 (가) 출력은 `CONTAINER_AUDIT_SUPPORT=`, lower helper는 `CONTAINER_AUDIT_INSTALL_HELPER=`, canonical 설치기는 `CONTAINER_AUDIT_INSTALL_CANONICAL=`, 적용기는 `CONTAINER_AUDIT_UPDATE=` 뒤 compact JSON으로 내보낸다. 같은 보호 writer가 없는 도구의 원문은 버린다. 기존 고정 문구와 우리 코드가 계산한 개수·상태 코드·ID·시각·버전·SHA는 safe_messages/allowed_codes에 등록하며 그 출력 형식은 유지한다. authenticated task-spec/lifecycle/onboarding-input/Observe 프로토콜은 기존 수신·검증 계약을 유지한다.
 
+relay runner(`tools/direct_sync_relay_runner.py`)의 공개 stdout 은 `direct_sync_relay_status=`·`direct_sync_scan_status=`·`direct_sync_scan_enqueued_count=`·`direct_sync_scan_attempted_count=`·`direct_sync_scan_no_new_count=`·`direct_sync_scan_terminal_blocked_count=` 의 key=value 줄뿐이며, 값이 있는 칸만 낸다. 실패한 원본 파일 경로는 공개 stdout 에 쓰지 않는다(9219545). 실패 원본이 있으면 `CONTAINER_AUDIT_SUPPORT=` compact JSON 한 줄(stage `relay_runtime`, reason_code `SUPPORT_RESULT`, report_status `REPORT_UNAVAILABLE`, 안내 「자료를 보존하고 관리자 지원 복구를 요청하세요.」)을 내고, 경로는 relay 상태 기록의 `scan_failed_source_file` 에만 남는다. 실패 원본이 없으면 그 줄을 내지 않는다. 종료 코드는 blocked_disk_pressure·blocked_operator_control·blocked_queue_backpressure·existing_terminal_blocked·failed_permanent·operator_review = 2, enqueue_error·runtime_error = 1, 그 밖 0 이다.
+
 | 코드/단계 | 고정 안내 |
 | --- | --- |
 | ARGUMENT_INVALID / argument_parse | 입력 항목을 확인하고 다시 실행하세요. |
