@@ -178,12 +178,12 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "01459d9c287910c5cbb99503b72947d8222430d9d484cdd7f6c8d36d3f4c84fd"
+      "after": "c2b4be374f54e16ddbcb0cbe49847874f4984f9796f62684987476f3fe4c6552"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
       "before": "95bb11b9fb4ed0035f229d7b6c6ca2abba17760caef15837734b7a809c52fc4c",
-      "after": "dff2d19858df4849a534939bad5d77cc197a6f6b944d4feac5cf83b5d2049bb5"
+      "after": "0cc6c2d5a4db15e906a9935df10684d85b8af85fb13c5c8c8a1f7b953e8d5b3f"
     },
     {
       "path": "app/Container_Audit.py",
@@ -4508,12 +4508,12 @@
     {
       "path": "tools/bootstrap_integrity.ps1",
       "before": "01919751911b37dea315a412585c85ec397e479ca02df36554ca7309a27fa9ba",
-      "after": "8f90f96986350973907b062877e1d194105701b340aff9b5078e4fc9ee2d888c"
+      "after": "a470bf2abb522f1e60a7f3db930d8c508f03cdbbb35a4c9f84d67489a3742f41"
     },
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "9df349a82746055b241d3794877a5052344b3d21d319ce43d155f38a3e6ebb36"
+      "after": "029a8d909509eb7fdedeeb5729eab7ddab0673fd515801a51d04ecef882d25d3"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4540,12 +4540,12 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "01459d9c287910c5cbb99503b72947d8222430d9d484cdd7f6c8d36d3f4c84fd"
+      "after": "c2b4be374f54e16ddbcb0cbe49847874f4984f9796f62684987476f3fe4c6552"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
       "before": "08f1bb2c468e24998460192d25b546788417d2ed1dd09d3e0ee601e826d9c909",
-      "after": "dff2d19858df4849a534939bad5d77cc197a6f6b944d4feac5cf83b5d2049bb5"
+      "after": "0cc6c2d5a4db15e906a9935df10684d85b8af85fb13c5c8c8a1f7b953e8d5b3f"
     },
     {
       "path": "container_admin_pin.py",
@@ -4645,7 +4645,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "9df349a82746055b241d3794877a5052344b3d21d319ce43d155f38a3e6ebb36"
+      "after": "029a8d909509eb7fdedeeb5729eab7ddab0673fd515801a51d04ecef882d25d3"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",

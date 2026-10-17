@@ -1,7 +1,7 @@
 ﻿Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
 Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 Set-StrictMode -Version Latest
-$Script:ContainerAtomicBootstrapSha256 = '8f90f96986350973907b062877e1d194105701b340aff9b5078e4fc9ee2d888c'
+$Script:ContainerAtomicBootstrapSha256 = 'a470bf2abb522f1e60a7f3db930d8c508f03cdbbb35a4c9f84d67489a3742f41'
 if (-not (Get-Command 'Invoke-ContainerAtomicReplace' -CommandType Function -ErrorAction SilentlyContinue)) {
     # Preserve a caller's already verified/in-memory bootstrap library. Cold imports
     # evaluate precisely the pinned bytes, not a second path read after verification.
