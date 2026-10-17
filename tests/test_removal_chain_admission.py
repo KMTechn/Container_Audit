@@ -208,7 +208,11 @@ def _run(tmp_path, body):
         "$ErrorActionPreference='Stop';Set-StrictMode -Version Latest\n"
         f"$tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseFile('{source}',[ref]$tokens,[ref]$errors)\n"
         "if($errors.Count){throw 'SOURCE_PARSE_FAILED'}\n"
-        "$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and "
+        "$sharedPath=Join-Path (Split-Path -Parent $ast.Extent.File) 'tools/bootstrap_integrity.ps1'
+$shared=[Management.Automation.Language.Parser]::ParseFile($sharedPath,[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'SHARED_SOURCE_PARSE_FAILED'}
+$shared.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Test-BootstrapProcessRootPrefix','Test-BootstrapSamePath','Assert-BootstrapSupportQuiescent')},$false)|ForEach-Object { . ([scriptblock]::Create($_.Extent.Text)) }
+$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and "
         "$n.Name -in @('Get-ContainerRemovalProcessArguments','Read-ContainerRemovalTransport',"
         "'Get-ContainerRemovalInvocation','Assert-ContainerRemovalHelperArguments',"
         "'Get-ContainerRemovalVerifiedChain','Assert-ContainerRemovalQuiescent',"
@@ -344,7 +348,7 @@ function Get-FileSha256([string]$Path){(Get-FileHash -LiteralPath $Path -Algorit
 $uninstallSource=Join-Path $PSScriptRoot 'packet';[void][IO.Directory]::CreateDirectory((Join-Path $uninstallSource 'tools'))
 $BootstrapScriptPath=Join-Path $uninstallSource 'INSTALL_THIS_PC.ps1'
 Copy-Item -LiteralPath $helperSourcePath -Destination $BootstrapScriptPath
-$library=Join-Path $uninstallSource 'tools\bootstrap_integrity.ps1';Copy-Item -LiteralPath $librarySource -Destination $library
+$library=Join-Path $uninstallSource 'tools/bootstrap_integrity.ps1';Copy-Item -LiteralPath $librarySource -Destination $library
 $canonical=Join-Path $PSScriptRoot 'manager\INSTALL_CANONICAL_PORTABLE.ps1'
 $installRootFull=Join-Path $PSScriptRoot 'application\current'
 $OperatorLocalAppDataRoot=Join-Path $PSScriptRoot 'worker\AppData\Local'

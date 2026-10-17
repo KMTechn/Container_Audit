@@ -22,6 +22,10 @@ def observe(tmp_path):
     source = Path("tools/apply_prepared_update.ps1").read_text(encoding="utf-8-sig")
     function = "function Get-StartupUpdateProcesses" + source.split(
         "function Get-StartupUpdateProcesses", 1)[1].split("\nfunction ", 1)[0]
+    shared = Path("tools/bootstrap_integrity.ps1").read_text(encoding="utf-8-sig")
+    marker = "function Test-BootstrapProcessRootPrefix("
+    prefix_helper = marker + shared.split(marker, 1)[1].split("\nfunction ", 1)[0] if marker in shared else ""
+    function = prefix_helper + "\n" + function
     script = tmp_path / "observe.ps1"
     script.write_text(r'''
 param([string]$Root,[string]$InputFile,[string]$OutputFile)
@@ -42,8 +46,16 @@ function Invoke-CimMethod {
 }
 function Assert-BootstrapNoReparsePoint { param($Path,$Label) }
 ''' + function + r'''
+$script:prefixCalls=0
+if(Get-Command Test-BootstrapProcessRootPrefix -ErrorAction SilentlyContinue){
+ $script:originalPrefix=(Get-Command Test-BootstrapProcessRootPrefix).ScriptBlock
+ function Test-BootstrapProcessRootPrefix([string]$Value,[string]$Root,[switch]$CommandLine){
+  $script:prefixCalls++
+  & $script:originalPrefix $Value $Root -CommandLine:$CommandLine
+ }
+}
 $rows=Get-StartupUpdateProcesses $Root
-@{rows=@($rows);owner_calls=@($script:ownerCalls)} | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $OutputFile -Encoding UTF8
+@{rows=@($rows);owner_calls=@($script:ownerCalls);prefix_calls=$script:prefixCalls} | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $OutputFile -Encoding UTF8
 ''', encoding="utf-8-sig")
 
     def row(pid, role, *, sha=OLD, bootstrap=False, variant=None, sid=None, born=NOW):
@@ -67,19 +79,23 @@ $rows=Get-StartupUpdateProcesses $Root
         return dict(ProcessId=pid, Name="pythonw.exe", ExecutablePath=str(image),
                     CommandLine=command, CreationDate=born, Owner=sid or owner)
 
-    def run(processes):
+    prefix_counts = []
+
+    def run(processes, *, root_override=None):
         input_file, output_file = tmp_path / "processes.json", tmp_path / "observed.json"
         input_file.write_text(json.dumps(processes), encoding="utf-8")
         process = Popen([
             "powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
-            "-ExecutionPolicy", "Bypass", "-File", str(script), "-Root", str(root),
+            "-ExecutionPolicy", "Bypass", "-File", str(script), "-Root", str(root if root_override is None else root_override),
             "-InputFile", str(input_file), "-OutputFile", str(output_file)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW)
         process.communicate()
         assert process.returncode == 0
-        return json.loads(output_file.read_text(encoding="utf-8-sig"))
+        actual = json.loads(output_file.read_text(encoding="utf-8-sig"))
+        prefix_counts.append(actual.pop("prefix_calls"))
+        return actual
 
-    return type("Observation", (), {"row": staticmethod(row), "run": staticmethod(run), "owner": owner})()
+    return type("Observation", (), {"prefix_counts": prefix_counts, "row": staticmethod(row), "run": staticmethod(run), "owner": owner})()
 
 
 @pytest.mark.parametrize("phase", ["APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"])

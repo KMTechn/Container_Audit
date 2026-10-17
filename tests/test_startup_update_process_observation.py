@@ -14,6 +14,10 @@ import user_relay
 def test_update_observer_rechecks_unreadable_python(tmp_path, case, expected):
     source = Path("tools/apply_prepared_update.ps1").read_text(encoding="utf-8-sig")
     function = source.split("function Get-StartupUpdateProcesses", 1)[1].split("\nfunction ", 1)[0]
+    shared = Path("tools/bootstrap_integrity.ps1").read_text(encoding="utf-8-sig")
+    marker = "function Test-BootstrapProcessRootPrefix("
+    prefix_helper = marker + shared.split(marker, 1)[1].split("\nfunction ", 1)[0] if marker in shared else ""
+    function = prefix_helper + "\n" + function
     function = "function Get-StartupUpdateProcesses" + function
     bundle = tmp_path / "current"
     bundle.mkdir()
