@@ -433,6 +433,7 @@ live/reused owner·살아 있는 session authority·기록 불일치로 잔류 f
 보존은 검사에서 확정된 메타데이터 예외와 같다.
 
 사용자 제거의 `current_user_removal.json`은 기존 report_version을 유지하며 현재 작업자의 `operator_sid`를 추가한다. 이미 제거한 상태의 재실행도 SID가 있는 새 영수증을 발행한다. 관리자 제거는 SID가 없거나 다른 옛 영수증을 인정하지 않으며 프로필 아래 실제 파일의 reparse 부재와 정확한 `PASS_DATA_PRESERVED`를 함께 확인한다([운영](operations.md)).
+관리자 canonical의 G28 사전 증명은 bootstrap 공용 `Test-BootstrapSamePath`로 경로를 대조한다. 별도 프로세스에서 helper의 선택 함수만 적재해도 미실행·프로필 부재·SID 영수증·계정 사용 불가 증명이 같은 뜻으로 동작해야 한다. 보호 제거 감사와 journal의 `worker_removal_proof`는 `proof`와 `worker_run_present`를 기록한다.
 
 <a id="ca-c01"></a>
 ## CA-C01 로컬 상태·내구성·소유권

@@ -1,3 +1,5 @@
+10/18 sub-308 F2(P1)·F3(P2)·G62: canonical의 선택 적재 G28 함수는 이미 적재되는 공용 경로 판별을 사용한다. 실제 PS5.1 새 canonical 범위에서 증명 네 가지와 검토자 repro를 회귀로 확인한다. trial relay의 시도 한도·간격·마감 검사 뒤에만 프로세스를 관측한다. 독립 PS 진입점마다 자기 적재 집합의 Verb-Noun 명령 정의를 AST로 확인하는 G62 관문을 추가했다. canonical 제거 감사/journal에는 결정 행 자리가 없어 기존 worker_removal_proof를 보존하며 새 감사 형식은 만들지 않았다.
+
 10/18 sub-300 P3 문서: supported-removals 는 제거가 끝난 뒤에도 보호 기록으로 남긴다(검사 4 잔존 72 판정).
 
 ## 목표 명세 고칠 목록(10/11)
