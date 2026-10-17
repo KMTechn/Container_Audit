@@ -4782,6 +4782,8 @@ if ($rollbackContinuation) {
     }
 }
 Assert-CanonicalOperatingWorkerAccount $canonicalOperation ([bool]$rollbackContinuation)
+# Supported FAILED preflight needs authenticated shared generation definitions.
+. (Get-BootstrapSharedPortableLeaf $PSScriptRoot 'data_generation.ps1')
 $supportedContext=$null
 $supportedPlacement=$false
 $installedCodeRoot=$install
