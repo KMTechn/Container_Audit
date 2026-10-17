@@ -476,6 +476,10 @@ G59의 실패 설치 정리는 공식 사용자 몫 제거에서만 허용한다
 - 미확정 현재 묶음을 관리자가 보류할 때 current snapshot·기존 현품표 보류 중복을 확인하고, 원 snapshot의 parked readback과 동기 `TRAY_PARKED` 감사 뒤 current slot만 비운다. 원본 사건·SQLite intent/key·UNKNOWN은 바꾸지 않고, 같은 현품표의 신규 스캔은 보류 중복 guard로 막는다. `DRAINING` hold와 current의 부분 반영 불일치는 [짝 원본 인계](../../paired_preflight_handoff.py)로만 해제한다. 원 요청/영수증/key는 변경하지 않는다. [CA-G14](BACKLOG.md#ca-g14).
 - 로컬 관리자 네 동작(`CA.PRECHECK_HOLD`, `CA.PAIR_RETRY`, `CA.PAIR_HANDOFF`, `CA.TRAY_HOLD`)은 [admin-pin.v1 클라이언트](../../container_admin_pin.py)의 기기 서명 요청으로 웹 개인 PIN을 확인한다. 원본 readback→operation key/intent fsync→서버 redemption→원본·로그인 epoch 재대조→기존 writer→전체 효과 readback·동기 감사 순서를 따른다. 응답 불명확성은 같은 key의 status로 해소하고, 소비되었으나 효과가 증명되지 않으면 해당 key의 intent와 원본을 보존한다. 소비 뒤 자체 중간 쓰기는 같은 key로 readback·재개하며 새 로그인 작업자의 원값과 전송 local_id를 감사한다. 오프라인 보류는 `UNVERIFIED_DETACHING`에서 원본 이전·readback·활성 해제를 완료한 뒤에만 `UNVERIFIED_OPERATOR_HOLD`와 완료 감사를 기록한다. 중단 시 같은 intent로 재개하고 지원하지 않는 원본 형식은 오류로 남긴다. 보류는 승인 효과가 아니며 해당 key만 막는다. 중앙 `CA.CENTRAL_RETRY`는 PIN 적용 대상이 아니다. 실제 서버·GUI 확인은 [CA-G14](BACKLOG.md#ca-g14)에 남긴다.
 
+SQLite 자료·relay DB 의 `-wal`·`-shm` 은 휘발 파일이다(G63). 주인(앱·relay)이 닫혀 있을 때 `mode=ro` 로 열고 닫아도 두 파일이 새로 생겨 남을 수 있다(SQLite 3.49.1 실측). 지문·보존 대조는 본 DB 파일(또는 논리 내용)만 대고 `-wal`·`-shm` 은 세지 않는다. 앱 시작의 GUI 준비 확인(`auto_update.py` 의 GUI 준비 신호)과 relay 상태 읽기(`direct_sync_operator.py` 의 `read_relay_queue_status_read_only`)는 `mode=ro` 로 열므로 그 폴더에 두 파일이 생길 수 있다. 밖의 도구(키트 등)가 주인이 멈춘 DB 를 읽을 때는 본 파일과 `-wal` 을 임시 폴더에 바이트로 복사해 사본만 연다.
+
+`immutable=1` 연결은 `-wal` 에만 있는 행을 보지 못한다(G64). 그래서 그 결과로 진행 중 작업을 판정하지 않는다. `kmtech_factory_contracts/active_work_probe`(immutable 사용)는 빌드 시점 검증 도구이며(입구 `tools/active_work_probe.py` 는 설치기 nonDeployed), 설치·업데이트·제거·앱 흐름은 이것을 부르지 않는다.
+
 <a id="ca-c02"></a>
 ## CA-C02 검사 완료 구성원 → CA preflight·lease
 
