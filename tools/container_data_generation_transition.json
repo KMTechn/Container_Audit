@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "b628bb986268f9b682d9728cd17fba40896a97ce62901b42471c4d791f618b51",
+  "after_inventory_sha256": "ad0563a9e70a460831308f010fd983b0141cf997ab9911bec2ee65ca1f585596",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -183,7 +183,7 @@
     {
       "path": "INSTALL_THIS_PC.ps1",
       "before": "95bb11b9fb4ed0035f229d7b6c6ca2abba17760caef15837734b7a809c52fc4c",
-      "after": "0cc6c2d5a4db15e906a9935df10684d85b8af85fb13c5c8c8a1f7b953e8d5b3f"
+      "after": "0e2c4c505dbcf1252f9a41d4e941bc87667fe9bb3d21a816eb265f9a7af352e3"
     },
     {
       "path": "app/Container_Audit.py",
@@ -213,7 +213,7 @@
     {
       "path": "app/current_user_onboarding.py",
       "before": "3781e04e185b139c0bacb8b8c3bd2c69f42cc3735760d45191d851d4d98914aa",
-      "after": "85f9e484f4c858acb620a7936cbe5a14389b015623d2d36bacb4d33ab9175200"
+      "after": "896282429c878e1a418ffd6efadab4a3b1290bc2a5507ad4cbf688b38f7678fc"
     },
     {
       "path": "app/data_generation_guard.py",
@@ -1463,7 +1463,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "00912320985487c00553eab2b486b4c98d9e118b66c919800307003fcc5ad273"
+      "after": "e338a18a05ac6a7a12e9d88532728fc28e29efd8da804fe1febfe739b3fb9554"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4513,7 +4513,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "029a8d909509eb7fdedeeb5729eab7ddab0673fd515801a51d04ecef882d25d3"
+      "after": "1c2f98e8a207cf28e753c7f8fbd37f1c86e79b103ab88195bf3fd64f58582e34"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4523,12 +4523,12 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "23cc2839e33c4fd9a455f5fcc0fcb51439665fde11ea0bd29be2a3e397b650a8"
+      "after": "be9bb85f30f7e0c16e203ec0b551a3a152d2c50a2b9f836e49b1241e06ea03eb"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "882f8648807c5d865cab88dd1451343a2c76eeea490034e4aebb3a6f9cfce745"
+      "after": "bba70d74934bd2580f99aafdb286131219277f68b482285a38cabc9e868502d9"
     }
   ],
   "source_replacements": [
@@ -4545,7 +4545,7 @@
     {
       "path": "INSTALL_THIS_PC.ps1",
       "before": "08f1bb2c468e24998460192d25b546788417d2ed1dd09d3e0ee601e826d9c909",
-      "after": "0cc6c2d5a4db15e906a9935df10684d85b8af85fb13c5c8c8a1f7b953e8d5b3f"
+      "after": "0e2c4c505dbcf1252f9a41d4e941bc87667fe9bb3d21a816eb265f9a7af352e3"
     },
     {
       "path": "container_admin_pin.py",
@@ -4560,7 +4560,7 @@
     {
       "path": "current_user_onboarding.py",
       "before": "3781e04e185b139c0bacb8b8c3bd2c69f42cc3735760d45191d851d4d98914aa",
-      "after": "85f9e484f4c858acb620a7936cbe5a14389b015623d2d36bacb4d33ab9175200"
+      "after": "896282429c878e1a418ffd6efadab4a3b1290bc2a5507ad4cbf688b38f7678fc"
     },
     {
       "path": "data_generation_guard.py",
@@ -4645,7 +4645,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "029a8d909509eb7fdedeeb5729eab7ddab0673fd515801a51d04ecef882d25d3"
+      "after": "1c2f98e8a207cf28e753c7f8fbd37f1c86e79b103ab88195bf3fd64f58582e34"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4695,7 +4695,7 @@
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "00912320985487c00553eab2b486b4c98d9e118b66c919800307003fcc5ad273"
+      "after": "e338a18a05ac6a7a12e9d88532728fc28e29efd8da804fe1febfe739b3fb9554"
     }
   ],
   "hash_provenance": {
