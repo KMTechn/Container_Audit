@@ -845,10 +845,13 @@ class _FailedInstallerRemoval:
                 "user_relay_autostart_remove", "persistent_relay_registry",
                 "persistent_relay_status",
             }
-        if (source != "current_user_setup_removal" or active["status"] != "INSTALLING"
+        if (os.name != "nt" or source != "current_user_setup_removal" or active["status"] != "INSTALLING"
                 or active["owner_kind"] != "canonical_installer"):
             return False
-        claim = _acquire_named_mutex(active["session_authority_mutex_name"], 0)
+        try:
+            claim = _acquire_named_mutex(active["session_authority_mutex_name"], 0)
+        except (OSError, WriterFenceError):
+            return False
         if claim is None:
             return False
         self.claim, self.root, self.active = claim, root, dict(active)

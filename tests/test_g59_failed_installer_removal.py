@@ -147,6 +147,21 @@ def test_live_installer_authority_is_rejected_without_wait(removal_case, monkeyp
     assert case.path.read_bytes() == case.original
     assert case.registry_deletes == 0
 
+def test_authority_open_failure_uses_existing_active_refusal(removal_case, monkeypatch):
+    case = removal_case
+    acquire = fence._acquire_named_mutex
+    def unavailable(name, timeout_seconds):
+        if name == case.payload["session_authority_mutex_name"]:
+            assert timeout_seconds == 0
+            raise fence.WriterFenceError("WRITER_MUTEX_CREATE_FAILED", "authority unavailable")
+        return acquire(name, timeout_seconds)
+    monkeypatch.setattr(fence, "_acquire_named_mutex", unavailable)
+    with pytest.raises(fence.WriterFencedError) as caught:
+        onboarding.remove_current_user_setup(case.app)
+    assert caught.value.code == "ACTIVE_WRITER_FENCE"
+    assert case.path.read_bytes() == case.original
+    assert case.registry_deletes == 0
+
 @pytest.mark.parametrize("change", ["owner", "worker-root", "worker-sid", "receipt-app", "fence-app",
     "PREPARING", "PREPARED", "RESTORING", "RESTORE_FAILED"])
 def test_unrelated_fence_is_preserved(removal_case, change):
