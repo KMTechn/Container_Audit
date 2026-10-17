@@ -272,6 +272,16 @@ function Invoke-InstallationElevationCapture {
 }
 '''
 
+
+CAPTURE_OS_BOUNDARIES = OS_BOUNDARIES[OS_BOUNDARIES.index('$script:FixtureCaughtFailureWriter'):] + r"""
+$script:FixtureSafeOutputWriter=${function:ConvertTo-SafeInstallationOutput}
+function ConvertTo-SafeInstallationOutput($Output) {
+    $path=Join-Path $env:CA_UNINSTALL_ROOT ('child-output-private-'+[Guid]::NewGuid().ToString('N')+'.raw')
+    [IO.File]::WriteAllBytes($path,[byte[]]$Output.bytes)
+    & $script:FixtureSafeOutputWriter $Output
+}
+"""
+
 HELPER_OS = r'''
 function Test-CurrentUserRelayPersistencePresent { return [bool](Get-Content (Join-Path $env:CA_UNINSTALL_ROOT 'registry.json') -Raw | ConvertFrom-Json).exists }
 function Get-CimInstance {
@@ -459,6 +469,9 @@ def _setup(tmp_path, fault='', *, stock_version_identity=False, install_director
         shutil.copyfile(version_file, source / 'app/Container_Audit.py')
     canonical = source / 'INSTALL_CANONICAL_PORTABLE.ps1'
     text = canonical.read_text(encoding='utf-8-sig').replace('$wanted = Command $install', OS_BOUNDARIES + '\n$wanted = Command $install')
+    before, marker, after = text.rpartition("\n. $BootstrapIntegrityFunctions\n")
+    assert marker
+    text = before + marker + CAPTURE_OS_BOUNDARIES + "\n" + after
     audit_assignment = '$auditPath = Join-Path $auditRoot "canonical-portable-$runId.json"'
     assert text.count(audit_assignment) == 1
     # Observe real run/PID provenance; evidence initialization and BasePath stay
