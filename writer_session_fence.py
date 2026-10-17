@@ -922,6 +922,22 @@ def _current_user_removal_fence_scope(app_root: Path, direct_sync_root: Path):
         scope.release()
 
 
+def _claim_current_user_removal_fence() -> None:
+    """Check authority before waiting for an overlapping remover's writer gate."""
+    scope = getattr(_WRITER_LOCAL, "removal_scope", None)
+    if scope is None:
+        return
+    try:
+        root = canonical_control_root()
+        active = active_fence(root)
+    except WriterFenceError as exc:
+        raise WriterFencedError("ACTIVE_WRITER_FENCE", "writer denied by the active deployment fence") from exc
+    if active is not None and not _delegation_matches(
+        active, source="current_user_setup_removal", environ=os.environ,
+    ) and not scope.admits("current_user_setup_removal", root, active):
+        raise WriterFencedError("ACTIVE_WRITER_FENCE", "writer denied by the active deployment fence")
+
+
 @writer_sink("current_user_setup_removal")
 def _settle_failed_installer_removal() -> dict[str, str] | None:
     scope = getattr(_WRITER_LOCAL, "removal_scope", None)

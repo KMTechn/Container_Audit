@@ -221,6 +221,22 @@ def test_overlapping_removal_cannot_borrow_claim(removal_case):
     assert_settled(case, report)
     assert case.registry_deletes == 1
 
+def test_contending_removal_checks_authority_before_writer_gate(removal_case):
+    case = removal_case
+    rejected = []
+    def competitor():
+        try: onboarding.remove_current_user_setup(case.app)
+        except fence.WriterFencedError as error: rejected.append(error.code)
+    with fence._current_user_removal_fence_scope(case.app, case.paths.direct_sync_root):
+        with fence.writer_admission("current_user_setup_removal"):
+            thread = threading.Thread(target=competitor)
+            thread.start()
+            thread.join(10)
+            assert not thread.is_alive()
+            assert rejected == ["ACTIVE_WRITER_FENCE"]
+    assert case.path.read_bytes() == case.original
+    assert case.registry_deletes == 0
+
 def test_copy_readback_failure_preserves_original_fence(removal_case, monkeypatch):
     case = removal_case
     read_bytes = Path.read_bytes

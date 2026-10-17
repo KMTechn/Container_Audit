@@ -53,7 +53,8 @@ from user_relay import (
 )
 from writer_session_fence import (
     WriterFenceError, writer_admission, writer_sink,
-    _current_user_removal_fence_scope, _settle_failed_installer_removal,
+    _current_user_removal_fence_scope, _claim_current_user_removal_fence,
+    _settle_failed_installer_removal,
 )
 from kmtech_shared import data_generation as generation
 from vendor.kmtech_zero_pe import (
@@ -2410,6 +2411,7 @@ def remove_current_user_setup(
         )
         try:
             with _authenticated_support_removal_source(app_root):
+                _claim_current_user_removal_fence()
                 with writer_admission("current_user_setup_removal"):
                     probe_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values(), admission_source="current_user_setup_removal")
         except DataGenerationBlocked as exc:
