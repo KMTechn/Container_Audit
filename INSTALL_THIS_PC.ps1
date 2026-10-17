@@ -2537,7 +2537,8 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
     Assert-ContainerRemovalQuiescent $application $ExcludeProcessIds
     $plan = if($OnlyUncommittedCurrent){Get-ContainerArtifactFilePlan $current}else{Get-ContainerRemovalArtifacts $application}
     if (-not $OnlyUncommittedCurrent -and (Test-Path -LiteralPath $markerPath)) { $plan.artifacts += $markerPath }
-    $workerRemovalProof = if ($MachineControlRoot -and -not $Script:ContainerRemovalAttestedNewPlacement) {
+    $workerRemovalProof = if ($MachineControlRoot -and -not $Script:ContainerRemovalAttestedNewPlacement -and
+        -not [string]::IsNullOrEmpty($Script:ContainerMachineRemovalProofKind)) {
         @{proof=$Script:ContainerMachineRemovalProofKind;worker_run_present=$Script:ContainerMachineRemovalWorkerRunPresent}
     } else { $null }
     if ($null -ne $workerRemovalProof) {

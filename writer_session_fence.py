@@ -28,6 +28,8 @@ import unicodedata
 import weakref
 
 
+logging.getLogger(__name__).addHandler(logging.NullHandler())
+
 APP_ID = "container_audit"
 ACTIVE_SCHEMA = "container-audit-all-writer-fence-active-v1"
 RELEASE_SCHEMA = "container-audit-all-writer-fence-release-v1"
