@@ -150,7 +150,8 @@ else:
     raise SystemExit(dispatch_product_mode(['--onboard-current-user', '--app-root', str(app)]))
 '''
 
-OS_BOUNDARIES = r'''
+OS_BOUNDARIES = r'''[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
+
 # PowerShell 7 prepends its own module directory after Python env isolation.
 # Restore this fixture's existing Windows PowerShell module path for the
 # actual WinPS placement child; keep every child/receipt assertion intact.
@@ -398,8 +399,18 @@ function Write-InstallationCaughtFailure($Failure) {
 '''
 
 
+def _run_fixture_powershell(arguments, **kwargs):
+    file_index = next((i for i, value in enumerate(arguments) if value.lower() == "-file"), None)
+    if file_index is not None and Path(arguments[file_index + 1]).name == "INSTALL_CANONICAL_PORTABLE.ps1":
+        # Exercise the documented canonical -File invocation. The generic
+        # observation helper wraps -File in -Command, which is not this contract.
+        return subprocess.run(arguments, creationflags=subprocess.CREATE_NO_WINDOW,
+                              encoding="utf-8", errors="replace", **kwargs)
+    return run_powershell(arguments, **kwargs)
+
+
 def _ps(path, env, *args):
-    result = run_powershell(
+    result = _run_fixture_powershell(
         [_powershell(), '-NoLogo', '-NoProfile', '-NonInteractive',
          '-ExecutionPolicy', 'Bypass', '-File', str(path), *args],
         # Native contracts finish naturally; task policy forbids timeout kills.
@@ -410,7 +421,6 @@ def _ps(path, env, *args):
     assert len(observations) <= 1
     result.fixture_audit = observations[0] if observations else None
     return result
-
 
 def _setup(tmp_path, fault='', *, stock_version_identity=False, install_directory=None):
     env = native_python_environment()
