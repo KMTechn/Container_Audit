@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$InstallRoot,
     [ValidateSet('Apply','Observe','Verify','Authority')][string]$Mode = 'Apply',
@@ -158,7 +158,7 @@ public static class KMTechStartupUpdateToken {
             }
             continue
         }
-        $insideManaged = $image.StartsWith($managed + '\',[StringComparison]::OrdinalIgnoreCase)
+        $insideManaged = Test-BootstrapProcessRootPrefix $image $managed
         $bundle = Split-Path -Parent (Split-Path -Parent $image)
         $command = [string]$process.CommandLine
         if (-not $insideManaged) {

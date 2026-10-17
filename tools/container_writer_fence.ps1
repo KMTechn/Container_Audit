@@ -1,7 +1,7 @@
-﻿Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
+Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
 Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 Set-StrictMode -Version Latest
-$Script:ContainerAtomicBootstrapSha256 = '989b8bf3c5489acf07c0dc43db204c4293e5cdad31677cd8d12b9c256412eb71'
+$Script:ContainerAtomicBootstrapSha256 = '8f90f96986350973907b062877e1d194105701b340aff9b5078e4fc9ee2d888c'
 if (-not (Get-Command 'Invoke-ContainerAtomicReplace' -CommandType Function -ErrorAction SilentlyContinue)) {
     # Preserve a caller's already verified/in-memory bootstrap library. Cold imports
     # evaluate precisely the pinned bytes, not a second path read after verification.
@@ -26,7 +26,7 @@ $Script:ContainerWriterFenceTupleVersion = 'container-audit-deployment-session-a
 $Script:ContainerWriterFenceSessionMutexPrefix = 'Local\KMTech.ContainerAudit.DeploymentSession.'
 $Script:ContainerWriterFenceAdmissionMutexName = 'Local\KMTech.ContainerAudit.WriterAdmission.v1'
 $Script:ContainerWriterFenceAdmissionProductionRoot = ''
-$Script:ContainerWriterFenceInventorySha256 = '6e902e2d7b357804336c673d34f551bdf5280c486b6bfd39f7cde14df0198c69'
+$Script:ContainerWriterFenceInventorySha256 = 'b628bb986268f9b682d9728cd17fba40896a97ce62901b42471c4d791f618b51'
 $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''
 $Script:ContainerWriterFenceMaximumBytes = 262144
 $Script:ContainerWriterFenceActiveFields = @(
@@ -644,7 +644,7 @@ function Write-ContainerMachineRecoveryGuidance($Fence,[string]$ControlRoot) {
     $state=Split-Path -Parent (Split-Path -Parent (Get-ContainerWriterFenceControlRoot $ControlRoot))
     if ($Fence.owner_kind -ceq 'canonical_installer' -and (Split-Path -Leaf $state) -ieq 'machine-install') {
         $path='install-audit\canonical-portable-'+[string]$Fence.replacement_transaction_id+'.json'
-        [Console]::Error.WriteLine('CONTAINER_AUDIT_MACHINE_RECOVERY='+(@{guidance=('Recovery: -RecoverMachineInstallation; audit: '+$path)}|ConvertTo-Json -Compress))
+        [Console]::Error.WriteLine('CONTAINER_AUDIT_MACHINE_RECOVERY='+([regex]::Replace((@{guidance=('Recovery: -RecoverMachineInstallation; audit: '+$path)}|ConvertTo-Json -Compress), '[^\x00-\x7f]', {param($unit) '\u{0:x4}' -f [int][char]$unit.Value})))
     }
 }
 

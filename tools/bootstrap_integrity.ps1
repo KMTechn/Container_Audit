@@ -4005,8 +4005,17 @@ function Assert-BootstrapExactFileCopy([string]$Original,[string]$Copy) {
     }
 }
 
+function Test-BootstrapProcessRootPrefix([string]$Value,[string]$Root,[switch]$CommandLine) {
+    $prefix = [IO.Path]::GetFullPath($Root).Replace('/','\').TrimEnd('\') + '\'
+    $candidate = $Value.Replace('/','\')
+    if ($CommandLine) {
+        return $candidate.IndexOf($prefix,[StringComparison]::OrdinalIgnoreCase) -ge 0
+    }
+    return $candidate.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)
+}
+
 function Assert-BootstrapSupportQuiescent([string]$ApplicationRoot,[int[]]$ExcludeProcessIds=@()) {
-    $prefix = (Get-StrictFullPath $ApplicationRoot 'removal process root').TrimEnd('\','/') + '\'
+    $root = Get-StrictFullPath $ApplicationRoot 'removal process root'
     $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop)
     if ($rows.Count -eq 0) { throw 'REMOVAL_PROCESS_OBSERVATION_UNKNOWN' }
     foreach ($row in $rows) {
@@ -4025,8 +4034,8 @@ function Assert-BootstrapSupportQuiescent([string]$ApplicationRoot,[int[]]$Exclu
             }
             continue
         }
-        if (([string]$row.ExecutablePath).StartsWith($prefix, 'OrdinalIgnoreCase') -or
-            ([string]$row.CommandLine).IndexOf($prefix, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        if ((Test-BootstrapProcessRootPrefix ([string]$row.ExecutablePath) $root) -or
+            (Test-BootstrapProcessRootPrefix ([string]$row.CommandLine) $root -CommandLine)) {
             throw 'REMOVAL_REQUIRES_PRODUCT_PROCESS_STOP'
         }
     }
