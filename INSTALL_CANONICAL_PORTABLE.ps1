@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$SourceRoot = "",
     [string]$InstallRoot = "C:\KMTech\Apps\Container_Audit\current",
@@ -71,7 +71,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '8f90f96986350973907b062877e1d194105701b340aff9b5078e4fc9ee2d888c'
+$ExpectedBootstrapIntegritySha256 = 'a470bf2abb522f1e60a7f3db930d8c508f03cdbbb35a4c9f84d67489a3742f41'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }

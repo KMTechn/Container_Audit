@@ -737,7 +737,7 @@ is idempotent, unknown/deny/reparse/partial states are rejected. The actual app
 leaf/ancestor guard runs again, including rejection of user-owned name squatters.
 This protection is intentionally persistent across app rollback/uninstall.
 Its before/after SDDL is evidence, never unbound privileged restore authority.
-All three shipped installer/bootstrap PowerShell files keep UTF8 BOM so PS5.1
+All non-ASCII product .ps1/.psm1 files keep exactly one UTF-8 BOM so PS5.1
 decodes bounded Korean path/reason errors consistently. Shared child execution
 is admitted only when every shipped caller terminates in a byte-pinned installer
 admission lifetime; early/late/unknown/ambiguous/direct unfenced calls are rejected.

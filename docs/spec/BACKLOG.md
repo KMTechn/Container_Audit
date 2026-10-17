@@ -2,6 +2,8 @@
 
 ## 목표 명세 고칠 목록(10/11)
 
+10/18 sub-305 G60: 조립이 잃은 제품 PowerShell 5개 파일의 UTF-8 BOM을 바이트 단위로 되살렸다. git 추적 비시험 .ps1/.psm1의 비ASCII 파일은 정확히 하나의 BOM으로 시작하는 회귀 시험으로 고정한다.
+
 10/17 sub-290 G55·G56 꼴 relay 재시도·G43 닫음(기준일 115 제어 코드): bootstrap 감독을 내구 단계 시각의 창 끝+15초까지 늘리되 시작+480초로 제한한다. 후보 정상 종료 대기 시작도 내구 기록한다. 같은 GUI claim 뒤 실제 trial relay를 다시 관측하며 bootstrap 프로세스의 nonce마다 최대 3회/간격 2초 이상으로 시작한다. OSError 세 번 실패는 사용자 지원 기록의 `TRIAL_RELAY_START_FAILED`로 남긴다. 멈춤 표지가 있으면 포인터·표지를 보존한 `DEFERRED`·`UPDATE_RELAY_STOP_REQUESTED`로 적용을 미루며 recovery_pending은 두지 않는다. 사용자 시작은 REQUEST_APPLY 없이 현재 화면을 연다. 정식 멈춤 PC는 업데이트 날 전에 onboarding한다. 고정 current 교체 장치와 실제 배포본·현장/VM 수용은 별도 레인 회차이며, 이번 고침은 115 설치본에 들어갈 제어 코드다.
 10/17 sub-297 덩어리 3b 집중 고침: G42 진단 재예외와 공개 writer 부분 출력, G35 숨김 제어 파일 읽기 7곳,
 G31 조건부 failure_code/reason_code 읽기, G36 공개 레코드의 코드 페이지 차이를 고쳤다.
