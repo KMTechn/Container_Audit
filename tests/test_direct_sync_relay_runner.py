@@ -559,7 +559,7 @@ def test_runner_scan_source_dir_reports_terminal_dedupe_as_blocked(tmp_path, cap
     args = runner_args(tmp_path, scan_dir=sync_dir)
 
     assert main(args) == 0
-    capsys.readouterr()
+    _assert_scan_public_output(capsys.readouterr().out, csv_path, failed_source=False)
     with sqlite3.connect(tmp_path / "relay.sqlite3") as conn:
         conn.execute("UPDATE direct_sync_relay_batches SET status = ?", (RELAY_STATUS_FAILED_PERMANENT,))
         conn.commit()
@@ -1036,7 +1036,7 @@ def test_runner_scan_source_committed_operator_review_delta_blocks_progress(tmp_
     args = runner_args(tmp_path, scan_dir=sync_dir)
 
     assert main(args) == 0
-    capsys.readouterr()
+    _assert_scan_public_output(capsys.readouterr().out, csv_path, failed_source=False)
     first_row = relay_rows(tmp_path / "relay.sqlite3")[0]
     with sqlite3.connect(tmp_path / "relay.sqlite3") as conn:
         conn.execute(
@@ -1087,7 +1087,7 @@ def test_runner_scan_source_uncommitted_operator_review_delta_blocks_progress(tm
     args = runner_args(tmp_path, scan_dir=sync_dir)
 
     assert main(args) == 0
-    capsys.readouterr()
+    _assert_scan_public_output(capsys.readouterr().out, csv_path, failed_source=False)
     first_row = relay_rows(tmp_path / "relay.sqlite3")[0]
     with sqlite3.connect(tmp_path / "relay.sqlite3") as conn:
         conn.execute(
@@ -1549,7 +1549,9 @@ def test_runner_honors_operator_pause_before_scan_enqueue(tmp_path, capsys):
     assert "direct_sync_relay_status=paused_by_operator" in output
     assert "direct_sync_scan_enqueued_count=0" in output
     assert "direct_sync_scan_attempted_count=1" in output
-    _assert_scan_public_output(output, csv_path, failed_source=False)
+    _assert_scan_public_output(output, csv_path, failed_source=True)
+    status = json.loads((tmp_path / "runtime" / "status.json").read_text(encoding="utf-8"))
+    assert status["scan_failed_source_file"] == str(csv_path)
     assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {}
 
 
@@ -1567,5 +1569,7 @@ def test_runner_invalid_operator_pause_marker_returns_blocked_exit(tmp_path, cap
     assert "direct_sync_relay_status=blocked_operator_control" in output
     assert "direct_sync_scan_enqueued_count=0" in output
     assert "direct_sync_scan_attempted_count=1" in output
-    _assert_scan_public_output(output, csv_path, failed_source=False)
+    _assert_scan_public_output(output, csv_path, failed_source=True)
+    status = json.loads((tmp_path / "runtime" / "status.json").read_text(encoding="utf-8"))
+    assert status["scan_failed_source_file"] == str(csv_path)
     assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {}
