@@ -3043,15 +3043,15 @@ def _bootstrap_trial_relay(control, policy, state, active, gui_arguments, attemp
     """One sampled start attempt per nonce, with process-local retry accounting."""
     if apply_claim_status(control) == "ABSENT":
         return  # The caller resumes the existing ordinary recovery proof path.
-    rows = writer_processes(process_snapshot(control), own_pid=os.getpid())
-    relays = [row for row in rows if process_matches_trial(row, state=state,
-        sha=active["sha"], sid=policy["operator_sid"], role="relay")]
-    if relays:
-        return
     count, previous, reported = attempts.get(state["nonce"], (0, None, False))
     if count >= 3 or previous is not None and time.monotonic() - previous < 2:
         return
     if time.monotonic() >= deadline:
+        return
+    rows = writer_processes(process_snapshot(control), own_pid=os.getpid())
+    relays = [row for row in rows if process_matches_trial(row, state=state,
+        sha=active["sha"], sid=policy["operator_sid"], role="relay")]
+    if relays:
         return
     root_arguments = []
     if "--data-root" in gui_arguments:

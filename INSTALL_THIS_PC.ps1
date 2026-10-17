@@ -646,7 +646,7 @@ function Get-ContainerMachineRemovalPolicyLocalAppDataRoot([string]$Sid,[string]
     if ([string]$policy.operator_sid -cne $Sid) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
     $local=Get-StrictFullPath ([string]$policy.operator_local_app_data) 'removal policy profile'
     $profile=Split-Path -Parent (Split-Path -Parent $local)
-    if (-not(Test-SamePath $local (Join-Path $profile 'AppData\Local'))) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+    if (-not(Test-BootstrapSamePath $local (Join-Path $profile 'AppData\Local'))) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
     Assert-ContainerRemovalBoundary $local
     return $local
 }
@@ -661,7 +661,7 @@ function Read-ContainerMachineRemovalBinding {
         try {
             $marker=$pendingText|ConvertFrom-Json
             if ([string]$marker.schema -ceq 'container-audit-machine-pending-v1' -and
-                [string]$marker.status -ceq 'PENDING' -and (Test-SamePath ([string]$marker.install_root) $installRootFull)) {
+                [string]$marker.status -ceq 'PENDING' -and (Test-BootstrapSamePath ([string]$marker.install_root) $installRootFull)) {
                 if ([string]$marker.target_sid -cne $OperatorSid) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
                 $valid=$true
             }
@@ -680,7 +680,7 @@ function Read-ContainerMachineRemovalBinding {
     if ($profile) { $profile=Get-StrictFullPath ([Environment]::ExpandEnvironmentVariables($profile)) 'removal worker profile' }
     $local=if($profile){Join-Path $profile 'AppData\Local'}elseif($valid){Get-ContainerMachineRemovalPolicyLocalAppDataRoot $OperatorSid $installRootFull}else{''}
     if (-not $profile -and $local) { $profile=Split-Path -Parent (Split-Path -Parent $local) }
-    if ($local -and -not(Test-SamePath $local $OperatorLocalAppDataRoot)) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+    if ($local -and -not(Test-BootstrapSamePath $local $OperatorLocalAppDataRoot)) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
     return [pscustomobject]@{sid=$OperatorSid;profile_root=$profile;local_appdata_root=$local;pending_valid=$valid;profile_registered=($null -ne $key)}
 }
 
