@@ -484,6 +484,10 @@ def _setup(tmp_path, fault='', *, stock_version_identity=False, install_director
         shutil.copyfile(version_file, source / 'app/Container_Audit.py')
     canonical = source / 'INSTALL_CANONICAL_PORTABLE.ps1'
     text = canonical.read_text(encoding='utf-8-sig').replace('$wanted = Command $install', OS_BOUNDARIES + '\n$wanted = Command $install')
+    text = text.replace(
+        '$elevationLogPath = Join-Path $auditRoot "canonical-portable-$runId-elevated.jsonl"',
+        '$elevationLogPath = Join-Path $auditRoot "e.jsonl"',
+    )
     before, marker, after = text.rpartition("\n. $BootstrapIntegrityFunctions\n")
     assert marker
     text = before + marker + CAPTURE_OS_BOUNDARIES + "\n" + after
@@ -625,7 +629,7 @@ def _run(tmp_path, env, source, install, *extra):
     result = _ps(source / 'INSTALL_CANONICAL_PORTABLE.ps1', env,
                  '-SourceRoot', str(source), '-InstallRoot', str(install),
                  '-EvidencePath', str(tmp_path / 'audit.json'), '-Uninstall',
-                 '-AllowNoncanonicalLayoutForTest', '-SkipSignatureValidationForTest', '-ElevationLogPath', str(tmp_path / 'e'), *extra)
+                 '-AllowNoncanonicalLayoutForTest', '-SkipSignatureValidationForTest', *extra)
     (tmp_path / 'stdout.log').write_text(result.stdout, encoding='utf-8')
     (tmp_path / 'stderr.log').write_text(result.stderr, encoding='utf-8')
     return result
