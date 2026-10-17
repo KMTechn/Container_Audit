@@ -462,7 +462,7 @@ def _ps(path, env, *args):
 def _setup(tmp_path, fault='', *, stock_version_identity=False, install_directory=None):
     env = native_python_environment()
     for name in ('LOCALAPPDATA', 'APPDATA', 'PROGRAMDATA', 'TEMP', 'TMP'):
-        target = tmp_path / name
+        target = tmp_path / ("l" if name == "LOCALAPPDATA" else name)
         target.mkdir()
         env[name] = str(target)
     env.update(PYTHONDONTWRITEBYTECODE='1', KMTECH_FACTORY_INSTALL_TEST_MODE='1',
