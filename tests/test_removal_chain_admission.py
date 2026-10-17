@@ -11,6 +11,26 @@ from tests.powershell_contracts import run_powershell
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_retired_capture_passes_only_script_arguments_to_existing_wrapper(tmp_path):
+    source = str(ROOT / 'INSTALL_CANONICAL_PORTABLE.ps1').replace("'", "''")
+    _run(tmp_path, "$canonical='" + source + "'\n" + r'''
+$tokens=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile($canonical,[ref]$tokens,[ref]$errors)
+$definition=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Invoke-CanonicalRetiredRemovalChild'},$false)
+Invoke-Expression $definition.Extent.Text
+function Same {param($Left,$Right) $Left -ceq $Right}
+function Protect-InstallationText {param($Text,$Limit) $Text}
+function Invoke-InstallationElevationCapture {
+    param($Target,$Arguments,$AuditBase,$Sid)
+    $script:CapturedArguments=@($Arguments)
+    [pscustomobject]@{Id=42;ExitCode=0;Streams=$null}
+}
+$arguments=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File','helper.ps1','-Uninstall','-InstallRoot','fixture')
+$child=Invoke-CanonicalRetiredRemovalChild 'helper.ps1' $arguments 'audit' 'fixture-sid'
+if(($script:CapturedArguments -join ',') -cne '-Uninstall,-InstallRoot,fixture' -or $child.ExitCode -ne 0){throw 'engine arguments leaked into script parameters'}
+''')
+
+
 @pytest.mark.parametrize('shape', ['missing_parent', 'reused_parent', 'blank_created', 'blocked_above'])
 def test_ancestor_walk_stops_at_first_broken_or_ineligible_link(tmp_path, shape):
     _run(tmp_path, r'''

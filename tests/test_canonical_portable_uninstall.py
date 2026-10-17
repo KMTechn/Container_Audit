@@ -224,9 +224,54 @@ function StartRaw([string]$Line) {
     $child = Start-Process -FilePath $env:CA_UNINSTALL_PYTHON -ArgumentList $arguments -WindowStyle Hidden -PassThru
     return $child.Id
 }
+
+$script:FixtureCaughtFailureWriter=${function:Write-InstallationCaughtFailure}
+function Write-InstallationCaughtFailure($Failure) {
+    $entries=@();$exception=if($Failure -is [Exception]){$Failure}else{$Failure.Exception}
+    for($depth=0;$null -ne $exception -and $depth -lt 8;$depth++){
+        $entries+=@{type=$exception.GetType().FullName;message=$exception.Message};$exception=$exception.InnerException
+    }
+    $record=@{exceptions=$entries;script=[string]$Failure.InvocationInfo.ScriptName;line=$Failure.InvocationInfo.ScriptLineNumber;stack=[string]$Failure.ScriptStackTrace}
+    [IO.File]::AppendAllText((Join-Path $env:CA_UNINSTALL_ROOT 'caught-failure-private.jsonl'),(($record|ConvertTo-Json -Depth 6 -Compress)+[Environment]::NewLine),[Text.UTF8Encoding]::new($false))
+    & $script:FixtureCaughtFailureWriter $Failure
+}
+
+function Test-UninstallFixtureRootPath([string]$Path) {
+    if([string]::IsNullOrWhiteSpace($env:CA_UNINSTALL_ROOT) -or [string]::IsNullOrWhiteSpace($Path)){return $false}
+    $root=[IO.Path]::GetFullPath($env:CA_UNINSTALL_ROOT).TrimEnd('\')
+    $full=[IO.Path]::GetFullPath($Path)
+    return ($full.Equals($root,[StringComparison]::OrdinalIgnoreCase) -or $full.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase))
+}
+function Test-UninstallFixtureProtectedPath([string]$Path) {
+    return (Test-UninstallFixtureRootPath $Path)
+}
+function Assert-InstallationEvidenceProtectedPath([string]$Path,[switch]$AllowSupportedPreparation) {
+    if(Test-UninstallFixtureProtectedPath $Path){
+        if(-not(Test-Path -LiteralPath $Path)){throw 'FIXTURE_PROTECTED_PATH_MISSING'}
+        Assert-BootstrapNoReparsePoint $Path 'fixture protected boundary' -PathOnly
+        return
+    }
+    & $Script:CAUninstallOriginalProtectionFunctions['Assert-InstallationEvidenceProtectedPath'] $Path -AllowSupportedPreparation:$AllowSupportedPreparation
+}
+function Assert-BootstrapProtectedRelayPath([string]$Path,[switch]$AllowSupportedPreparation) {
+    if(Test-UninstallFixtureProtectedPath $Path){
+        if(-not(Test-Path -LiteralPath $Path)){throw 'FIXTURE_PROTECTED_PATH_MISSING'}
+        Assert-BootstrapNoReparsePoint $Path 'fixture protected relay boundary' -PathOnly
+        return
+    }
+    & $Script:CAUninstallOriginalProtectionFunctions['Assert-BootstrapProtectedRelayPath'] $Path -AllowSupportedPreparation:$AllowSupportedPreparation
+}
+
+function Invoke-InstallationElevationCapture {
+    param([string]$Target,[string[]]$Arguments,[string]$AuditBase,[string]$OperatorSid,$AuthorityLease=$null)
+    $engine=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+    $argv=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$Target)+$Arguments
+    $child=Invoke-InstallationEvidenceChild 'fixture-retired-elevated-helper' $engine $argv
+    [pscustomobject]@{Id=$child.ProcessId;ExitCode=$child.ExitCode;Streams=$child.Streams}
+}
 '''
 
-HELPER_OS = r"""
+HELPER_OS = r'''
 function Test-CurrentUserRelayPersistencePresent { return [bool](Get-Content (Join-Path $env:CA_UNINSTALL_ROOT 'registry.json') -Raw | ConvertFrom-Json).exists }
 function Get-CimInstance {
     if ($env:CA_UNINSTALL_INTERACTIVE -ceq '1') {
@@ -339,7 +384,18 @@ function Assert-BootstrapProtectedRelayPath([string]$Path,[switch]$AllowSupporte
     }
     & $Script:CAUninstallOriginalProtectionFunctions['Assert-BootstrapProtectedRelayPath'] $Path -AllowSupportedPreparation:$AllowSupportedPreparation
 }
-"""
+
+$script:FixtureCaughtFailureWriter=${function:Write-InstallationCaughtFailure}
+function Write-InstallationCaughtFailure($Failure) {
+    $entries=@();$exception=if($Failure -is [Exception]){$Failure}else{$Failure.Exception}
+    for($depth=0;$null -ne $exception -and $depth -lt 8;$depth++){
+        $entries+=@{type=$exception.GetType().FullName;message=$exception.Message};$exception=$exception.InnerException
+    }
+    $record=@{exceptions=$entries;script=[string]$Failure.InvocationInfo.ScriptName;line=$Failure.InvocationInfo.ScriptLineNumber;stack=[string]$Failure.ScriptStackTrace}
+    [IO.File]::AppendAllText((Join-Path $env:CA_UNINSTALL_ROOT 'caught-failure-private.jsonl'),(($record|ConvertTo-Json -Depth 6 -Compress)+[Environment]::NewLine),[Text.UTF8Encoding]::new($false))
+    & $script:FixtureCaughtFailureWriter $Failure
+}
+'''
 
 
 def _ps(path, env, *args):

@@ -2004,7 +2004,15 @@ function Get-CanonicalRetirementChildFailure($Child, [Collections.IDictionary]$E
     return $detail
 }
 function Invoke-CanonicalRetiredRemovalChild([string]$Target,[string[]]$Arguments,[string]$AuditBase,[string]$Sid) {
-    $capture=Invoke-InstallationElevationCapture $Target $Arguments $AuditBase $Sid
+    $prefix=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File')
+    if($Arguments.Count -le 7 -or -not(Same $Arguments[6] $Target)) { throw 'Retired removal helper invocation differs.' }
+    for($index=0;$index -lt $prefix.Count;$index++) {
+        if($Arguments[$index] -cne $prefix[$index]) { throw 'Retired removal helper invocation differs.' }
+    }
+    # The elevation wrapper selects its own engine and pinned target. Its tail
+    # contains script parameters, without another engine startup or -File.
+    $helperArguments=[string[]]@($Arguments|Select-Object -Skip 7)
+    $capture=Invoke-InstallationElevationCapture $Target $helperArguments $AuditBase $Sid
     $texts=@{stdout='';stderr=''}
     foreach($name in @('stdout','stderr')) {
         if($null -eq $capture.Streams){continue}
