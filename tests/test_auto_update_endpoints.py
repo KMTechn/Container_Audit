@@ -37,6 +37,21 @@ def restored_ready_processes(control, stage):
             for pid, role in ((456, "gui"), (457, "relay"))]
 
 
+@pytest.fixture(autouse=True)
+def _isolate_endpoint_control_root(isolate_product_state, tmp_path, monkeypatch):
+    """Keep iwrun's fixed writer root from sharing generation markers across tests."""
+    import writer_session_fence as fence
+
+    if getattr(fence, "__kmtech_test_ca_writer_isolated__", False):
+        import data_generation_guard as generation_guard
+
+        root = tmp_path / "onboarding-control"
+        canonical_root = lambda environ=None: root
+        monkeypatch.setattr(fence, "canonical_control_root", canonical_root)
+        monkeypatch.setattr(generation_guard, "canonical_control_root", canonical_root)
+        monkeypatch.setenv("KMTECH_TEST_CA_WRITER_ROOT", str(root))
+
+
 @pytest.fixture
 def endpoint(monkeypatch, tmp_path):
     control, stage = tmp_path / "update-control", tmp_path / "stage"
