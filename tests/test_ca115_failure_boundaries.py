@@ -234,6 +234,7 @@ PRODUCERS = [
     ("INSTALL_CANONICAL_PORTABLE.ps1", "Write-CanonicalInstallationPublicRecord", "Write-CanonicalInstallationPublicRecord -ExitCode 1"),
     ("INSTALL_CANONICAL_PORTABLE.ps1", "Write-CanonicalMachinePublicRecord", "Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED'"),
     ("INSTALL_THIS_PC.ps1", "Write-InstallationHelperPublicRecord", "Write-InstallationHelperPublicRecord @{status='FAILED'}"),
+    ("INSTALL_THIS_PC.ps1", "Write-InstallationHelperPublicRecord", "Write-InstallationHelperPublicRecord @{status='PASS';reason_code='HIBERBOOT_ENABLED'}"),
     ("tools/bootstrap_integrity.ps1", "Write-InstallationTransactionTerminalFailure", "Write-InstallationTransactionTerminalFailure"),
     ("tools/bootstrap_integrity.ps1", "Start-BootstrapNormalProducerWrapper", "try {Start-BootstrapNormalProducerWrapper ('x'*1024) $null @() @()} catch {}"),
     ("tools/apply_prepared_update.ps1", "sink:update-child", ""),
@@ -246,6 +247,7 @@ PRODUCERS = [
 @pytest.mark.parametrize("source,name,invoke", PRODUCERS, ids=[row[1] for row in PRODUCERS])
 def test_public_failure_wire_bytes_are_console_independent(tmp_path, source, name, invoke):
     outputs = []
+    is_pass = "status='PASS'" in invoke
     # The approved vectors avoid unrelated PS5/PS7 JSON escaping differences.
     vector_path = ROOT / "tests/fixtures/g36_public_line_vectors.json"
     vectors = json.loads(vector_path.read_text(encoding="utf-8"))["vectors"]
@@ -260,11 +262,15 @@ function Write-InstallationEvidenceEvent {}
 function Get-ContainerWriterFenceControlRoot {return 'E:\isolated\machine-install\update-control\fence'}
 function ConvertTo-KmtechPublicRecord {
  param($Fields,$AllowedCodes,$SafeMessages)
+ if($env:WIRE_PASS -ceq '1'){return [ordered]@{status='PASS';guidance=$script:VectorText}}
  return [ordered]@{guidance=$script:VectorText}
 }
 function ConvertTo-Json {
  param([Parameter(ValueFromPipeline=$true)]$InputObject,[switch]$Compress,[int]$Depth)
- end {return Microsoft.PowerShell.Utility\ConvertTo-Json -InputObject ([ordered]@{guidance=$script:VectorText}) -Compress}
+ end {
+  if($env:WIRE_PASS -ceq '1'){return Microsoft.PowerShell.Utility\ConvertTo-Json -InputObject $InputObject -Compress}
+  return Microsoft.PowerShell.Utility\ConvertTo-Json -InputObject ([ordered]@{guidance=$script:VectorText}) -Compress
+ }
 }
 $vectors=(Get-Content -LiteralPath $env:VECTORS -Raw -Encoding UTF8|ConvertFrom-Json).vectors
 [Console]::OutputEncoding=[Text.Encoding]::GetEncoding([int]$env:CODEPAGE)
@@ -292,7 +298,8 @@ if(-not $env:WIRE_FUNCTION.StartsWith('sink:')){
 }
 ''' + script, encoding="utf-8-sig")
             environment = dict(os.environ, CODEPAGE=str(codepage), VECTORS=str(vector_path),
-                               WIRE_SOURCE=str(ROOT / source), WIRE_FUNCTION=name)
+                               WIRE_SOURCE=str(ROOT / source), WIRE_FUNCTION=name,
+                               WIRE_PASS="1" if is_pass else "0")
             result = subprocess.run([shutil.which(engine), "-NoLogo", "-NoProfile", "-NonInteractive",
                                      "-ExecutionPolicy", "Bypass", "-File", str(driver)],
                                     env=environment, capture_output=True,
@@ -305,8 +312,12 @@ if(-not $env:WIRE_FUNCTION.StartsWith('sink:')){
             assert len(lines) == len(vectors)
             for line, vector in zip(lines, vectors):
                 body = line.split("=", 1)[1]
-                assert body == '{"guidance":' + vector["expected_json_string_ascii"] + '}'
-                assert json.loads(body) == {"guidance": vector["text"]}
+                prefix = '{"status":"PASS","guidance":' if is_pass else '{"guidance":'
+                assert body == prefix + vector["expected_json_string_ascii"] + '}'
+                expected = {"guidance": vector["text"]}
+                if is_pass:
+                    expected["status"] = "PASS"
+                assert json.loads(body) == expected
             outputs.append(raw)
     assert all(output == outputs[0] for output in outputs)
 

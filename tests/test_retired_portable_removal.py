@@ -323,8 +323,28 @@ def test_retirement_first_child_failure_survives_recovery_and_contains_no_raw_se
     observation = result.fixture_audit
     directory = Path(observation['audit_path'] + '.evidence.' + str(observation['process_id']))
     assert all(raw not in p.read_bytes() for p in directory.rglob('*') if p.is_file()), 'secret in evidence (value suppressed)'
-    full_present = full_cause in failure['stdout'] and full_cause in result.stdout
-    assert full_present, 'first child diagnostic missing or truncated (output suppressed)'
+    protected_records = [json.loads(line) for path in directory.glob("*.jsonl")
+                         for line in path.read_text(encoding="utf-8").splitlines()]
+    protected_full = any(
+        record.get("event") == "CANONICAL_DIAGNOSTIC_REPORT" and any(
+            item.get("field") == "stderr" and full_cause in item.get("diagnostic", "")
+            for item in record.get("diagnostics", ()))
+        for record in protected_records)
+    assert protected_full, "first child diagnostic must remain complete in protected evidence"
+    assert full_cause not in result.stdout, "public stdout must not contain free diagnostic text"
+    from auto_update import REGISTERED_POWERSHELL_PUBLIC_LITERALS
+    prefix = "CONTAINER_AUDIT_INSTALL_CANONICAL="
+    public_records = []
+    for line in result.stdout.splitlines():
+        if line.startswith(prefix):
+            record = json.loads(line[len(prefix):])
+            assert isinstance(record, dict)
+            public_records.append(record)
+        else:
+            assert any(line == literal or (literal.endswith("=") and line.startswith(literal))
+                       for literal in REGISTERED_POWERSHELL_PUBLIC_LITERALS
+                       if "failure_summary=" not in literal and "child_failure=" not in literal), "unregistered public diagnostic text"
+    assert public_records
 
 
 @pytest.mark.parametrize('operation', ['install', 'ordinary_remove', 'update'])

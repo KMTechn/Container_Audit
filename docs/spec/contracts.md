@@ -705,6 +705,8 @@ PS5.1/7 RED2→GREEN4이고 기존 startup/export와 합쳐 34 PASS다. 새 help
 Main의 새 QA 소유 배정 뒤 Web이 발행한 단회 recovery를 기존 지원 등록 명령으로 실행한 Recovery01은 ordinary native/task0 / `ADMIN_RECOVERY_REGISTERED`, epoch8이다. 제품이 이 대상에서 만든 실제 current_user fingerprint `bqMrBqbmdGBJjoPnV-JasvUTsdGnMdQKrdXCZrrc3S4`를 그대로 사용했고 producer/source `container-audit-source-20da23dc1c762b3c1055a10e3e2450c1`·install `container-audit-install-87f6d7d8b6e36067490c1d1146fcebeb`, semantic manifest `27c471d693d0de73377beaeeddbbc93aad90ac676b3b2a6c2fa388c37f4b7538`를 확인했다. [Web의14:06:14Z 독립 확인](E:/KMTech/web-integration-20260908/ca-final-recovery-central-readback-01.json)은 recovery 단회 소모와 기존97 receipt의 ID·full row hash/rowid 보존을 입증한다. 기존 key/identity·token·clock·ledger를 시험 도구로 바꾸지 않았으며 `OPERATION_PENDING`은 등록 성공과 별도 권한 상태다. 실제 상태가 회복된 뒤 Install02는 native/task0 / `PASS`·`REUSED_VERIFIED`로 정상 계속했다. [전체 원본·후속 lifecycle](E:/KMTech/ca-final-qualification-20260908/REPORT.md)을 따르며, 기존 Restore09는 원 receipt/VM 범위에서만 재사용하고 이 대상의 무지원 첫 등록 성공으로 승계하지 않는다.
 # Installation evidence and shared ancestor protection — 2026-10-02
 
+설치기 공개 레코드 producer는 PASS·FAILED 모두 같은 ASCII 규칙을 적용한다. 상태별로 출력 채널·필드·JSON 복원 의미를 바꾸지 않는다.
+
 설치 공개 실패 줄은 기존 출력 채널에서 `<앱 접두>=` + JSON 객체 하나(-Compress) + CRLF이며 CRLF 앞 바이트는 0x20–0x7E다. JSON 생성 뒤 U+007F보다 큰 UTF-16 코드 단위를 소문자 16진 네 자리 `\uXXXX`로 바꾼다(서로게이트 단위마다). 필드 이름·차례·다른 이스케이프는 앱 생산자 그대로다. PS5.1/PS7 및 콘솔 949/65001에서 공통 벡터의 바이트와 JSON 복원 값이 같아야 한다. `< > & '`의 엔진별 직렬화 차이는 이 계약의 동일 바이트 시험에 넣지 않는다.
 
 Installer failures preserve the original redacted message, line, inner chain,
