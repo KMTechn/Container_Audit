@@ -1496,13 +1496,16 @@ def resolve_lifecycle_context(root: Path, *, operation: str = 'inspect', expecte
             if supported_task_present(fixed, policy.get('operator_sid')) is not True:
                 raise ValueError('lifecycle_task_absence_or_unknown')
             if failed_support:
-                assert_failed_support_quiescent(control, policy, state)
-                observed = read_trial_generation(policy)
-                if (observed.get('status') != 'READ' or observed.get('record') is None
-                        or current_generation_status(control, policy, active_sha) != 'ALLOW'
-                        or read_trial_generation(policy) != observed):
-                    raise ValueError('lifecycle_failed_support_generation_unknown')
-                assert_failed_support_quiescent(control, policy, state)
+                try:
+                    assert_failed_support_quiescent(control, policy, state)
+                    observed = read_trial_generation(policy)
+                    if (observed.get('status') != 'READ' or observed.get('record') is None
+                            or current_generation_status(control, policy, active_sha) != 'ALLOW'
+                            or read_trial_generation(policy) != observed):
+                        raise ValueError('lifecycle_failed_support_generation_unknown')
+                    assert_failed_support_quiescent(control, policy, state)
+                except (TypeError, KeyError) as error:
+                    raise ValueError('lifecycle_failed_support_observation_unknown') from error
             try:
                 if [read_json(path) for path in records] != [policy, pointer, state]:
                     if not startup: raise ValueError('lifecycle_state_changed_during_verification')

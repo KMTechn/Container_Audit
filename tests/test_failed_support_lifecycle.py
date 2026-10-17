@@ -75,3 +75,22 @@ def test_failed_lifecycle_requires_explicit_preflight_and_separate_proofs(instal
         if case != "ordinary_caller":
             assert case in calls
     assert state_path.read_bytes() == before
+
+
+def test_failed_lifecycle_unobservable_prepared_fails_closed(installed, monkeypatch):
+    import auto_update as update
+    import writer_session_fence as fence
+
+    state_path = installed / "update-control/transition.json"
+    state = update.read_json(state_path)
+    state["phase"] = "FAILED"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    before = state_path.read_bytes()
+    monkeypatch.setattr(update, "process_snapshot", lambda _control: [])
+    monkeypatch.setattr(fence, "active_fence", lambda *args, **kwargs: None)
+    def unreadable(*args, **kwargs):
+        raise TypeError("prepared receipt cannot be observed")
+    monkeypatch.setattr(update, "prepared_pending", unreadable)
+    with pytest.raises(ValueError):
+        update.resolve_lifecycle_context(installed, operation="install", failed_support_preflight=True)
+    assert state_path.read_bytes() == before
