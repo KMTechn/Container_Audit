@@ -314,6 +314,9 @@ def test_restart_rollback_uses_only_original_remaining_window(scene, monkeypatch
     assert updates.wait_for_rollback_ready(s.control, s.policy) == 20
     state = updates.read_json(s.control / "transition.json")
     assert state["phase"] == "FAILED" and state["rollback_at"] == original["rollback_at"]
+    terminal_before = len(s.terminal)
+    assert updates._bootstrap(s.control.parent, [], role='gui') == 0
+    assert len(s.terminal) == terminal_before + 1
 
 
 def test_overlapping_run_and_gui_reuse_sampled_single_trial_relay(scene, monkeypatch):

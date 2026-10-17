@@ -383,6 +383,8 @@ def test_pending_gui_scan_does_not_enter_preflight_or_business_mutation():
 def test_relay_logon_launches_gui_and_ordinary_trial_relay_on_the_same_data_root(monkeypatch, tmp_path):
     from contextlib import nullcontext
     import time
+    monkeypatch.setattr(updates, "now_utc", lambda: NOW)
+    monkeypatch.setattr(updates, "process_snapshot", lambda _control: [])
 
     control = tmp_path / "update-control"
     stage = tmp_path / "stage"
