@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$SourceRoot = "",
     [string]$InstallRoot = "C:\KMTech\Apps\Container_Audit\current",
@@ -4934,11 +4934,13 @@ if ($rollbackContinuation) {
     }
 }
 Assert-CanonicalOperatingWorkerAccount $canonicalOperation ([bool]$rollbackContinuation)
+# Supported FAILED preflight needs authenticated shared generation definitions.
+. (Get-BootstrapSharedPortableLeaf $PSScriptRoot 'data_generation.ps1')
 $supportedContext=$null
 $supportedPlacement=$false
 $installedCodeRoot=$install
 if(-not $testMode -and -not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $rollbackContinuation) {
-    $supportedContext = Get-BootstrapSupportedLifecycleContext -Root (Split-Path -Parent $install) -Operation 'install'
+    $supportedContext = Get-BootstrapSupportedLifecycleContext -Root (Split-Path -Parent $install) -Operation 'install' -FailedSupportPreflight
     if([string]$supportedContext.lifecycle_state -ceq 'HEALTHY' -and [bool]$supportedContext.managed -and
         [string]$supportedContext.bootstrap_commit -cne [string]$supportedContext.from_commit) {
         $supportedPlacement=$true

@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [switch]$DryRun,
     [switch]$Uninstall,
@@ -850,6 +850,7 @@ function Enter-ContainerPlacementWriterFence {
         -DelegationToken $WriterFenceDelegationToken `
         -Source $PlacementWriterSource `
         -TimeoutMilliseconds 15000
+    $failedSupportIdentity=$null
     try {
         $active = Read-ContainerWriterFence -ControlRoot $controlRoot
         $preparedMatches = (
@@ -872,10 +873,20 @@ function Enter-ContainerPlacementWriterFence {
             [string]$active.owner_kind -cne 'canonical_installer' -or
             -not ($preparedMatches -or $uninstallRecovery)
         ) { throw 'CONTAINER_OPERATOR_PREPARED_BINDING_MISMATCH' }
+        if($preparedMatches -and [string]$active.status -ceq 'INSTALLING') {
+            $fencePath=Get-ContainerWriterFenceActivePath $controlRoot
+            $failedSupportIdentity=[pscustomobject]@{
+                process_id=$PID;thread_id=[Threading.Thread]::CurrentThread.ManagedThreadId
+                fence_path=$fencePath;fence_sha256=Get-ContainerWriterFenceFileSha256 $fencePath
+                prepared_path=[string]$operatorBinding.receipt_path;prepared_sha256=[string]$operatorBinding.receipt_sha256
+                session_id=$WriterFenceSessionId;attempt_id=$WriterFenceAttemptId
+                replacement_transaction_id=$WriterFenceReplacementTransactionId
+            }
+        }
     }
     finally { Exit-ContainerWriterAdmission $preflightLease }
     if (-not $testOverride) { Invoke-SelfElevated }
-    return Enter-ContainerWriterDelegatedOperation `
+    $lease=Enter-ContainerWriterDelegatedOperation `
         -ControlRoot $controlRoot `
         -SessionId $WriterFenceSessionId `
         -AttemptId $WriterFenceAttemptId `
@@ -883,6 +894,8 @@ function Enter-ContainerPlacementWriterFence {
         -DelegationToken $WriterFenceDelegationToken `
         -Source $PlacementWriterSource `
         -TimeoutMilliseconds 15000
+    $lease|Add-Member -NotePropertyName failed_support_identity -NotePropertyValue $failedSupportIdentity
+    return $lease
 }
 
 function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTest) {
@@ -1435,6 +1448,18 @@ function Save-ContainerStartupUpdatePreimage([string]$Root, [string]$Purpose) {
     return [pscustomobject]@{path=$directory;sha256=(Get-FileSha256 (Join-Path $directory 'preimage.json'))}
 }
 
+function Move-ContainerFailedTransitionEvidence([string]$Root,$Preimage) {
+    $source=Join-Path (Split-Path -Parent $Root) 'update-control\transition.json'
+    if(-not(Test-Path -LiteralPath $source)){return}
+    $state=Read-BootstrapLifecycleJson $source
+    if($state['phase'] -cne 'FAILED'){return}
+    $copy=Join-Path ([string]$Preimage.path) 'transition.json'
+    Assert-BootstrapExactFileCopy $source $copy
+    $target=Join-Path ([string]$Preimage.path) 'failed-transition-original.json'
+    Move-Item -LiteralPath $source -Destination $target -ErrorAction Stop
+    Assert-BootstrapExactFileCopy $target $copy
+}
+
 function Restore-ContainerStartupUpdatePreimage([string]$Root, [string]$Directory, [string]$ExpectedSha256) {
     # Restoration uses the protected parent and exact pinned preimage, not
     # executable bytes that an earlier rollback step may already have removed.
@@ -1587,7 +1612,9 @@ function Initialize-ContainerStartupUpdate([string]$Root) {
     $oldTransitionPath = Join-Path $Script:StartupUpdatePreimage.path 'transition.json'
     if (Test-Path -LiteralPath $oldTransitionPath) {
         $oldTransition = Get-Content -LiteralPath $oldTransitionPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        $failedShas = @($oldTransition.failed_shas)
+        if([string]$oldTransition.phase -ceq 'FAILED') {
+            Move-ContainerFailedTransitionEvidence $Root $Script:StartupUpdatePreimage
+        } else {$failedShas = @($oldTransition.failed_shas)}
     }
     Set-InstallationEvidenceStage 'startup.control_records' 'startup'
     Write-ContainerStartupUpdateRecord (Join-Path $control 'transition.json') ([ordered]@{schema='container-audit-startup-update-v1';phase='DEFERRED';deferred_at=(Get-Date).ToUniversalTime().ToString('o');reason='canonical installation';failed_shas=$failedShas})
@@ -2241,30 +2268,7 @@ function Get-ContainerRemovalControllerProcessId([object[]]$ProcessRows) {
 }
 
 function Assert-ContainerRemovalQuiescent([string]$ApplicationRoot, [int[]]$ExcludeProcessIds = @()) {
-    $prefix = (Get-StrictFullPath $ApplicationRoot 'removal process root').TrimEnd('\','/') + '\'
-    $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop)
-    if ($rows.Count -eq 0) { throw 'REMOVAL_PROCESS_OBSERVATION_UNKNOWN' }
-    foreach ($row in $rows) {
-        if ($null -eq $row.ProcessId) { throw 'REMOVAL_PROCESS_OBSERVATION_UNKNOWN' }
-        if ([int]$row.ProcessId -eq $PID -or [int]$row.ProcessId -in $ExcludeProcessIds) {
-            $identities=Get-Variable -Name ContainerRemovalVerifiedProcessIdentities -Scope Script -ValueOnly -ErrorAction SilentlyContinue
-            if ($null -ne $identities -and $identities.ContainsKey([int]$row.ProcessId)) {
-                $identity=$identities[[int]$row.ProcessId]
-                try {
-                    $live=(Get-Process -Id ([int]$row.ProcessId) -ErrorAction Stop).StartTime.ToUniversalTime()
-                    if ($live -ne $identity.started -or
-                        ([datetime]$row.CreationDate).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffff') -cne $identity.started.ToString('yyyy-MM-ddTHH:mm:ss.ffffff') -or
-                        -not(Test-SamePath ([string]$row.ExecutablePath) ([string]$identity.row.ExecutablePath)) -or
-                        [string]$row.CommandLine -cne [string]$identity.row.CommandLine) { throw 'identity changed' }
-                } catch { throw 'REMOVAL_CONTROLLER_PROCESS_IDENTITY_CHANGED' }
-            }
-            continue
-        }
-        if (([string]$row.ExecutablePath).StartsWith($prefix, 'OrdinalIgnoreCase') -or
-            ([string]$row.CommandLine).IndexOf($prefix, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-            throw 'REMOVAL_REQUIRES_PRODUCT_PROCESS_STOP'
-        }
-    }
+    Assert-BootstrapSupportQuiescent $ApplicationRoot $ExcludeProcessIds
 }
 
 function Resolve-ContainerRemovalTaskSid([string]$Identity) {
@@ -2518,6 +2522,16 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
     $evidence = Join-Path $evidenceParent ([Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $evidence | Out-Null
     if (-not $testOverride) { Set-HardenedCodeAcl $evidence }
+    $failedTransition=Join-Path $application 'update-control\transition.json'
+    if(Test-Path -LiteralPath $failedTransition -PathType Leaf) {
+        $failedState=$null
+        try{$failedState=Read-BootstrapLifecycleJson $failedTransition}catch{}
+        if($null -ne $failedState -and $failedState['phase'] -ceq 'FAILED') {
+            $failedCopy=Join-Path $evidence 'failed-transition-copy.json'
+            Copy-Item -LiteralPath $failedTransition -Destination $failedCopy -ErrorAction Stop
+            Assert-BootstrapExactFileCopy $failedTransition $failedCopy
+        }
+    }
     if ($null -eq $TaskFolder -and -not $testOverride -and -not $OnlyUncommittedCurrent) { throw 'REMOVAL_TASK_OBSERVATION_UNKNOWN' }
     if ($null -ne $TaskFolder) { Remove-ContainerScheduledTasks $TaskFolder $evidence $current }
     Assert-ContainerRemovalQuiescent $application $ExcludeProcessIds
@@ -2754,12 +2768,12 @@ function Set-ContainerLifecycleContextFailure($ContextText) {
     Write-InstallationEvidenceEvent ([ordered]@{event='LIFECYCLE_CONTEXT_FAILED';diagnostic=$safe})
 }
 
-function Get-ContainerSupportedInstallContext([string]$Source,[string]$Fixed,[string]$RecoveryMessage='Supported lifecycle context is unhealthy.') {
+function Get-ContainerSupportedInstallContext([string]$Source,[string]$Fixed,[string]$RecoveryMessage='Supported lifecycle context is unhealthy.',$SelfIdentity=$null) {
     $lease=Get-Variable -Name placementWriterFenceLease -ValueOnly -ErrorAction SilentlyContinue
     if($null -ne $lease -and $lease.acquired -is [bool] -and $lease.acquired){
         # The helper already owns admission. A Python child cannot reacquire
         # that mutex; use the existing pinned classifier in this same thread.
-        try{return Get-BootstrapSupportedLifecycleContext (Split-Path -Parent $Fixed) 'install'}
+        try{return Get-BootstrapSupportedLifecycleContext (Split-Path -Parent $Fixed) 'install' -SelfIdentity $SelfIdentity}
         catch{
             Write-InstallationCaughtFailure $_
             $details=@();$contextException=$_.Exception
@@ -2788,7 +2802,7 @@ function Invoke-ContainerPlacementRollbackStep([string]$Name,[scriptblock]$Actio
 }
 
 if(-not $testOverride -and -not $RestoreUninstallRecordPath -and -not $SupportedActiveVersionPlacement) {
-    $context=Get-ContainerSupportedInstallContext $sourceRootFull $installRootFull '자료와 등록 및 전송 대기를 보존하고 지원 제거를 먼저 실행한 뒤 다시 설치하세요.'
+    $context=Get-ContainerSupportedInstallContext $sourceRootFull $installRootFull '자료와 등록 및 전송 대기를 보존하고 지원 제거를 먼저 실행한 뒤 다시 설치하세요.' -SelfIdentity $placementWriterFenceLease.failed_support_identity
     if([string]$context.lifecycle_state -ceq 'HEALTHY' -and [bool]$context.managed -and [string]$context.bootstrap_commit -cne [string]$context.from_commit){throw '자동 적용 뒤 지원 설치는 INSTALL_CANONICAL_PORTABLE.ps1 로 실행하세요.'}
 }
 $sourceInventory = @(Get-CodeInventory $sourceRootFull)
@@ -2854,7 +2868,7 @@ function Invoke-ContainerSupportedActiveVersionPlacement {
         try{$held=$gate.WaitOne(5000)}catch [Threading.AbandonedMutexException]{$held=$true;throw 'Supported update gate was abandoned.'}
         if(-not $held){throw 'Supported update gate is busy.'}
         # Verify the old stock through the admitted source, never by running B.
-        $context=Get-ContainerSupportedInstallContext $sourceRootFull $installRootFull
+        $context=Get-ContainerSupportedInstallContext $sourceRootFull $installRootFull -SelfIdentity $placementWriterFenceLease.failed_support_identity
         if([string]$context.lifecycle_state -cne 'HEALTHY' -or [string]$context.from_commit -cne $SupportedFromCommit -or
             [string]$context.bootstrap_commit -ceq $SupportedFromCommit){throw 'Supported active from binding differs.'}
         Assert-ContainerReplacementRestoreQuiescent -CurrentRoot $installRootFull
@@ -2884,7 +2898,9 @@ function Invoke-ContainerSupportedActiveVersionPlacement {
         $policy.profile_auth=[bool]$settings.profile_auth;$policy.approved_transitions=@($settings.approved_transitions)
         Write-ContainerStartupUpdateRecord (Join-Path $planned 'policy.json') $policy
         Write-ContainerStartupUpdateRecord (Join-Path $planned 'active.json') ([ordered]@{schema='container-audit-startup-update-v1';sha=[string]$manifest.source_commit;transition_id=$ReplacementTransactionId})
-        Write-ContainerStartupUpdateRecord (Join-Path $planned 'transition.json') ([ordered]@{schema='container-audit-startup-update-v1';phase='DEFERRED';deferred_at=[DateTime]::UtcNow.ToString('o');reason='supported canonical active-version placement';failed_shas=@($oldState.failed_shas)})
+        $failedShas=@()
+        if([string]$oldState.phase -cne 'FAILED'){$failedShas=@($oldState.failed_shas)}
+        Write-ContainerStartupUpdateRecord (Join-Path $planned 'transition.json') ([ordered]@{schema='container-audit-startup-update-v1';phase='DEFERRED';deferred_at=[DateTime]::UtcNow.ToString('o');reason='supported canonical active-version placement';failed_shas=@($failedShas)})
         $after=@('policy.json','active.json','transition.json'|ForEach-Object {[ordered]@{name=$_;sha256=Get-FileSha256 (Join-Path $planned $_)}})
         $receiptFull=Join-Path $Script:InstallationEvidenceRoot 'replacement-receipt.json'
         $payload=[ordered]@{schema_version='container-audit-verified-replacement-v1';status='OLD_PRESERVED_NEW_VERIFIED';app_id='container_audit';transaction_id=$ReplacementTransactionId;
@@ -2896,6 +2912,7 @@ function Invoke-ContainerSupportedActiveVersionPlacement {
         $saved=Write-BootstrapReplacementReceipt $receiptFull $payload
         Write-InstallationEvidenceEvent ([ordered]@{event='REPLACEMENT_RECEIPT_READY';path=$saved.path;sha256=$saved.sha256;old_manifest_sha256=$owner.manifest_sha256;new_manifest_sha256=$new.manifest_sha256;transaction_id=$ReplacementTransactionId})
         if($Script:InstallationEvidenceFailed){throw 'Supported receipt was not durably recorded.'}
+        Move-ContainerFailedTransitionEvidence $installRootFull $preimage
         foreach($name in @('transition.json','policy.json','active.json')) {
             $bytes=Get-Content -LiteralPath (Join-Path $planned $name) -Raw -Encoding UTF8|ConvertFrom-Json
             Write-ContainerStartupUpdateRecord (Join-Path $control $name) $bytes

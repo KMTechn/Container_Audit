@@ -1415,7 +1415,28 @@ Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Mi
         return False
 
 
-def resolve_lifecycle_context(root: Path, *, operation: str = 'inspect', expected_from_commit: str | None = None, startup: bool = False) -> dict[str, Any]:
+def assert_failed_support_quiescent(control: Path, policy: Mapping[str, Any], state: Mapping[str, Any]) -> None:
+    """Read-only proof; a phase name never grants support admission."""
+    from writer_session_fence import active_fence, canonical_control_root
+
+    if writer_processes(process_snapshot(control), own_pid=os.getpid()):
+        raise ValueError('failed_support_writers_present')
+    roots = [canonical_control_root()]
+    if policy.get('operator_local_app_data'):
+        roots.append(canonical_control_root({'LOCALAPPDATA': policy['operator_local_app_data']}))
+    if os.name == 'nt':
+        if not os.environ.get('PROGRAMDATA'):
+            raise ValueError('failed_support_machine_fence_unobservable')
+        machine = Path(os.environ['PROGRAMDATA']) / 'KMTech/ContainerAudit/machine-install/control/writer-session'
+        roots.append(machine)
+    for root in dict.fromkeys(roots):
+        if active_fence(root) is not None:
+            raise ValueError('failed_support_writer_fence_present')
+    if prepared_pending(control, policy, state):
+        raise ValueError('failed_support_prepared_pending')
+
+
+def resolve_lifecycle_context(root: Path, *, operation: str = 'inspect', expected_from_commit: str | None = None, startup: bool = False, failed_support_preflight: bool = False) -> dict[str, Any]:
     """Removal needs scope; install/register require actual healthy stock bytes."""
     if operation not in {'inspect', 'install', 'register', 'uninstall', 'user_remove'}:
         raise ValueError('lifecycle_operation_invalid')
@@ -1456,8 +1477,11 @@ def resolve_lifecycle_context(root: Path, *, operation: str = 'inspect', expecte
             if not all(present):
                 raise ValueError('lifecycle_control_incomplete')
             policy, pointer, state = [read_json(path) for path in records]
+            failed_support = (state.get('phase') == 'FAILED' and operation == 'install'
+                              and failed_support_preflight is True and not startup)
             if (policy.get('schema') != 'container-audit-startup-update-policy-v1' or pointer.get('schema') != SCHEMA
-                    or state.get('schema') != SCHEMA or state.get('phase') not in {'CONFIRMED', 'DEFERRED', 'ROLLED_BACK'}):
+                    or state.get('schema') != SCHEMA
+                    or (state.get('phase') not in {'CONFIRMED', 'DEFERRED', 'ROLLED_BACK'} and not failed_support)):
                 raise ValueError('lifecycle_transition_requires_recovery')
             active_sha = _sha(pointer.get('sha'))
             if state.get('phase') == 'CONFIRMED' and state.get('candidate_sha') != active_sha:
@@ -1476,6 +1500,17 @@ def resolve_lifecycle_context(root: Path, *, operation: str = 'inspect', expecte
                 raise ValueError('lifecycle_active_trust_key_mismatch')
             if supported_task_present(fixed, policy.get('operator_sid')) is not True:
                 raise ValueError('lifecycle_task_absence_or_unknown')
+            if failed_support:
+                try:
+                    assert_failed_support_quiescent(control, policy, state)
+                    observed = read_trial_generation(policy)
+                    if (observed.get('status') != 'READ' or observed.get('record') is None
+                            or current_generation_status(control, policy, active_sha) != 'ALLOW'
+                            or read_trial_generation(policy) != observed):
+                        raise ValueError('lifecycle_failed_support_generation_unknown')
+                    assert_failed_support_quiescent(control, policy, state)
+                except (TypeError, KeyError) as error:
+                    raise ValueError('lifecycle_failed_support_observation_unknown') from error
             try:
                 if [read_json(path) for path in records] != [policy, pointer, state]:
                     if not startup: raise ValueError('lifecycle_state_changed_during_verification')

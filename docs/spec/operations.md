@@ -1,4 +1,4 @@
-﻿# 운영·환경·장애 복구
+# 운영·환경·장애 복구
 
 10/15 화면 동작: 부분 제출 확인은 재시작 때 채우는 중으로 돌아가며, 이미 저장된 결정은 유예 없이 같은 키로 복구·확정한다. C02–C07·검증된 C09는 자기 작업에 한해 PIN 없이 처리하고 C08·수동 결속·격리 복원은 관리자 PIN을 요구한다. 실제 창 동작·장면 판정과 부분 제출/PIN 독립 검토는 통합 뒤 별도 수용한다.
 
@@ -421,6 +421,13 @@ owner가 살아 있거나 기록·source가 다르면 거절한다. 사용자 �
 키트/SSH 조상은 실제 부모 사슬의 System32 PowerShell·cmd·OpenSSH sshd·conhost 또는 Program Files의 PowerShell 7만 후보로 삼는다. `-InstallRoot <값>`을 뺀 나머지에 앱 뿌리 하위 경로가 있거나 생성 identity가 다르면 제외하지 않는다. Python/pythonw 조상은 제외하지 않는다. 첫 비대상 조상이나 부모 부재·더 늦은 부모 생성 시각에서 탐색을 정상 종료한다. 그 위 행은 일반 census로 판정하며, 탐색 중 생성 시각·부모 PID가 빈 행만 UNKNOWN이다.
 
 공개 standalone 관리자 `-Uninstall`은 보호 pending에 결속된 지정 작업자의 미실행·프로필 부재·사용자 제거 영수증·로컬 계정 사용 불가 중 하나를 코드 변경 전에 확인한다. PENDING 단독은 증명이 아니며 로드된 작업자 hive의 CompletedInstallId와 제품 Run이 모두 없어야 미실행이다. 영수증은 지정 SID와 같은 `operator_sid`, 프로필 아래 실제 파일, reparse 부재, 정확한 `status=PASS_DATA_PRESERVED`를 모두 요구한다. 증명 부재·읽기 실패는 `MACHINE_REMOVAL_WORKER_PART_PENDING`이다. 보호 journal과 기계 감사의 `worker_removal_proof`는 proof와 Run 존재(true/false/null)만 남긴다. 기존 위임·원본·새 배치 부재 prestate가 증명된 내부 설치 실패 복원은 새 사용자 몫 조건의 대상이 아니다.
+### FAILED 지원 출구
+
+FAILED에서도 활성 판의 코드 inventory·서명, writer 0, 읽히는 자료 세대와 출처 하한, 살아 있는 fence·대기 prepared 부재의 네 증명이 모두 성립해야 한다. 실패 원인을 지우거나 phase를 손으로 바꾸어 진행하지 않는다. 증명 실패는 UNKNOWN 거절이며 자료·등록·전송 대기를 유지한다.
+
+기존 권한 경계대로 작업자 Limited의 지원 `-Uninstall` → 관리자의 기계 `-Uninstall` → 기존 두 인수의 지원 재설치 → 새 판 첫 실행 READY 되읽기 순서를 따른다. 제거 도중 중단되면 위 보호 journal의 같은 제거로 재진입하며 부분 제거 상태에서는 재설치를 시작하지 않는다. 관리자 제거는 FAILED transition을 먼저 감사 사본으로 복사하고 원본과 바이트 대조한 뒤 기존 `removal-evidence/<UUID>`에 보존 이동한다. 사본 대조 실패에는 원본 이동과 후속 제거를 시작하지 않는다.
+
+직접 지원 재설치도 보호된 startup preimage에 FAILED transition을 복사·되읽기 대조한 뒤 원본을 같은 감사 증거 폴더로 이관하고 새 제어 상태를 게시한다. 원인과 이전 실패 목록은 감사에 남기며 새 판에 옛 FAILED 제어 상태를 이어 붙이지 않는다. 내부 재검사에서는 이미 delegation에 대조한 자기 fence/receipt의 경로·SHA256·실행 ID를 같은 프로세스·thread의 함수 인수로만 전달한다. 다른 fence·대기 prepared·바이트 불일치·관측 실패를 제외하는 권한은 없다. 업무 자료·원장·등록·전송 대기는 기존 제거 보존 경계를 따른다.
 
 자동 feed는 설치 키로 검증한 manifest의 정확한 양방향 쌍 하나만 권한으로 쓴다.
 실제 stock 판 번호·계약 원문 SHA를 사용자 준비와 SYSTEM 적용/재개에서 다시 대조한다.
