@@ -423,6 +423,8 @@ live/reused owner·살아 있는 session authority·기록 불일치로 잔류 f
 후속 설치가 덮어쓰지 않는다. 파일 목록 자체의 마지막 이동과 SHA 없는 incoming signature
 보존은 검사에서 확정된 메타데이터 예외와 같다.
 
+사용자 제거의 `current_user_removal.json`은 기존 report_version을 유지하며 현재 작업자의 `operator_sid`를 추가한다. 이미 제거한 상태의 재실행도 SID가 있는 새 영수증을 발행한다. 관리자 제거는 SID가 없거나 다른 옛 영수증을 인정하지 않으며 프로필 아래 실제 파일의 reparse 부재와 정확한 `PASS_DATA_PRESERVED`를 함께 확인한다([운영](operations.md)).
+
 <a id="ca-c01"></a>
 ## CA-C01 로컬 상태·내구성·소유권
 
@@ -703,6 +705,10 @@ PS5.1/7 RED2→GREEN4이고 기존 startup/export와 합쳐 34 PASS다. 새 help
 Main의 새 QA 소유 배정 뒤 Web이 발행한 단회 recovery를 기존 지원 등록 명령으로 실행한 Recovery01은 ordinary native/task0 / `ADMIN_RECOVERY_REGISTERED`, epoch8이다. 제품이 이 대상에서 만든 실제 current_user fingerprint `bqMrBqbmdGBJjoPnV-JasvUTsdGnMdQKrdXCZrrc3S4`를 그대로 사용했고 producer/source `container-audit-source-20da23dc1c762b3c1055a10e3e2450c1`·install `container-audit-install-87f6d7d8b6e36067490c1d1146fcebeb`, semantic manifest `27c471d693d0de73377beaeeddbbc93aad90ac676b3b2a6c2fa388c37f4b7538`를 확인했다. [Web의14:06:14Z 독립 확인](E:/KMTech/web-integration-20260908/ca-final-recovery-central-readback-01.json)은 recovery 단회 소모와 기존97 receipt의 ID·full row hash/rowid 보존을 입증한다. 기존 key/identity·token·clock·ledger를 시험 도구로 바꾸지 않았으며 `OPERATION_PENDING`은 등록 성공과 별도 권한 상태다. 실제 상태가 회복된 뒤 Install02는 native/task0 / `PASS`·`REUSED_VERIFIED`로 정상 계속했다. [전체 원본·후속 lifecycle](E:/KMTech/ca-final-qualification-20260908/REPORT.md)을 따르며, 기존 Restore09는 원 receipt/VM 범위에서만 재사용하고 이 대상의 무지원 첫 등록 성공으로 승계하지 않는다.
 # Installation evidence and shared ancestor protection — 2026-10-02
 
+설치기 공개 레코드 producer는 PASS·FAILED 모두 같은 ASCII 규칙을 적용한다. 상태별로 출력 채널·필드·JSON 복원 의미를 바꾸지 않는다.
+
+설치 공개 실패 줄은 기존 출력 채널에서 `<앱 접두>=` + JSON 객체 하나(-Compress) + CRLF이며 CRLF 앞 바이트는 0x20–0x7E다. JSON 생성 뒤 U+007F보다 큰 UTF-16 코드 단위를 소문자 16진 네 자리 `\uXXXX`로 바꾼다(서로게이트 단위마다). 필드 이름·차례·다른 이스케이프는 앱 생산자 그대로다. PS5.1/PS7 및 콘솔 949/65001에서 공통 벡터의 바이트와 JSON 복원 값이 같아야 한다. `< > & '`의 엔진별 직렬화 차이는 이 계약의 동일 바이트 시험에 넣지 않는다.
+
 Installer failures preserve the original redacted message, line, inner chain,
 HResult/native error and ordered stage start/end/result. Finite installer children
 retain separate stdout/stderr bytes, capped at1MiB each, with redaction/truncation,
@@ -799,7 +805,7 @@ legacy receipt self-path 규칙은 그대로이고, 새 journal로 검증된 사
 relay READY 뒤 복구 완료 기록은 새 INSTALLING fence를 열지 않는다. privileged helper는 원 보호 journal/receipt·exact restored tree/Run/task·runtime audit·실제 protected RELEASED receipt와 authorization SHA·같은 살아 있는 controller PID/시작 시각 및 이미 잡힌 authority mutex를 확인하고 CreateNew 보호 완료를 기록한다. 실제 fence/stop 부재를 요구하며 relay를 재기동하지 않는다. controller는 helper 뒤 같은 resident PID와 READY를 다시 관측한다.
 
 
-**제거 제어자 결속 (sub-248):** 현재 INSTALL_THIS_PC의 수렴 제거는 delegated lease 및 살아 있는 canonical session authority, active/prepared의 session·attempt·transaction·orchestrator·writer 계약과 prepared 파일 SHA를 검증한다. canonical은 RemovalControllerProcessId/RemovalControllerStartedAtUtc/RemovalControllerCanonicalPath를 함께 전달한다. helper는 준비된 source manifest 및 canonical 바이트 해시, 실제 WinPS 조상 PID와 시작 시각을 확인한 단일 controller만 process quiescence 제외에 넣는다. 같은 경로 문자열을 가진 다른 PID, PID 재사용/시각 불일치, 부분 입력, manifest/canonical 변조 및 authority 부재는 거절한다. OldSourceRoot와 관리 SourceRoot가 달라도 동일한 결속을 적용하며 일반 uninstall도 이 계약을 사용한다. historical helper는 세 매개변수가 모두 있을 때만 전달하고 부분 인터페이스는 거절한다. 역사 packet은 수정하지 않는다.
+**제거 제어자 결속 (sub-248):** 현재 INSTALL_THIS_PC의 수렴 제거는 delegated lease 및 살아 있는 canonical session authority, active/prepared의 session·attempt·transaction·orchestrator·writer 계약과 prepared 파일 SHA를 검증한다. canonical은 RemovalControllerProcessId/RemovalControllerStartedAtUtc/RemovalControllerCanonicalPath를 함께 전달한다. helper는 준비된 source manifest 및 canonical 바이트 해시, 실제 WinPS 조상 PID와 시작 시각을 확인한 실행 사슬과 운영 문서의 검증된 키트/SSH 조상만 process quiescence 제외에 넣는다. 같은 경로 문자열을 가진 다른 PID, PID 재사용/시각 불일치, 부분 입력, manifest/canonical 변조 및 authority 부재는 거절한다. OldSourceRoot와 관리 SourceRoot가 달라도 동일한 결속을 적용하며 일반 uninstall도 이 계약을 사용한다. historical helper는 세 매개변수가 모두 있을 때만 전달하고 부분 인터페이스는 거절한다. 역사 packet은 수정하지 않는다.
 
 
 ### 시작 뒤 security input의 첫 판독 G (sub-272 추가 교정)

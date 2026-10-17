@@ -17,7 +17,8 @@ from tests import test_retired_portable_removal as retired
 ROOT = Path(__file__).resolve().parents[1]
 
 
-HELPER = r'''
+HELPER = r'''$RemoveUncommittedPlacement=$false
+
 $ErrorActionPreference='Stop'
 $lease=$null
 try {
@@ -27,7 +28,7 @@ try {
     $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $env:CA_BINDING_REPO 'INSTALL_THIS_PC.ps1'),[ref]$tokens,[ref]$errors)
     if ($errors.Count) { throw 'controller source parse failed' }
     $definitions=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst]},$true))
-    foreach($name in @('Test-SamePath','Test-PathWithin','Assert-NoReparsePoint','Get-ContainerRemovalControllerProcessId')) {
+    foreach($name in @('Test-SamePath','Test-PathWithin','Assert-NoReparsePoint','Get-ContainerRemovalVerifiedChain','Get-ContainerRemovalCallingAncestors','Get-ContainerRemovalControllerProcessId')) {
         $definition=@($definitions|Where-Object {$_.Name -ceq $name})
         if($definition.Count -ne 1){throw 'controller function not unique'}
         Invoke-Expression $definition[0].Extent.Text
@@ -50,9 +51,11 @@ try {
     if($env:CA_BINDING_CASE -ceq 'wrong_pid'){$RemovalControllerProcessId=[int]$env:CA_BINDING_SPOOF_PID}
     if($env:CA_BINDING_CASE -ceq 'wrong_start'){$RemovalControllerStartedAtUtc=[DateTime]::Parse($RemovalControllerStartedAtUtc).ToUniversalTime().AddSeconds(-1).ToString('o')}
     if($env:CA_BINDING_CASE -ceq 'partial'){$RemovalControllerCanonicalPath=''}
+    function Get-StrictFullPath { param($Path,$Label) [IO.Path]::GetFullPath($Path) }
+    function Get-ContainerRemovalInvocation { param($Row) if([int]$Row.ProcessId -eq $PID){[pscustomobject]@{kind='helper'}}else{[pscustomobject]@{kind='canonical'}} }
     $rows=@(Get-CimInstance Win32_Process -ErrorAction Stop)
     $controller=Get-ContainerRemovalControllerProcessId $rows
-    if($controller -ne [int]$env:CA_BINDING_CONTROLLER_PID){throw 'controller selection changed'}
+    if([int]$env:CA_BINDING_CONTROLLER_PID -notin $controller){throw 'controller selection changed'}
     'verified_controller_selected'
 } catch {
     [IO.File]::WriteAllText((Join-Path $env:CA_BINDING_ROOT 'controller-error-private.json'),((@{error_id=$_.FullyQualifiedErrorId;script_stack_trace=$_.ScriptStackTrace})|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
@@ -156,7 +159,7 @@ def test_current_packet_uninstall_uses_the_verified_controller(tmp_path):
         return result
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(portable, '_run', capture)
-        portable.test_normal_uninstall_real_removal_and_exact_recovery(tmp_path, 'success')
+        portable.test_normal_uninstall_real_removal_and_forward_convergence(tmp_path, 'success')
 
 
 def test_retired_manager_uninstall_uses_its_own_canonical_identity(tmp_path):

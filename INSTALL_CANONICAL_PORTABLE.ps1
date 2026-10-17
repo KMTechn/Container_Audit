@@ -71,7 +71,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '43b67845c82983e01ab5b412ce9947bc3f1b240595d590099f4e507e8110c86e'
+$ExpectedBootstrapIntegritySha256 = '0cc17ebb856f3673769970126d75d64ac66967ad3eb2514502c8c622e1cdbfd0'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -397,10 +397,28 @@ function Get-WriterContractSessionMutexName(
 }
 function Write-CanonicalInstallationPublicRecord($Failure=$null,[int]$ExitCode=0) {
     $guidance='자료를 보존하고 관리자 지원 복구를 요청하세요.'
+    $replacementFailureCode=$null
+    $replacement=$null
+    if($null -ne $audit){
+        if($audit -is [Collections.IDictionary]){
+            if($audit.Contains('code_replacement')){$replacement=$audit['code_replacement']}
+        }else{
+            $property=$audit.PSObject.Properties['code_replacement']
+            if($null -ne $property){$replacement=$property.Value}
+        }
+    }
+    if($null -ne $replacement){
+        if($replacement -is [Collections.IDictionary]){
+            if($replacement.Contains('failure_code')){$replacementFailureCode=$replacement['failure_code']}
+        }else{
+            $property=$replacement.PSObject.Properties['failure_code']
+            if($null -ne $property){$replacementFailureCode=$property.Value}
+        }
+    }
     $elevationRecovered=($ExitCode -ne 0 -and $null -ne $audit -and
         [string]$audit.status -ceq 'FAILED_ROLLED_BACK' -and [bool]$audit.rollback.runtime_restored -and
         -not $canonicalWriterFenceActive -and
-        [string]$audit.code_replacement.failure_code -ceq 'CONTAINER_PLACEMENT_ELEVATION_FAILED')
+        [string]$replacementFailureCode -ceq 'CONTAINER_PLACEMENT_ELEVATION_FAILED')
     if($elevationRecovered){$guidance='관리자 권한 요청을 완료하지 못했습니다. 이번 설치의 변경을 되돌렸습니다. 관리자 실행을 다시 확인하세요.'}
     $fields=[ordered]@{status=if($ExitCode){'FAILED'}else{'PASS'};stage='canonical_install';
         reason_code=if($ExitCode){'INSTALLER_CANONICAL_FAILURE'}else{'INSTALLER_CHILD_RESULT'};
@@ -436,7 +454,7 @@ function Write-CanonicalInstallationPublicRecord($Failure=$null,[int]$ExitCode=0
     if(Get-Command ConvertTo-KmtechPublicRecord -ErrorAction SilentlyContinue){
         $fields=ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes @('RECOVERY_REQUIRED','PASS','FAILED','canonical_install','INSTALLER_CANONICAL_FAILURE','INSTALLER_CHILD_RESULT','REPORT_UNAVAILABLE','CONTAINER_PLACEMENT_ELEVATION_FAILED','FAILED_ROLLED_BACK') -SafeMessages @($guidance)
     }
-    Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+($fields|ConvertTo-Json -Depth 4 -Compress))
+    Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+([regex]::Replace(($fields|ConvertTo-Json -Depth 4 -Compress), '[^\x00-\x7f]', {param($unit) '\u{0:x4}' -f [int][char]$unit.Value})))
 }
 function Assert-WriterSessionPublicContract(
     [string]$Path,
@@ -2002,6 +2020,65 @@ function Get-CanonicalRetirementChildFailure($Child, [Collections.IDictionary]$E
         $detail[$stream.ToLowerInvariant()]=ConvertTo-KmtechRedactedSinkText @redaction
     }
     return $detail
+}
+function Read-CanonicalRetiredRemovalCapture($Stream,$EvidenceSummary=$null) {
+    if($Stream.path -is [string] -and ([string]$Stream.path).Length -eq 0) {
+        $recording=$null;$failureCodes=$null
+        if($null -ne $EvidenceSummary){
+            $recording=$EvidenceSummary.PSObject.Properties['recording_failed']
+            $failureCodes=$EvidenceSummary.PSObject.Properties['failure_codes']
+        }
+        if($null -eq $recording -or $recording.Value -isnot [bool] -or -not $recording.Value -or
+            $null -eq $failureCodes -or @($failureCodes.Value) -cnotcontains 'CHILD_STREAM_IO_OR_ACL_FAILURE') {
+            throw 'Retired removal captured stream binding differs.'
+        }
+        $Script:InstallationEvidenceFailed=$true
+        if(-not $Script:InstallationEvidenceFailureCodes.Contains('CHILD_STREAM_IO_OR_ACL_FAILURE')){
+            [void]$Script:InstallationEvidenceFailureCodes.Add('CHILD_STREAM_IO_OR_ACL_FAILURE')
+        }
+        return ''
+    }
+    Assert-BootstrapNoReparsePoint ([string]$Stream.path) 'retired removal captured stream' -PathOnly
+    Assert-InstallationEvidenceProtectedPath ([string]$Stream.path)
+    Initialize-InstallationChildCapture
+    # Use the existing bounded capture reader and its existing overflow policy.
+    # The file remains read-shared only while its hash and bytes are consumed.
+    $readerType=([KMTechInstallationChildCapture]).GetNestedType('Reader',[Reflection.BindingFlags]::NonPublic)
+    $reader=[Activator]::CreateInstance($readerType,$true)
+    $file=$null
+    try {
+        $file=[IO.File]::Open([string]$Stream.path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+        if((Sha ([string]$Stream.path)) -cne [string]$Stream.sha256){throw 'Retired removal captured stream binding differs.'}
+        [void]$readerType.GetMethod('Read').Invoke($reader,@($file))
+        $output=$readerType.GetMethod('Snapshot').Invoke($reader,@())
+        $safe=ConvertTo-SafeInstallationOutput $output
+        return [Text.Encoding]::UTF8.GetString([byte[]]$safe.bytes)
+    } finally {
+        if($null -ne $file){$file.Dispose()}
+        $reader.saved.Dispose()
+    }
+}
+function Invoke-CanonicalRetiredRemovalChild([string]$Target,[string[]]$Arguments,[string]$AuditBase,[string]$Sid) {
+    $prefix=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File')
+    if($Arguments.Count -le 7 -or -not(Same $Arguments[6] $Target)) { throw 'Retired removal helper invocation differs.' }
+    for($index=0;$index -lt $prefix.Count;$index++) {
+        if($Arguments[$index] -cne $prefix[$index]) { throw 'Retired removal helper invocation differs.' }
+    }
+    # The elevation wrapper selects its own engine and pinned target. Its tail
+    # contains script parameters, without another engine startup or -File.
+    $helperArguments=[string[]]@($Arguments|Select-Object -Skip 7)
+    $capture=Invoke-InstallationElevationCapture $Target $helperArguments $AuditBase $Sid
+    $texts=@{stdout='';stderr=''}
+    foreach($name in @('stdout','stderr')) {
+        if($null -eq $capture.Streams){continue}
+        $stream=$capture.Streams.$name
+        $summaryProperty=$capture.PSObject.Properties['EvidenceSummary']
+        $summary=if($null -ne $summaryProperty){$summaryProperty.Value}else{$null}
+        $texts[$name]=Read-CanonicalRetiredRemovalCapture $stream $summary
+    }
+    $Script:InstallationLastChildCapture=[ordered]@{stage='uninstall-helper';pid=$capture.Id;exit_code=$capture.ExitCode;
+        stdout=(Protect-InstallationText $texts.stdout 512);stderr=(Protect-InstallationText $texts.stderr 512)}
+    return [pscustomobject]@{ProcessId=$capture.Id;ExitCode=$capture.ExitCode;Stdout=$texts.stdout;Stderr=$texts.stderr;Streams=$capture.Streams}
 }
 function Remove-CanonicalSupportedRemovalAttemptStop([string]$RemovalPath,[string]$StopPath,
     [DateTime]$StartedAt,[string]$ExpectedAppRoot,[string]$ExpectedStopSha256='') {
@@ -3814,6 +3891,63 @@ function Resolve-CanonicalMachineWorker([string]$Account,[string]$InventoryPath,
     finally { $digest.Dispose() }
     return [pscustomobject]@{sid=$sid;profile_root=$profile;survey_sha256=$sha;survey_path=$path;same_caller=($sid -ceq [string]$Caller.sid)}
 }
+function Resolve-CanonicalMachineRemovalWorker([string]$Account,$Caller,[string]$Root) {
+    if (-not ([bool]$Caller.elevated -or [int]$Caller.session_id -le 0)) {
+        return Resolve-CanonicalMachineWorker $Account $WorkerSurveyInventory $Caller
+    }
+    try {
+        $pending=Join-Path (Get-ContainerMachineInstallStateRoot) 'pending-onboarding.json'
+        $marker=$null
+        if (Test-Path -LiteralPath $pending -ErrorAction Stop) {
+            Assert-BootstrapNoReparsePoint $pending 'machine removal target' -PathOnly
+            if (-not $testMode) { Assert-InstallationEvidenceProtectedPath $pending }
+            $pendingText=Get-Content -LiteralPath $pending -Raw -Encoding UTF8 -ErrorAction Stop
+            try {
+                $candidate=$pendingText|ConvertFrom-Json
+                if ([string]$candidate.schema -ceq 'container-audit-machine-pending-v1' -and
+                    [string]$candidate.status -ceq 'PENDING' -and [string]$candidate.target_sid -cmatch '^S-1-' -and
+                    (Same ([string]$candidate.install_root) $Root)) { $marker=$candidate }
+            } catch { $marker=$null }
+        }
+        $requested=if($Account){Resolve-CanonicalWorkerSid $Account}else{''}
+        if ($null -ne $marker) {
+            $sid=[string]$marker.target_sid
+            if ($requested -and $requested -cne $sid) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+        } elseif ($requested) { $sid=$requested }
+        else { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+        $profileKey=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\'+$sid,$false)
+        try { $profileMissing=$null -eq $profileKey } finally { if($null -ne $profileKey){$profileKey.Dispose()} }
+        if ($profileMissing) {
+            if ($null -eq $marker) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+            $policyPath=Join-Path (Split-Path -Parent $Root) 'update-control\policy.json'
+            Assert-BootstrapNoReparsePoint $policyPath 'machine removal profile policy' -PathOnly
+            if(-not $testMode){Assert-InstallationEvidenceProtectedPath $policyPath}
+            $policy=Get-Content -LiteralPath $policyPath -Raw -Encoding UTF8 -ErrorAction Stop|ConvertFrom-Json
+            if([string]$policy.operator_sid -cne $sid){throw 'MACHINE_REMOVAL_WORKER_PART_PENDING'}
+            $local=Full ([string]$policy.operator_local_app_data) 'machine removal profile'
+            $profile=Split-Path -Parent (Split-Path -Parent $local)
+            if(-not(Same $local (Join-Path $profile 'AppData\Local'))){throw 'MACHINE_REMOVAL_WORKER_PART_PENDING'}
+        } else { $profile=Get-CanonicalWorkerProfileRoot $sid }
+        return [pscustomobject]@{sid=$sid;profile_root=$profile;survey_sha256=$(if($null -ne $marker){[string]$marker.survey_sha256}else{''});
+            survey_path='';same_caller=($sid -ceq [string]$Caller.sid)}
+    } catch { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+}
+
+function Assert-CanonicalMachineRemovalWorkerPart($Worker,[string]$Source,[string]$Root,$Manifest) {
+    # Reuse the pinned helper's read-only admission, without running its entrypoint.
+    $helper=Get-InstallationVerifiedScript (Join-Path $Source 'INSTALL_THIS_PC.ps1') ([string]$Manifest.helper_sha256)
+    $names=@('Get-ContainerMachineRemovalPolicyLocalAppDataRoot','Read-ContainerMachineRemovalBinding','Test-ContainerRemovalWorkerUnavailable',
+        'Test-ContainerRemovalWorkerProfileAbsent','Test-ContainerRemovalWorkerNeverStarted',
+        'Get-ContainerRemovalWorkerRunPresent','Read-ContainerRemovalWorkerReceipt',
+        'Assert-ContainerMachineRemovalWorkerPart','Assert-ContainerRemovalBoundary','Get-ContainerRemovalIoPath')
+    $functions=@($helper.Ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in $names},$false))
+    if ($functions.Count -ne $names.Count) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+    foreach($function in $functions){. ([scriptblock]::Create($function.Extent.Text))}
+    $OperatorSid=[string]$Worker.sid;$OperatorLocalAppDataRoot=Join-Path ([string]$Worker.profile_root) 'AppData\Local'
+    $installRootFull=$Root;$testOverride=$testMode
+    [void](Assert-ContainerMachineRemovalWorkerPart)
+}
+
 function Get-CanonicalMachineHelperReason([string]$Stdout,[string]$Code='') {
     # Only the pinned helper's fixed reason codes cross this edge. Any other
     # child text, including a malformed or unknown reason, stays private.
@@ -3831,11 +3965,15 @@ function Get-CanonicalMachineHelperReason([string]$Stdout,[string]$Code='') {
         'STARTUP_UPDATE_PREIMAGE_PATH_INVALID','STARTUP_UPDATE_PREIMAGE_READBACK_FAILED','STARTUP_UPDATE_WRITER_HELPER_PIN_DIFFERS',
         'STARTUP_UPDATE_TASK_SPEC_FAILED','STARTUP_UPDATE_TASK_SPEC_INVALID','STARTUP_UPDATE_OWNED_TASK_DIFFERS',
         'STARTUP_UPDATE_TASK_IS_RUNNING','STARTUP_UPDATE_TASK_READBACK_FAILED',
-        'EMERGENCY_SHORTCUT_PUBLICATION_BLOCKED')
+        'EMERGENCY_SHORTCUT_PUBLICATION_BLOCKED','MACHINE_REMOVAL_WORKER_PART_PENDING')
     if (-not $Code) {
         $lines=@(([string]$Stdout) -split '\r?\n' | Where-Object { $_ -clike 'installation_failure_summary=*' })
         if ($lines.Count) {
-            try { $Code=[string](($lines[-1].Substring('installation_failure_summary='.Length) | ConvertFrom-Json).reason_code) } catch { $Code='' }
+            try {
+                $diagnostic=$lines[-1].Substring('installation_failure_summary='.Length) | ConvertFrom-Json
+                $property=$diagnostic.PSObject.Properties['reason_code']
+                $Code=if($null -ne $property){[string]$property.Value}else{''}
+            } catch { $Code='' }
         }
     }
     if ($Code -cin $allowed) { return $Code }
@@ -3885,15 +4023,18 @@ function Write-CanonicalMachinePublicRecord([string]$Code,[string]$Status='FAILE
         $message='설치가 아직 진행 중입니다 — 끝난 뒤 같은 명령을 다시 실행하세요'
     } elseif ($Code -clike 'MACHINE_RECOVERY_CHILD_*') {
         $message='설치 자식의 종료를 확인하지 못했습니다. 자료와 설치 기록을 보존하고 관리자 지원 복구를 요청하세요.'
+    } elseif ($Code -ceq 'MACHINE_REMOVAL_WORKER_PART_PENDING') {
+        $message='작업자 계정으로 먼저 제거(사용자 몫)를 실행한 뒤 다시 시도하세요.'
     }
     $fields=[ordered]@{status=$Status;code=$Code;stage='machine_install';guidance=$message;report_status='REPORT_UNAVAILABLE'}
     $summary=''
     if ($reason) { $summary=$Code+' reason='+$reason; $fields.reason_code=$reason; $fields.summary_message=$summary }
     $public=ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes @('FAILED','PASS','machine_install',
         'PENDING_TARGET_AMBIGUOUS','MACHINE_WORKER_ARGUMENTS_REQUIRE_ADMINISTRATOR','MACHINE_INSTALL_FAILED',
+        'MACHINE_REMOVAL_WORKER_PART_PENDING',
         'PASS_MACHINE_WORKER_PENDING','PASS_UNINSTALLED_DATA_PRESERVED','PASS_RESTORED_VERIFIED','REPORT_UNAVAILABLE',
         'MACHINE_RECOVERY_CHILD_UNRECORDED','MACHINE_RECOVERY_CHILD_IDENTITY_INVALID','MACHINE_RECOVERY_CHILD_ACTIVE','MACHINE_RECOVERY_CHILD_EXIT_UNPROVEN',$reason) -SafeMessages @($message,$summary)
-    Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+($public|ConvertTo-Json -Depth 4 -Compress))
+    Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+([regex]::Replace(($public|ConvertTo-Json -Depth 4 -Compress), '[^\x00-\x7f]', {param($unit) '\u{0:x4}' -f [int][char]$unit.Value})))
 }
 
 function Get-CanonicalMachineArtifactPaths([string]$State,[string]$Root='') {
@@ -4419,6 +4560,7 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         throw 'Machine installation requires an already privileged token.'
     }
     if ($CompleteRetiredRemoval) { throw 'Machine installation does not accept retired removal.' }
+    if ($Uninstall) { Assert-CanonicalMachineRemovalWorkerPart $Worker $Source $Root $Manifest }
     $state=Get-ContainerMachineInstallStateRoot
     $control=Join-Path $state 'control\writer-session'
     $existingState=$state
@@ -4514,7 +4656,10 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         Write-Utf8Json $journal $prestate
         if ((Get-Item -LiteralPath $journal).Length -gt 1048576) { throw 'MACHINE_PRESTATE_TOO_LARGE' }
         $audit.machine_prestate=@{path=$journal;sha256=Sha $journal}
-        if ($Uninstall) { $audit.status='PREIMAGE_SAVED' }
+        if ($Uninstall) {
+            $audit.status='PREIMAGE_SAVED'
+            $audit.worker_removal_proof=@{proof=$Script:ContainerMachineRemovalProofKind;worker_run_present=$Script:ContainerMachineRemovalWorkerRunPresent}
+        }
         Save $path $audit
         [void](Start-ContainerWriterFence -ControlRoot $control -Status 'INSTALLING' -OwnerKind 'canonical_installer' `
             -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
@@ -4559,7 +4704,10 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         } } else { $null }
         $child=Invoke-InstallationEvidenceChild 'machine-placement-helper' $engine $arguments -OnStarted $placementStarted
         $audit.placement_child.status='EXITED';$audit.placement_child.exit_code=[int]$child.ExitCode
-        if ($child.ExitCode -ne 0) { $helperReason=Get-CanonicalMachineHelperReason ([string]$child.Stdout) }
+        if ($child.ExitCode -ne 0) {
+            $helperReason=Get-CanonicalMachineHelperReason ([string]$child.Stdout)
+            if ($helperReason -ceq 'MACHINE_REMOVAL_WORKER_PART_PENDING') { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+        }
         $placementKind=if($child.ExitCode -eq 0){Read-CanonicalPlacementStatus ([string]$child.Stdout) ($arguments -ccontains '-ReplaceExistingVerifiedPortable')}else{''}
         $reusedPlacement=($placementKind -ceq 'REUSED')
         # REUSED proves unchanged code placement; startup repair is audited separately.
@@ -4702,9 +4850,13 @@ elseif ($RestoreReceiptPath -or $RestoreReceiptSha256) {
 }
 # Classify the requested operation before applying the new-install requirement.
 $canonicalOperation=if($CompleteRetiredRemoval){'COMPLETE_RETIRED_REMOVAL'}elseif($Uninstall){'UNINSTALL'}elseif($RestoreVerifiedReplacement){'RESTORE'}elseif($RecoverMachineInstallation){'MACHINE_RECOVERY'}else{'INSTALL'}
-try { $machineWorker=Resolve-CanonicalMachineWorker $WorkerAccount $WorkerSurveyInventory (Get-CanonicalInstallationCallerSecurity) }
+try {
+    $caller=Get-CanonicalInstallationCallerSecurity
+    $machineWorker=if($Uninstall -and -not $CompleteRetiredRemoval){Resolve-CanonicalMachineRemovalWorker $WorkerAccount $caller (Full $InstallRoot 'InstallRoot')}
+        else{Resolve-CanonicalMachineWorker $WorkerAccount $WorkerSurveyInventory $caller}
+}
 catch {
-    $code=if($_.Exception.Message -ceq 'MACHINE_WORKER_ARGUMENTS_REQUIRE_ADMINISTRATOR'){$_.Exception.Message}else{'PENDING_TARGET_AMBIGUOUS'}
+    $code=if($_.Exception.Message -cin @('MACHINE_WORKER_ARGUMENTS_REQUIRE_ADMINISTRATOR','MACHINE_REMOVAL_WORKER_PART_PENDING')){$_.Exception.Message}else{'PENDING_TARGET_AMBIGUOUS'}
     Write-CanonicalMachinePublicRecord $code
     exit 4
 }
@@ -5190,7 +5342,8 @@ if ($null -ne $machineWorker) {
     catch {
         $outputFailure=$_
         Write-CanonicalInstallerRelayGuidance
-        $code=if($RecoverMachineInstallation -and $_.Exception.Message -cin @('MACHINE_RECOVERY_CHILD_UNRECORDED','MACHINE_RECOVERY_CHILD_IDENTITY_INVALID','MACHINE_RECOVERY_CHILD_ACTIVE','MACHINE_RECOVERY_CHILD_EXIT_UNPROVEN')){$_.Exception.Message}else{'MACHINE_INSTALL_FAILED'}
+        $code=if($_.Exception.Message -ceq 'MACHINE_REMOVAL_WORKER_PART_PENDING'){$_.Exception.Message}
+            elseif($RecoverMachineInstallation -and $_.Exception.Message -cin @('MACHINE_RECOVERY_CHILD_UNRECORDED','MACHINE_RECOVERY_CHILD_IDENTITY_INVALID','MACHINE_RECOVERY_CHILD_ACTIVE','MACHINE_RECOVERY_CHILD_EXIT_UNPROVEN')){$_.Exception.Message}else{'MACHINE_INSTALL_FAILED'}
         Write-CanonicalMachinePublicRecord $code;exit 4
     }
     exit 0
@@ -5733,7 +5886,9 @@ $enteredPlacementTry = $true
         if ($testMode) { $uninstallArguments += '-AllowNoncanonicalLayoutForTest' }
         $uninstallCodeStarted = $true
         if (-not $resumeCodeAbsent) {
-            $capturedChild = Invoke-InstallationEvidenceChild 'uninstall-helper' $winps $uninstallArguments
+            $capturedChild=if($CompleteRetiredRemoval -and -not (Test-InstallationEvidencePrivileged)){
+                Invoke-CanonicalRetiredRemovalChild (Join-Path $lifecycleSource 'INSTALL_THIS_PC.ps1') $uninstallArguments $elevationLogPath $operatorSid
+            }else{Invoke-InstallationEvidenceChild 'uninstall-helper' $winps $uninstallArguments}
             $global:LASTEXITCODE=$capturedChild.ExitCode
             Write-CanonicalInstallationPublicRecord -ExitCode $capturedChild.ExitCode
             if ($LASTEXITCODE -ne 0) {
@@ -6947,19 +7102,31 @@ finally {
 
 } catch {
     $outputFailure=$_
-    if ($null -ne $machineWorker) { Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED'; exit 4 }
+    if ($null -ne $machineWorker) {
+        try { $publicFailureRecord=Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED' }
+        catch { $publicFailureRecord='CONTAINER_AUDIT_INSTALL_CANONICAL={"status":"FAILED","code":"MACHINE_INSTALL_FAILED","stage":"machine_install","guidance":"\uc790\ub8cc\ub97c \ubcf4\uc874\ud558\uace0 \uad00\ub9ac\uc790 \uc9c0\uc6d0 \ubcf5\uad6c\ub97c \uc694\uccad\ud558\uc138\uc694.","report_status":"REPORT_UNAVAILABLE"}' }
+        Write-Output $publicFailureRecord
+        exit 4
+    }
     if (-not $enteredPlacementTry -and -not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
         if (-not $Script:CanonicalPreparationAdmissionFailed) {
-            Write-CanonicalPreparationAdmissionFailure ([string](Get-Variable auditPath -ValueOnly -ErrorAction SilentlyContinue)) `
-                ([string](Get-Variable evidenceFull -ValueOnly -ErrorAction SilentlyContinue)) `
-                ([string](Get-Variable source -ValueOnly -ErrorAction SilentlyContinue)) $Script:CanonicalInstallerSourceInventorySha256 $outputFailure
+            try {
+                Write-CanonicalPreparationAdmissionFailure ([string](Get-Variable auditPath -ValueOnly -ErrorAction SilentlyContinue)) `
+                    ([string](Get-Variable evidenceFull -ValueOnly -ErrorAction SilentlyContinue)) `
+                    ([string](Get-Variable source -ValueOnly -ErrorAction SilentlyContinue)) $Script:CanonicalInstallerSourceInventorySha256 $outputFailure
+            } catch { $publicMessage='PREPARATION_DIAGNOSTICS_UNAVAILABLE' }
         }
         $publicMessage='FAILED_PREPARATION_ADMISSION'
     } else {
-        $publicMessage=ConvertTo-KmtechRedactedSinkText -Text $outputFailure.Exception.Message -UserLine
+        try { $publicMessage=ConvertTo-KmtechRedactedSinkText -Text $outputFailure.Exception.Message -UserLine }
+        catch { $publicMessage='FAILURE_DIAGNOSTICS_UNAVAILABLE' }
     }
-    if(Get-Command Write-InstallationCaughtFailure -ErrorAction SilentlyContinue){Write-InstallationCaughtFailure $outputFailure}
-    Write-CanonicalInstallationPublicRecord -Failure $outputFailure -ExitCode 1
+    try {
+        if(Get-Command Write-InstallationCaughtFailure -ErrorAction SilentlyContinue){Write-InstallationCaughtFailure $outputFailure}
+    } catch { $publicMessage='PRIVATE_DIAGNOSTICS_UNAVAILABLE' }
+    try { $publicFailureRecord=Write-CanonicalInstallationPublicRecord -Failure $outputFailure -ExitCode 1 }
+    catch { $publicFailureRecord='CONTAINER_AUDIT_INSTALL_CANONICAL={"status":"FAILED","code":"INSTALLER_CANONICAL_FAILURE","stage":"canonical_install","guidance":"\uc790\ub8cc\ub97c \ubcf4\uc874\ud558\uace0 \uad00\ub9ac\uc790 \uc9c0\uc6d0 \ubcf5\uad6c\ub97c \uc694\uccad\ud558\uc138\uc694.","report_status":"REPORT_UNAVAILABLE"}' }
+    Write-Output $publicFailureRecord
     exit 1
 } finally {
     try {

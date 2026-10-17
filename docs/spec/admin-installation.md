@@ -48,6 +48,9 @@ GUI 입구는 기존 업데이트 관문 전에 대상 SID만 읽어 확인하�
 
 `RestoreVerifiedReplacement`와 `-Uninstall`은 기존 replacement receipt·bootstrap inventory·
 supported removal journal을 쓰는 기계 코드 복원/제거다. 작업자 HKCU 복원을 주장하지 않는다.
+공개 관리자 제거는 지정 작업자의 사용자 몫 정리를 읽기로 증명한다. 보호 pending의 SID·설치 루트가 맞고 로드된 hive에 CompletedInstallId와 제품 Run이 모두 없는 경우, 프로필 부재, SID·프로필 경계·reparse 부재·정확한 PASS_DATA_PRESERVED가 맞는 영수증, 또는 이 PC 로컬 계정 없음/Enabled=False 중 하나여야 한다. 도메인 SID·잠김·만료·조회 불명은 계정 사용 불가 증명이 아니다.
+프로필이 없는 길은 pending SID와 맞는 보호 `update-control/policy.json`의 `operator_local_app_data`를 읽기로 재사용한다. policy 부재·읽기 실패는 지원 사례로 거절한다. pending이 없거나 잘못됐으면 명시 WorkerAccount와 존재하는 ProfileList에 결속된 영수증만 받는다. 둘 다 있으면 SID가 같아야 한다. 실패 코드는 `MACHINE_REMOVAL_WORKER_PART_PENDING`이며 작업자 계정으로 먼저 사용자 몫 제거를 실행한 뒤 다시 시도한다.
+작업자 hive 로드와 다른 사용자 프로필·HKCU 쓰기는 하지 않는다. 사용 불가 계정의 남은 HKCU Run은 존재 true/false/null(불명)을 `worker_removal_proof`에 감사로만 남긴다.
 두 작업은 대상 SID·설치 루트가 맞는 PENDING과 제품의 직접 공용 링크도 정리한다.
 변경된 링크와 옛 앱 링크는 보존한다. 설치 전 표지·링크 원바이트와 ACL을 캡처하며,
 이후 설치가 실패하면 새 항목을 지우고 원본을 복원한다. 교체 receipt가 있으면 앞 코드 판도

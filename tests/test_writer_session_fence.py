@@ -65,7 +65,7 @@ def _active_payload(*, token: str = "", sources: list[str] | None = None) -> dic
 
 
 def _write_active(root: Path, payload: dict[str, object]) -> Path:
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)
     if not payload.get("prepared_receipt_sha256"):
         receipt = root / "prepared.json"
         receipt.write_text('{"status":"PREPARED"}\n', encoding="utf-8")

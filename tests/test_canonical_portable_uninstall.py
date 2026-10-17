@@ -150,7 +150,8 @@ else:
     raise SystemExit(dispatch_product_mode(['--onboard-current-user', '--app-root', str(app)]))
 '''
 
-OS_BOUNDARIES = r'''
+OS_BOUNDARIES = r'''[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
+
 # PowerShell 7 prepends its own module directory after Python env isolation.
 # Restore this fixture's existing Windows PowerShell module path for the
 # actual WinPS placement child; keep every child/receipt assertion intact.
@@ -224,9 +225,44 @@ function StartRaw([string]$Line) {
     $child = Start-Process -FilePath $env:CA_UNINSTALL_PYTHON -ArgumentList $arguments -WindowStyle Hidden -PassThru
     return $child.Id
 }
+
 '''
 
-HELPER_OS = r"""
+
+CAPTURE_OS_BOUNDARIES = r'''function Test-UninstallFixtureRootPath([string]$Path) {
+    if([string]::IsNullOrWhiteSpace($env:CA_UNINSTALL_ROOT) -or [string]::IsNullOrWhiteSpace($Path)){return $false}
+    $root=[IO.Path]::GetFullPath($env:CA_UNINSTALL_ROOT).TrimEnd('\')
+    $full=[IO.Path]::GetFullPath($Path)
+    return ($full.Equals($root,[StringComparison]::OrdinalIgnoreCase) -or $full.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase))
+}
+function Test-UninstallFixtureProtectedPath([string]$Path) {
+    return (Test-UninstallFixtureRootPath $Path)
+}
+function Assert-InstallationEvidenceProtectedPath([string]$Path,[switch]$AllowSupportedPreparation) {
+    if(Test-UninstallFixtureProtectedPath $Path){
+        if(-not(Test-Path -LiteralPath $Path)){throw 'FIXTURE_PROTECTED_PATH_MISSING'}
+        Assert-BootstrapNoReparsePoint $Path 'fixture protected boundary' -PathOnly
+        return
+    }
+    & $Script:CAUninstallOriginalProtectionFunctions['Assert-InstallationEvidenceProtectedPath'] $Path -AllowSupportedPreparation:$AllowSupportedPreparation
+}
+function Assert-BootstrapProtectedRelayPath([string]$Path,[switch]$AllowSupportedPreparation) {
+    if(Test-UninstallFixtureProtectedPath $Path){
+        if(-not(Test-Path -LiteralPath $Path)){throw 'FIXTURE_PROTECTED_PATH_MISSING'}
+        Assert-BootstrapNoReparsePoint $Path 'fixture protected relay boundary' -PathOnly
+        return
+    }
+    & $Script:CAUninstallOriginalProtectionFunctions['Assert-BootstrapProtectedRelayPath'] $Path -AllowSupportedPreparation:$AllowSupportedPreparation
+}
+function Invoke-InstallationElevationCapture {
+    param([string]$Target,[string[]]$Arguments,[string]$AuditBase,[string]$OperatorSid,$AuthorityLease=$null)
+    $engine=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+    $argv=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$Target)+$Arguments
+    $child=Invoke-InstallationEvidenceChild 'fixture-retired-elevated-helper' $engine $argv
+    [pscustomobject]@{Id=$child.ProcessId;ExitCode=$child.ExitCode;Streams=$child.Streams}
+}'''
+
+HELPER_OS = r'''
 function Test-CurrentUserRelayPersistencePresent { return [bool](Get-Content (Join-Path $env:CA_UNINSTALL_ROOT 'registry.json') -Raw | ConvertFrom-Json).exists }
 function Get-CimInstance {
     if ($env:CA_UNINSTALL_INTERACTIVE -ceq '1') {
@@ -339,11 +375,22 @@ function Assert-BootstrapProtectedRelayPath([string]$Path,[switch]$AllowSupporte
     }
     & $Script:CAUninstallOriginalProtectionFunctions['Assert-BootstrapProtectedRelayPath'] $Path -AllowSupportedPreparation:$AllowSupportedPreparation
 }
-"""
+
+'''
+
+
+def _run_fixture_powershell(arguments, **kwargs):
+    file_index = next((i for i, value in enumerate(arguments) if value.lower() == "-file"), None)
+    if file_index is not None and Path(arguments[file_index + 1]).name == "INSTALL_CANONICAL_PORTABLE.ps1":
+        # Exercise the documented canonical -File invocation. The generic
+        # observation helper wraps -File in -Command, which is not this contract.
+        return subprocess.run(arguments, creationflags=subprocess.CREATE_NO_WINDOW,
+                              encoding="utf-8", errors="replace", **kwargs)
+    return run_powershell(arguments, **kwargs)
 
 
 def _ps(path, env, *args):
-    result = run_powershell(
+    result = _run_fixture_powershell(
         [_powershell(), '-NoLogo', '-NoProfile', '-NonInteractive',
          '-ExecutionPolicy', 'Bypass', '-File', str(path), *args],
         # Native contracts finish naturally; task policy forbids timeout kills.
@@ -355,11 +402,10 @@ def _ps(path, env, *args):
     result.fixture_audit = observations[0] if observations else None
     return result
 
-
 def _setup(tmp_path, fault='', *, stock_version_identity=False, install_directory=None):
     env = native_python_environment()
     for name in ('LOCALAPPDATA', 'APPDATA', 'PROGRAMDATA', 'TEMP', 'TMP'):
-        target = tmp_path / name
+        target = tmp_path / ("l" if name == "LOCALAPPDATA" else name)
         target.mkdir()
         env[name] = str(target)
     env.update(PYTHONDONTWRITEBYTECODE='1', KMTECH_FACTORY_INSTALL_TEST_MODE='1',
@@ -368,7 +414,7 @@ def _setup(tmp_path, fault='', *, stock_version_identity=False, install_director
                CA_UNINSTALL_PYTHON=str(native_python_executable()),
                CA_UNINSTALL_VENV_LAUNCHER=sys.executable,
                CA_UNINSTALL_MUTEX='Local\\Container.UninstallTest.' + uuid.uuid4().hex)
-    env['PSModulePath'] = str(Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/Modules')
+    env['PSModulePath'] = str(Path(os.environ['SystemRoot']) / 'f')
     env.pop('CONTAINER_AUDIT_DATA_ROOT', None)
     env.pop('KMTECH_CONTAINER_WRITER_CONTROL_ROOT', None)
     host = tmp_path / 'host.py'
@@ -393,6 +439,13 @@ def _setup(tmp_path, fault='', *, stock_version_identity=False, install_director
         shutil.copyfile(version_file, source / 'app/Container_Audit.py')
     canonical = source / 'INSTALL_CANONICAL_PORTABLE.ps1'
     text = canonical.read_text(encoding='utf-8-sig').replace('$wanted = Command $install', OS_BOUNDARIES + '\n$wanted = Command $install')
+    text = text.replace(
+        '$elevationLogPath = Join-Path $auditRoot "canonical-portable-$runId-elevated.jsonl"',
+        '$elevationLogPath = Join-Path $auditRoot "e.jsonl"',
+    )
+    before, marker, after = text.rpartition("\n. $BootstrapIntegrityFunctions\n")
+    assert marker
+    text = before + marker + CAPTURE_OS_BOUNDARIES + "\n" + after
     audit_assignment = '$auditPath = Join-Path $auditRoot "canonical-portable-$runId.json"'
     assert text.count(audit_assignment) == 1
     # Observe real run/PID provenance; evidence initialization and BasePath stay

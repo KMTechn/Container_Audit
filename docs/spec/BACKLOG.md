@@ -1,6 +1,18 @@
-﻿## 목표 명세 고칠 목록(10/11)
+## 목표 명세 고칠 목록(10/11)
 
 10/17 sub-290 G55·G56 꼴 relay 재시도·G43 닫음(기준일 115 제어 코드): bootstrap 감독을 내구 단계 시각의 창 끝+15초까지 늘리되 시작+480초로 제한한다. 후보 정상 종료 대기 시작도 내구 기록한다. 같은 GUI claim 뒤 실제 trial relay를 다시 관측하며 bootstrap 프로세스의 nonce마다 최대 3회/간격 2초 이상으로 시작한다. OSError 세 번 실패는 사용자 지원 기록의 `TRIAL_RELAY_START_FAILED`로 남긴다. 멈춤 표지가 있으면 포인터·표지를 보존한 `DEFERRED`·`UPDATE_RELAY_STOP_REQUESTED`로 적용을 미루며 recovery_pending은 두지 않는다. 사용자 시작은 REQUEST_APPLY 없이 현재 화면을 연다. 정식 멈춤 PC는 업데이트 날 전에 onboarding한다. 고정 current 교체 장치와 실제 배포본·현장/VM 수용은 별도 레인 회차이며, 이번 고침은 115 설치본에 들어갈 제어 코드다.
+10/17 sub-297 덩어리 3b 집중 고침: G42 진단 재예외와 공개 writer 부분 출력, G35 숨김 제어 파일 읽기 7곳,
+G31 조건부 failure_code/reason_code 읽기, G36 공개 레코드의 코드 페이지 차이를 고쳤다.
+공용 0.3.7(repinned 83420a3, 코드 11f4bf3)의 manifest·lock·실행 핀·vendor metadata와 writer inventory를 갱신했다.
+공개 producer는 PASS·FAILED 모두 ASCII JSON이며 PS5.1/PS7 × 949/65001 원시 바이트와 복원 값을 대조한다.
+최소 JSON 7형식의 실제 StrictMode 소비 회귀와 보호 퇴역 캡처·Save·journal 직접 회귀를 확인했다.
+퇴역 첫 진단 전문은 보호 감사/journal에 보존하고 공개 stdout은 고정 레코드/허용 참조로 제한한다.
+기존 퇴역 통합 시험의 앞 단언은 보존하고 마지막 stdout 전문 단언만 이 계약으로 고쳤다.
+그 통합 시험은 자료 세대 준비 실패로 확인0이며 c4 조립 뒤 레인이 재확인한다.
+ANSWER-2325에 따라 166 파일 묶음은 이 하위 검증 밖(목록만 현장 회귀로 전달), ZIP 관문/import/탐침은 조립 뒤 담당 몫이다.
+집중 증거·남은 한계와 독립 검토 인계는 sub-297 RESULT를 따른다.
+
+10/17 sub-291 G53·G28 고침: 검증한 제거 실행 사슬과 허용된 키트/SSH 조상만 census에서 제외하며 경로 끝 구분자와 PID 생성 identity를 재확인한다. 퇴역 제거는 exact old helper를 직접 상승시킨다. 공개 관리자 제거는 작업자 미실행·프로필 부재·SID 영수증·로컬 계정 사용 불가 중 하나를 먼저 증명한다. 타 사용자 HKCU 쓰기 없이 SID 영수증 재발행과 보호 worker_removal_proof를 더했다. 격리 시험·남은 실제 PC 수용은 sub-291 RESULT가 정본이다.
 
 10/17 sub-276 G46 닫음: Observe가 기존 bootstrap 판정에 맞는 GUI·relay launcher를 소유자 조회·역할 분류 전에 제외한다. 되돌림 READY는 실제 relay 하나로만 확인하며 실제 relay 둘·relay 부재는 확인하지 않는다. READY·census 판정 본문과 G41 동시 relay 요청의 단일 실행을 유지한다.
 
