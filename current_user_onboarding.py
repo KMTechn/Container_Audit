@@ -51,7 +51,11 @@ from user_relay import (
     start_user_relay_process,
     user_relay_stop_path,
 )
-from writer_session_fence import WriterFenceError, writer_admission, writer_sink
+from writer_session_fence import (
+    WriterFenceError, writer_admission, writer_sink,
+    _current_user_removal_fence_scope, _claim_current_user_removal_fence,
+    _settle_failed_installer_removal,
+)
 from kmtech_shared import data_generation as generation
 from vendor.kmtech_zero_pe import (
     ADMIN_RECOVERY_ACTION,
@@ -2398,80 +2402,86 @@ def remove_current_user_setup(
     ] = request_user_relay_stop,
 ) -> dict[str, Any]:
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
-    status_dir: Path = paths.status_dir
-    from tools.register_container_audit_worker_pc import _current_user_sid
-    operator_sid = _current_user_sid()
-    from data_generation_guard import (
-        DataGenerationBlocked, _authenticated_support_removal_source, probe_before_owner_paths,
-    )
-    try:
-        with _authenticated_support_removal_source(app_root):
-            with writer_admission("current_user_setup_removal"):
-                probe_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values(), admission_source="current_user_setup_removal")
-    except DataGenerationBlocked as exc:
-        raise CurrentUserOnboardingError(
-            exc.user_message, report_path=paths.removal_report_path, status="FAILED",
-        ) from exc
-    with writer_admission("current_user_setup_removal"):
-        ensure_user_runtime_directory(status_dir)
-    report: dict[str, Any] = {
-        "report_version": REMOVAL_REPORT_VERSION,
-        "operator_sid": operator_sid,
-        "status": "UNKNOWN",
-        "captured_at": _now(),
-        "state_scope": "current_user",
-        "data_preserved": True,
-        "preserved_paths": [
-            str(paths.data_root),
-            str(paths.direct_sync_root),
-            str(paths.logistics_profile_path.parent),
-        ],
-        "machine_code_root": str(paths.app_root),
-        "machine_code_removal_requires_elevation": True,
-        "failure": "",
-    }
-    try:
-        with writer_admission("current_user_setup_removal"):
-            report["relay_autostart"] = dict(autostart_remover())
-        # The relay needs admission for its final STOPPED write before it can
-        # release the runtime lease. Keep this wait outside our mutation scope.
-        report["relay_process"] = dict(relay_stopper(paths.direct_sync_root))
-        autostart_status = str(report["relay_autostart"].get("status") or "")
-        relay_status = str(report["relay_process"].get("status") or "")
-        if autostart_status in {"", "UNKNOWN"} or relay_status in {"", "UNKNOWN"}:
+    with _current_user_removal_fence_scope(paths.app_root, paths.direct_sync_root):
+        status_dir: Path = paths.status_dir
+        from tools.register_container_audit_worker_pc import _current_user_sid
+        operator_sid = _current_user_sid()
+        from data_generation_guard import (
+            DataGenerationBlocked, _authenticated_support_removal_source, probe_before_owner_paths,
+        )
+        try:
+            with _authenticated_support_removal_source(app_root):
+                _claim_current_user_removal_fence()
+                with writer_admission("current_user_setup_removal"):
+                    probe_before_owner_paths(paths.data_root, file_paths=_owner_artifact_paths(paths).values(), admission_source="current_user_setup_removal")
+        except DataGenerationBlocked as exc:
             raise CurrentUserOnboardingError(
-                "current-user removal result is UNKNOWN",
-                report_path=paths.removal_report_path,
-                status="UNKNOWN",
+                exc.user_message, report_path=paths.removal_report_path, status="FAILED",
+            ) from exc
+        with writer_admission("current_user_setup_removal"):
+            ensure_user_runtime_directory(status_dir)
+        report: dict[str, Any] = {
+            "report_version": REMOVAL_REPORT_VERSION,
+            "operator_sid": operator_sid,
+            "status": "UNKNOWN",
+            "captured_at": _now(),
+            "state_scope": "current_user",
+            "data_preserved": True,
+            "preserved_paths": [
+                str(paths.data_root),
+                str(paths.direct_sync_root),
+                str(paths.logistics_profile_path.parent),
+            ],
+            "machine_code_root": str(paths.app_root),
+            "machine_code_removal_requires_elevation": True,
+            "failure": "",
+        }
+        try:
+            with writer_admission("current_user_setup_removal"):
+                report["relay_autostart"] = dict(autostart_remover())
+            # The relay needs admission for its final STOPPED write before it can
+            # release the runtime lease. Keep this wait outside our mutation scope.
+            report["relay_process"] = dict(relay_stopper(paths.direct_sync_root))
+            autostart_status = str(report["relay_autostart"].get("status") or "")
+            relay_status = str(report["relay_process"].get("status") or "")
+            if autostart_status in {"", "UNKNOWN"} or relay_status in {"", "UNKNOWN"}:
+                raise CurrentUserOnboardingError(
+                    "current-user removal result is UNKNOWN",
+                    report_path=paths.removal_report_path,
+                    status="UNKNOWN",
+                )
+            if autostart_status != "ABSENT":
+                raise ValueError("HKCU relay persistence absence was not proven")
+            if relay_status != "ABSENT":
+                raise ValueError("current-user relay process absence is UNKNOWN")
+            report.update({"status": "PASS_DATA_PRESERVED", "completed_at": _now()})
+            with writer_admission("current_user_setup_removal"):
+                settled = _settle_failed_installer_removal()
+                if settled is not None:
+                    report["abandoned_fence_settled"] = settled
+                _write_json_atomic(paths.removal_report_path, report)
+            return report
+        except CurrentUserOnboardingError as exc:
+            report.update(
+                {
+                    "status": exc.status,
+                    "error_type": exc.__class__.__name__,
+                }
             )
-        if autostart_status != "ABSENT":
-            raise ValueError("HKCU relay persistence absence was not proven")
-        if relay_status != "ABSENT":
-            raise ValueError("current-user relay process absence is UNKNOWN")
-        report.update({"status": "PASS_DATA_PRESERVED", "completed_at": _now()})
-        _write_json_atomic(paths.removal_report_path, report)
-        return report
-    except CurrentUserOnboardingError as exc:
-        report.update(
-            {
-                "status": exc.status,
-                "error_type": exc.__class__.__name__,
-            }
-        )
-        _persist_failure_report(paths.removal_report_path, report, exc)
-        raise
-    except Exception as exc:
-        report.update(
-            {
-                "status": "FAILED",
-                "error_type": exc.__class__.__name__,
-            }
-        )
-        _persist_failure_report(paths.removal_report_path, report, exc)
-        raise CurrentUserOnboardingError(
-            f"Container_Audit current-user removal failed: {exc}",
-            report_path=paths.removal_report_path,
-        ) from exc
+            _persist_failure_report(paths.removal_report_path, report, exc)
+            raise
+        except Exception as exc:
+            report.update(
+                {
+                    "status": "FAILED",
+                    "error_type": exc.__class__.__name__,
+                }
+            )
+            _persist_failure_report(paths.removal_report_path, report, exc)
+            raise CurrentUserOnboardingError(
+                f"Container_Audit current-user removal failed: {exc}",
+                report_path=paths.removal_report_path,
+            ) from exc
 
 
 @writer_sink("current_user_lifecycle_restore")

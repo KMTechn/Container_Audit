@@ -101,7 +101,7 @@ def close_and_wait_writers(timeout_seconds: float) -> bool:
 
 # This pin is generated and checked by tools/derive_container_writer_sinks.py.
 # It is updated together with the inventory after all sink markers are placed.
-WRITER_INVENTORY_SHA256 = "b628bb986268f9b682d9728cd17fba40896a97ce62901b42471c4d791f618b51"
+WRITER_INVENTORY_SHA256 = "656017ee0bc695b201c4bb4e640848bf61b50e2a87218a7e7a26d5bacf87b00b"
 
 DELEGATION_TOKEN_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN"
 DELEGATION_SESSION_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID"
@@ -591,7 +591,9 @@ def _writer_admission(
     if depth:
         nested_active = getattr(_WRITER_LOCAL, "active", None)
         nested_environ = getattr(_WRITER_LOCAL, "environ", None)
-        if nested_active is not None and not _delegation_matches(
+        if nested_active is not None and not _removal_admits(
+            selected_source, getattr(_WRITER_LOCAL, "root", None), nested_active,
+        ) and not _delegation_matches(
             nested_active,
             source=selected_source,
             environ=nested_environ if nested_environ is not None else os.environ,
@@ -628,12 +630,17 @@ def _writer_admission(
                 "WRITER_GATE_ABANDONED",
                 "writer admission mutex ownership was abandoned",
             )
-        active = active_fence(root, environ=values)
+        try:
+            active = active_fence(root, environ=values)
+        except WriterFenceError as exc:
+            if selected_source == "current_user_setup_removal" and getattr(_WRITER_LOCAL, "removal_scope", None):
+                raise WriterFencedError("ACTIVE_WRITER_FENCE", "writer denied by the active deployment fence") from exc
+            raise
         if active is not None and not _delegation_matches(
             active,
             source=selected_source,
             environ=values,
-        ):
+        ) and not _removal_admits(selected_source, root, active):
             _emit_machine_recovery_guidance(active, root)
             raise WriterFencedError(
                 "ACTIVE_WRITER_FENCE",
@@ -804,6 +811,164 @@ def writer_sink(
         return guarded
 
     return decorate
+
+
+class _FailedInstallerRemoval:
+    """A thread-local claim held across every admission of one public removal."""
+
+    def __init__(self, app_root: Path, direct_sync_root: Path) -> None:
+        self.app_root = app_root
+        self.direct_sync_root = direct_sync_root
+        self.claim = None
+        self.root = None
+        self.active = None
+        self.original = b""
+        self.ready = False
+        self.checking_processes = False
+
+    def release(self) -> None:
+        claim, self.claim = self.claim, None
+        self.ready = False
+        if claim is not None:
+            claim.release()
+
+    def admits(self, source: str, root: Path, active: Mapping[str, Any]) -> bool:
+        if self.claim is not None:
+            if root != self.root or active != self.active:
+                return False
+            if self.checking_processes:
+                # process_snapshot dispatches only the existing read-only
+                # Observe mode through the guarded fixed helper.
+                return source == "auto_update_control"
+            return self.ready and source in {
+                "current_user_setup_removal", "current_user_onboarding_storage",
+                "user_relay_autostart_remove", "persistent_relay_registry",
+                "persistent_relay_status",
+            }
+        if (os.name != "nt" or source != "current_user_setup_removal" or active["status"] != "INSTALLING"
+                or active["owner_kind"] != "canonical_installer"):
+            return False
+        try:
+            claim = _acquire_named_mutex(active["session_authority_mutex_name"], 0)
+        except (OSError, WriterFenceError):
+            return False
+        if claim is None:
+            return False
+        self.claim, self.root, self.active = claim, root, dict(active)
+        try:
+            from tools.register_container_audit_worker_pc import _current_user_sid
+            from auto_update import control_root, process_snapshot, writer_processes
+            from runtime_instance import acquire_runtime_instance
+
+            prepared = _bounded_json(Path(active["prepared_receipt_path"]))
+            identity_fields = (
+                "app_id", "session_id", "attempt_id", "replacement_transaction_id",
+                "session_started_at_utc", "orchestrator_sha256", "writer_contract_sha256",
+                "writer_inventory_sha256",
+            )
+            local = prepared.get("operator_local_appdata_root")
+            if (prepared.get("schema") != "container-audit-canonical-writer-prepared-v1"
+                    or prepared.get("status") != "PREPARED"
+                    or prepared.get("operator_sid") != _current_user_sid()
+                    or prepared.get("secret_values_recorded") is not False
+                    or any(prepared.get(name) != active[name] for name in identity_fields)
+                    or not isinstance(local, str) or not Path(local).is_absolute()
+                    or _normalized_control_root(Path(local) / CONTROL_RELATIVE_PATH) != _normalized_control_root(root)):
+                self.release()
+                return False
+            self.original = (root / ACTIVE_FILENAME).read_bytes()
+            control = control_root(self.app_root)
+            if control is None:
+                self.release()
+                return False
+            self.checking_processes = True
+            if writer_processes(process_snapshot(control), own_pid=os.getpid()):
+                self.release()
+                return False
+            self.checking_processes = False
+            relay = acquire_runtime_instance(self.direct_sync_root / "user-relay-instance")
+            if relay is None:
+                self.release()
+                return False
+            relay.release()
+            if (active_fence(root) != active
+                    or (root / ACTIVE_FILENAME).read_bytes() != self.original):
+                self.release()
+                return False
+            self.ready = True
+            return True
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError):
+            self.release()
+            return False
+        finally:
+            self.checking_processes = False
+
+
+def _removal_admits(source: str, root: Path, active: Mapping[str, Any]) -> bool:
+    scope = getattr(_WRITER_LOCAL, "removal_scope", None)
+    return scope is not None and scope.admits(source, root, active)
+
+
+@contextmanager
+def _current_user_removal_fence_scope(app_root: Path, direct_sync_root: Path):
+    if getattr(_WRITER_LOCAL, "removal_scope", None) is not None:
+        raise WriterFencedError("ACTIVE_WRITER_FENCE", "another current-user removal owns this thread")
+    scope = _FailedInstallerRemoval(app_root, direct_sync_root)
+    _WRITER_LOCAL.removal_scope = scope
+    try:
+        yield
+    finally:
+        _WRITER_LOCAL.removal_scope = None
+        scope.release()
+
+
+def _claim_current_user_removal_fence() -> None:
+    """Check authority before waiting for an overlapping remover's writer gate."""
+    scope = getattr(_WRITER_LOCAL, "removal_scope", None)
+    if scope is None:
+        return
+    try:
+        root = canonical_control_root()
+        active = active_fence(root)
+    except WriterFenceError as exc:
+        raise WriterFencedError("ACTIVE_WRITER_FENCE", "writer denied by the active deployment fence") from exc
+    if active is not None and not _delegation_matches(
+        active, source="current_user_setup_removal", environ=os.environ,
+    ) and not scope.admits("current_user_setup_removal", root, active):
+        raise WriterFencedError("ACTIVE_WRITER_FENCE", "writer denied by the active deployment fence")
+
+
+@writer_sink("current_user_setup_removal")
+def _settle_failed_installer_removal() -> dict[str, str] | None:
+    scope = getattr(_WRITER_LOCAL, "removal_scope", None)
+    if scope is None or scope.claim is None:
+        return None
+    root, active, original = scope.root, scope.active, scope.original
+    path = root / ACTIVE_FILENAME
+    if not scope.ready or active_fence(root) != active or path.read_bytes() != original:
+        raise ValueError("writer fence changed before removal settlement")
+    digest = hashlib.sha256(original).hexdigest()
+    copy = root / "settled" / (digest + ".json")
+    _assert_no_reparse_components(copy)
+    copy.parent.mkdir(parents=True, exist_ok=True)
+    _assert_no_reparse_components(copy)
+    if not copy.exists():
+        with copy.open("xb") as handle:
+            handle.write(original)
+            handle.flush()
+            os.fsync(handle.fileno())
+    _assert_no_reparse_components(copy)
+    if copy.read_bytes() != original or path.read_bytes() != original or active_fence(root) != active:
+        raise ValueError("writer fence copy readback differs")
+    path.unlink()
+    if path.exists():
+        raise ValueError("writer fence absence was not proven")
+    return {
+        "session_id_sha256": _sha256_text(active["session_id"]),
+        "attempt_id_sha256": _sha256_text(active["attempt_id"]),
+        "fence_copy_sha256": digest,
+        "fence_copy_path": "writer-session/settled/" + digest + ".json",
+    }
 
 
 __all__ = [

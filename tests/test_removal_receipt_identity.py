@@ -4,10 +4,12 @@ import json
 
 import current_user_onboarding as onboarding
 import data_generation_guard
+import writer_session_fence as fence
 from tools import register_container_audit_worker_pc as registration
 
 
 def test_already_removed_user_republishes_sid_bound_receipt(tmp_path, monkeypatch):
+    monkeypatch.setattr(fence, "canonical_control_root", lambda environ=None: tmp_path / "writer-control")
     app = tmp_path / "application"
     app.mkdir()
     environment = {"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "worker-data")}
