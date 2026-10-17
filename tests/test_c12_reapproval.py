@@ -151,6 +151,13 @@ def test_c12_restart_before_redeem_requests_new_approval(monkeypatch, tmp_path):
     before = held.read_bytes()
     client._test_c12_server.consumed = False
     redeem = client.redeem
+    verify = client.verify
+    answers = []
+    def remember_verify(**kwargs):
+        answer = verify(**kwargs)
+        answers.append(answer)
+        return answer
+    monkeypatch.setattr(client, "verify", remember_verify)
     def stopped(**kwargs):
         raise KeyboardInterrupt("before redemption")
     monkeypatch.setattr(client, "redeem", stopped)
@@ -162,10 +169,75 @@ def test_c12_restart_before_redeem_requests_new_approval(monkeypatch, tmp_path):
     app._preflight_hold_store_instance = None
     app._preflight_hold_snapshot = None
     monkeypatch.setattr(client, "redeem", redeem)
+    old_answer = answers[-1]
+    transport = client.transport
+    def stale_request_answer(path, body, headers):
+        if path.endswith("/verifications"):
+            return 201, json.dumps(old_answer).encode("utf-8")
+        return transport(path, body, headers)
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda *args, **kwargs: False)
+    monkeypatch.setattr(client, "transport", stale_request_answer)
+    assert restore() is False
+    assert held.read_bytes() == before and not original.exists()
+    assert store.read(prepared["operation_key"])["state"] == "SUPERSEDED"
+    monkeypatch.setattr(client, "transport", transport)
     assert restore() is True
     assert store.read(prepared["operation_key"])["state"] == "SUPERSEDED"
     fresh = next(row for row in store.list_pending() if row["state"] == "APPLIED"
                  and row["source_snapshot"].get("restore_preflight_id"))
     assert fresh["request_id"] != prepared["request_id"]
     assert fresh["operation_key"] != prepared["operation_key"]
+    assert fresh["operator"] != prepared["operator"]
     assert original.read_bytes() == before
+
+
+def test_c12_duplicate_reapproval_is_rejected_on_serial_ui_lane(monkeypatch, tmp_path):
+    import threading
+    from types import SimpleNamespace
+    from tests.test_admin_pin_ui_lane import PinRoot
+
+    (app, client, audits, store, quarantine, changed, held,
+     original, label, restore) = _changed_restore(monkeypatch, tmp_path)
+    root = PinRoot()
+    app.root = root
+    app.scan_entry = SimpleNamespace(configure=lambda **kwargs: None)
+    entered, release = threading.Event(), threading.Event()
+    transport = client.transport
+    requests = []
+    prompts = []
+    prompt = app._prompt_blocked_work_admin_pin
+    def counted_prompt(**kwargs):
+        assert threading.get_ident() == root.owner_thread_id
+        prompts.append(kwargs)
+        return prompt(**kwargs)
+    def waiting_server(path, body, headers):
+        assert threading.get_ident() != root.owner_thread_id
+        requests.append(path.rsplit("/", 1)[-1])
+        if path.endswith("/verifications"):
+            entered.set()
+            release.wait()
+        return transport(path, body, headers)
+    monkeypatch.setattr(app, "_prompt_blocked_work_admin_pin", counted_prompt)
+    monkeypatch.setattr(client, "transport", waiting_server)
+    before = held.read_bytes()
+    old_keys = {row["operation_key"] for row in store.list_pending()}
+    def invoke():
+        return app._submit_admin_pin_steps(
+            app._restore_quarantined_preflight_hold_steps(str(held), _confirmed=True),
+            "admin-pin-preflight-restore")
+    try:
+        assert invoke() is True
+        root.run_until(entered.is_set)
+        assert app._admin_pin_ui_pending and app._ui_lane.is_busy()
+        assert invoke() is False
+        assert len(prompts) == 1 and requests == ["verifications"]
+        fresh = [row for row in store.list_pending() if row["operation_key"] not in old_keys]
+        assert len(fresh) == 1 and fresh[0]["state"] == "PREPARED"
+        assert held.read_bytes() == before and not original.exists()
+    finally:
+        release.set()
+        root.run_until(lambda: not getattr(app, "_admin_pin_ui_pending", False))
+    assert requests == ["verifications", "redemptions"] and len(prompts) == 1
+    assert not held.exists() and original.read_bytes() == before
+    assert store.read(fresh[0]["operation_key"])["state"] == "APPLIED"
+    assert not app._paired_preflight_blocks_label(label)
