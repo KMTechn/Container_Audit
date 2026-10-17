@@ -280,6 +280,18 @@ function ConvertTo-SafeInstallationOutput($Output) {
     [IO.File]::WriteAllBytes($path,[byte[]]$Output.bytes)
     & $script:FixtureSafeOutputWriter $Output
 }
+
+$script:FixtureAtomicReplaceOnce=${function:Invoke-ContainerAtomicReplaceOnce}
+function Invoke-ContainerAtomicReplaceOnce {
+    param([string]$Source,[string]$Destination,[string]$Mode,[string]$Backup)
+    try { & $script:FixtureAtomicReplaceOnce $Source $Destination $Mode $Backup }
+    catch {
+        $failure=$_
+        $record=@{source_chars=$Source.Length;destination_chars=$Destination.Length;source_exists=(Test-Path -LiteralPath $Source);destination_parent_exists=(Test-Path -LiteralPath (Split-Path -Parent $Destination));mode=$Mode}
+        try {[IO.File]::AppendAllText((Join-Path $env:CA_UNINSTALL_ROOT 'atomic-path-lengths-private.jsonl'),(($record|ConvertTo-Json -Compress)+[Environment]::NewLine),[Text.UTF8Encoding]::new($false))}catch{}
+        throw $failure
+    }
+}
 """
 
 HELPER_OS = r'''
