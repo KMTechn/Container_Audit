@@ -471,7 +471,7 @@ def _setup(tmp_path, fault='', *, stock_version_identity=False, install_director
                CA_UNINSTALL_PYTHON=str(native_python_executable()),
                CA_UNINSTALL_VENV_LAUNCHER=sys.executable,
                CA_UNINSTALL_MUTEX='Local\\Container.UninstallTest.' + uuid.uuid4().hex)
-    env['PSModulePath'] = str(Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/Modules')
+    env['PSModulePath'] = str(Path(os.environ['SystemRoot']) / 'f')
     env.pop('CONTAINER_AUDIT_DATA_ROOT', None)
     env.pop('KMTECH_CONTAINER_WRITER_CONTROL_ROOT', None)
     host = tmp_path / 'host.py'
