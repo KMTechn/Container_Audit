@@ -2003,6 +2003,27 @@ function Get-CanonicalRetirementChildFailure($Child, [Collections.IDictionary]$E
     }
     return $detail
 }
+function Read-CanonicalRetiredRemovalCapture($Stream) {
+    Assert-BootstrapNoReparsePoint ([string]$Stream.path) 'retired removal captured stream' -PathOnly
+    Assert-InstallationEvidenceProtectedPath ([string]$Stream.path)
+    Initialize-InstallationChildCapture
+    # Use the existing bounded capture reader and its existing overflow policy.
+    # The file remains read-shared only while its hash and bytes are consumed.
+    $readerType=([KMTechInstallationChildCapture]).GetNestedType('Reader',[Reflection.BindingFlags]::NonPublic)
+    $reader=[Activator]::CreateInstance($readerType,$true)
+    $file=$null
+    try {
+        $file=[IO.File]::Open([string]$Stream.path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+        if((Sha ([string]$Stream.path)) -cne [string]$Stream.sha256){throw 'Retired removal captured stream binding differs.'}
+        [void]$readerType.GetMethod('Read').Invoke($reader,@($file))
+        $output=$readerType.GetMethod('Snapshot').Invoke($reader,@())
+        $safe=ConvertTo-SafeInstallationOutput $output
+        return [Text.Encoding]::UTF8.GetString([byte[]]$safe.bytes)
+    } finally {
+        if($null -ne $file){$file.Dispose()}
+        $reader.saved.Dispose()
+    }
+}
 function Invoke-CanonicalRetiredRemovalChild([string]$Target,[string[]]$Arguments,[string]$AuditBase,[string]$Sid) {
     $prefix=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File')
     if($Arguments.Count -le 7 -or -not(Same $Arguments[6] $Target)) { throw 'Retired removal helper invocation differs.' }
@@ -2017,10 +2038,7 @@ function Invoke-CanonicalRetiredRemovalChild([string]$Target,[string[]]$Argument
     foreach($name in @('stdout','stderr')) {
         if($null -eq $capture.Streams){continue}
         $stream=$capture.Streams.$name
-        Assert-BootstrapNoReparsePoint ([string]$stream.path) 'retired removal captured stream' -PathOnly
-        Assert-InstallationEvidenceProtectedPath ([string]$stream.path)
-        if((Get-Item -LiteralPath $stream.path).Length -gt 1048576 -or (Sha ([string]$stream.path)) -cne [string]$stream.sha256){throw 'Retired removal captured stream binding differs.'}
-        $texts[$name]=ConvertTo-KmtechRedactedSinkText ([Text.Encoding]::GetEncoding([string]$stream.encoding).GetString([IO.File]::ReadAllBytes([string]$stream.path)))
+        $texts[$name]=Read-CanonicalRetiredRemovalCapture $stream
     }
     $Script:InstallationLastChildCapture=[ordered]@{stage='uninstall-helper';pid=$capture.Id;exit_code=$capture.ExitCode;
         stdout=(Protect-InstallationText $texts.stdout 512);stderr=(Protect-InstallationText $texts.stderr 512)}
@@ -3847,8 +3865,7 @@ function Resolve-CanonicalMachineRemovalWorker([string]$Account,$Caller,[string]
         if (Test-Path -LiteralPath $pending -ErrorAction Stop) {
             Assert-BootstrapNoReparsePoint $pending 'machine removal target' -PathOnly
             if (-not $testMode) { Assert-InstallationEvidenceProtectedPath $pending }
-            $length=(Get-Item -LiteralPath $pending -ErrorAction Stop).Length
-            $pendingText=if($length -le 65536){Get-Content -LiteralPath $pending -Raw -Encoding UTF8 -ErrorAction Stop}else{''}
+            $pendingText=Get-Content -LiteralPath $pending -Raw -Encoding UTF8 -ErrorAction Stop
             try {
                 $candidate=$pendingText|ConvertFrom-Json
                 if ([string]$candidate.schema -ceq 'container-audit-machine-pending-v1' -and
@@ -3869,7 +3886,6 @@ function Resolve-CanonicalMachineRemovalWorker([string]$Account,$Caller,[string]
             $policyPath=Join-Path (Split-Path -Parent $Root) 'update-control\policy.json'
             Assert-BootstrapNoReparsePoint $policyPath 'machine removal profile policy' -PathOnly
             if(-not $testMode){Assert-InstallationEvidenceProtectedPath $policyPath}
-            if((Get-Item -LiteralPath $policyPath -ErrorAction Stop).Length -gt 65536){throw 'MACHINE_REMOVAL_WORKER_PART_PENDING'}
             $policy=Get-Content -LiteralPath $policyPath -Raw -Encoding UTF8 -ErrorAction Stop|ConvertFrom-Json
             if([string]$policy.operator_sid -cne $sid){throw 'MACHINE_REMOVAL_WORKER_PART_PENDING'}
             $local=Full ([string]$policy.operator_local_app_data) 'machine removal profile'

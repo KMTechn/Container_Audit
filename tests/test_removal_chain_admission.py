@@ -11,6 +11,46 @@ from tests.powershell_contracts import run_powershell
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize('case', ['normal', 'hash_mismatch', 'over_existing_admission'])
+def test_retired_stream_reuses_existing_bounded_capture_policy(tmp_path, case):
+    canonical = str(ROOT / 'INSTALL_CANONICAL_PORTABLE.ps1').replace("'", "''")
+    library = str(ROOT / 'tools/bootstrap_integrity.ps1').replace("'", "''")
+    _run(tmp_path, "$canonical='" + canonical + "'\n$library='" + library + "'\n$case='" + case + "'\n" + r'''
+$tokens=$null;$errors=$null
+foreach($path in @($canonical,$library)){
+    $ast=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
+    $definitions=$ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Read-CanonicalRetiredRemovalCapture','Initialize-InstallationChildCapture','ConvertTo-SafeInstallationOutput')},$false)
+    foreach($definition in $definitions){Invoke-Expression $definition.Extent.Text}
+}
+function Assert-BootstrapNoReparsePoint {param($Path,$Label,[switch]$PathOnly)}
+function Assert-InstallationEvidenceProtectedPath {param($Path)}
+function Protect-InstallationText {param($Text,$Limit) $Text}
+function ConvertTo-KmtechRedactedSinkText {param($Text) $Text}
+function Sha {
+    param($Path)
+    $input=[IO.File]::OpenRead($Path);$hash=[Security.Cryptography.SHA256]::Create()
+    try {([BitConverter]::ToString($hash.ComputeHash($input))).Replace('-','').ToLowerInvariant()}
+    finally {$input.Dispose();$hash.Dispose()}
+}
+$path=Join-Path $PSScriptRoot 'captured-output.txt'
+[IO.File]::WriteAllText($path,'fixture output',[Text.UTF8Encoding]::new($false))
+if($case -eq 'over_existing_admission'){
+    $file=[IO.File]::OpenWrite($path)
+    try {$file.SetLength(33554433)} finally {$file.Dispose()}
+}
+$digest=Sha $path
+if($case -eq 'hash_mismatch'){$digest='different'}
+try {
+    $text=Read-CanonicalRetiredRemovalCapture ([pscustomobject]@{path=$path;sha256=$digest})
+    if($case -eq 'hash_mismatch'){throw 'expected binding failure'}
+    if($case -eq 'normal' -and $text -cne 'fixture output'){throw 'capture bytes differ'}
+    if($case -eq 'over_existing_admission' -and -not $text.StartsWith('[TRUNCATED: child input exceeded ')){throw 'existing overflow policy differs'}
+} catch {
+    if($case -ne 'hash_mismatch' -or $_.Exception.Message -cne 'Retired removal captured stream binding differs.'){throw}
+}
+''')
+
+
 def test_retired_capture_passes_only_script_arguments_to_existing_wrapper(tmp_path):
     source = str(ROOT / 'INSTALL_CANONICAL_PORTABLE.ps1').replace("'", "''")
     _run(tmp_path, "$canonical='" + source + "'\n" + r'''

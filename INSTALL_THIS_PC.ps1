@@ -642,7 +642,6 @@ function Get-ContainerMachineRemovalPolicyLocalAppDataRoot([string]$Sid,[string]
     $path=Join-Path (Split-Path -Parent $Root) 'update-control\policy.json'
     Assert-ContainerRemovalBoundary $path
     if (-not $testOverride) { Assert-InstallationEvidenceProtectedPath $path }
-    if ((Get-Item -LiteralPath $path -ErrorAction Stop).Length -gt 65536) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
     $policy=Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop|ConvertFrom-Json
     if ([string]$policy.operator_sid -cne $Sid) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
     $local=Get-StrictFullPath ([string]$policy.operator_local_app_data) 'removal policy profile'
@@ -658,8 +657,7 @@ function Read-ContainerMachineRemovalBinding {
     if (Test-Path -LiteralPath $pending -ErrorAction Stop) {
         Assert-ContainerRemovalBoundary $pending
         if (-not $testOverride) { Assert-InstallationEvidenceProtectedPath $pending }
-        $length=(Get-Item -LiteralPath $pending -ErrorAction Stop).Length
-        $pendingText=if($length -le 65536){Get-Content -LiteralPath $pending -Raw -Encoding UTF8 -ErrorAction Stop}else{''}
+        $pendingText=Get-Content -LiteralPath $pending -Raw -Encoding UTF8 -ErrorAction Stop
         try {
             $marker=$pendingText|ConvertFrom-Json
             if ([string]$marker.schema -ceq 'container-audit-machine-pending-v1' -and
@@ -776,7 +774,6 @@ function Test-ContainerAttestedNewPlacementRemoval {
     if (-not(Test-Path -LiteralPath $path -ErrorAction Stop)) { return $false }
     Assert-ContainerRemovalBoundary $path
     if (-not $testOverride) { Assert-InstallationEvidenceProtectedPath $path }
-    if ((Get-Item -LiteralPath $path -ErrorAction Stop).Length -gt 1048576) { return $false }
     $state=Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop|ConvertFrom-Json
     $active=Read-ContainerWriterFence -ControlRoot $Script:ContainerWriterFenceAdmissionProductionRoot
     Assert-ContainerWriterSessionAuthority $active
