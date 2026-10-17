@@ -194,7 +194,7 @@ def _complete(tmp_path, env, old_source, manager, install, receipt, marker, **pi
                '-RetiredRemovalReceiptSha256', pins.get('receipt_pin', _sha(receipt)),
                '-RetiredStopMarkerSha256', pins.get('marker_pin', _sha(marker)),
                '-EvidencePath', str(pins.get('evidence_path', tmp_path / 'retirement-audit.json')),
-               '-AllowNoncanonicalLayoutForTest', '-SkipSignatureValidationForTest', *resume)
+               '-AllowNoncanonicalLayoutForTest', '-SkipSignatureValidationForTest', '-ElevationLogPath', str(tmp_path / 'e'), *resume)
 
 
 @pytest.mark.parametrize('live', [False, True])

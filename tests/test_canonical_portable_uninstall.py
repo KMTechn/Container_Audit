@@ -625,7 +625,7 @@ def _run(tmp_path, env, source, install, *extra):
     result = _ps(source / 'INSTALL_CANONICAL_PORTABLE.ps1', env,
                  '-SourceRoot', str(source), '-InstallRoot', str(install),
                  '-EvidencePath', str(tmp_path / 'audit.json'), '-Uninstall',
-                 '-AllowNoncanonicalLayoutForTest', '-SkipSignatureValidationForTest', *extra)
+                 '-AllowNoncanonicalLayoutForTest', '-SkipSignatureValidationForTest', '-ElevationLogPath', str(tmp_path / 'e'), *extra)
     (tmp_path / 'stdout.log').write_text(result.stdout, encoding='utf-8')
     (tmp_path / 'stderr.log').write_text(result.stderr, encoding='utf-8')
     return result
