@@ -33,6 +33,21 @@ def test_installer_logon_task_child_runs_as_an_isolated_script(tmp_path):
     assert not install_root.exists()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_update_control_root(isolate_product_state, tmp_path, monkeypatch):
+    """Keep iwrun's fixed writer root from sharing generation markers across tests."""
+    import writer_session_fence as fence
+
+    if getattr(fence, "__kmtech_test_ca_writer_isolated__", False):
+        import data_generation_guard as generation_guard
+
+        root = tmp_path / "onboarding-control"
+        canonical_root = lambda environ=None: root
+        monkeypatch.setattr(fence, "canonical_control_root", canonical_root)
+        monkeypatch.setattr(generation_guard, "canonical_control_root", canonical_root)
+        monkeypatch.setenv("KMTECH_TEST_CA_WRITER_ROOT", str(root))
+
+
 NOW = "2026-10-01T04:00:00+00:00"
 LATER = "2026-10-01T04:00:01+00:00"
 OLD = "1" * 40
