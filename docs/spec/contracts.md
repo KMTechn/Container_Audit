@@ -1,6 +1,10 @@
-﻿10/15 화면 계약(M124·M125): `work.list[].code`는 원문, `work.exchange={phase,remove,insert}`는 교환 중·직후에만 제공, `today.rows[].products`는 내구 완료 제품 수 정수, `admin_menu[].pin`은 boolean이다. C02–C07·검증된 같은 원본 C09는 작업자와 원 소유권·지문·멱등 키·CAS를 유지하고 승인자 칸을 비운다. C08 목록과 C10·C11 수동 결속·C12 격리 복원은 PIN 경계를 유지한다.
+10/15 화면 계약(M124·M125): `work.list[].code`는 원문, `work.exchange={phase,remove,insert}`는 교환 중·직후에만 제공, `today.rows[].products`는 내구 완료 제품 수 정수, `admin_menu[].pin`은 boolean이다. C02–C07·검증된 같은 원본 C09는 작업자와 원 소유권·지문·멱등 키·CAS를 유지하고 승인자 칸을 비운다. C08 목록과 C10·C11 수동 결속·C12 격리 복원은 PIN 경계를 유지한다.
 
 자동 오프라인 보관 원본의 복귀는 같은 작업자·동기 감사의 자동 보관 사유·원본 지문이 모두 맞는 내부 스캔 경로에서만 PIN 없이 처리한다. 관리자 격리 원본의 복원과 공개 C12 진입은 기존 관리자 PIN을 요구한다. 자동 보관 의도는 이동 전에 기존 CSV 형식으로 동기 기록해 이동 직후 중단에도 같은 조건을 증명한다.
+
+C12에서 격리 바이트 변경으로 `TARGET_CHANGED`가 남으면, 같은 격리 경로·preflight ID·원 작업자·현품표·최초 격리 이동 journal 및 소유권 감사로 결속한 항목만 명시적 관리자 재승인에 진입한다. 현재 바이트에 새 PIN·새 operation key를 결속하며 이전 소비 승인은 재사용하지 않는다. 복원 효과·복원 감사·새 승인 완료를 확인한 뒤 해당 최초 격리 승인에 `RESTORED`를 기록하고 해당 변경 거절 승인만 기존 `ADMIN_PIN_SUPERSEDED` 감사와 함께 은퇴한다. 최초 지문·승인 기록은 보존하며 다른 항목의 잠금은 유지한다.
+
+C12 승인 화면의 빠른 두 번째 누름은 기존 직렬 UI lane의 pending/busy 검사에서 거절한다. 첫 재승인 요청이 대기 중이면 추가 PIN·서버 요청·승인 intent·파일 이동을 만들지 않는다. 같은 자료 뿌리의 다른 프로세스 동시 예약이나 서버 결속 형식은 추가하지 않는다.
 
 자동 오프라인 보관 의도·격리·복귀 감사는 LOCAL_ONLY이며 CSV 투영 전의 durable outbox 원본도 같은 소유권·지문 확인에 쓴다. 복귀 rename 뒤 중단하면 새 app/store에서 원 작업자·원 지문·자동 격리 감사·격리 원본 부재를 확인하고 같은 idempotency key로 RESTORED 감사를 마친다. C12 intent의 복구는 기존 PIN 길에 남긴다. APP_STOP_DEFERRED·APP_CLOSE_DELAY·UI_LANE_FAULT는 업무 수량 event가 아닌 로컬 종료·오류 진단으로 서버 CSV에 싣지 않는다.
 
@@ -418,7 +422,8 @@ READY는 초기화된 GUI의 nonce·판 SHA·PID·생성 시각과 현재 사용
 제거 실패는 이미 제거한 코드·task·Run을 되살리지 않고 같은 제거 재실행으로 수렴한다.
 내용 이동 전에 권한 있는 하위 설치기가 `update-control/supported-removals/<transaction>/`에
 원 제거 감사의 불변 사본과 정확한 source manifest·fence tuple·prepared SHA·controller PID/시작 시각을
-보호 기록으로 남긴다. controller는 실제 검증된 외부 source 조상이어야 한다.
+보호 기록으로 남긴다. supported-removals 는 제거가 끝난 뒤에도 보호 기록으로 남긴다.
+controller는 실제 검증된 외부 source 조상이어야 한다.
 재진입은 그 보호 기록·원 감사 사본·같은 source와 fence를 재검사하고 원 owner 종료 및
 같은 tuple의 배타적 session authority를 함께 확인한 뒤 위임만 새로 만든다.
 새 controller의 추가 중단에도 원 감사/tuple을 유지한다. 사용자 쓰기 가능 감사 하나,

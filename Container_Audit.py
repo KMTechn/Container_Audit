@@ -2285,6 +2285,49 @@ class ContainerAudit:
         return self._run_durable_ui_steps(self._restore_quarantined_preflight_hold_steps(
             filepath, confirm=confirm, _confirmed=_confirmed))
 
+    def _preflight_restore_reapproval_intents(self, path, snapshot, store, pending):
+        """Bind the exception to the original quarantine and its ownership audit."""
+        audits = self._preflight_hold_ownership_audits()
+        if audits is None:
+            return (), ()
+        origins = []
+        for row in pending:
+            source = row.get("source_snapshot") or {}
+            if (row.get("state") != "APPLIED"
+                    or source.get("preflight_id") != snapshot.preflight_id
+                    or not any(Path(move["target"]).resolve() == path
+                               and move.get("sha256") == source.get("hold_sha256")
+                               and Path(move["source"]).resolve() == store.path.resolve()
+                               for move in row.get("moving") or ())):
+                continue
+            if any(event == "PHS2_PREFLIGHT_HOLD_QUARANTINED"
+                   and detail.get("operation_key") == row["operation_key"]
+                   and detail.get("preflight_id") == snapshot.preflight_id
+                   and detail.get("quarantine_file") == path.name
+                   and detail.get("worker") == snapshot.worker
+                   and canonical_master_label_key(detail.get("master_raw", ""))
+                   == canonical_master_label_key(snapshot.master_raw)
+                   for event, detail in audits):
+                origins.append(row)
+        if not origins:
+            return (), ()
+        changed = []
+        for row in self._admin_pin_store().list_pending():
+            source = row.get("source_snapshot") or {}
+            if (row.get("state") == "TARGET_CHANGED"
+                    and row.get("action") == "CA.PRECHECK_HOLD"
+                    and row.get("authorization_mode") != "WORKER"
+                    and row.get("verification_id")
+                    and source.get("restore_preflight_id") == snapshot.preflight_id
+                    and source.get("quarantine_source") == str(path)
+                    and source.get("active_target") == str(store.path.resolve())
+                    and row.get("target", {}).get("id") == "restore-" + str(source.get("hold_sha256"))
+                    and any(canonical_master_label_key(label)
+                            == canonical_master_label_key(snapshot.master_raw)
+                            for label in row.get("labels") or ())):
+                changed.append(row)
+        return (tuple(origins), tuple(changed)) if changed else ((), ())
+
     def _restore_quarantined_preflight_hold_steps(self, filepath: str, *, confirm: bool = True, _confirmed: bool = False,
                                                 expected_source_sha256: str = "",
                                                 offline_return: Optional[QuarantinedPreflightHold] = None) -> bool:
@@ -2321,6 +2364,11 @@ class ContainerAudit:
                        if row.get("state") == "APPLIED"
                        and (row.get("source_snapshot") or {}).get("preflight_id") == snapshot.preflight_id
                        and row["source_snapshot"].get("hold_sha256") == digest]
+            reapproval_origins, reapproval_intents = self._preflight_restore_reapproval_intents(
+                path, snapshot, store, pending_intents)
+            for row in reapproval_origins:
+                if row not in intents:
+                    intents.append(row)
             if intents:
                 store = self._admin_pin_preflight_hold_store(intents[0])
             resuming_restore = not original_present and any(
@@ -2332,6 +2380,8 @@ class ContainerAudit:
             restore_target_id = "restore-" + digest
             restore_intents = pin_store.pending("CA.PRECHECK_HOLD", restore_target_id, include_applied=True)
             restore_intent_paths = tuple(pin_store.path(row["operation_key"]).resolve() for row in restore_intents)
+            restore_intent_paths += tuple(pin_store.path(row["operation_key"]).resolve()
+                                          for row in reapproval_intents)
             restoring_paths += restore_intent_paths
         except (OSError, ValueError, TypeError, KeyError, PreflightHoldError):
             self._call_admin_pin_ui(messagebox.showerror,
@@ -2518,10 +2568,15 @@ class ContainerAudit:
         try:
             for row in intents:
                 (yield lambda: pin_store.write(dict(row, restoration={
-                    "state": "RESTORED", "source": str(path), "hold_sha256": digest,
+                    "state": "RESTORED", "source": str(path),
+                    "hold_sha256": row["source_snapshot"]["hold_sha256"],
                     "master_label_key": canonical_master_label_key(restored.master_raw),
                     "snapshot_hash": restored_hash, "audit_key": audit_key,
                 })))
+            for row in reapproval_intents:
+                if not (yield lambda: self._admin_pin_audit("ADMIN_PIN_SUPERSEDED", row)):
+                    raise OSError("changed restoration retirement audit failed")
+                (yield lambda: pin_store.transition(row, "SUPERSEDED", reason="TARGET_CHANGED"))
             if restored.state == HOLD_DRAINING:
                 restored = (yield lambda: store.mark_failed(error_code="PHS2_QUARANTINE_RESTORE_REVIEW"))
         except (OSError, ValueError, PreflightHoldError):
@@ -9786,7 +9841,14 @@ class ContainerAudit:
                               proof=verified["proof"], operation_key=intent["operation_key"],
                               action=action, target=target, operator=operator))
                 intent = (yield lambda: store.transition(intent, "CONSUMED"))
-                if read_source() != original:
+                try:
+                    current_source = read_source()
+                except PreflightHoldError:
+                    if not original.get("restore_preflight_id"):
+                        raise
+                    (yield lambda: self._admin_pin_target_changed(intent))
+                    return None
+                if current_source != original:
                     (yield lambda: self._admin_pin_target_changed(intent))
                     return None
                 if not self._blocked_work_identity_is_current(base):
@@ -10207,6 +10269,9 @@ class ContainerAudit:
                 and (action == "CA.PRECHECK_HOLD" or action == "CA.TRAY_HOLD" and isinstance(source.get("tray"), dict))):
             return not self._admin_pin_check_moves(intent)
         if action == "CA.PRECHECK_HOLD":
+            if source.get("restore_preflight_id"):
+                return not (Path(source["quarantine_source"]).is_file()
+                            or Path(source["active_target"]).is_file())
             return not self._admin_pin_preflight_hold_store(intent).path.is_file()
         if source.get("handoff_id"):
             return not (self._paired_preflight_store().directory
