@@ -11,6 +11,26 @@ from tests.powershell_contracts import run_powershell
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize('index,field', [(0, 'CreationDate'), (0, 'ParentProcessId'), (1, 'CreationDate'), (1, 'ParentProcessId')])
+def test_verified_chain_missing_identity_fields_are_unknown(tmp_path, index, field):
+    _run(tmp_path, r'''
+$now=[datetime]::UtcNow
+$engine=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+$RemovalControllerProcessId=20000
+$RemovalControllerStartedAtUtc=$now.AddSeconds(-1).ToString('o')
+$rows=@(
+    [pscustomobject]@{ProcessId=$PID;ParentProcessId=20000;CreationDate=$now;ExecutablePath=$engine;CommandLine='helper'},
+    [pscustomobject]@{ProcessId=20000;ParentProcessId=0;CreationDate=$now.AddSeconds(-1);ExecutablePath=$engine;CommandLine='canonical'}
+)
+function Get-Process {param($Id,$ErrorAction) [pscustomobject]@{StartTime=($rows|Where-Object ProcessId -eq $Id).CreationDate}}
+function Invoke-CimMethod {param($InputObject,$MethodName,$ErrorAction) [pscustomobject]@{ReturnValue=0;Sid='fixture-owner'}}
+function Get-ContainerRemovalInvocation {param($Row) [pscustomobject]@{kind=$(if($Row.ProcessId -eq $PID){'helper'}else{'canonical'})}}
+''' + '$rows[' + str(index) + '].' + field + r'''=$null
+try {Get-ContainerRemovalVerifiedChain $rows;throw 'expected unknown'}
+catch {if($_.Exception.Message -cne 'REMOVAL_PROCESS_OBSERVATION_UNKNOWN'){throw}}
+''')
+
+
 @pytest.mark.parametrize('case', ['reported_recording_failure', 'unreported_missing_path', 'different_failure_code', 'reported_hash_mismatch'])
 def test_retired_capture_separates_reported_recording_failure_from_integrity_failure(tmp_path, case):
     canonical = str(ROOT / 'INSTALL_CANONICAL_PORTABLE.ps1').replace("'", "''")
