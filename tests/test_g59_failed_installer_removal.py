@@ -181,8 +181,7 @@ def test_proof_boundary_failure_uses_active_refusal(removal_case, monkeypatch, c
     assert case.registry_deletes == 0
     assert not (case.root / "settled").exists()
     records = [r for r in caplog.records if r.name == fence.__name__]
-    assert [r.getMessage() for r in records] == [error_type.__name__]
-    assert all(r.exc_info is None for r in records)
+    assert records == []
 
 def test_live_installer_delegation_keeps_its_fence(removal_case, monkeypatch):
     case = removal_case

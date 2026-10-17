@@ -853,8 +853,7 @@ class _FailedInstallerRemoval:
             return False
         try:
             claim = _acquire_named_mutex(active["session_authority_mutex_name"], 0)
-        except Exception as exc:
-            logging.getLogger(__name__).warning(type(exc).__name__)
+        except Exception:
             return False
         if claim is None:
             return False
@@ -901,8 +900,7 @@ class _FailedInstallerRemoval:
                 return False
             self.ready = True
             return True
-        except Exception as exc:
-            logging.getLogger(__name__).warning(type(exc).__name__)
+        except Exception:
             self.release()
             return False
         finally:
