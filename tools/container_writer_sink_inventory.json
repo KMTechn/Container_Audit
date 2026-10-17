@@ -31,7 +31,7 @@
     {
       "caller": "current_user_onboarding._write_json_atomic",
       "category": "filesystem",
-      "line": 443,
+      "line": 446,
       "operation": "atomic_replace.atomic_replace",
       "writer_admission_sources": []
     },
@@ -1482,30 +1482,30 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 431,
+      "line": 434,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 438,
+          "line": 441,
           "operation": "temporary.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 443,
+          "line": 446,
           "operation": "atomic_replace.atomic_replace",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 446,
+          "line": 449,
           "operation": "temporary.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 435,
+          "line": 438,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -1554,30 +1554,30 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 450,
+      "line": 453,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 458,
+          "line": 461,
           "operation": "temporary.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 463,
+          "line": 466,
           "operation": "os.link",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 466,
+          "line": 469,
           "operation": "temporary.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 455,
+          "line": 458,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -1627,12 +1627,12 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 681,
+      "line": 684,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 730,
+          "line": 733,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -1682,12 +1682,12 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 778,
+      "line": 781,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 818,
+          "line": 821,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -1721,12 +1721,12 @@
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 1089,
+      "line": 1092,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 1099,
+          "line": 1102,
           "operation": "subprocess.Popen",
           "writer_admission_sources": []
         }
@@ -1747,17 +1747,17 @@
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 1257,
+      "line": 1260,
       "mutation_sites": [
         {
           "category": "registry",
-          "line": 1265,
+          "line": 1268,
           "operation": "winreg.CreateKeyEx",
           "writer_admission_sources": []
         },
         {
           "category": "registry",
-          "line": 1271,
+          "line": 1274,
           "operation": "winreg.SetValueEx",
           "writer_admission_sources": []
         }
@@ -1778,17 +1778,17 @@
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 1996,
+      "line": 1999,
       "mutation_sites": [
         {
           "category": "registry",
-          "line": 1999,
+          "line": 2002,
           "operation": "winreg.CreateKeyEx",
           "writer_admission_sources": []
         },
         {
           "category": "registry",
-          "line": 2003,
+          "line": 2006,
           "operation": "winreg.SetValueEx",
           "writer_admission_sources": []
         }
@@ -1825,12 +1825,12 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 2105,
+      "line": 2108,
       "mutation_sites": [
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 2204,
+          "line": 2207,
           "operation": "path.mkdir",
           "writer_admission_sources": [
             "current_user_onboarding"
@@ -1881,12 +1881,12 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 2391,
+      "line": 2394,
       "mutation_sites": [
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 2416,
+          "line": 2420,
           "operation": "path.mkdir",
           "writer_admission_sources": [
             "current_user_setup_removal"
@@ -5701,6 +5701,7 @@
       "covered_entrypoints": [
         "Container_Audit.__file_entry__",
         "auto_update.__file_entry__",
+        "best_time_records.__file_entry__",
         "ca_screen_bridge.__file_entry__",
         "container_admin_pin.__file_entry__",
         "container_audit_product_host.__file_entry__",
@@ -5713,21 +5714,42 @@
         "direct_sync_runtime.__file_entry__",
         "event_log_store.__file_entry__",
         "item_catalog_sync.__file_entry__",
+        "kmtech_factory_contracts.active_work_probe.__main__.__file_entry__",
+        "kmtech_factory_contracts.active_work_probe.cli.__file_entry__",
+        "kmtech_factory_contracts.build_cli.__file_entry__",
+        "kmtech_factory_contracts.bundle.__file_entry__",
+        "kmtech_factory_contracts.canonical.__file_entry__",
+        "kmtech_factory_contracts.corrective.__file_entry__",
+        "kmtech_factory_contracts.installer.__file_entry__",
+        "kmtech_factory_contracts.lock.__file_entry__",
+        "kmtech_factory_contracts.package.__file_entry__",
+        "kmtech_factory_contracts.strict_server.__file_entry__",
+        "legacy_state_migration.__file_entry__",
         "logistics_runtime_profile.__file_entry__",
         "paired_preflight_handoff.__file_entry__",
         "parked_tray_store.__file_entry__",
         "phs_label_workflow.__file_entry__",
         "phs_reconciliation_workflow.__file_entry__",
+        "pin_file_move.__file_entry__",
         "portable.main.__file_entry__",
         "preflight_scan_hold.__file_entry__",
         "producer_runtime_client.__file_entry__",
         "protected_admin.__file_entry__",
         "recovery_file_read.__file_entry__",
+        "recovery_two_phase.__file_entry__",
         "runtime_dependency_guard.__file_entry__",
+        "runtime_entry.__file_entry__",
+        "runtime_instance.__file_entry__",
+        "screen_startup_fallback.__file_entry__",
         "startup_check.__file_entry__",
         "startup_check_report.__file_entry__",
+        "storage_policy.__file_entry__",
+        "storage_utils.__file_entry__",
+        "terminal_operation_lease.__file_entry__",
+        "tk_serial_ui_lane.__file_entry__",
         "tools.active_work_probe.__file_entry__",
         "tools.check_logistics_runtime_profile.__file_entry__",
+        "tools.check_release_version.__file_entry__",
         "tools.direct_sync_relay_install_pack.__file_entry__",
         "tools.direct_sync_relay_operator.__file_entry__",
         "tools.direct_sync_relay_runner.__file_entry__",
@@ -5741,10 +5763,12 @@
         "transfer_store.__file_entry__",
         "tray_completion.__file_entry__",
         "tray_state.__file_entry__",
+        "update_service.__file_entry__",
         "user_relay.__file_entry__",
         "work_session_state.__file_entry__",
         "worker_registry.__file_entry__",
-        "worker_roster.__file_entry__"
+        "worker_roster.__file_entry__",
+        "writer_session_fence.__file_entry__"
       ],
       "decorated_source": "runtime_dependency_report",
       "direct_callers": [
@@ -5778,6 +5802,7 @@
       "reachable_entrypoints": [
         "Container_Audit.__file_entry__",
         "auto_update.__file_entry__",
+        "best_time_records.__file_entry__",
         "ca_screen_bridge.__file_entry__",
         "container_admin_pin.__file_entry__",
         "container_audit_product_host.__file_entry__",
@@ -5790,21 +5815,42 @@
         "direct_sync_runtime.__file_entry__",
         "event_log_store.__file_entry__",
         "item_catalog_sync.__file_entry__",
+        "kmtech_factory_contracts.active_work_probe.__main__.__file_entry__",
+        "kmtech_factory_contracts.active_work_probe.cli.__file_entry__",
+        "kmtech_factory_contracts.build_cli.__file_entry__",
+        "kmtech_factory_contracts.bundle.__file_entry__",
+        "kmtech_factory_contracts.canonical.__file_entry__",
+        "kmtech_factory_contracts.corrective.__file_entry__",
+        "kmtech_factory_contracts.installer.__file_entry__",
+        "kmtech_factory_contracts.lock.__file_entry__",
+        "kmtech_factory_contracts.package.__file_entry__",
+        "kmtech_factory_contracts.strict_server.__file_entry__",
+        "legacy_state_migration.__file_entry__",
         "logistics_runtime_profile.__file_entry__",
         "paired_preflight_handoff.__file_entry__",
         "parked_tray_store.__file_entry__",
         "phs_label_workflow.__file_entry__",
         "phs_reconciliation_workflow.__file_entry__",
+        "pin_file_move.__file_entry__",
         "portable.main.__file_entry__",
         "preflight_scan_hold.__file_entry__",
         "producer_runtime_client.__file_entry__",
         "protected_admin.__file_entry__",
         "recovery_file_read.__file_entry__",
+        "recovery_two_phase.__file_entry__",
         "runtime_dependency_guard.__file_entry__",
+        "runtime_entry.__file_entry__",
+        "runtime_instance.__file_entry__",
+        "screen_startup_fallback.__file_entry__",
         "startup_check.__file_entry__",
         "startup_check_report.__file_entry__",
+        "storage_policy.__file_entry__",
+        "storage_utils.__file_entry__",
+        "terminal_operation_lease.__file_entry__",
+        "tk_serial_ui_lane.__file_entry__",
         "tools.active_work_probe.__file_entry__",
         "tools.check_logistics_runtime_profile.__file_entry__",
+        "tools.check_release_version.__file_entry__",
         "tools.direct_sync_relay_install_pack.__file_entry__",
         "tools.direct_sync_relay_operator.__file_entry__",
         "tools.direct_sync_relay_runner.__file_entry__",
@@ -5818,10 +5864,12 @@
         "transfer_store.__file_entry__",
         "tray_completion.__file_entry__",
         "tray_state.__file_entry__",
+        "update_service.__file_entry__",
         "user_relay.__file_entry__",
         "work_session_state.__file_entry__",
         "worker_registry.__file_entry__",
-        "worker_roster.__file_entry__"
+        "worker_roster.__file_entry__",
+        "writer_session_fence.__file_entry__"
       ],
       "reachable_from_product_entrypoint": true,
       "trust_reason": "",
@@ -9648,8 +9696,8 @@
     "powershell_sink_count": 2,
     "python_external_control_literal_site_count": 5,
     "scheduled_task_mutation_site_count": 12,
-    "sink_function_count": 261,
-    "total_cross_language_sink_count": 263,
+    "sink_function_count": 262,
+    "total_cross_language_sink_count": 264,
     "trusted_control_plane_mutation_count": 0,
     "uncovered_mutation_function_count": 0
   },
@@ -9710,7 +9758,7 @@
       "argument_ast_sha256": "d8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81",
       "caller": "current_user_onboarding._write_json_atomic",
       "classification": "decorator",
-      "line": 435,
+      "line": 438,
       "probe_only": false,
       "report_only": false,
       "source": "current_user_onboarding_storage",
@@ -9720,7 +9768,7 @@
       "argument_ast_sha256": "d8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81",
       "caller": "current_user_onboarding._write_json_atomic_create_new",
       "classification": "decorator",
-      "line": 455,
+      "line": 458,
       "probe_only": false,
       "report_only": false,
       "source": "current_user_onboarding_storage",
@@ -9730,7 +9778,7 @@
       "argument_ast_sha256": "87f9ed34d31694cef448ad430f4bf2d47211409a8649376df30813e5b8d1bd2f",
       "caller": "current_user_onboarding.onboard_current_user",
       "classification": "writer_admission",
-      "line": 2204,
+      "line": 2207,
       "probe_only": true,
       "report_only": false,
       "source": "current_user_onboarding",
@@ -9742,7 +9790,7 @@
       "argument_ast_sha256": "baed5eba0765259aa71ca7259034e47e8c4d38ae2520bd286c7010aebaacf367",
       "caller": "current_user_onboarding.remove_current_user_setup",
       "classification": "writer_admission",
-      "line": 2416,
+      "line": 2420,
       "probe_only": false,
       "report_only": false,
       "source": "current_user_setup_removal",
@@ -10797,9 +10845,13 @@
       "worker_registry",
       "writer_session_fence"
     ],
-    "writer_session_fence": []
+    "writer_session_fence": [
+      "auto_update",
+      "runtime_instance",
+      "tools.register_container_audit_worker_pc"
+    ]
   },
-  "inventory_sha256": "b628bb986268f9b682d9728cd17fba40896a97ce62901b42471c4d791f618b51",
+  "inventory_sha256": "96350fd36df916853f11aa479880ea058f32ab83d15b06e30e6a970b8e03d157",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -24874,7 +24926,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._replacement_identities_match",
-      "line": 778,
+      "line": 781,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -24882,7 +24934,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._start_replacement_user_relay_process",
-      "line": 1089,
+      "line": 1092,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -24890,7 +24942,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.restore_current_user_lifecycle_after_replacement",
-      "line": 2478,
+      "line": 2486,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -24898,7 +24950,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._windows_acl_identity",
-      "line": 681,
+      "line": 684,
       "marker_kind": "decorator",
       "source": "current_user_onboarding"
     },
@@ -24906,7 +24958,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.onboard_current_user",
-      "line": 2105,
+      "line": 2108,
       "marker_kind": "decorator",
       "source": "current_user_onboarding"
     },
@@ -24914,7 +24966,7 @@
       "direct_mutation_site_count": 2,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._install_replacement_user_relay_autostart",
-      "line": 1257,
+      "line": 1260,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -24922,7 +24974,7 @@
       "direct_mutation_site_count": 2,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._record_completed_machine_install_id",
-      "line": 1996,
+      "line": 1999,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -24930,7 +24982,7 @@
       "direct_mutation_site_count": 4,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._write_json_atomic",
-      "line": 431,
+      "line": 434,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -24938,7 +24990,7 @@
       "direct_mutation_site_count": 4,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._write_json_atomic_create_new",
-      "line": 450,
+      "line": 453,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -24946,8 +24998,16 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.remove_current_user_setup",
-      "line": 2391,
+      "line": 2394,
       "marker_kind": "writer_admission",
+      "source": "current_user_setup_removal"
+    },
+    {
+      "direct_mutation_site_count": 0,
+      "file": "writer_session_fence.py",
+      "function": "writer_session_fence._settle_failed_installer_removal",
+      "line": 923,
+      "marker_kind": "decorator",
       "source": "current_user_setup_removal"
     },
     {
