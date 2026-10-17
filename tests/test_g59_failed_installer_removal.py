@@ -162,6 +162,31 @@ def test_authority_open_failure_uses_existing_active_refusal(removal_case, monke
     assert case.path.read_bytes() == case.original
     assert case.registry_deletes == 0
 
+def test_live_installer_delegation_keeps_its_fence(removal_case, monkeypatch):
+    case = removal_case
+    delegated = hashlib.sha256(os.urandom(32)).hexdigest()
+    case.payload.update(
+        delegated_sources=sorted(["current_user_setup_removal", "current_user_onboarding_storage",
+                                  "user_relay_autostart_remove", "persistent_relay_registry",
+                                  "persistent_relay_status"]),
+        delegation_sha256=hashlib.sha256(delegated.encode("utf-8")).hexdigest(),
+        delegation_expires_at_utc=_utc(300),
+    )
+    case.publish()
+    for name, value in (
+        (fence.DELEGATION_TOKEN_ENV, delegated),
+        (fence.DELEGATION_SESSION_ENV, case.payload["session_id"]),
+        (fence.DELEGATION_ATTEMPT_ENV, case.payload["attempt_id"]),
+        (fence.DELEGATION_TRANSACTION_ENV, case.payload["replacement_transaction_id"]),
+    ):
+        monkeypatch.setenv(name, value)
+    with authority_owner(case):
+        report = onboarding.remove_current_user_setup(case.app)
+    assert report["status"] == "PASS_DATA_PRESERVED"
+    assert "abandoned_fence_settled" not in report
+    assert case.path.read_bytes() == case.original
+    assert not (case.root / "settled").exists()
+
 @pytest.mark.parametrize("change", ["owner", "worker-root", "worker-sid", "receipt-app", "fence-app",
     "PREPARING", "PREPARED", "RESTORING", "RESTORE_FAILED"])
 def test_unrelated_fence_is_preserved(removal_case, change):
