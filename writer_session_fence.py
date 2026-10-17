@@ -15,6 +15,7 @@ import ctypes
 import hashlib
 import inspect
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -101,7 +102,7 @@ def close_and_wait_writers(timeout_seconds: float) -> bool:
 
 # This pin is generated and checked by tools/derive_container_writer_sinks.py.
 # It is updated together with the inventory after all sink markers are placed.
-WRITER_INVENTORY_SHA256 = "656017ee0bc695b201c4bb4e640848bf61b50e2a87218a7e7a26d5bacf87b00b"
+WRITER_INVENTORY_SHA256 = "ad0563a9e70a460831308f010fd983b0141cf997ab9911bec2ee65ca1f585596"
 
 DELEGATION_TOKEN_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN"
 DELEGATION_SESSION_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID"
@@ -850,7 +851,8 @@ class _FailedInstallerRemoval:
             return False
         try:
             claim = _acquire_named_mutex(active["session_authority_mutex_name"], 0)
-        except (OSError, WriterFenceError):
+        except Exception as exc:
+            logging.getLogger(__name__).warning(type(exc).__name__)
             return False
         if claim is None:
             return False
@@ -897,7 +899,8 @@ class _FailedInstallerRemoval:
                 return False
             self.ready = True
             return True
-        except (OSError, ValueError, TypeError, KeyError, RuntimeError):
+        except Exception as exc:
+            logging.getLogger(__name__).warning(type(exc).__name__)
             self.release()
             return False
         finally:

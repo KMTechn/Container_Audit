@@ -923,3 +923,5 @@ sub-298 소스 구현: 최초 격리 journal·원 작업자·현품표·격리 �
 - 제품 길 반영: 활성 코드·writer 0·자료 세대/하한·fence/대기 prepared의 네 증명을 각각 확인한다. phase만 허용 목록에 추가하지 않는다. 일반 lifecycle의 FAILED 거절과 자료 보존 경계는 유지한다.
 - 원인 기록은 복사→되읽기 바이트 대조→감사 이관으로 보존한다. 재설치 성공 시 새 판의 새 제어 상태를 게시한다. 정확한 자기 fence/receipt 예외는 검증된 내부 배치의 같은 thread 함수 인수에만 적용한다.
 - 검증 근거는 w9firstupd sub-292 RESULT와 연결한다. 115 ZIP/VM 실제 FAILED 지원 출구 회차는 별도 실물 수용이며 소스 시험으로 완료를 주장하지 않는다.
+
+- 115 합침 검토 고침: G59 증명 실패는 Exception까지만 받아 ACTIVE_WRITER_FENCE로 거절하고 예외 이름만 감사에 남긴다. 제거 표지의 worker_removal_proof와 WORKER_PART 행은 포장과 같은 키·값으로 같은 증명 객체에서 기록한다. G60 시험은 tests/ 경로만 제외하고 G36 문서는 DEL 포함 범위를 명시한다. 집중 회귀는 tests/test_g59_failed_installer_removal.py와 tests/test_ca115_integration.py에서 확인한다.

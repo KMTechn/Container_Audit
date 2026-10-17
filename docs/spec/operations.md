@@ -1701,7 +1701,7 @@ Registration retains string profile-path arguments after shared resolution. Inva
 
 설치기 공개 레코드 producer는 PASS·FAILED 모두 같은 ASCII 규칙을 적용한다.
 
-공개 실패 줄은 기존 출력 채널에서 `<앱 접두>=` + compact JSON 객체 하나 + CRLF로 쓴다. CRLF 앞 바이트는 모두 0x20–0x7E다. JSON을 만든 뒤 U+007F보다 큰 UTF-16 코드 단위를 각각 소문자 네 자리 `\uXXXX`로 이스케이프하며, 서로게이트 짝도 단위마다 처리한다. 필드 이름·차례·그 밖의 JSON 이스케이프와 종료 코드는 유지한다. 콘솔 코드 페이지나 전역 출력 인코딩을 바꾸지 않는다.
+공개 실패 줄은 기존 출력 채널에서 `<앱 접두>=` + compact JSON 객체 하나 + CRLF로 쓴다. CRLF 앞 바이트는 모두 0x20–0x7F(ASCII, DEL 포함)다. JSON을 만든 뒤 U+007F보다 큰 UTF-16 코드 단위를 각각 소문자 네 자리 `\uXXXX`로 이스케이프하며, 서로게이트 짝도 단위마다 처리한다. 필드 이름·차례·그 밖의 JSON 이스케이프와 종료 코드는 유지한다. 콘솔 코드 페이지나 전역 출력 인코딩을 바꾸지 않는다.
 
 공개 설치기의 마지막 실패 경계는 준비 진단·문장 가림·private 진단을 각각 독립적으로 시도한다. 그 진단이 실패해도 공개 실패 레코드와 기존 실패 종료 코드를 낸다. 공개 변환 또는 writer까지 실패하면 변환 helper에 기대지 않는 상수 레코드 하나로 `REPORT_UNAVAILABLE`을 알리며 원 예외 문장·경로·위임 값은 싣지 않는다.
 

@@ -435,7 +435,7 @@ live/reused owner·살아 있는 session authority·기록 불일치로 잔류 f
 사용자 제거의 `current_user_removal.json`은 기존 report_version을 유지하며 현재 작업자의 `operator_sid`를 추가한다. 이미 제거한 상태의 재실행도 SID가 있는 새 영수증을 발행한다. 관리자 제거는 SID가 없거나 다른 옛 영수증을 인정하지 않으며 프로필 아래 실제 파일의 reparse 부재와 정확한 `PASS_DATA_PRESERVED`를 함께 확인한다([운영](operations.md)).
 
 G59의 실패 설치 정리는 공식 사용자 몫 제거에서만 허용한다. fence가 `INSTALLING`·`canonical_installer`이고, 기록된 session authority mutex를 대기 0초로 얻으며(`WAIT_ABANDONED`도 얻음), 기존 판별로 이 앱 GUI·relay 프로세스 부재와 현재 작업자 뿌리·앱 결속을 모두 증명해야 한다. 하나라도 맞지 않으면 `ACTIVE_WRITER_FENCE`로 거절한다. 성공한 제거(`PASS_DATA_PRESERVED`) 뒤 같은 authority mutex를 유지한 채 같은 작업자 `control/writer-session/settled/<fence_copy_sha256>.json`에 fence를 복사하고 원본과 사본의 바이트를 되읽어 대조한 다음에만 지우며, 지운 뒤 부재를 되읽는다. 사본 대조 실패에는 원 fence를 지우지 않고 기존 `FAILED` 제거 결과를 사용한다. 정리했을 때만 기존 버전의 영수증에 `abandoned_fence_settled` 객체를 넣고 이 칸을 작업자 제거 감사로 삼는다. 객체의 `session_id_sha256`·`attempt_id_sha256`는 각 ID 문자열 UTF-8 바이트의 SHA-256 소문자 hex이며, `fence_copy_sha256`는 사본 바이트의 SHA-256이다. `fence_copy_path`는 이 앱 control 뿌리 기준 상대 경로 `writer-session/settled/<sha>.json`이다. 관리자 보호 저장소에는 쓰지 않으며 새 승격·권한 변경도 없다. 업무 자료·원장과 그 밖의 fence 소유·위임·G28 증명 및 기계 설치의 작업자 fence 거절은 유지한다.
-관리자 canonical의 G28 사전 증명은 bootstrap 공용 `Test-BootstrapSamePath`로 경로를 대조한다. 별도 프로세스에서 helper의 선택 함수만 적재해도 미실행·프로필 부재·SID 영수증·계정 사용 불가 증명이 같은 뜻으로 동작해야 한다. 보호 제거 감사와 journal의 `worker_removal_proof`는 `proof`와 `worker_run_present`를 기록한다.
+관리자 canonical의 G28 사전 증명은 bootstrap 공용 `Test-BootstrapSamePath`로 경로를 대조한다. 별도 프로세스에서 helper의 선택 함수만 적재해도 미실행·프로필 부재·SID 영수증·계정 사용 불가 증명이 같은 뜻으로 동작해야 한다. 보호 제거 감사와 journal의 `worker_removal_proof`는 `proof`와 `worker_run_present`를 기록한다. 제거 표지 `removed.json`의 최상위에도 같은 키·값을 기록하며, 그 객체에서 `artifact_dispositions`의 `path=application`·`disposition=WORKER_PART_<proof>`·`worker_run_present` 행 하나를 계산한다. 기존 schema는 유지한다.
 
 <a id="ca-c01"></a>
 ## CA-C01 로컬 상태·내구성·소유권
@@ -719,7 +719,7 @@ Main의 새 QA 소유 배정 뒤 Web이 발행한 단회 recovery를 기존 지�
 
 설치기 공개 레코드 producer는 PASS·FAILED 모두 같은 ASCII 규칙을 적용한다. 상태별로 출력 채널·필드·JSON 복원 의미를 바꾸지 않는다.
 
-설치 공개 실패 줄은 기존 출력 채널에서 `<앱 접두>=` + JSON 객체 하나(-Compress) + CRLF이며 CRLF 앞 바이트는 0x20–0x7E다. JSON 생성 뒤 U+007F보다 큰 UTF-16 코드 단위를 소문자 16진 네 자리 `\uXXXX`로 바꾼다(서로게이트 단위마다). 필드 이름·차례·다른 이스케이프는 앱 생산자 그대로다. PS5.1/PS7 및 콘솔 949/65001에서 공통 벡터의 바이트와 JSON 복원 값이 같아야 한다. `< > & '`의 엔진별 직렬화 차이는 이 계약의 동일 바이트 시험에 넣지 않는다.
+설치 공개 실패 줄은 기존 출력 채널에서 `<앱 접두>=` + JSON 객체 하나(-Compress) + CRLF이며 CRLF 앞 바이트는 0x20–0x7F(ASCII, DEL 포함)다. JSON 생성 뒤 U+007F보다 큰 UTF-16 코드 단위를 소문자 16진 네 자리 `\uXXXX`로 바꾼다(서로게이트 단위마다). 필드 이름·차례·다른 이스케이프는 앱 생산자 그대로다. PS5.1/PS7 및 콘솔 949/65001에서 공통 벡터의 바이트와 JSON 복원 값이 같아야 한다. `< > & '`의 엔진별 직렬화 차이는 이 계약의 동일 바이트 시험에 넣지 않는다.
 
 Installer failures preserve the original redacted message, line, inner chain,
 HResult/native error and ordered stage start/end/result. Finite installer children

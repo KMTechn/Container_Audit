@@ -2537,6 +2537,12 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
     Assert-ContainerRemovalQuiescent $application $ExcludeProcessIds
     $plan = if($OnlyUncommittedCurrent){Get-ContainerArtifactFilePlan $current}else{Get-ContainerRemovalArtifacts $application}
     if (-not $OnlyUncommittedCurrent -and (Test-Path -LiteralPath $markerPath)) { $plan.artifacts += $markerPath }
+    $workerRemovalProof = if ($MachineControlRoot -and -not $Script:ContainerRemovalAttestedNewPlacement) {
+        @{proof=$Script:ContainerMachineRemovalProofKind;worker_run_present=$Script:ContainerMachineRemovalWorkerRunPresent}
+    } else { $null }
+    if ($null -ne $workerRemovalProof) {
+        $plan.decisions += @{path='application';disposition=('WORKER_PART_'+$workerRemovalProof.proof);worker_run_present=$workerRemovalProof.worker_run_present}
+    }
     $changedMetadataRoots = @(); $cleanupRetained = @()
     foreach ($path in $plan.artifacts) {
         $prefix = $application.TrimEnd('\') + '\'
@@ -2584,6 +2590,7 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
     }
     Write-ContainerStartupUpdateRecord -Path $markerPath -Payload @{
         schema='container-audit-supported-removal-v1'; lifecycle_state='REMOVED';
+        worker_removal_proof=$workerRemovalProof
         evidence_root=$evidence; business_data_and_registration_preserved=$true
         retained_paths=@($remaining.retained_paths)+@($(if(Test-Path -LiteralPath (Get-BootstrapEmergencyShortcutPath $current)){Get-BootstrapEmergencyShortcutPath $current})); artifact_dispositions=@($plan.decisions)
         emergency_shortcut=(Get-BootstrapEmergencyRemovalState $current)

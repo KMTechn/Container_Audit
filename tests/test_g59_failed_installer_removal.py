@@ -162,6 +162,28 @@ def test_authority_open_failure_uses_existing_active_refusal(removal_case, monke
     assert case.path.read_bytes() == case.original
     assert case.registry_deletes == 0
 
+
+@pytest.mark.parametrize("error_type", [subprocess.SubprocessError, fence.WriterFenceError])
+def test_proof_boundary_failure_uses_active_refusal(removal_case, monkeypatch, caplog, error_type):
+    case = removal_case
+    original_run = subprocess.run
+    def fail_observation(arguments, *args, **kwargs):
+        if isinstance(arguments, list) and arguments[-2:] == ["-Mode", "Observe"]:
+            if error_type is fence.WriterFenceError:
+                raise error_type("PROOF_TEST", "private proof detail")
+            raise error_type("private proof detail")
+        return original_run(arguments, *args, **kwargs)
+    monkeypatch.setattr(subprocess, "run", fail_observation)
+    with pytest.raises(fence.WriterFencedError) as caught:
+        onboarding.remove_current_user_setup(case.app)
+    assert caught.value.code == "ACTIVE_WRITER_FENCE"
+    assert case.path.read_bytes() == case.original
+    assert case.registry_deletes == 0
+    assert not (case.root / "settled").exists()
+    records = [r for r in caplog.records if r.name == fence.__name__]
+    assert [r.getMessage() for r in records] == [error_type.__name__]
+    assert all(r.exc_info is None for r in records)
+
 def test_live_installer_delegation_keeps_its_fence(removal_case, monkeypatch):
     case = removal_case
     delegated = hashlib.sha256(os.urandom(32)).hexdigest()

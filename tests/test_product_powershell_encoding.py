@@ -6,7 +6,6 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 UTF8_BOM = b"\xef\xbb\xbf"
-# Baseline exceptions must say: 바탕부터 — 1차 판정 대기.
 BASELINE_WITHOUT_BOM: dict[str, str] = {}
 
 
@@ -20,7 +19,7 @@ def test_product_powershell_preserves_one_utf8_bom_for_windows_powershell():
         path = Path(name)
         if path.suffix.lower() not in {".ps1", ".psm1"}:
             continue
-        if any("test" in part.lower() for part in path.parts):
+        if path.parts and path.parts[0].lower() == "tests":
             continue
         raw = (ROOT / path).read_bytes()
         if not any(byte >= 0x80 for byte in raw):
