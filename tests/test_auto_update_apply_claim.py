@@ -194,7 +194,7 @@ def test_system_restart_supervises_only_a_window_it_opens(endpoint, monkeypatch,
 
 
 @pytest.mark.parametrize('phase', ['FAILED', 'UNKNOWN'])
-@pytest.mark.parametrize('guard', ['allow', 'writer', 'generation_unknown', 'generation_denied', 'prepared'])
+@pytest.mark.parametrize('guard', ['allow', 'writer', 'gui_writer', 'generation_unknown', 'generation_denied', 'prepared'])
 def test_b1_settled_trial_recovers_in_same_bootstrap(endpoint, monkeypatch, phase, guard):
     control, stage, policy, state, marker, observation = endpoint
     clock = [0.0]
@@ -208,7 +208,11 @@ def test_b1_settled_trial_recovers_in_same_bootstrap(endpoint, monkeypatch, phas
         updates.write_json_durable(control / 'transition.json', {**state, 'phase': phase})
         updates.write_json_durable(control / 'apply-claim.json', {**own_claim(), 'status': 'SETTLED'})
         if guard == 'writer':
-            monkeypatch.setattr(updates, 'process_snapshot', lambda *_: [{'pid': 456, 'observable': True}])
+            # An observed non-GUI, non-relay writer: the relay recovery contract answers guidance + 20.
+            monkeypatch.setattr(updates, 'process_snapshot', lambda *_: [{'pid': 456, 'observable': True, 'role': 'writer'}])
+        elif guard == 'gui_writer':
+            # An existing GUI still owns the work: no second launch, exit 0.
+            monkeypatch.setattr(updates, 'process_snapshot', lambda *_: [{'pid': 456, 'observable': True, 'role': 'gui'}])
         elif guard == 'generation_unknown':
             marker.write_bytes(b'{unreadable-generation')
         elif guard == 'generation_denied':
@@ -224,7 +228,7 @@ def test_b1_settled_trial_recovers_in_same_bootstrap(endpoint, monkeypatch, phas
         assert clock[0] == 0.0
         assert updates.read_json(stage / 'startup-support.json')['reason_code'] == 'UPDATE_TERMINAL_RECOVERED'
     else:
-        assert updates.bootstrap(control.parent / 'current/app', [], role='gui') == (0 if guard == 'writer' else 20)
+        assert updates.bootstrap(control.parent / 'current/app', [], role='gui') == (0 if guard == 'gui_writer' else 20)
         assert not observation.exists()
     assert requests == [True]
     assert updates.apply_claim_status(control) == 'NONE'
