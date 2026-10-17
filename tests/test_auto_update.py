@@ -33,6 +33,21 @@ def test_installer_logon_task_child_runs_as_an_isolated_script(tmp_path):
     assert not install_root.exists()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_update_control_root(isolate_product_state, tmp_path, monkeypatch):
+    """Keep iwrun's fixed writer root from sharing generation markers across tests."""
+    import writer_session_fence as fence
+
+    if getattr(fence, "__kmtech_test_ca_writer_isolated__", False):
+        import data_generation_guard as generation_guard
+
+        root = tmp_path / "onboarding-control"
+        canonical_root = lambda environ=None: root
+        monkeypatch.setattr(fence, "canonical_control_root", canonical_root)
+        monkeypatch.setattr(generation_guard, "canonical_control_root", canonical_root)
+        monkeypatch.setenv("KMTECH_TEST_CA_WRITER_ROOT", str(root))
+
+
 NOW = "2026-10-01T04:00:00+00:00"
 LATER = "2026-10-01T04:00:01+00:00"
 OLD = "1" * 40
@@ -383,6 +398,8 @@ def test_pending_gui_scan_does_not_enter_preflight_or_business_mutation():
 def test_relay_logon_launches_gui_and_ordinary_trial_relay_on_the_same_data_root(monkeypatch, tmp_path):
     from contextlib import nullcontext
     import time
+    monkeypatch.setattr(updates, "now_utc", lambda: NOW)
+    monkeypatch.setattr(updates, "process_snapshot", lambda _control: [])
 
     control = tmp_path / "update-control"
     stage = tmp_path / "stage"

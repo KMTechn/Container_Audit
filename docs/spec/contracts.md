@@ -279,7 +279,7 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 실패 시 `ROLLBACK_PENDING → ROLLBACK_PENDING_READY → ROLLED_BACK`을 기록한다.
 이전 판 포인터를 복원한 뒤에도 새 일반 사용자 GUI/relay의 같은 SHA·nonce·거래·시각과
 실제 프로세스 대조를 통과한 READY가 있어야 confirmed_at과 ROLLED_BACK을 기록한다.
-기존 protocol 1의 phase/필드만 사용하며, 중단 뒤에는 같은 nonce·rollback_at 창을 이어 간다.
+protocol 1의 기존 phase를 유지하며, 중단 뒤에는 같은 nonce·rollback_at 창을 이어 간다.
 기존 120초 안에 준비되지 않으면 완료를 쓰지 않고 기존 FAILED/지원 복구 정책을 유지한다.
 시험 기동 실패는 정상 writer 종료 뒤 실제 공통 SID 자료 세대를 다시 읽어 판정한다.
 PREPARED의 before와 같고 옛 판 guard가 ALLOW일 때만 복귀한다. candidate 세대가
@@ -828,11 +828,19 @@ locator를 준비하므로, owner가 높은 판으로 바뀌면 locator 재판�
 
 ### Bootstrap relay 시작의 일시 admission 대기
 
-Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRITER_GATE_TIMEOUT`만 기존 240초 창에서 0.1초씩 쉬며 재시도한다. 각 시도는 기존 launch_version의 admission을 다시 얻으며 시도 사이에는 admission을 보유하지 않는다. 상한은 240초 + 마지막 admission 대기 최대 5초이며 마감 뒤에는 기존 실패 출구를 유지한다. fence 확정·버려진 소유권 등 다른 거절과 GUI 실행 자체의 timeout은 재시도하지 않는다. 포인터·trial claim·READY·CONFIRMED·G 허가·cohort·잠금 순서는 유지한다. bootstrap 밖의 relay launcher admission과 실제 로그온/pythonw 수용은 별도 범위다.
+Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRITER_GATE_TIMEOUT`을 감독 마감 안에서 0.1초씩 쉬며 재시도한다. 각 시도는 기존 launch_version의 admission을 다시 얻으며 시도 사이에는 admission을 보유하지 않는다. 마지막 admission 대기는 기존 최대 5초이며 마감 뒤에는 기존 실패 출구를 유지한다. fence 확정·버려진 소유권 등 다른 거절과 GUI 실행 자체의 timeout은 재시도하지 않는다. 포인터·trial claim·READY·CONFIRMED·G 허가·cohort·잠금 순서는 유지한다. bootstrap 밖의 relay launcher admission과 실제 로그온/pythonw 수용은 별도 범위다.
+
+bootstrap의 시작을 `t_b`라 하면 감독 마감은 `max(t_b+240초, 진행 단계 창 끝+15초)`이며 `t_b+480초`를 넘지 않는다. 단계 창은 내구 기록된 후보 적용 시각+120초, 후보 정상 종료 기다림 시작 `normal_stop_started_at+60초`, `rollback_at+120초`다. bootstrap 재시작이 단계 창의 기준 시각을 바꾸지 않는다. 감독 마감 연장은 실제 READY 창이나 G 판정을 늘리지 않는다.
+
+trial GUI claim이 같은 nonce로 이미 존재하거나 GUI PID가 결속된 뒤에도 bootstrap은 반복마다 기존 `process_matches_trial(role="relay")`와 writer census의 같은 SHA·작업자 SID 판별로 실제 relay를 다시 관측한다. relay가 없을 때만 같은 bootstrap 프로세스의 nonce마다 최대 3회, 2초 이상 간격으로 감독 마감 안에서 시작을 시도한다. 재시작한 bootstrap은 다시 3회가 있지만 내구 시각에 묶인 READY 창은 늘지 않는다. Popen의 `OSError`만 이 횟수 안에서 다시 시도하며, 매 시도 전 표본을 다시 읽어 오류 뒤 실제로 생긴 relay의 중복 시작을 막는다. 세 번 모두 실패하면 기존 사용자 `staging/startup-support.json`과 공개 `CONTAINER_AUDIT_SUPPORT=` 한 줄에 정확한 공개 코드 `TRIAL_RELAY_START_FAILED`를 기록한다. 사용자 bootstrap은 SYSTEM 소유 transition.json에 재시도 기록을 쓰지 않으며 trial.json 형식은 유지한다. READY의 실제 relay 정확히 하나 조건과 기존 되돌림/FAILED 출구는 유지한다.
+
+SYSTEM 적용은 검증된 작업자 루트의 `container_audit_user_relay.stop.json`을 후보 포인터 전환 전에 읽는다. 표지가 있으면 포인터와 표지를 보존하고 기존 적용 전 writer 보류와 같은 `phase=DEFERRED`, `deferred_at`, `reason_code=UPDATE_RELAY_STOP_REQUESTED`를 기록하며 recovery_pending은 두지 않는다. 다음 SYSTEM 호출은 prepared 인증·검증부터 다시 검사한다. 사용자 bootstrap도 REQUEST_APPLY 전에 같은 표지를 확인해 요청하지 않고, 기존 사용자 지원 기록·공개 한 줄에 같은 코드를 남긴 뒤 검증된 start_current로 지금 판 화면을 연다. relay는 기존 표지 판정대로 멈춘 채다. 업데이트 경로는 표지를 지우지 않는다. 기존 `--onboard-current-user`로 표지를 해제한 뒤 다음 로그온에서 적용을 진행한다.
+
+자기·조상·감싸개는 이름이나 조상 관계만으로 writer 표본에서 제외하지 않는다. 검증된 실행 사슬의 실제 PID·생성 identity와 실행 엔진·원본 경로·인수 결속으로 증명된 행만 제외한다. 경로 접두 비교는 끝에 `\`를 붙인 경로를 사용하여 `Container_Audit2`를 `Container_Audit` 안으로 세지 않는다.
 
 ### 매일 갱신과 앱 시작의 경합
 
-- 앱 시작과 bootstrap은 갱신 mutex를 5초씩 다시 기다린다. apply 증거가 없으면 60초, LIVE/UNKNOWN이면 240초이며 bootstrap의 기존 전체 창을 넘기지 않는다. writer admission을 쥐고 기다리지 않는다.
+- 앱 시작과 bootstrap은 갱신 mutex를 5초씩 다시 기다린다. apply 증거가 없으면 60초, LIVE/UNKNOWN이면 기본 240초이며 bootstrap은 위 단계별 감독 마감을 넘기지 않는다. writer admission을 쥐고 기다리지 않는다.
 - 상한 뒤에는 현재 active·기동 판 일치, G ALLOW, `START_CURRENT` 종점을 확인한 일반 시작만 허용한다. `UPDATE_LOCK_WAIT_EXPIRED`와 종료 값 0을 기록하며 포인터·trial·READY·CONFIRMED를 쓰지 않는다. 다른 판·시험·복구·자료 거절과 abandoned는 기존 출구를 유지한다.
 - 적용 전 실패는 보호 transition에 `failed_prepared_sha`와 `failed_prepared_marker_sha256`를 남긴다. 같은 후보 또는 같은 무효 marker는 다음 SYSTEM 호출에서 claim/실패/transition을 다시 쓰지 않는다. prepared와 실패 증거는 보존하며 다른 후보는 서명·stock·pin 검증을 다시 거친다. 적용 여부가 UNKNOWN인 실패는 격리로 종결하지 않는다.
 - 첫 실행의 최종 비교가 달라지면 갱신 잠금 아래 한 번 다시 읽는다. policy·pointer와 transition의 업무/시험/복구 의미가 같고 진단 시각/문장만 바뀌었으면 통과한다. 앱 시작의 실제 변경·판독 불가는 `UPDATE_LIFECYCLE_CHANGED`/`UPDATE_LIFECYCLE_UNKNOWN`과 값 0을 남기고 호출한 현재 코드 루트로 계속한다. 기존 무결성·자료·등록 검증은 계속 실행하며 관리자 수동 인자의 실제 변경 거절은 유지한다.

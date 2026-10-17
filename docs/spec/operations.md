@@ -1718,7 +1718,11 @@ Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종�
 
 ### Bootstrap relay 시작의 일시 admission 대기
 
-Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRITER_GATE_TIMEOUT`만 기존 240초 창에서 0.1초씩 쉬며 재시도한다. 각 시도는 기존 launch_version의 admission을 다시 얻으며 시도 사이에는 admission을 보유하지 않는다. 상한은 240초 + 마지막 admission 대기 최대 5초이며 마감 뒤에는 기존 실패 출구를 유지한다. fence 확정·버려진 소유권 등 다른 거절과 GUI 실행 자체의 timeout은 재시도하지 않는다. 포인터·trial claim·READY·CONFIRMED·G 허가·cohort·잠금 순서는 유지한다. bootstrap 밖의 relay launcher admission과 실제 로그온/pythonw 수용은 별도 범위다.
+Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRITER_GATE_TIMEOUT`을 감독 마감 안에서 0.1초씩 쉬며 재시도한다. 각 시도는 기존 launch_version의 admission을 다시 얻으며 시도 사이에는 admission을 보유하지 않는다. 마지막 admission 대기는 기존 최대 5초이며 마감 뒤에는 기존 실패 출구를 유지한다. fence 확정·버려진 소유권 등 다른 거절과 GUI 실행 자체의 timeout은 재시도하지 않는다. 포인터·trial claim·READY·CONFIRMED·G 허가·cohort·잠금 순서는 유지한다. bootstrap 밖의 relay launcher admission과 실제 로그온/pythonw 수용은 별도 범위다.
+
+감독 마감은 시작+240초를 기본으로, 내구 기록된 현재 단계 창 끝+15초까지 늘리되 시작+480초를 넘지 않는다. 후보 READY 120초·후보 정상 종료 60초·원 rollback_at 기준 되돌림 READY 120초 자체는 늘리지 않는다. 같은 trial GUI claim 뒤에도 relay 실제 표본을 다시 확인하며, 없을 때만 같은 bootstrap 프로세스의 nonce마다 최대 3회/간격 2초 이상으로 시작한다. 재시작해도 원 READY 창은 늘지 않는다. Popen OSError의 세 번 실패는 사용자 `staging/startup-support.json`과 공개 지원 한 줄에 `TRIAL_RELAY_START_FAILED`로 남기며 기존 되돌림/FAILED 판정을 따른다. 사용자 bootstrap이 SYSTEM 소유 transition을 쓰지 않는다.
+
+정식 멈춤 PC는 업데이트 날 전에 `--onboard-current-user`로 onboarding하여 되살린다. relay 멈춤 표지가 있으면 SYSTEM은 포인터를 바꾸지 않고 기존 적용 전 보류와 같은 `DEFERRED`·`UPDATE_RELAY_STOP_REQUESTED`로 보류하며 recovery_pending은 두지 않는다. 사용자 bootstrap도 같은 표지에서 REQUEST_APPLY를 보내지 않고, 지원 기록·안내 한 번 뒤 기존 검증을 거쳐 지금 판 화면을 연다. relay는 표지대로 멈춘 채다. 표지는 업데이트가 지우지 않으며 onboarding 뒤 다음 로그온에서 적용한다. trial 도중 운영자가 새로 건 멈춤은 기존 READY 실패·되돌림/FAILED 흐름을 따른다.
 
 복구 GUI가 relay를 다시 요청하면 부모 GUI가 있다는 사실만으로 성공 처리하지 않는다.
 같은 잠금 안에서 원 `KMTECH_CA_UPDATE_DEFERRED_AT` 경계와 기존 일반 복구 증명을

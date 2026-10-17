@@ -872,7 +872,12 @@ def public_record(fields: Mapping[str, Any], allowed_codes, safe_messages) -> di
     return result
 
 
+UPDATE_RELAY_STOP_REQUESTED = "UPDATE_RELAY_STOP_REQUESTED"
+TRIAL_RELAY_START_FAILED = "TRIAL_RELAY_START_FAILED"
+
+
 PUBLIC_CODES = frozenset({
+    UPDATE_RELAY_STOP_REQUESTED, TRIAL_RELAY_START_FAILED,
     'INSTALL_SERVER_ORIGIN_CHANGED',
     'UPDATE_APPLY_REQUEST_FAILED', 'UPDATE_APPLY_NO_PROGRESS',
     'UPDATE_PREPARATION_FAILED', 'UPDATE_TERMINAL_RECOVERED',
@@ -1809,6 +1814,26 @@ def emit_progress_guidance() -> None:
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
 
 
+def update_relay_stop_requested(policy: Mapping[str, Any]) -> bool:
+    """Read the installed operator's relay marker, including when running as SYSTEM."""
+    from user_relay import user_relay_stop_path
+
+    local = Path(policy["operator_local_app_data"])
+    if not local.is_absolute():
+        raise ValueError("operator profile is not absolute")
+    root = local / "KMTech" / "DirectSync" / "container_audit"
+    _assert_no_reparse_components(root)
+    return user_relay_stop_path(root).exists()
+
+
+def defer_stopped_update(control: Path, state) -> None:
+    """Match pre-apply writer deferral; there is no trial to recover yet."""
+    deferred = {**(state or {}), "schema": SCHEMA, "phase": "DEFERRED",
+                "deferred_at": now_utc(), "reason_code": UPDATE_RELAY_STOP_REQUESTED}
+    deferred.pop("recovery_pending", None)
+    write_json_durable(control / "transition.json", deferred)
+
+
 def apply_prepared(control: Path) -> int:
     """Preserve a failed preparation; never fall back after an uncertain switch."""
     from contextlib import nullcontext
@@ -2006,6 +2031,9 @@ def _apply_prepared_once(control: Path) -> int:
         if state is None or state["phase"] in {"CONFIRMED", "ROLLED_BACK", "DEFERRED"}:
             if not prepared_pending(control, policy, state):
                 return 0
+            if update_relay_stop_requested(policy):
+                defer_stopped_update(control, state)
+                return 0
             if writer_processes(process_snapshot(control), own_pid=os.getpid()):
                 deferred = {**(state or {}), "schema": SCHEMA, "phase": "DEFERRED", "deferred_at": now_utc(), "reason": "an existing application writer continues working"}
                 write_json_durable(control / "transition.json", deferred)
@@ -2061,6 +2089,9 @@ def _apply_prepared_once(control: Path) -> int:
         else:
             pointer = read_json(control / "active.json")
             if state["phase"] == "PREPARED":
+                if update_relay_stop_requested(policy):
+                    defer_stopped_update(control, state)
+                    return 0
                 protected_name = state.get("protected_packet")
                 if not isinstance(protected_name, str) or re.fullmatch(r"packet-[0-9a-f]{32}", protected_name) is None:
                     raise ValueError("daily_update_prepared_authentication_missing")
@@ -2095,7 +2126,8 @@ def _apply_prepared_once(control: Path) -> int:
                 if writer_processes(process_snapshot(control), own_pid=os.getpid()):
                     return 20
                 persist_switch(control, state, sha)
-    deadline = time.monotonic() + 120
+    remaining = 120 - (_utc(now_utc()) - _utc(state["applied_at"])).total_seconds()
+    deadline = time.monotonic() + min(120.0, max(0.0, remaining))
     while time.monotonic() < deadline:
         with update_lock(control, policy["operator_sid"]):
             state = read_json(control / "transition.json")
@@ -2135,8 +2167,10 @@ def _apply_prepared_once(control: Path) -> int:
                 raise ValueError("rollback requires a pending trial")
             # An inherited window supplies no supervised failure evidence.
             state = {**state, "phase": "UNKNOWN"}
+        state = {**state, "normal_stop_started_at": state.get("normal_stop_started_at") or now_utc()}
         write_json_durable(control / "transition.json", state)
-    deadline = time.monotonic() + 60
+    remaining = 60 - (_utc(now_utc()) - _utc(state["normal_stop_started_at"])).total_seconds()
+    deadline = time.monotonic() + min(60.0, max(0.0, remaining))
     while time.monotonic() < deadline:
         with update_lock(control, policy["operator_sid"]):
             if not writer_processes(process_snapshot(control), own_pid=os.getpid()):
@@ -2924,7 +2958,10 @@ def start_current(control: Path, policy: Mapping[str, Any], state, active, argum
             previous = optional_record(report_path)
         if not (report_once and previous and previous.get("reason_code") == code
                 and previous.get("apply_claim_sha256") == report["apply_claim_sha256"]):
-            write_json_durable(report_path, report)
+            if code == UPDATE_RELAY_STOP_REQUESTED:
+                emit_support_record(report, stage="update_apply", policy=policy)
+            else:
+                write_json_durable(report_path, report)
     except (OSError, ValueError, TypeError, WriterFencedError):
         # A support sink failure cannot turn a safe ordinary launch into a stop.
         emit_support_record({"reason_code": "REPORT_UNAVAILABLE"}, stage="update_apply")
@@ -2953,6 +2990,51 @@ def bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
         return 20
 
 
+def bootstrap_supervision_deadline(state, *, started: float, now: float, utc_now: str) -> float:
+    """Observe durable stage clocks without reopening any of their windows."""
+    phase = (state or {}).get("phase")
+    timestamp, window = None, 0
+    if phase == "APPLIED_PENDING_READY":
+        timestamp, window = state.get("applied_at"), 120
+    elif phase == "ROLLBACK_PENDING_READY":
+        timestamp, window = state.get("rollback_at", state.get("applied_at")), 120
+    elif phase in {"ROLLBACK_PENDING", "UNKNOWN"}:
+        timestamp, window = state.get("normal_stop_started_at"), 60
+    stage_end = now + (window - (_utc(utc_now) - _utc(timestamp)).total_seconds()) if timestamp else started
+    return min(started + 480, max(started + 240, stage_end + 15))
+
+
+def _bootstrap_trial_relay(control, policy, state, active, gui_arguments, attempts, *, deadline):
+    """One sampled start attempt per nonce, with process-local retry accounting."""
+    if apply_claim_status(control) == "ABSENT":
+        return  # The caller resumes the existing ordinary recovery proof path.
+    rows = writer_processes(process_snapshot(control), own_pid=os.getpid())
+    relays = [row for row in rows if process_matches_trial(row, state=state,
+        sha=active["sha"], sid=policy["operator_sid"], role="relay")]
+    if relays:
+        return
+    count, previous, reported = attempts.get(state["nonce"], (0, None, False))
+    if count >= 3 or previous is not None and time.monotonic() - previous < 2:
+        return
+    if time.monotonic() >= deadline:
+        return
+    root_arguments = []
+    if "--data-root" in gui_arguments:
+        index = gui_arguments.index("--data-root")
+        if index + 1 >= len(gui_arguments):
+            raise ValueError("trial data root argument is absent")
+        root_arguments = gui_arguments[index:index + 2]
+    count += 1
+    attempts[state["nonce"]] = (count, time.monotonic(), reported)
+    try:
+        _launch_bootstrap_version(control, active["sha"],
+            ["--container-audit-user-relay", *root_arguments], nonce=state["nonce"], deadline=deadline)
+    except OSError:
+        if count == 3 and not reported:
+            emit_support_record({"reason_code": TRIAL_RELAY_START_FAILED}, stage="update_apply", policy=policy)
+            attempts[state["nonce"]] = (count, attempts[state["nonce"]][1], True)
+
+
 def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
     import time
 
@@ -2967,13 +3049,17 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
     progress_deadline = None
     saw_trial = False
     apply_started = False
-    deadline = time.monotonic() + 240
+    started = time.monotonic()
+    deadline = started + 240
+    relay_attempts = {}
     while time.monotonic() < deadline:
         try:
             with startup_update_lock(control, policy, deadline=deadline) as acquired:
                 if not acquired:
                     break
                 state = optional_record(control / "transition.json")
+                deadline = bootstrap_supervision_deadline(state, started=started,
+                    now=time.monotonic(), utc_now=now_utc())
                 claim_status = apply_claim_status(control)
                 apply_started = apply_started or claim_status in {"LIVE", "UNKNOWN"} or bool(state and state["phase"] in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"})
                 if state and state["phase"] in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"}:
@@ -3001,9 +3087,10 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                     return 0  # The already-launched GUI owns input and its ordinary relay.
                 if state and state["phase"] == "DEFERRED" and requested_at and _utc(state["deferred_at"]) >= _utc(requested_at):
                     code = state.get("reason_code")
-                    if code not in {"UPDATE_PREPARATION_FAILED", "UPDATE_EXISTING_WRITER"}:
+                    if code not in {"UPDATE_PREPARATION_FAILED", "UPDATE_EXISTING_WRITER", UPDATE_RELAY_STOP_REQUESTED}:
                         code = "UPDATE_TERMINAL_RECOVERED"
-                    return start_current(control, policy, state, active, arguments, code=code, deadline=deadline)
+                    launch_arguments = gui_arguments if code == UPDATE_RELAY_STOP_REQUESTED else arguments
+                    return start_current(control, policy, state, active, launch_arguments, code=code, deadline=deadline)
                 if claim_status == "ABSENT":
                     existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline)
                     if existing is not None:
@@ -3025,6 +3112,9 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                         if current_generation_status(control, policy, active["sha"]) == "ALLOW" and not prepared:
                             return start_current(control, policy, state, active, arguments, code="UPDATE_TERMINAL_RECOVERED", deadline=deadline)
                 if action in {"REQUEST_APPLY", "REQUEST_TRIAL", "WAIT_FOR_RECOVERY", "WAIT_FOR_TRIAL"} and not requested:
+                    if action == "REQUEST_APPLY" and update_relay_stop_requested(policy):
+                        return start_current(control, policy, state, active, gui_arguments,
+                            code=UPDATE_RELAY_STOP_REQUESTED, deadline=deadline)
                     requested_at = now_utc()
                     progress_deadline = time.monotonic() + APPLY_PROGRESS_TIMEOUT
                     try:
@@ -3045,25 +3135,6 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                     # The task may already have settled or switched this journal.
                     # Release ownership and reread it before creating a trial.
                     continue
-                if action == "REQUEST_TRIAL":
-                    # Both the Run relay and a launcher request this same GUI trial.
-                    # The GUI's ordinary onboarding starts its single normal relay.
-                    with update_lock(control, policy["operator_sid"], trial=True):
-                        state = read_json(control / "transition.json")
-                        claim = optional_record(Path(policy["staging_root"]) / "trial.json")
-                        if claim and claim.get("nonce") == state["nonce"]:
-                            saw_trial = True
-                        else:
-                            pid = _launch_bootstrap_version(control, active["sha"], gui_arguments, nonce=state["nonce"], deadline=deadline)
-                            write_json_durable(Path(policy["staging_root"]) / "trial.json", {"pid": pid, "nonce": state["nonce"], "transition_id": state["transition_id"]})
-                            root_arguments = []
-                            if "--data-root" in gui_arguments:
-                                index = gui_arguments.index("--data-root")
-                                if index + 1 >= len(gui_arguments):
-                                    raise ValueError("trial data root argument is absent")
-                                root_arguments = gui_arguments[index:index + 2]
-                            _launch_bootstrap_version(control, active["sha"], ["--container-audit-user-relay", *root_arguments], nonce=state["nonce"], deadline=deadline)
-                            saw_trial = True
                 if requested and progress_deadline is not None:
                     claim_status = apply_claim_status(control)
                     if claim_status == "ABSENT":
@@ -3076,6 +3147,27 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                         apply_started = True
                     if not apply_started and time.monotonic() >= progress_deadline:
                         return start_current(control, policy, state, active, arguments, code="UPDATE_APPLY_NO_PROGRESS", deadline=deadline)
+                if action in {"REQUEST_TRIAL", "WAIT_FOR_TRIAL"}:
+                    # Both the Run relay and a launcher request this same GUI trial.
+                    # The GUI's ordinary onboarding starts its single normal relay.
+                    with update_lock(control, policy["operator_sid"], trial=True):
+                        state = read_json(control / "transition.json")
+                        if state["phase"] not in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"}:
+                            continue
+                        trial_at = state.get("rollback_at", state["applied_at"]) if state["phase"] == "ROLLBACK_PENDING_READY" else state["applied_at"]
+                        if (_utc(now_utc()) - _utc(trial_at)).total_seconds() >= 120:
+                            time.sleep(0.1)
+                            continue
+                        claim = optional_record(Path(policy["staging_root"]) / "trial.json")
+                        if state.get("trial_pid") or claim and claim.get("nonce") == state["nonce"]:
+                            saw_trial = True
+                        else:
+                            pid = _launch_bootstrap_version(control, active["sha"], gui_arguments, nonce=state["nonce"], deadline=deadline)
+                            write_json_durable(Path(policy["staging_root"]) / "trial.json", {"pid": pid, "nonce": state["nonce"], "transition_id": state["transition_id"]})
+                            saw_trial = True
+                        _bootstrap_trial_relay(control, policy, state, active, gui_arguments,
+                            relay_attempts, deadline=min(deadline, time.monotonic() + max(0.0,
+                                120 - (_utc(now_utc()) - _utc(trial_at)).total_seconds())))
         except RuntimeError as error:
             if str(error) != 'update mutex ownership is busy or abandoned' or getattr(error, 'wait_result', 0x102) != 0x102:
                 raise

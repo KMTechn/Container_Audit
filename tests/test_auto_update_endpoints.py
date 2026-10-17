@@ -37,8 +37,21 @@ def restored_ready_processes(control, stage):
             for pid, role in ((456, "gui"), (457, "relay"))]
 
 
+
+
 @pytest.fixture
-def endpoint(monkeypatch, tmp_path):
+def endpoint(isolate_product_state, monkeypatch, tmp_path):
+    import writer_session_fence as fence
+
+    if getattr(fence, "__kmtech_test_ca_writer_isolated__", False):
+        import data_generation_guard as generation_guard
+
+        root = tmp_path / "onboarding-control"
+        canonical_root = lambda environ=None: root
+        monkeypatch.setattr(fence, "canonical_control_root", canonical_root)
+        monkeypatch.setattr(generation_guard, "canonical_control_root", canonical_root)
+        monkeypatch.setenv("KMTECH_TEST_CA_WRITER_ROOT", str(root))
+
     control, stage = tmp_path / "update-control", tmp_path / "stage"
     control.mkdir(); stage.mkdir()
     local = tmp_path / "local"
