@@ -31,6 +31,7 @@ def recovery(tmp_path, monkeypatch):
     policy = {"operator_sid": uuid.uuid4().hex, "staging_root": str(stage)}
     state = {"schema": updates.SCHEMA, "phase": "APPLIED_PENDING_READY", "trial_pid": 42,
              "nonce": uuid.uuid4().hex}
+    state.update(applied_at=CREATED, rollback_at=CREATED)
     records = {
         control / "policy.json": policy,
         control / "active.json": {"sha": SHA},

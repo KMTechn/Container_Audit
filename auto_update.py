@@ -2126,7 +2126,8 @@ def _apply_prepared_once(control: Path) -> int:
                 if writer_processes(process_snapshot(control), own_pid=os.getpid()):
                     return 20
                 persist_switch(control, state, sha)
-    deadline = time.monotonic() + max(0.0, 120 - (_utc(now_utc()) - _utc(state["applied_at"])).total_seconds())
+    remaining = 120 - (_utc(now_utc()) - _utc(state["applied_at"])).total_seconds()
+    deadline = time.monotonic() + min(120.0, max(0.0, remaining))
     while time.monotonic() < deadline:
         with update_lock(control, policy["operator_sid"]):
             state = read_json(control / "transition.json")
@@ -2168,7 +2169,8 @@ def _apply_prepared_once(control: Path) -> int:
             state = {**state, "phase": "UNKNOWN"}
         state = {**state, "normal_stop_started_at": state.get("normal_stop_started_at") or now_utc()}
         write_json_durable(control / "transition.json", state)
-    deadline = time.monotonic() + max(0.0, 60 - (_utc(now_utc()) - _utc(state["normal_stop_started_at"])).total_seconds())
+    remaining = 60 - (_utc(now_utc()) - _utc(state["normal_stop_started_at"])).total_seconds()
+    deadline = time.monotonic() + min(60.0, max(0.0, remaining))
     while time.monotonic() < deadline:
         with update_lock(control, policy["operator_sid"]):
             if not writer_processes(process_snapshot(control), own_pid=os.getpid()):
@@ -2995,7 +2997,7 @@ def bootstrap_supervision_deadline(state, *, started: float, now: float, utc_now
     if phase == "APPLIED_PENDING_READY":
         timestamp, window = state.get("applied_at"), 120
     elif phase == "ROLLBACK_PENDING_READY":
-        timestamp, window = state.get("rollback_at"), 120
+        timestamp, window = state.get("rollback_at", state.get("applied_at")), 120
     elif phase in {"ROLLBACK_PENDING", "UNKNOWN"}:
         timestamp, window = state.get("normal_stop_started_at"), 60
     stage_end = now + (window - (_utc(utc_now) - _utc(timestamp)).total_seconds()) if timestamp else started
@@ -3004,6 +3006,8 @@ def bootstrap_supervision_deadline(state, *, started: float, now: float, utc_now
 
 def _bootstrap_trial_relay(control, policy, state, active, gui_arguments, attempts, *, deadline):
     """One sampled start attempt per nonce, with process-local retry accounting."""
+    if apply_claim_status(control) == "ABSENT":
+        return  # The caller resumes the existing ordinary recovery proof path.
     rows = writer_processes(process_snapshot(control), own_pid=os.getpid())
     relays = [row for row in rows if process_matches_trial(row, state=state,
         sha=active["sha"], sid=policy["operator_sid"], role="relay")]
@@ -3085,7 +3089,8 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                     code = state.get("reason_code")
                     if code not in {"UPDATE_PREPARATION_FAILED", "UPDATE_EXISTING_WRITER", UPDATE_RELAY_STOP_REQUESTED}:
                         code = "UPDATE_TERMINAL_RECOVERED"
-                    return start_current(control, policy, state, active, arguments, code=code, deadline=deadline)
+                    launch_arguments = gui_arguments if code == UPDATE_RELAY_STOP_REQUESTED else arguments
+                    return start_current(control, policy, state, active, launch_arguments, code=code, deadline=deadline)
                 if claim_status == "ABSENT":
                     existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline)
                     if existing is not None:
@@ -3130,6 +3135,18 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                     # The task may already have settled or switched this journal.
                     # Release ownership and reread it before creating a trial.
                     continue
+                if requested and progress_deadline is not None:
+                    claim_status = apply_claim_status(control)
+                    if claim_status == "ABSENT":
+                        if state and state["phase"] == "APPLIED_PENDING_READY":
+                            existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline)
+                            if existing is not None:
+                                return existing
+                        return start_current(control, policy, state, active, arguments, code="UPDATE_SUPERVISION_UNAVAILABLE", report_once=True, deadline=deadline)
+                    if claim_status in {"LIVE", "UNKNOWN"}:
+                        apply_started = True
+                    if not apply_started and time.monotonic() >= progress_deadline:
+                        return start_current(control, policy, state, active, arguments, code="UPDATE_APPLY_NO_PROGRESS", deadline=deadline)
                 if action in {"REQUEST_TRIAL", "WAIT_FOR_TRIAL"}:
                     # Both the Run relay and a launcher request this same GUI trial.
                     # The GUI's ordinary onboarding starts its single normal relay.
@@ -3137,7 +3154,7 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                         state = read_json(control / "transition.json")
                         if state["phase"] not in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"}:
                             continue
-                        trial_at = state["rollback_at"] if state["phase"] == "ROLLBACK_PENDING_READY" else state["applied_at"]
+                        trial_at = state.get("rollback_at", state["applied_at"]) if state["phase"] == "ROLLBACK_PENDING_READY" else state["applied_at"]
                         if (_utc(now_utc()) - _utc(trial_at)).total_seconds() >= 120:
                             time.sleep(0.1)
                             continue
@@ -3151,18 +3168,6 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                         _bootstrap_trial_relay(control, policy, state, active, gui_arguments,
                             relay_attempts, deadline=min(deadline, time.monotonic() + max(0.0,
                                 120 - (_utc(now_utc()) - _utc(trial_at)).total_seconds())))
-                if requested and progress_deadline is not None:
-                    claim_status = apply_claim_status(control)
-                    if claim_status == "ABSENT":
-                        if state and state["phase"] == "APPLIED_PENDING_READY":
-                            existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline)
-                            if existing is not None:
-                                return existing
-                        return start_current(control, policy, state, active, arguments, code="UPDATE_SUPERVISION_UNAVAILABLE", report_once=True, deadline=deadline)
-                    if claim_status in {"LIVE", "UNKNOWN"}:
-                        apply_started = True
-                    if not apply_started and time.monotonic() >= progress_deadline:
-                        return start_current(control, policy, state, active, arguments, code="UPDATE_APPLY_NO_PROGRESS", deadline=deadline)
         except RuntimeError as error:
             if str(error) != 'update mutex ownership is busy or abandoned' or getattr(error, 'wait_result', 0x102) != 0x102:
                 raise

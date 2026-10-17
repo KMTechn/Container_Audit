@@ -198,17 +198,35 @@ def test_d_stop_defers_system_and_bootstrap_without_pointer_or_marker_change(sce
         "DEFERRED", False, "UPDATE_RELAY_STOP_REQUESTED")
     monkeypatch.setattr(updates, "apply_claim_status", lambda *_: "NONE")
     monkeypatch.setattr(updates, "start_current", START_CURRENT)
-    assert updates._bootstrap(s.control.parent, [], role="gui") == 0
-    assert s.requests == []
-    assert len(s.launches) == 1 and s.launches[0][2] == []
-    assert updates.read_json(s.stage / "startup-support.json")["reason_code"] == "UPDATE_RELAY_STOP_REQUESTED"
-    assert capsys.readouterr().out.count("CONTAINER_AUDIT_SUPPORT=") == 1
+    for role in ("gui", "relay"):
+        s.launches.clear()
+        arguments = [] if role == "gui" else ["--container-audit-user-relay"]
+        assert updates._bootstrap(s.control.parent, arguments, role=role) == 0
+        assert s.requests == []
+        assert len(s.launches) == 1 and s.launches[0][2] == []
+        assert updates.read_json(s.stage / "startup-support.json")["reason_code"] == "UPDATE_RELAY_STOP_REQUESTED"
+        assert capsys.readouterr().out.count("CONTAINER_AUDIT_SUPPORT=") == 1
     assert (s.control / "active.json").read_bytes() == pointer
     assert s.marker.read_bytes() == marker
     # A repeated SYSTEM invocation must retain the same stopped pre-apply state.
     assert updates._apply_prepared_once(s.control) == 0
     repeated = updates.read_json(s.control / "transition.json")
     assert repeated["phase"] == "DEFERRED" and not repeated.get("recovery_pending")
+    # The marker can appear after Run's precheck but before SYSTEM applies.
+    s.launches.clear()
+    monkeypatch.setattr(updates, "update_relay_stop_requested", lambda *_: False)
+
+    def late_stop(*args):
+        s.requests.append(s.clock[0])
+        updates.defer_stopped_update(s.control, updates.read_json(s.control / "transition.json"))
+
+    monkeypatch.setattr(updates, "request_apply_task", late_stop)
+    assert updates._bootstrap(s.control.parent, ["--container-audit-user-relay"], role="relay") == 0
+    assert len(s.requests) == 1 and len(s.launches) == 1
+    assert s.launches[0][2] == []
+    assert capsys.readouterr().out.count("CONTAINER_AUDIT_SUPPORT=") == 1
+    assert (s.control / "active.json").read_bytes() == pointer
+    assert s.marker.read_bytes() == marker
 
 
 def test_e_onboarding_cleared_stop_allows_next_apply_request(scene, monkeypatch,
@@ -252,6 +270,7 @@ def test_e_onboarding_cleared_stop_allows_next_apply_request(scene, monkeypatch,
         s.write(s.control / "transition.json", {**s.state, "phase": "CONFIRMED"})
 
     monkeypatch.setattr(updates, "request_apply_task", apply)
+    monkeypatch.setattr(updates, "prepared_pending", lambda _control, _policy, state: state["phase"] != "CONFIRMED")
     assert updates._bootstrap(s.control.parent, [], role="gui") == 0
     assert len(s.requests) == 1
     assert not s.marker.exists()
