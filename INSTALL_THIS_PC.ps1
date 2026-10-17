@@ -116,7 +116,7 @@ function Get-InstallationHelperPublicFailure($Failure, [int]$ExitCode) {
         'STARTUP_UPDATE_PREIMAGE_PATH_INVALID','STARTUP_UPDATE_PREIMAGE_READBACK_FAILED','STARTUP_UPDATE_WRITER_HELPER_PIN_DIFFERS',
         'STARTUP_UPDATE_TASK_SPEC_FAILED','STARTUP_UPDATE_TASK_SPEC_INVALID','STARTUP_UPDATE_OWNED_TASK_DIFFERS',
         'STARTUP_UPDATE_TASK_IS_RUNNING','STARTUP_UPDATE_TASK_READBACK_FAILED',
-        'EMERGENCY_SHORTCUT_PUBLICATION_BLOCKED')
+        'EMERGENCY_SHORTCUT_PUBLICATION_BLOCKED','MACHINE_REMOVAL_WORKER_PART_PENDING')
     if($fields.reason_code -ceq 'INSTALLER_HELPER_FAILURE'){
         # Exact startup-update throw codes only; other exception text stays private.
         $cause=$exception
@@ -248,6 +248,7 @@ function Get-CodePlacementPreflightFailureCode($Failure) {
         $candidate=$candidate.InnerException
     }
     $message = [string]$Failure.Exception.Message
+    if ($message -ceq 'MACHINE_REMOVAL_WORKER_PART_PENDING') { return $message }
     if ($message -cmatch '^CONTAINER_(?:OPERATOR|WRITER|PLACEMENT)_[A-Z_]+$') { return $message }
     $exception = $Failure.Exception
     while ($exception -is [Management.Automation.RuntimeException] -and $null -ne $exception.InnerException) {
@@ -342,7 +343,7 @@ function Write-ContainerSupportedRemovalJournal([int[]]$ControllerProcessIds) {
     $active=Read-ContainerWriterFence
     if ([IO.Path]::GetFileName([string]$origin.stage_evidence_root) -cnotmatch '\.evidence\.([1-9][0-9]{0,9})$') { throw 'REMOVAL_JOURNAL_OWNER_INVALID' }
     $ownerPid=[int]$Matches[1]
-    if ($ownerPid -notin $ControllerProcessIds) { throw 'REMOVAL_JOURNAL_OWNER_NOT_CONTROLLER_ANCESTOR' }
+    if ($ownerPid -ne $RemovalControllerProcessId -or $ownerPid -notin $ControllerProcessIds) { throw 'REMOVAL_JOURNAL_OWNER_NOT_CONTROLLER_ANCESTOR' }
     $ownerStarted=(Get-Process -Id $ownerPid -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')
     $manifestSha=Get-FileSha256 (Join-Path $uninstallSource 'portable-manifest.json')
     if ([string]$origin.schema -cne 'container-audit-canonical-portable-install-v2' -or
@@ -388,6 +389,9 @@ function Write-ContainerSupportedRemovalJournal([int[]]$ControllerProcessIds) {
         owner_process_id=$ownerPid;owner_started_at_utc=$ownerStarted;authority_mutex_name=$active.session_authority_mutex_name;
         original_audit_path=$UninstallAuditPath;original_audit_sha256=$UninstallAuditSha256;audit_copy_path=$copy;
         source_manifest_sha256=$manifestSha;prepared_receipt_path=$active.prepared_receipt_path;secret_values_recorded=$false}
+    if ($MachineControlRoot -and -not $Script:ContainerRemovalAttestedNewPlacement) {
+        $record.worker_removal_proof=@{proof=$Script:ContainerMachineRemovalProofKind;worker_run_present=$Script:ContainerMachineRemovalWorkerRunPresent}
+    }
     foreach ($name in @('session_id','attempt_id','replacement_transaction_id','session_started_at_utc',
         'orchestrator_sha256','writer_contract_sha256','writer_inventory_sha256','prepared_receipt_sha256')) { $record[$name]=[string]$active.$name }
     Write-ContainerStartupUpdateRecord $path $record
@@ -615,6 +619,180 @@ function Complete-ContainerRollbackContinuation {
     [void](Write-BootstrapReplacementReceipt (Join-Path (Split-Path -Parent $RollbackContinuationPath) 'continuation-completed.json') $completed)
 }
 
+function Get-ContainerRemovalIoPath([string]$Path) {
+    if ($Path.Length -lt 240 -or $Path.StartsWith('\\?\')) { return $Path }
+    $native = $Path.Replace('/','\')
+    if ($native.StartsWith('\\')) { return '\\?\UNC\' + $native.Substring(2) }
+    return '\\?\' + $native
+}
+
+function Assert-ContainerRemovalBoundary([string]$Path) {
+    # Inspect ancestors, never enumerate opaque control/code children.
+    $component = [IO.Path]::GetFullPath((Get-ContainerRemovalIoPath $Path))
+    while ($component) {
+        if (Test-Path -LiteralPath (Get-ContainerRemovalIoPath $component) -ErrorAction Stop) {
+            $item = Get-Item -LiteralPath (Get-ContainerRemovalIoPath $component) -Force -ErrorAction Stop
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'REMOVAL_BOUNDARY_REDIRECTED' }
+        }
+        $component = [IO.Path]::GetDirectoryName($component)
+    }
+}
+
+function Get-ContainerMachineRemovalPolicyLocalAppDataRoot([string]$Sid,[string]$Root) {
+    $path=Join-Path (Split-Path -Parent $Root) 'update-control\policy.json'
+    Assert-ContainerRemovalBoundary $path
+    if (-not $testOverride) { Assert-InstallationEvidenceProtectedPath $path }
+    if ((Get-Item -LiteralPath $path -ErrorAction Stop).Length -gt 65536) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+    $policy=Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop|ConvertFrom-Json
+    if ([string]$policy.operator_sid -cne $Sid) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+    $local=Get-StrictFullPath ([string]$policy.operator_local_app_data) 'removal policy profile'
+    $profile=Split-Path -Parent (Split-Path -Parent $local)
+    if (-not(Test-SamePath $local (Join-Path $profile 'AppData\Local'))) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+    Assert-ContainerRemovalBoundary $local
+    return $local
+}
+
+function Read-ContainerMachineRemovalBinding {
+    $pending=Join-Path (Get-ContainerMachineInstallStateRoot) 'pending-onboarding.json'
+    $valid=$false
+    if (Test-Path -LiteralPath $pending -ErrorAction Stop) {
+        Assert-ContainerRemovalBoundary $pending
+        if (-not $testOverride) { Assert-InstallationEvidenceProtectedPath $pending }
+        $length=(Get-Item -LiteralPath $pending -ErrorAction Stop).Length
+        $pendingText=if($length -le 65536){Get-Content -LiteralPath $pending -Raw -Encoding UTF8 -ErrorAction Stop}else{''}
+        try {
+            $marker=$pendingText|ConvertFrom-Json
+            if ([string]$marker.schema -ceq 'container-audit-machine-pending-v1' -and
+                [string]$marker.status -ceq 'PENDING' -and (Test-SamePath ([string]$marker.install_root) $installRootFull)) {
+                if ([string]$marker.target_sid -cne $OperatorSid) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+                $valid=$true
+            }
+        } catch {
+            if ($_.Exception.Message -ceq 'MACHINE_REMOVAL_WORKER_PART_PENDING') { throw }
+            # Only malformed content permits receipt-only fallback. I/O and
+            # protection failures above remain closed.
+            $valid=$false
+        }
+    }
+    $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\'+$OperatorSid,$false)
+    $profile=''
+    try { if($null -ne $key){$profile=[string]$key.GetValue('ProfileImagePath')} }
+    finally { if($null -ne $key){$key.Dispose()} }
+    if ($null -ne $key -and [string]::IsNullOrWhiteSpace($profile)) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+    if ($profile) { $profile=Get-StrictFullPath ([Environment]::ExpandEnvironmentVariables($profile)) 'removal worker profile' }
+    $local=if($profile){Join-Path $profile 'AppData\Local'}elseif($valid){Get-ContainerMachineRemovalPolicyLocalAppDataRoot $OperatorSid $installRootFull}else{''}
+    if (-not $profile -and $local) { $profile=Split-Path -Parent (Split-Path -Parent $local) }
+    if ($local -and -not(Test-SamePath $local $OperatorLocalAppDataRoot)) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+    return [pscustomobject]@{sid=$OperatorSid;profile_root=$profile;local_appdata_root=$local;pending_valid=$valid;profile_registered=($null -ne $key)}
+}
+
+function Test-ContainerRemovalWorkerUnavailable($Binding) {
+    $sid=[Security.Principal.SecurityIdentifier]::new([string]$Binding.sid)
+    $local=@(Get-LocalUser -ErrorAction Stop)
+    $domains=@($local|ForEach-Object {$_.SID.AccountDomainSid.Value}|Select-Object -Unique)
+    if ($null -eq $sid.AccountDomainSid -or $sid.AccountDomainSid.Value -cnotin $domains) { return $false }
+    $user=@($local|Where-Object {$_.SID.Value -ceq $sid.Value})
+    if ($user.Count -eq 0) { return $true }
+    if ($user.Count -ne 1 -or $user[0].Enabled -isnot [bool]) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+    return -not $user[0].Enabled
+}
+
+function Test-ContainerRemovalWorkerProfileAbsent($Binding) {
+    if (-not $Binding.profile_registered) { return $true }
+    Assert-ContainerRemovalBoundary ([string]$Binding.profile_root)
+    return -not (Test-Path -LiteralPath ([string]$Binding.profile_root) -PathType Container -ErrorAction Stop)
+}
+
+function Test-ContainerRemovalWorkerNeverStarted($Binding) {
+    $hive=[Microsoft.Win32.Registry]::Users.OpenSubKey([string]$Binding.sid,$false)
+    if ($null -eq $hive) { return $false }
+    $completed=$null;$run=$null
+    try {
+        $completed=$hive.OpenSubKey('Software\KMTech\ContainerAudit\MachineOnboarding',$false)
+        $run=$hive.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run',$false)
+        $hasCompletion=$null -ne $completed -and @($completed.GetValueNames()) -ccontains 'CompletedInstallId'
+        $hasRun=$null -ne $run -and @($run.GetValueNames()) -ccontains 'KMTech.ContainerAudit.Relay'
+        return (-not $hasCompletion -and -not $hasRun)
+    } finally {
+        if($null -ne $completed){$completed.Dispose()};if($null -ne $run){$run.Dispose()};$hive.Dispose()
+    }
+}
+
+function Get-ContainerRemovalWorkerRunPresent($Binding) {
+    $hive=$null;$run=$null
+    try {
+        $hive=[Microsoft.Win32.Registry]::Users.OpenSubKey([string]$Binding.sid,$false)
+        if ($null -eq $hive) { return $null }
+        $run=$hive.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run',$false)
+        return ($null -ne $run -and @($run.GetValueNames()) -ccontains 'KMTech.ContainerAudit.Relay')
+    } catch { return $null }
+    finally {if($null -ne $run){$run.Dispose()};if($null -ne $hive){$hive.Dispose()}}
+}
+
+function Read-ContainerRemovalWorkerReceipt($Binding) {
+    if (-not $Binding.local_appdata_root) { return $null }
+    $path=Join-Path ([string]$Binding.local_appdata_root) 'KMTech\DirectSync\container_audit\status\current_user_removal.json'
+    Assert-ContainerRemovalBoundary $path
+    if (-not(Test-Path -LiteralPath $path -PathType Leaf -ErrorAction Stop)) { return $null }
+    if ((Get-Item -LiteralPath $path -ErrorAction Stop).Length -gt 65536) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+    $receipt=Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop|ConvertFrom-Json
+    $receipt|Add-Member -NotePropertyName path -NotePropertyValue $path -Force
+    return $receipt
+}
+
+function Assert-ContainerMachineRemovalWorkerPart {
+    $Script:ContainerMachineRemovalProofKind=''
+    $Script:ContainerMachineRemovalWorkerRunPresent=$null
+    try {
+        $binding=Read-ContainerMachineRemovalBinding
+        if ($binding.pending_valid) {
+            if (Test-ContainerRemovalWorkerUnavailable $binding) {
+                $Script:ContainerMachineRemovalProofKind='ACCOUNT_UNAVAILABLE'
+                $Script:ContainerMachineRemovalWorkerRunPresent=Get-ContainerRemovalWorkerRunPresent $binding
+                return $true
+            }
+            if (Test-ContainerRemovalWorkerProfileAbsent $binding) {
+                $Script:ContainerMachineRemovalProofKind='PROFILE_ABSENT';return $true
+            }
+            if (Test-ContainerRemovalWorkerNeverStarted $binding) {
+                $Script:ContainerMachineRemovalProofKind='NEVER_STARTED';return $true
+            }
+        }
+        $receipt=Read-ContainerRemovalWorkerReceipt $binding
+        if ($null -eq $receipt -or [string]$receipt.operator_sid -cne [string]$binding.sid -or
+            [string]$receipt.status -cne 'PASS_DATA_PRESERVED') { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+        $path=Get-StrictFullPath ([string]$receipt.path) 'worker removal receipt'
+        $prefix=(Get-StrictFullPath ([string]$binding.profile_root) 'worker removal profile').TrimEnd('\','/')+'\'
+        if (-not $path.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+        Assert-ContainerRemovalBoundary $path
+        $Script:ContainerMachineRemovalProofKind='USER_RECEIPT'
+        return $true
+    } catch { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+}
+
+function Test-ContainerAttestedNewPlacementRemoval {
+    if (-not $MachineControlRoot -or $null -eq $placementWriterFenceLease) { return $false }
+    $path=Join-Path (Get-ContainerMachineInstallStateRoot) ('install-audit\machine-prestate-'+$WriterFenceReplacementTransactionId+'\prestate.json')
+    if (-not(Test-Path -LiteralPath $path -ErrorAction Stop)) { return $false }
+    Assert-ContainerRemovalBoundary $path
+    if (-not $testOverride) { Assert-InstallationEvidenceProtectedPath $path }
+    if ((Get-Item -LiteralPath $path -ErrorAction Stop).Length -gt 1048576) { return $false }
+    $state=Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop|ConvertFrom-Json
+    $active=Read-ContainerWriterFence -ControlRoot $Script:ContainerWriterFenceAdmissionProductionRoot
+    Assert-ContainerWriterSessionAuthority $active
+    if ([string]$state.schema -cne 'container-audit-machine-install-prestate-v1' -or
+        [string]$state.run_id -cne $WriterFenceReplacementTransactionId -or
+        [string]$state.session_id -cne $WriterFenceSessionId -or [string]$state.attempt_id -cne $WriterFenceAttemptId -or
+        [string]$state.worker_sid -cne $OperatorSid -or [string]$state.before_manifest_sha256 -cne '' -or
+        -not(Test-SamePath ([string]$state.install_root) $installRootFull) -or
+        [string]$state.orchestrator_sha256 -cne [string]$active.orchestrator_sha256 -or
+        -not(Test-SamePath ([string]$state.prepared_receipt.path) $WriterFencePreparedReceiptPath) -or
+        [string]$state.prepared_receipt.sha256 -cne $WriterFencePreparedReceiptSha256 -or
+        [string]$state.source_manifest_sha256 -cne (Get-FileSha256 (Join-Path $SourceRoot 'portable-manifest.json')) -or
+        [string]$state.source_manifest_sha256 -cne (Get-FileSha256 (Join-Path $installRootFull 'portable-manifest.json'))) { return $false }
+    return $true
+}
+
 function Enter-ContainerPlacementWriterFence {
     if (
         [string]::IsNullOrWhiteSpace($WriterFenceHelperPath) -or
@@ -644,16 +822,26 @@ function Enter-ContainerPlacementWriterFence {
     if ($MachineControlRoot -and -not $testOverride -and -not (Test-InstallationEvidencePrivileged)) {
         throw 'Machine placement requires an already privileged token.'
     }
-    $operatorBinding = Assert-ContainerWriterFenceOperatorRoot `
-        -PreparedReceiptPath $WriterFencePreparedReceiptPath `
-        -PreparedReceiptSha256 $WriterFencePreparedReceiptSha256 `
-        -OperatorLocalAppDataRoot $OperatorLocalAppDataRoot `
-        -OperatorSid $OperatorSid `
-        -ProfileLocalAppDataRootForTest $(if ($testOverride) { $OperatorLocalAppDataRoot } else { '' }) `
-        -MachineControlRoot $MachineControlRoot `
-        -SessionId $WriterFenceSessionId `
-        -AttemptId $WriterFenceAttemptId `
-        -ReplacementTransactionId $WriterFenceReplacementTransactionId
+    $bindingArguments=@{PreparedReceiptPath=$WriterFencePreparedReceiptPath;PreparedReceiptSha256=$WriterFencePreparedReceiptSha256;
+        OperatorLocalAppDataRoot=$OperatorLocalAppDataRoot;OperatorSid=$OperatorSid;
+        ProfileLocalAppDataRootForTest=$(if($testOverride){$OperatorLocalAppDataRoot}else{''});MachineControlRoot=$MachineControlRoot;
+        SessionId=$WriterFenceSessionId;AttemptId=$WriterFenceAttemptId;ReplacementTransactionId=$WriterFenceReplacementTransactionId}
+    $operatorBinding=if($Uninstall -and $MachineControlRoot -and -not $testOverride){
+        & {
+            $originalProfileLookup=${function:Get-ContainerWriterFenceProfileLocalAppDataRoot}
+            function Get-ContainerWriterFenceProfileLocalAppDataRoot([string]$Sid) {
+                try { return & $originalProfileLookup $Sid }
+                catch {
+                    $binding=Read-ContainerMachineRemovalBinding
+                    if ($Sid -cne $OperatorSid -or -not $binding.pending_valid -or $binding.profile_registered) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+                    [void](Assert-ContainerMachineRemovalWorkerPart)
+                    if($Script:ContainerMachineRemovalProofKind -cnotin @('PROFILE_ABSENT','ACCOUNT_UNAVAILABLE')){throw 'MACHINE_REMOVAL_WORKER_PART_PENDING'}
+                    return [string]$binding.local_appdata_root
+                }
+            }
+            Assert-ContainerWriterFenceOperatorRoot @bindingArguments
+        }
+    }else{Assert-ContainerWriterFenceOperatorRoot @bindingArguments}
     $controlRoot = [string]$operatorBinding.control_root
     $Script:ContainerWriterFenceAdmissionProductionRoot = $controlRoot
     if ($MachineControlRoot) { $Script:ContainerMachineInstallControlRoot=$controlRoot }
@@ -1713,25 +1901,6 @@ if (-not $DryRun.IsPresent -and -not $testOverride) {
     Write-ElevationLog 'STARTED' 'Elevated Container code placement started.'
 }
 
-function Get-ContainerRemovalIoPath([string]$Path) {
-    if ($Path.Length -lt 240 -or $Path.StartsWith('\\?\')) { return $Path }
-    $native = $Path.Replace('/','\')
-    if ($native.StartsWith('\\')) { return '\\?\UNC\' + $native.Substring(2) }
-    return '\\?\' + $native
-}
-
-function Assert-ContainerRemovalBoundary([string]$Path) {
-    # Inspect ancestors, never enumerate opaque control/code children.
-    $component = [IO.Path]::GetFullPath((Get-ContainerRemovalIoPath $Path))
-    while ($component) {
-        if (Test-Path -LiteralPath (Get-ContainerRemovalIoPath $component) -ErrorAction Stop) {
-            $item = Get-Item -LiteralPath (Get-ContainerRemovalIoPath $component) -Force -ErrorAction Stop
-            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'REMOVAL_BOUNDARY_REDIRECTED' }
-        }
-        $component = [IO.Path]::GetDirectoryName($component)
-    }
-}
-
 function Get-ContainerTransactionRemovalControllerProcessId([object[]]$ProcessRows) {
     if($null -eq $placementWriterFenceLease){throw 'TRANSACTION_REMOVAL_ADMISSION_REQUIRED'}
     if(-not $testOverride){Assert-InstallationEvidenceProtectedPath $TransactionHandoverPath}
@@ -1769,9 +1938,263 @@ function Get-ContainerTransactionRemovalControllerProcessId([object[]]$ProcessRo
     return $ids
 }
 
+function Get-ContainerRemovalProcessArguments([string]$CommandLine) {
+    if (-not ('KMTechContainerRemovalCommandLine' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class KMTechContainerRemovalCommandLine {
+ [DllImport("shell32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+ static extern IntPtr CommandLineToArgvW(string line, out int count);
+ [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr value);
+ public static string[] Parse(string line) {
+  int count; IntPtr memory=CommandLineToArgvW(line,out count);
+  if(memory==IntPtr.Zero) throw new InvalidOperationException("REMOVAL_CONTROLLER_ARGUMENTS_INVALID");
+  try { string[] values=new string[count]; for(int i=0;i<count;i++) values[i]=Marshal.PtrToStringUni(Marshal.ReadIntPtr(memory,i*IntPtr.Size)); return values; }
+  finally { LocalFree(memory); }
+ }
+}
+'@
+    }
+    if ([string]::IsNullOrWhiteSpace($CommandLine)) { throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID' }
+    return [KMTechContainerRemovalCommandLine]::Parse($CommandLine)
+}
+
+function Read-ContainerRemovalTransport([string]$Encoded) {
+    # Authenticate the existing memory transport without executing its source.
+    # Its immutable template and the wrapper/helper bodies come from the pinned
+    # bootstrap library already loaded by this admitted helper.
+    if ($Encoded.Length -gt 30000) { throw 'REMOVAL_CONTROLLER_TRANSPORT_INVALID' }
+    try { $text=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($Encoded)) }
+    catch { throw 'REMOVAL_CONTROLLER_TRANSPORT_INVALID' }
+    $tokens=$null;$errors=$null
+    $ast=[Management.Automation.Language.Parser]::ParseInput($text,[ref]$tokens,[ref]$errors)
+    if ($errors.Count) { throw 'REMOVAL_CONTROLLER_TRANSPORT_INVALID' }
+    $reads=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ceq 'ReadPinned'},$true))
+    if ($reads.Count -ne 2) { throw 'REMOVAL_CONTROLLER_TRANSPORT_INVALID' }
+    $paths=@();$pins=@();$contents=@()
+    foreach ($read in $reads) {
+        if ($read.CommandElements.Count -ne 3 -or
+            $read.CommandElements[1] -isnot [Management.Automation.Language.StringConstantExpressionAst] -or
+            $read.CommandElements[2] -isnot [Management.Automation.Language.StringConstantExpressionAst]) {
+            throw 'REMOVAL_CONTROLLER_TRANSPORT_INVALID'
+        }
+        $path=[string]$read.CommandElements[1].Value;$pin=[string]$read.CommandElements[2].Value
+        if ($pin -cnotmatch '^[0-9a-f]{64}$') { throw 'REMOVAL_CONTROLLER_TRANSPORT_INVALID' }
+        Assert-ContainerRemovalBoundary $path
+        $stream=[IO.File]::Open($path,'Open','Read',([IO.FileShare]::Read -bor [IO.FileShare]::Delete))
+        try {
+            if ($stream.Length -le 0 -or $stream.Length -gt 16777216) { throw 'REMOVAL_CONTROLLER_TRANSPORT_INVALID' }
+            $bytes=([IO.BinaryReader]::new($stream)).ReadBytes([int]$stream.Length)
+            if ($bytes.Length -ne $stream.Length -or $stream.ReadByte() -ne -1) { throw 'REMOVAL_CONTROLLER_TRANSPORT_INVALID' }
+        } finally { $stream.Dispose() }
+        $sha=[Security.Cryptography.SHA256]::Create()
+        try { $actual=([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-','').ToLowerInvariant() }
+        finally { $sha.Dispose() }
+        if ($actual -cne $pin) { throw 'REMOVAL_CONTROLLER_TRANSPORT_INVALID' }
+        $paths+=$path;$pins+=$pin;$contents+=([Text.UTF8Encoding]::new($false,$true).GetString($bytes))
+    }
+    if (-not (Test-SamePath ([IO.Path]::ChangeExtension($paths[0],'.dat')) $paths[1]) -or
+        [IO.Path]::GetExtension($paths[0]) -cne '.ps1') { throw 'REMOVAL_CONTROLLER_TRANSPORT_INVALID' }
+    $assignment=@(${function:New-InstallationMemoryTransport}.Ast.FindAll({param($n)
+        $n -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $n.Left -is [Management.Automation.Language.VariableExpressionAst] -and $n.Left.VariablePath.UserPath -ceq 'bootstrap'
+    },$true))[0]
+    $literal=@($assignment.Right.FindAll({param($n) $n -is [Management.Automation.Language.StringConstantExpressionAst]},$true))[0]
+    $bootstrap=("Import-Module -Name (Join-Path `$PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop`n"+
+        "Import-Module -Name (Join-Path `$PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop`n"+$literal.Value)
+    $bootstrap=$bootstrap.Replace('@@code-path@@',$paths[0].Replace("'","''")).Replace('@@code-sha@@',$pins[0]).Replace(
+        '@@data-path@@',$paths[1].Replace("'","''")).Replace('@@data-sha@@',$pins[1])
+    $expected=ConvertTo-InstallationMemoryCommand $bootstrap @()
+    if ($Encoded -cne $expected) { throw 'REMOVAL_CONTROLLER_TRANSPORT_INVALID' }
+    $parsed=ConvertFrom-Json -InputObject $contents[1]
+    $values=@($parsed)
+    if (@($values|Where-Object {$_ -isnot [string]}).Count) { throw 'REMOVAL_CONTROLLER_TRANSPORT_INVALID' }
+    return [pscustomobject]@{source=$contents[0];arguments=$values}
+}
+
+function Assert-ContainerRemovalHelperArguments([string[]]$Arguments) {
+    $parameters=@{}
+    $definitions=(Get-InstallationVerifiedScript $BootstrapScriptPath (Get-FileSha256 $BootstrapScriptPath)).Ast.ParamBlock.Parameters
+    for ($index=0;$index -lt $Arguments.Count;$index++) {
+        $name=([string]$Arguments[$index]).TrimStart('-')
+        $definition=@($definitions|Where-Object {$_.Name.VariablePath.UserPath -ieq $name})
+        if (-not $Arguments[$index].StartsWith('-') -or $definition.Count -ne 1 -or $parameters.ContainsKey($name)) {
+            throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID'
+        }
+        if ($definition[0].StaticType -eq [Management.Automation.SwitchParameter]) { $parameters[$name]=$true }
+        else {
+            if (++$index -ge $Arguments.Count) { throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID' }
+            $parameters[$name]=[string]$Arguments[$index]
+        }
+    }
+    if (-not $parameters.ContainsKey('Uninstall') -or $parameters.ContainsKey('RemoveUncommittedPlacement')) {
+        throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID'
+    }
+    foreach ($name in @('SourceRoot','InstallRoot','OperatorLocalAppDataRoot','RemovalControllerCanonicalPath')) {
+        $expected=switch($name){'SourceRoot'{$uninstallSource};'InstallRoot'{$installRootFull};
+            'OperatorLocalAppDataRoot'{$OperatorLocalAppDataRoot};'RemovalControllerCanonicalPath'{$canonical}}
+        if (-not $parameters.ContainsKey($name) -or -not (Test-SamePath ([string]$parameters[$name]) $expected)) {
+            throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID'
+        }
+    }
+    foreach ($name in @('OperatorSid','RemovalControllerProcessId','RemovalControllerStartedAtUtc','WriterFenceSessionId',
+        'WriterFenceAttemptId','WriterFenceReplacementTransactionId','WriterFencePreparedReceiptPath','WriterFencePreparedReceiptSha256')) {
+        if (-not $parameters.ContainsKey($name) -or [string]$parameters[$name] -cne [string](Get-Variable -Name $name -ValueOnly)) {
+            throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID'
+        }
+    }
+}
+
+function Get-ContainerRemovalInvocation($Row) {
+    $arguments=@(Get-ContainerRemovalProcessArguments ([string]$Row.CommandLine))
+    $index=1;$flags=@{}
+    while ($index -lt $arguments.Count -and $arguments[$index] -in @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy')) {
+        $name=$arguments[$index++];if($flags.ContainsKey($name)){throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID'};$flags[$name]=$true
+        if($name -ieq '-ExecutionPolicy') {
+            if($index -ge $arguments.Count -or $arguments[$index++] -ine 'Bypass'){throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID'}
+        }
+    }
+    if (-not $flags.ContainsKey('-NoProfile') -or $index+1 -ge $arguments.Count) { throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID' }
+    $mode=$arguments[$index++];$target=$arguments[$index++]
+    if ($mode -ieq '-File') {
+        $tail=@($arguments|Select-Object -Skip $index)
+        if ([int]$Row.ProcessId -eq $RemovalControllerProcessId) {
+            $compensation=Get-Variable -Name ContainerRemovalAttestedNewPlacement -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+            if (-not(Test-SamePath $target $canonical) -or
+                (-not $compensation -and $tail -inotcontains '-Uninstall' -and $tail -inotcontains '-CompleteRetiredRemoval')) {
+                throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID'
+            }
+            return [pscustomobject]@{kind='canonical';parent_id=0}
+        }
+        if (-not(Test-SamePath $target (Join-Path $uninstallSource 'INSTALL_THIS_PC.ps1'))) { throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID' }
+        Assert-ContainerRemovalHelperArguments $tail
+        return [pscustomobject]@{kind='helper';parent_id=0}
+    }
+    if ($mode -ine '-EncodedCommand' -or $index -ne $arguments.Count) { throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID' }
+    $transport=Read-ContainerRemovalTransport $target
+    $values=@($transport.arguments)
+    $helperSource='function Get-InstallationVerifiedScript {'+${function:Get-InstallationVerifiedScript}.ToString()+"}`n"+(Get-InstallationHelperMemorySource)
+    $library=Join-Path $uninstallSource 'tools\bootstrap_integrity.ps1'
+    $helper=Join-Path $uninstallSource 'INSTALL_THIS_PC.ps1'
+    $parent=0
+    if ($transport.source -ceq (Get-InstallationElevationWrapperSource)) {
+        if ($values.Count -lt 8 -or [string]$values[3] -cne $OperatorSid -or
+            [int]$values[4] -ne [int]$Row.ParentProcessId -or
+            [string]$values[5] -cne (Get-FileSha256 $helper) -or [string]$values[6] -cne (Get-FileSha256 $library)) {
+            throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID'
+        }
+        $parent=[int]$values[4]
+        $child=@($values|Select-Object -Skip 7)
+        $file=[Array]::IndexOf($child,'-File')
+        if ($file -lt 0 -or $file+1 -ge $child.Count -or -not(Test-SamePath $child[$file+1] $helper)) { throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID' }
+        $tail=@($child|Select-Object -Skip ($file+2))
+        $kind='wrapper'
+    } elseif ($transport.source -ceq $helperSource) {
+        if ($values.Count -lt 6 -or [string]$values[1] -cne (Get-FileSha256 $helper) -or
+            -not(Test-SamePath ([string]$values[2]) $library) -or [string]$values[3] -cne (Get-FileSha256 $library)) {
+            throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID'
+        }
+        $tail=@($values|Select-Object -Skip 5);$kind='helper'
+    } else { throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID' }
+    if (-not(Test-SamePath ([string]$values[0]) $helper)) { throw 'REMOVAL_CONTROLLER_ARGUMENTS_INVALID' }
+    Assert-ContainerRemovalHelperArguments $tail
+    return [pscustomobject]@{kind=$kind;parent_id=$parent}
+}
+
+function Get-ContainerRemovalVerifiedChain([object[]]$ProcessRows) {
+    $chain=@();$seen=@{};$next=[int]$PID;$childStarted=$null
+    $engine=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+    for ($depth=0;$next -gt 0 -and $depth -le 8;$depth++) {
+        if ($seen.ContainsKey($next)) { throw 'REMOVAL_CONTROLLER_ANCESTRY_INVALID' }
+        $seen[$next]=$true
+        $matches=@($ProcessRows|Where-Object {[int]$_.ProcessId -eq $next})
+        if ($matches.Count -ne 1 -or -not(Test-SamePath ([string]$matches[0].ExecutablePath) $engine)) {
+            throw 'REMOVAL_CONTROLLER_NOT_VERIFIED_ANCESTOR'
+        }
+        $row=$matches[0]
+        try {
+            $started=(Get-Process -Id $next -ErrorAction Stop).StartTime.ToUniversalTime()
+            if ($started.ToString('yyyy-MM-ddTHH:mm:ss.ffffff') -cne ([datetime]$row.CreationDate).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffff') -or
+                ($null -ne $childStarted -and $started -ge $childStarted)) { throw 'identity changed' }
+            $owner=Invoke-CimMethod -InputObject $row -MethodName GetOwnerSid -ErrorAction Stop
+            if ($owner.ReturnValue -ne 0 -or [string]::IsNullOrWhiteSpace([string]$owner.Sid)) { throw 'owner unknown' }
+        } catch { throw 'REMOVAL_CONTROLLER_PROCESS_IDENTITY_CHANGED' }
+        $invocation=Get-ContainerRemovalInvocation $row
+        $chain+=@{id=$next;row=$row;started=$started;owner=[string]$owner.Sid;invocation=$invocation}
+        if ($next -eq $RemovalControllerProcessId) { break }
+        $childStarted=$started;$next=[int]$row.ParentProcessId
+    }
+    if (-not $chain.Count -or $chain[-1].id -ne $RemovalControllerProcessId -or
+        $chain[-1].invocation.kind -cne 'canonical' -or $chain.Count -lt 2) {
+        throw 'REMOVAL_CONTROLLER_NOT_VERIFIED_ANCESTOR'
+    }
+    if ($chain[-1].started.ToString('o') -cne $RemovalControllerStartedAtUtc) { throw 'REMOVAL_CONTROLLER_PROCESS_IDENTITY_CHANGED' }
+    $roles=(@($chain|ForEach-Object {$_.invocation.kind}) -join ',')
+    if ($roles -cnotin @('helper,canonical','helper,wrapper,helper,canonical')) { throw 'REMOVAL_CONTROLLER_ANCESTRY_INVALID' }
+    foreach ($entry in $chain) {
+        $expectedOwner=if($chain.Count -eq 4 -and $entry.id -in @($chain[0].id,$chain[1].id)){$chain[0].owner}else{$chain[-1].owner}
+        try { $live=(Get-Process -Id $entry.id -ErrorAction Stop).StartTime.ToUniversalTime() }
+        catch { throw 'REMOVAL_CONTROLLER_PROCESS_IDENTITY_CHANGED' }
+        if ($live -ne $entry.started -or $entry.owner -cne $expectedOwner) { throw 'REMOVAL_CONTROLLER_PROCESS_IDENTITY_CHANGED' }
+    }
+    $Script:ContainerRemovalVerifiedProcessIdentities=@{}
+    foreach ($entry in $chain) { $Script:ContainerRemovalVerifiedProcessIdentities[$entry.id]=$entry }
+    return @($chain|ForEach-Object {[int]$_.id})
+}
+
+function Get-ContainerRemovalCallingAncestors([object[]]$ProcessRows,[int]$ControllerId,[string]$ApplicationRoot) {
+    $system=[Environment]::SystemDirectory
+    $engines=@((Join-Path $system 'WindowsPowerShell\v1.0\powershell.exe'),
+        (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'PowerShell\7\pwsh.exe'),
+        (Join-Path $system 'cmd.exe'),(Join-Path $system 'OpenSSH\sshd.exe'),(Join-Path $system 'conhost.exe'))
+    $prefix=(Get-StrictFullPath $ApplicationRoot 'removal caller root').TrimEnd('\','/').Normalize([Text.NormalizationForm]::FormC)+'\'
+    $controller=@($ProcessRows|Where-Object {[int]$_.ProcessId -eq $ControllerId})
+    if ($controller.Count -ne 1) { throw 'REMOVAL_CONTROLLER_ANCESTRY_INVALID' }
+    if ([string]::IsNullOrWhiteSpace([string]$controller[0].CreationDate) -or [string]::IsNullOrWhiteSpace([string]$controller[0].ParentProcessId)) { throw 'REMOVAL_PROCESS_OBSERVATION_UNKNOWN' }
+    $childStarted=([datetime]$controller[0].CreationDate).ToUniversalTime()
+    $next=[int]$controller[0].ParentProcessId;$seen=@{};$ids=@()
+    while ($next -gt 0 -and -not $seen.ContainsKey($next)) {
+        $seen[$next]=$true
+        $matches=@($ProcessRows|Where-Object {[int]$_.ProcessId -eq $next})
+        if ($matches.Count -ne 1) { break }
+        $row=$matches[0]
+        if ($null -eq $row.CreationDate -or $null -eq $row.ParentProcessId -or
+            [string]::IsNullOrWhiteSpace([string]$row.CreationDate) -or
+            [string]::IsNullOrWhiteSpace([string]$row.ParentProcessId)) { throw 'REMOVAL_PROCESS_OBSERVATION_UNKNOWN' }
+        $created=([datetime]$row.CreationDate).ToUniversalTime()
+        if ($created -ge $childStarted) { break }
+        $eligible=$false
+        foreach($engine in $engines){if(Test-SamePath ([string]$row.ExecutablePath) $engine){$eligible=$true;break}}
+        if ($eligible) {
+            try {
+                $started=(Get-Process -Id $next -ErrorAction Stop).StartTime.ToUniversalTime()
+                if ($started.ToString('yyyy-MM-ddTHH:mm:ss.ffffff') -cne $created.ToString('yyyy-MM-ddTHH:mm:ss.ffffff') -or
+                    $started -ge $childStarted) { $eligible=$false }
+                $arguments=@(Get-ContainerRemovalProcessArguments ([string]$row.CommandLine))
+                $remaining=@()
+                for($index=0;$index -lt $arguments.Count;$index++) {
+                    if ($arguments[$index] -ieq '-InstallRoot') {
+                        if(++$index -ge $arguments.Count){$eligible=$false;break}
+                    } else { $remaining+=$arguments[$index] }
+                }
+                foreach($argument in $remaining) {
+                    if(([string]$argument).Replace('/','\').Normalize([Text.NormalizationForm]::FormC).IndexOf($prefix,[StringComparison]::OrdinalIgnoreCase) -ge 0){$eligible=$false;break}
+                }
+            } catch { $eligible=$false }
+        }
+        if ($eligible) {
+            $ids+=$next
+            $Script:ContainerRemovalVerifiedProcessIdentities[$next]=@{id=$next;row=$row;started=$started}
+        } else { break }
+        $childStarted=$created;$next=[int]$row.ParentProcessId
+    }
+    return $ids
+}
+
 function Get-ContainerRemovalControllerProcessId([object[]]$ProcessRows) {
     if($RemoveUncommittedPlacement){return Get-ContainerTransactionRemovalControllerProcessId $ProcessRows}
-    # A delegated helper may exclude only its verified canonical controller.
+    # Only the exact, authenticated removal chain is excluded from census.
     # The caller already holds the placement admission; retain that admission
     # and recheck the existing session authority before reading its binding.
     if ($null -eq $placementWriterFenceLease -or $RemovalControllerProcessId -le 0 -or
@@ -1813,55 +2236,31 @@ function Get-ContainerRemovalControllerProcessId([object[]]$ProcessRows) {
         (Get-ContainerWriterFenceFileSha256 $managerManifest 1048576) -cne [string]$prepared.source_manifest_sha256) {
         throw 'REMOVAL_CONTROLLER_SOURCE_BINDING_INVALID'
     }
-    $ownRows = @($ProcessRows | Where-Object { [int]$_.ProcessId -eq $PID })
-    if ($ownRows.Count -ne 1) { throw 'REMOVAL_CONTROLLER_ANCESTRY_INVALID' }
-    $parentPid = [int]$ownRows[0].ParentProcessId
-    $seen = @{}
-    $controller = $null
-    for ($depth = 0; $parentPid -gt 0 -and $depth -lt 8; $depth++) {
-        if ($seen.ContainsKey($parentPid)) { throw 'REMOVAL_CONTROLLER_ANCESTRY_INVALID' }
-        $seen[$parentPid] = $true
-        $ancestors = @($ProcessRows | Where-Object { [int]$_.ProcessId -eq $parentPid })
-        if ($ancestors.Count -ne 1) { throw 'REMOVAL_CONTROLLER_ANCESTRY_INVALID' }
-        if ($parentPid -eq $RemovalControllerProcessId) { $controller = $ancestors[0]; break }
-        $parentPid = [int]$ancestors[0].ParentProcessId
-    }
-    $controllerEngineVerified=$null -ne $controller -and
-        (Test-SamePath ([string]$controller.ExecutablePath) (Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'))
-    if (-not $controllerEngineVerified -and $null -ne $controller -and $MachineControlRoot) {
-        $pwsh=Get-StrictFullPath ([string]$controller.ExecutablePath) 'machine removal controller engine'
-        $programFiles=(Get-StrictFullPath $env:ProgramFiles 'ProgramFiles').TrimEnd('\')+'\'
-        if ([IO.Path]::GetFileName($pwsh) -ieq 'pwsh.exe' -and
-            $pwsh.StartsWith($programFiles,[StringComparison]::OrdinalIgnoreCase)) {
-            # Store package ancestors have additional package ACL principals.
-            # Authenticate the actual Microsoft engine while retaining the
-            # canonical source, authority tuple and live ancestry bindings.
-            Assert-NoReparsePoint $pwsh 'machine removal controller engine'
-            $signature=Get-AuthenticodeSignature -LiteralPath $pwsh
-            $controllerEngineVerified=[string]$signature.Status -ceq 'Valid' -and
-                [string]$signature.SignerCertificate.Subject -match '(^|,\s*)O=Microsoft Corporation(,|$)'
-        }
-    }
-    if ($null -eq $controller -or -not $controllerEngineVerified -or
-        ([string]$controller.CommandLine).IndexOf($canonical,[StringComparison]::OrdinalIgnoreCase) -lt 0) {
-        throw 'REMOVAL_CONTROLLER_NOT_VERIFIED_ANCESTOR'
-    }
-    $started = ConvertTo-ContainerWriterFenceUtc $RemovalControllerStartedAtUtc
-    $process = Get-Process -Id $RemovalControllerProcessId -ErrorAction Stop
-    if ($started.ToString('o') -cne $RemovalControllerStartedAtUtc -or
-        $process.StartTime.ToUniversalTime().ToString('o') -cne $RemovalControllerStartedAtUtc) {
-        throw 'REMOVAL_CONTROLLER_PROCESS_IDENTITY_CHANGED'
-    }
-    return [int]$RemovalControllerProcessId
+    $ids=@(Get-ContainerRemovalVerifiedChain $ProcessRows)
+    $ids+=@(Get-ContainerRemovalCallingAncestors $ProcessRows $RemovalControllerProcessId $applicationRoot)
+    return $ids
 }
 
 function Assert-ContainerRemovalQuiescent([string]$ApplicationRoot, [int[]]$ExcludeProcessIds = @()) {
-    $prefix = (Get-StrictFullPath $ApplicationRoot 'removal process root') + '\'
+    $prefix = (Get-StrictFullPath $ApplicationRoot 'removal process root').TrimEnd('\','/') + '\'
     $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop)
     if ($rows.Count -eq 0) { throw 'REMOVAL_PROCESS_OBSERVATION_UNKNOWN' }
     foreach ($row in $rows) {
         if ($null -eq $row.ProcessId) { throw 'REMOVAL_PROCESS_OBSERVATION_UNKNOWN' }
-        if ([int]$row.ProcessId -eq $PID -or [int]$row.ProcessId -in $ExcludeProcessIds) { continue }
+        if ([int]$row.ProcessId -eq $PID -or [int]$row.ProcessId -in $ExcludeProcessIds) {
+            $identities=Get-Variable -Name ContainerRemovalVerifiedProcessIdentities -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+            if ($null -ne $identities -and $identities.ContainsKey([int]$row.ProcessId)) {
+                $identity=$identities[[int]$row.ProcessId]
+                try {
+                    $live=(Get-Process -Id ([int]$row.ProcessId) -ErrorAction Stop).StartTime.ToUniversalTime()
+                    if ($live -ne $identity.started -or
+                        ([datetime]$row.CreationDate).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffff') -cne $identity.started.ToString('yyyy-MM-ddTHH:mm:ss.ffffff') -or
+                        -not(Test-SamePath ([string]$row.ExecutablePath) ([string]$identity.row.ExecutablePath)) -or
+                        [string]$row.CommandLine -cne [string]$identity.row.CommandLine) { throw 'identity changed' }
+                } catch { throw 'REMOVAL_CONTROLLER_PROCESS_IDENTITY_CHANGED' }
+            }
+            continue
+        }
         if (([string]$row.ExecutablePath).StartsWith($prefix, 'OrdinalIgnoreCase') -or
             ([string]$row.CommandLine).IndexOf($prefix, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
             throw 'REMOVAL_REQUIRES_PRODUCT_PROCESS_STOP'
@@ -2184,6 +2583,8 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
 
 if ($Uninstall.IsPresent) {
     if ($DryRun.IsPresent) { 'uninstall_status=DRY_RUN_CODE_ONLY'; 'user_state_preserved=true'; exit 0 }
+    $Script:ContainerRemovalAttestedNewPlacement=Test-ContainerAttestedNewPlacementRemoval
+    if ($MachineControlRoot -and -not $RemoveUncommittedPlacement -and -not $Script:ContainerRemovalAttestedNewPlacement) { [void](Assert-ContainerMachineRemovalWorkerPart) }
     if($RemoveUncommittedPlacement){
         if($null -eq $placementWriterFenceLease){throw 'Uncommitted placement removal requires delegated writer admission.'}
         if(-not $testOverride){Assert-InstallationEvidenceProtectedPath $TransactionHandoverPath}

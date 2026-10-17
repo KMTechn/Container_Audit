@@ -417,6 +417,11 @@ launcher 경로와 실제 파일·재분석 여부를 확인한다. 연결이 �
 owner가 살아 있거나 기록·source가 다르면 거절한다. 사용자 감사나 잔류 fence를 임의로 고치지 않는다.
 보호 journal을 만들기 전의 중단에는 이 재진입 권한이 없으며 지원 담당자의 확인이 필요하다.
 
+제거 census는 검증된 canonical → 비상승 ITP → UAC 감싸개 → 상승 ITP의 실제 PID만 제외한다(이미 상승된 길은 canonical → ITP). 각 행의 System32 PowerShell, 같은 packet의 파일/핀된 메모리 전송과 인수, 부모보다 뒤인 생성 시각과 살아 있는 PID를 대조한다. census에서도 생성 identity를 다시 확인한다. 경로는 정규화·대소문자 무시와 끝 `\` 경계로 비교한다. 사슬 밖 앱 프로세스는 계속 제거를 막는다.
+키트/SSH 조상은 실제 부모 사슬의 System32 PowerShell·cmd·OpenSSH sshd·conhost 또는 Program Files의 PowerShell 7만 후보로 삼는다. `-InstallRoot <값>`을 뺀 나머지에 앱 뿌리 하위 경로가 있거나 생성 identity가 다르면 제외하지 않는다. Python/pythonw 조상은 제외하지 않는다. 첫 비대상 조상이나 부모 부재·더 늦은 부모 생성 시각에서 탐색을 정상 종료한다. 그 위 행은 일반 census로 판정하며, 탐색 중 생성 시각·부모 PID가 빈 행만 UNKNOWN이다.
+
+공개 standalone 관리자 `-Uninstall`은 보호 pending에 결속된 지정 작업자의 미실행·프로필 부재·사용자 제거 영수증·로컬 계정 사용 불가 중 하나를 코드 변경 전에 확인한다. PENDING 단독은 증명이 아니며 로드된 작업자 hive의 CompletedInstallId와 제품 Run이 모두 없어야 미실행이다. 영수증은 지정 SID와 같은 `operator_sid`, 프로필 아래 실제 파일, reparse 부재, 정확한 `status=PASS_DATA_PRESERVED`를 모두 요구한다. 증명 부재·읽기 실패는 `MACHINE_REMOVAL_WORKER_PART_PENDING`이다. 보호 journal과 기계 감사의 `worker_removal_proof`는 proof와 Run 존재(true/false/null)만 남긴다. 기존 위임·원본·새 배치 부재 prestate가 증명된 내부 설치 실패 복원은 새 사용자 몫 조건의 대상이 아니다.
+
 자동 feed는 설치 키로 검증한 manifest의 정확한 양방향 쌍 하나만 권한으로 쓴다.
 실제 stock 판 번호·계약 원문 SHA를 사용자 준비와 SYSTEM 적용/재개에서 다시 대조한다.
 같은/낮은 판·unsigned 정책 목록·Unicode 호스트·redirect/응답 URL 불일치는 거절한다.
@@ -851,6 +856,7 @@ old packet의 manifest/aggregate/integrity가 정확히 같아야 한다. 기존
 관리자는 보존한 원본을 대조한 뒤 이 값과 exact old packet을 선택한다. hash를 새 승인 증명으로 해석하지 않는다.
 
 정상 결과는 `PASS_RETIRED_REMOVAL_DATA_PRESERVED`이며 코드/Run/relay는 부재, 기본 은퇴 marker는 동일하다.
+일반 사용자의 퇴역 제거는 관리 canonical이 기존 UAC capture로 exact old helper를 직접 상승시킨다. 중간 비상승 ITP를 만들지 않아 old helper의 기존 census와 함께 동작한다. old packet/helper 바이트·무결성·기존 복원 계약은 유지한다.
 이후 새 패키지의 일반 canonical 설치를 **같은 채택 루트**로 진행하고 onboarding `REUSED`와 원 identity를
 대조한다. 명령이 실패하면 원 code/record·Run 명령과 은퇴 marker를 검증한 exact rollback 여부를 확인한다.
 다른 request로 바뀐 marker를 정리하지 않으며 불명 상태는 fence와 원본을 보존한다.

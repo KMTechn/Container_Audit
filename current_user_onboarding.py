@@ -2399,6 +2399,8 @@ def remove_current_user_setup(
 ) -> dict[str, Any]:
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
     status_dir: Path = paths.status_dir
+    from tools.register_container_audit_worker_pc import _current_user_sid
+    operator_sid = _current_user_sid()
     from data_generation_guard import (
         DataGenerationBlocked, _authenticated_support_removal_source, probe_before_owner_paths,
     )
@@ -2414,6 +2416,7 @@ def remove_current_user_setup(
         ensure_user_runtime_directory(status_dir)
     report: dict[str, Any] = {
         "report_version": REMOVAL_REPORT_VERSION,
+        "operator_sid": operator_sid,
         "status": "UNKNOWN",
         "captured_at": _now(),
         "state_scope": "current_user",

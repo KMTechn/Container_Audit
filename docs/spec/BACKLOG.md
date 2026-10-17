@@ -1,5 +1,7 @@
 ﻿## 목표 명세 고칠 목록(10/11)
 
+10/17 sub-291 G53·G28 고침: 검증한 제거 실행 사슬과 허용된 키트/SSH 조상만 census에서 제외하며 경로 끝 구분자와 PID 생성 identity를 재확인한다. 퇴역 제거는 exact old helper를 직접 상승시킨다. 공개 관리자 제거는 작업자 미실행·프로필 부재·SID 영수증·로컬 계정 사용 불가 중 하나를 먼저 증명한다. 타 사용자 HKCU 쓰기 없이 SID 영수증 재발행과 보호 worker_removal_proof를 더했다. 격리 시험·남은 실제 PC 수용은 sub-291 RESULT가 정본이다.
+
 10/17 sub-276 G46 닫음: Observe가 기존 bootstrap 판정에 맞는 GUI·relay launcher를 소유자 조회·역할 분류 전에 제외한다. 되돌림 READY는 실제 relay 하나로만 확인하며 실제 relay 둘·relay 부재는 확인하지 않는다. READY·census 판정 본문과 G41 동시 relay 요청의 단일 실행을 유지한다.
 
 10/17 sub-268 G41·G45: 복구 GUI의 relay 소실과 relay만 살아 있을 때의 GUI 막힘 P1을 수정했다. relay 요청은 원 시작 경계, GUI 요청은 허용 상태·정착 claim·검증된 relay 하나의 생성 경계를 사용한다. 일반 복구 증명·상태 보존·안내+20을 유지하며 SYSTEM guard/READY 소비자와 세대 정착을 격리 회귀로 확인한다. 실제 로그온·pythonw 수용은 별도다.
