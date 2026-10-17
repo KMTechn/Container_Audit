@@ -10851,7 +10851,7 @@
       "tools.register_container_audit_worker_pc"
     ]
   },
-  "inventory_sha256": "94fd01d4375c4c1e0c4133927719104d096c36d2da2dbd066156db425597f489",
+  "inventory_sha256": "6e698160c22508bba5d574ef2ebf9d66bbe787479bd51463c24fa0d3ec742142",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -25006,7 +25006,7 @@
       "direct_mutation_site_count": 0,
       "file": "writer_session_fence.py",
       "function": "writer_session_fence._settle_failed_installer_removal",
-      "line": 947,
+      "line": 945,
       "marker_kind": "decorator",
       "source": "current_user_setup_removal"
     },
