@@ -11,6 +11,37 @@ from tests.powershell_contracts import run_powershell
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize('case', ['absent', 'completion', 'run', 'both'])
+def test_loaded_hive_value_names_follow_registry_case_semantics(tmp_path, case):
+    source = str(ROOT / 'INSTALL_THIS_PC.ps1').replace("'", "''")
+    _run(tmp_path, "$source='" + source + "'\n$case='" + case + "'\n" + r'''
+$tokens=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile($source,[ref]$tokens,[ref]$errors)
+$definitions=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Test-ContainerRemovalWorkerNeverStarted','Get-ContainerRemovalWorkerRunPresent')},$false))
+if($definitions.Count -ne 2){throw 'hive reader definitions missing'}
+foreach($definition in $definitions){
+    $text=$definition.Extent.Text.Replace('[Microsoft.Win32.Registry]::Users.OpenSubKey([string]$Binding.sid,$false)','(Get-FixtureHive)')
+    Invoke-Expression $text
+}
+$script:FixtureCompletedNames=if($case -in @('completion','both')){@('completedinstallid')}else{@()}
+$script:FixtureRunNames=if($case -in @('run','both')){@('kmtech.containeraudit.relay')}else{@()}
+$script:FixtureCompletedKey=[pscustomobject]@{}
+$script:FixtureRunKey=[pscustomobject]@{}
+$script:FixtureCompletedKey|Add-Member ScriptMethod GetValueNames {$script:FixtureCompletedNames}
+$script:FixtureRunKey|Add-Member ScriptMethod GetValueNames {$script:FixtureRunNames}
+foreach($key in @($script:FixtureCompletedKey,$script:FixtureRunKey)){$key|Add-Member ScriptMethod Dispose {}}
+function Get-FixtureHive {
+    $hive=[pscustomobject]@{}
+    $hive|Add-Member ScriptMethod OpenSubKey {param($Path,$Writable) if($Path -like '*\Run'){$script:FixtureRunKey}else{$script:FixtureCompletedKey}}
+    $hive|Add-Member ScriptMethod Dispose {}
+    $hive
+}
+$binding=[pscustomobject]@{sid='fixture'}
+if((Test-ContainerRemovalWorkerNeverStarted $binding) -ne ($case -eq 'absent')){throw 'completion or Run name casing changed admission'}
+if((Get-ContainerRemovalWorkerRunPresent $binding) -ne ($case -in @('run','both'))){throw 'Run name casing changed audit'}
+''')
+
+
 @pytest.mark.parametrize('index,field', [(0, 'CreationDate'), (0, 'ParentProcessId'), (1, 'CreationDate'), (1, 'ParentProcessId')])
 def test_verified_chain_missing_identity_fields_are_unknown(tmp_path, index, field):
     _run(tmp_path, r'''
