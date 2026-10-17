@@ -208,11 +208,7 @@ def _run(tmp_path, body):
         "$ErrorActionPreference='Stop';Set-StrictMode -Version Latest\n"
         f"$tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseFile('{source}',[ref]$tokens,[ref]$errors)\n"
         "if($errors.Count){throw 'SOURCE_PARSE_FAILED'}\n"
-        "$sharedPath=Join-Path (Split-Path -Parent $ast.Extent.File) 'tools/bootstrap_integrity.ps1'
-$shared=[Management.Automation.Language.Parser]::ParseFile($sharedPath,[ref]$tokens,[ref]$errors)
-if($errors.Count){throw 'SHARED_SOURCE_PARSE_FAILED'}
-$shared.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Test-BootstrapProcessRootPrefix','Test-BootstrapSamePath','Assert-BootstrapSupportQuiescent')},$false)|ForEach-Object { . ([scriptblock]::Create($_.Extent.Text)) }
-$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and "
+        "$sharedPath=Join-Path (Split-Path -Parent $ast.Extent.File) 'tools/bootstrap_integrity.ps1'\n$shared=[Management.Automation.Language.Parser]::ParseFile($sharedPath,[ref]$tokens,[ref]$errors)\nif($errors.Count){throw 'SHARED_SOURCE_PARSE_FAILED'}\n$shared.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Test-BootstrapProcessRootPrefix','Test-BootstrapSamePath','Assert-BootstrapSupportQuiescent')},$false)|ForEach-Object { . ([scriptblock]::Create($_.Extent.Text)) }\n$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and "
         "$n.Name -in @('Get-ContainerRemovalProcessArguments','Read-ContainerRemovalTransport',"
         "'Get-ContainerRemovalInvocation','Assert-ContainerRemovalHelperArguments',"
         "'Get-ContainerRemovalVerifiedChain','Assert-ContainerRemovalQuiescent',"
