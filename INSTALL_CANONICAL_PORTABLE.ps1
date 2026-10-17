@@ -2003,7 +2003,23 @@ function Get-CanonicalRetirementChildFailure($Child, [Collections.IDictionary]$E
     }
     return $detail
 }
-function Read-CanonicalRetiredRemovalCapture($Stream) {
+function Read-CanonicalRetiredRemovalCapture($Stream,$EvidenceSummary=$null) {
+    if($Stream.path -is [string] -and ([string]$Stream.path).Length -eq 0) {
+        $recording=$null;$failureCodes=$null
+        if($null -ne $EvidenceSummary){
+            $recording=$EvidenceSummary.PSObject.Properties['recording_failed']
+            $failureCodes=$EvidenceSummary.PSObject.Properties['failure_codes']
+        }
+        if($null -eq $recording -or $recording.Value -isnot [bool] -or -not $recording.Value -or
+            $null -eq $failureCodes -or @($failureCodes.Value) -cnotcontains 'CHILD_STREAM_IO_OR_ACL_FAILURE') {
+            throw 'Retired removal captured stream binding differs.'
+        }
+        $Script:InstallationEvidenceFailed=$true
+        if(-not $Script:InstallationEvidenceFailureCodes.Contains('CHILD_STREAM_IO_OR_ACL_FAILURE')){
+            [void]$Script:InstallationEvidenceFailureCodes.Add('CHILD_STREAM_IO_OR_ACL_FAILURE')
+        }
+        return ''
+    }
     Assert-BootstrapNoReparsePoint ([string]$Stream.path) 'retired removal captured stream' -PathOnly
     Assert-InstallationEvidenceProtectedPath ([string]$Stream.path)
     Initialize-InstallationChildCapture
@@ -2038,7 +2054,9 @@ function Invoke-CanonicalRetiredRemovalChild([string]$Target,[string[]]$Argument
     foreach($name in @('stdout','stderr')) {
         if($null -eq $capture.Streams){continue}
         $stream=$capture.Streams.$name
-        $texts[$name]=Read-CanonicalRetiredRemovalCapture $stream
+        $summaryProperty=$capture.PSObject.Properties['EvidenceSummary']
+        $summary=if($null -ne $summaryProperty){$summaryProperty.Value}else{$null}
+        $texts[$name]=Read-CanonicalRetiredRemovalCapture $stream $summary
     }
     $Script:InstallationLastChildCapture=[ordered]@{stage='uninstall-helper';pid=$capture.Id;exit_code=$capture.ExitCode;
         stdout=(Protect-InstallationText $texts.stdout 512);stderr=(Protect-InstallationText $texts.stderr 512)}
