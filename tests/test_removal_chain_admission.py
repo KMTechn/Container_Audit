@@ -11,6 +11,47 @@ from tests.powershell_contracts import run_powershell
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize('case', ['reported_recording_failure', 'unreported_missing_path', 'different_failure_code', 'reported_hash_mismatch'])
+def test_retired_capture_separates_reported_recording_failure_from_integrity_failure(tmp_path, case):
+    canonical = str(ROOT / 'INSTALL_CANONICAL_PORTABLE.ps1').replace("'", "''")
+    library = str(ROOT / 'tools/bootstrap_integrity.ps1').replace("'", "''")
+    _run(tmp_path, "$canonical='" + canonical + "'\n$library='" + library + "'\n$case='" + case + "'\n" + r'''
+$tokens=$null;$errors=$null;$count=0
+foreach($path in @($canonical,$library)){
+    $ast=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
+    $definitions=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Read-CanonicalRetiredRemovalCapture','Invoke-CanonicalRetiredRemovalChild','Initialize-InstallationChildCapture','ConvertTo-SafeInstallationOutput')},$false))
+    $count+=$definitions.Count
+    foreach($definition in $definitions){Invoke-Expression $definition.Extent.Text}
+}
+if($count -ne 4){throw 'capture definitions missing'}
+function Same {param($Left,$Right) $Left -ceq $Right}
+function Protect-InstallationText {param($Text,$Limit) $Text}
+function Assert-BootstrapNoReparsePoint {param($Path,$Label,[switch]$PathOnly)}
+function Assert-InstallationEvidenceProtectedPath {param($Path)}
+function Sha {param($Path) 'actual-digest'}
+$Script:InstallationEvidenceFailed=$false
+$Script:InstallationEvidenceFailureCodes=[Collections.Generic.List[string]]::new()
+$capturePath=''
+if($case -eq 'reported_hash_mismatch'){
+    $capturePath=Join-Path $PSScriptRoot 'captured.txt'
+    [IO.File]::WriteAllText($capturePath,'fixture',[Text.UTF8Encoding]::new($false))
+}
+function Invoke-InstallationElevationCapture {
+    param($Target,$Arguments,$AuditBase,$Sid)
+    $codes=if($case -eq 'different_failure_code'){@('other')}else{@('CHILD_STREAM_IO_OR_ACL_FAILURE')}
+    [pscustomobject]@{Id=42;ExitCode=0;Streams=@{stdout=[pscustomobject]@{path=$capturePath;sha256='different-digest'}};
+        EvidenceSummary=[pscustomobject]@{recording_failed=($case -ne 'unreported_missing_path');failure_codes=$codes}}
+}
+$arguments=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File','helper.ps1','-Uninstall')
+$failed=$false
+try {$child=Invoke-CanonicalRetiredRemovalChild 'helper.ps1' $arguments 'audit' 'fixture-sid'}catch{$failed=$true}
+if($case -eq 'reported_recording_failure'){
+    if($failed -or $child.ExitCode -ne 0 -or -not $Script:InstallationEvidenceFailed -or
+        -not $Script:InstallationEvidenceFailureCodes.Contains('CHILD_STREAM_IO_OR_ACL_FAILURE')){throw 'recording failure changed helper outcome or lost evidence failure'}
+} elseif(-not $failed){throw 'unverified capture accepted'}
+''')
+
+
 @pytest.mark.parametrize('case', ['normal', 'hash_mismatch', 'over_existing_admission'])
 def test_retired_stream_reuses_existing_bounded_capture_policy(tmp_path, case):
     canonical = str(ROOT / 'INSTALL_CANONICAL_PORTABLE.ps1').replace("'", "''")
