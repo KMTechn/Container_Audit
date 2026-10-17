@@ -708,8 +708,8 @@ function Test-ContainerRemovalWorkerNeverStarted($Binding) {
     try {
         $completed=$hive.OpenSubKey('Software\KMTech\ContainerAudit\MachineOnboarding',$false)
         $run=$hive.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run',$false)
-        $hasCompletion=$null -ne $completed -and @($completed.GetValueNames()) -ccontains 'CompletedInstallId'
-        $hasRun=$null -ne $run -and @($run.GetValueNames()) -ccontains 'KMTech.ContainerAudit.Relay'
+        $hasCompletion=$null -ne $completed -and @($completed.GetValueNames()) -contains 'CompletedInstallId'
+        $hasRun=$null -ne $run -and @($run.GetValueNames()) -contains 'KMTech.ContainerAudit.Relay'
         return (-not $hasCompletion -and -not $hasRun)
     } finally {
         if($null -ne $completed){$completed.Dispose()};if($null -ne $run){$run.Dispose()};$hive.Dispose()
@@ -722,7 +722,7 @@ function Get-ContainerRemovalWorkerRunPresent($Binding) {
         $hive=[Microsoft.Win32.Registry]::Users.OpenSubKey([string]$Binding.sid,$false)
         if ($null -eq $hive) { return $null }
         $run=$hive.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run',$false)
-        return ($null -ne $run -and @($run.GetValueNames()) -ccontains 'KMTech.ContainerAudit.Relay')
+        return ($null -ne $run -and @($run.GetValueNames()) -contains 'KMTech.ContainerAudit.Relay')
     } catch { return $null }
     finally {if($null -ne $run){$run.Dispose()};if($null -ne $hive){$hive.Dispose()}}
 }
