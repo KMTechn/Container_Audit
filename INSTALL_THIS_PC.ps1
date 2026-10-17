@@ -2110,6 +2110,8 @@ function Get-ContainerRemovalVerifiedChain([object[]]$ProcessRows) {
             throw 'REMOVAL_CONTROLLER_NOT_VERIFIED_ANCESTOR'
         }
         $row=$matches[0]
+        if ([string]::IsNullOrWhiteSpace([string]$row.CreationDate) -or
+            [string]::IsNullOrWhiteSpace([string]$row.ParentProcessId)) { throw 'REMOVAL_PROCESS_OBSERVATION_UNKNOWN' }
         try {
             $started=(Get-Process -Id $next -ErrorAction Stop).StartTime.ToUniversalTime()
             if ($started.ToString('yyyy-MM-ddTHH:mm:ss.ffffff') -cne ([datetime]$row.CreationDate).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffff') -or
