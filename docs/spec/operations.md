@@ -78,6 +78,8 @@ VM 수용 결과와 따로 기록한다.
 변경 전에 거절한다. 이 attempt의 startup preimage만 복원하고 readback하며,
 공식 legacy 예약 writer와 다른 버전·설치의 파일은 이 제거 경로에서 변경하지 않는다.
 
+G59 실패 설치 복구 순서는 **같은 작업자의 공식 사용자 몫 제거(fence까지 정리) → 관리자 제거 → 승인 키트 다시 설치**다. 사용자 제거는 `INSTALLING`·`canonical_installer`, 대기 0초의 session authority mutex 획득(`WAIT_ABANDONED` 포함), 기존 검사로 GUI·relay 부재, 작업자 뿌리·앱 결속을 모두 확인한 경우에만 남은 fence를 정리한다. `PASS_DATA_PRESERVED` 뒤에도 같은 mutex를 유지하며 같은 작업자 `control/writer-session/settled/<sha>.json` 사본의 바이트 대조를 마친 다음 fence를 지우고 부재를 되읽는다. 사본/되읽기 실패에는 fence를 보존하고 실패를 기록한다. 정리한 제거의 영수증에만 `abandoned_fence_settled`가 있으며 이 칸이 정리 감사다. 이 칸은 session·attempt의 해시, 사본 해시, control 기준 상대 사본 경로를 담는다. 관리자 보호 저장소 쓰기·새 승격·ACL 완화는 하지 않는다. 관리자 기계 설치의 작업자 fence 검사는 그대로이므로 남은 fence를 건너뛰어 키트를 다시 설치하지 않는다.
+
 설치와 되돌리기의 resident relay READY 대기는 같은 기본 360초(상한 600초)를 쓴다.
 G 요청부터 첫 기록된 READY까지 275.561초라는 관측 상한에 84.439초 여유를 더했다.
 시간 초과는 되돌리기의 나머지 기록·끝 상태 저장을 계속하되 실패를 유지한다.
