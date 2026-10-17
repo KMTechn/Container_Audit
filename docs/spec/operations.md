@@ -417,6 +417,14 @@ launcher 경로와 실제 파일·재분석 여부를 확인한다. 연결이 �
 owner가 살아 있거나 기록·source가 다르면 거절한다. 사용자 감사나 잔류 fence를 임의로 고치지 않는다.
 보호 journal을 만들기 전의 중단에는 이 재진입 권한이 없으며 지원 담당자의 확인이 필요하다.
 
+### FAILED 지원 출구
+
+FAILED에서도 활성 판의 코드 inventory·서명, writer 0, 읽히는 자료 세대와 출처 하한, 살아 있는 fence·대기 prepared 부재의 네 증명이 모두 성립해야 한다. 실패 원인을 지우거나 phase를 손으로 바꾸어 진행하지 않는다. 증명 실패는 UNKNOWN 거절이며 자료·등록·전송 대기를 유지한다.
+
+기존 권한 경계대로 작업자 Limited의 지원 `-Uninstall` → 관리자의 기계 `-Uninstall` → 기존 두 인수의 지원 재설치 → 새 판 첫 실행 READY 되읽기 순서를 따른다. 제거 도중 중단되면 위 보호 journal의 같은 제거로 재진입하며 부분 제거 상태에서는 재설치를 시작하지 않는다. 관리자 제거는 FAILED transition을 먼저 감사 사본으로 복사하고 원본과 바이트 대조한 뒤 기존 `removal-evidence/<UUID>`에 보존 이동한다. 사본 대조 실패에는 원본 이동과 후속 제거를 시작하지 않는다.
+
+직접 지원 재설치도 보호된 startup preimage에 FAILED transition을 복사·되읽기 대조한 뒤 원본을 같은 감사 증거 폴더로 이관하고 새 제어 상태를 게시한다. 원인과 이전 실패 목록은 감사에 남기며 새 판에 옛 FAILED 제어 상태를 이어 붙이지 않는다. 내부 재검사에서는 이미 delegation에 대조한 자기 fence/receipt의 경로·SHA256·실행 ID를 같은 프로세스·thread의 함수 인수로만 전달한다. 다른 fence·대기 prepared·바이트 불일치·관측 실패를 제외하는 권한은 없다. 업무 자료·원장·등록·전송 대기는 기존 제거 보존 경계를 따른다.
+
 자동 feed는 설치 키로 검증한 manifest의 정확한 양방향 쌍 하나만 권한으로 쓴다.
 실제 stock 판 번호·계약 원문 SHA를 사용자 준비와 SYSTEM 적용/재개에서 다시 대조한다.
 같은/낮은 판·unsigned 정책 목록·Unicode 호스트·redirect/응답 URL 불일치는 거절한다.

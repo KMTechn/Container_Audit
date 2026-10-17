@@ -22,6 +22,10 @@ Portable metadata의 `data_generation_signed_manifest`·`data_generation_signatu
 
 지원 source packet의 사용자 정리는 설치 bootstrap PASS와 실행 source 전체 inventory·판/build가 일치할 때만 설치 기록을 실행 코드의 증명으로 사용한다. 매일 업데이트의 고정 current는 먼저 검증하고, 관리 기록이 있으면 policy·active pointer·transition의 완전성·판 선택·단계별 SHA 결속 및 versions/<sha> bootstrap PASS·build·기존 신뢰 키 일치를 확인한 활성 판 inventory에 source를 묶는다. 초기 설치·지원 배치의 DEFERRED 기록에는 transition_id가 없으므로 포인터와 거래 ID 동등성을 요구하지 않는다. CONFIRMED/ROLLED_BACK은 기존 lifecycle처럼 candidate_sha/previous_sha와 활성 SHA를 대조한다. 기록은 probe 전후 다시 대조한다. 서명이 있으면 기존 ES256 검증도 통과해야 한다. 증명은 쓰기 허가 밖에서 계산·최종 대조하며 제거 probe 동안만 유지한다. 근거 부재·변조·다른 판/build는 UNKNOWN, 새 자료의 REFUSE와 원 fence 예외는 그대로다. 다시 설치하기 전 사용자 정리는 이미 검증된 활성 host로 실행하고, 후보 배치 뒤 정리는 후보와 활성 설치 기록을 대조한다. 일반 시작·설치 packet 제거의 기존 무결성 경로는 유지한다.
 
+FAILED 지원 제거·재설치는 phase 자체로 허용하지 않는다. 활성 포인터 판의 검증 inventory·서명과 코드 바이트 일치, 기존 census의 writer 0, 읽을 수 있는 자료 세대 표지와 제거 출처의 호환 하한, 살아 있는 writer fence·대기 prepared 부재를 각각 증명해야 한다. 하나라도 증명하지 못하면 UNKNOWN으로 거절하며 자료·등록·전송 대기는 보존한다. 지원 제거 probe 전후에 활성 기록과 census를 다시 대조한다.
+
+FAILED 재설치의 바깥 preflight는 기존 fence·대기 prepared 0을 요구한다. 안쪽 배치는 이미 검증한 delegation의 자기 fence/receipt 경로·내용 SHA256·실행 ID를 같은 프로세스·같은 thread의 함수 인수로만 전달한다. 그 정확한 한 쌍만 제외하고 다른 실행·불일치·관측 불명은 거절한다. 일반 lifecycle 호출과 명령 줄에는 이 예외를 주지 않는다. 원 transition의 reason·last_ready_error 등 전체 바이트는 복사→되읽기 바이트 대조→감사 증거로 이관하며, 대조 실패에는 원본을 옮기지 않는다. 성공한 재설치는 새 판의 새 제어 상태로 시작하고 이전 FAILED 상태·실패 목록은 감사 증거에 보존한다.
+
 증명 계산의 암호 API 오류도 같은 fallback과 고정 한 줄 진단을 사용한다. 설치기 onboarding의 실제 첫 owner marker 기록까지 검증은 writer 깊이 0에서 한 번 수행한다. 코드 무결성·실행 신원 실패의 기존 차단 규칙은 유지한다.
 
 운영자 spool 복구는 publish 직전 ACKED row의 상태·metadata·신원 결속을 다시 비교한다. 등록 응답은 신원·manifest·credential·profile 원본의 fingerprint와 possession key를 재확인한 뒤 적용하며, two-phase 복구는 요청을 만든 journal binding과 현재 binding이 같을 때만 전이·sealed package를 저장한다. 대기 중 바뀐 원본은 늦은 응답으로 덮어쓰지 않는다.

@@ -3993,7 +3993,96 @@ function Get-BootstrapOfficialLegacyRelayIdentity($Task,[string]$Xml='',[object[
     return [pscustomobject]@{matched=$equal;sha256=(Task-Sha $lines);fields=$fields;records=$records;entry_tag=$entryTag;reason_code=if($equal){'EXACT_OFFICIAL_SOURCE_IDENTITY'}elseif($logonType -ceq 'ABSENT'){'LOGON_TYPE_ABSENT_UNMATCHED'}else{'IDENTITY_DIFFERS'}}
 }
 
-function Get-BootstrapSupportedLifecycleContext([string]$Root,[string]$Operation='inspect',[string]$ExpectedFromCommit='') {
+function Assert-BootstrapExactFileCopy([string]$Original,[string]$Copy) {
+    foreach($path in @($Original,$Copy)) {
+        Assert-BootstrapNoReparsePoint $path 'FAILED transition evidence' -PathOnly
+        if((Get-Item -LiteralPath $path -ErrorAction Stop).Length -gt 1048576){throw 'FAILED_TRANSITION_EVIDENCE_OVERSIZED'}
+    }
+    $left=[IO.File]::ReadAllBytes($Original);$right=[IO.File]::ReadAllBytes($Copy)
+    if($left.Length -ne $right.Length){throw 'FAILED_TRANSITION_COPY_READBACK_FAILED'}
+    for($index=0;$index -lt $left.Length;$index++) {
+        if($left[$index] -ne $right[$index]){throw 'FAILED_TRANSITION_COPY_READBACK_FAILED'}
+    }
+}
+
+function Assert-BootstrapSupportQuiescent([string]$ApplicationRoot,[int[]]$ExcludeProcessIds=@()) {
+    $prefix=(Get-StrictFullPath $ApplicationRoot 'support process root').TrimEnd('\')+'\'
+    $rows=@(Get-CimInstance Win32_Process -ErrorAction Stop)
+    if($rows.Count -eq 0){throw 'REMOVAL_PROCESS_OBSERVATION_UNKNOWN'}
+    foreach($row in $rows) {
+        if($null -eq $row.ProcessId){throw 'REMOVAL_PROCESS_OBSERVATION_UNKNOWN'}
+        if([int]$row.ProcessId -eq $PID -or [int]$row.ProcessId -in $ExcludeProcessIds){continue}
+        if(([string]$row.ExecutablePath).StartsWith($prefix,'OrdinalIgnoreCase') -or
+            ([string]$row.CommandLine).IndexOf($prefix,[StringComparison]::OrdinalIgnoreCase) -ge 0){throw 'REMOVAL_REQUIRES_PRODUCT_PROCESS_STOP'}
+    }
+}
+
+function Assert-BootstrapFailedSupportState([string]$Root,$Policy,$State,[string]$ActiveRoot,$SelfIdentity) {
+    Assert-BootstrapSupportQuiescent $Root
+    $local=Get-StrictFullPath ([string]$Policy['operator_local_app_data']) 'support operator profile'
+    $roots=@((Join-Path $local 'KMTech\DirectSync\container_audit\control\writer-session'))
+    if(-not $env:PROGRAMDATA){throw 'failed_support_fence_unknown'}
+    $roots+=Join-Path ([IO.Path]::GetFullPath($env:PROGRAMDATA)) 'KMTech\ContainerAudit\machine-install\control\writer-session'
+    if($env:LOCALAPPDATA){$roots+=Join-Path ([IO.Path]::GetFullPath($env:LOCALAPPDATA)) 'KMTech\DirectSync\container_audit\control\writer-session'}
+    $matchedSelf=$false
+    if($null -ne $SelfIdentity -and ($SelfIdentity.process_id -ne $PID -or
+        $SelfIdentity.thread_id -ne [Threading.Thread]::CurrentThread.ManagedThreadId)){throw 'failed_support_identity_unknown'}
+    foreach($fenceRoot in @($roots|Sort-Object -Unique)) {
+        $active=Read-ContainerWriterFence -ControlRoot $fenceRoot -AllowAbsent
+        if($null -eq $active){continue}
+        $path=Join-Path $fenceRoot 'active.json'
+        if($null -eq $SelfIdentity -or
+            -not(Test-BootstrapSamePath $path ([string]$SelfIdentity.fence_path)) -or
+            (Get-FileSha256 $path) -cne [string]$SelfIdentity.fence_sha256 -or
+            -not(Test-BootstrapSamePath ([string]$active.prepared_receipt_path) ([string]$SelfIdentity.prepared_path)) -or
+            (Get-FileSha256 ([string]$SelfIdentity.prepared_path)) -cne [string]$SelfIdentity.prepared_sha256 -or
+            [string]$active.prepared_receipt_sha256 -cne [string]$SelfIdentity.prepared_sha256 -or
+            [string]$active.session_id -cne [string]$SelfIdentity.session_id -or
+            [string]$active.attempt_id -cne [string]$SelfIdentity.attempt_id -or
+            [string]$active.replacement_transaction_id -cne [string]$SelfIdentity.replacement_transaction_id){throw 'failed_support_fence_unknown'}
+        $matchedSelf=$true
+    }
+    if($null -ne $SelfIdentity -and -not $matchedSelf){throw 'failed_support_identity_unknown'}
+    if($Policy['feed_url']) {
+        $prepared=Join-Path ([string]$Policy['staging_root']) 'prepared.json'
+        $existing=$prepared
+        while(-not(Test-Path -LiteralPath $existing)){
+            $parent=Split-Path -Parent $existing
+            if(-not $parent -or $parent -ceq $existing){throw 'failed_support_prepared_unknown'}
+            $existing=$parent
+        }
+        Assert-BootstrapNoReparsePoint $existing 'support prepared receipt' -PathOnly
+        if(Test-Path -LiteralPath $prepared) {
+            $ignoredFailure=($State['reason_code'] -ceq 'UPDATE_PREPARATION_FAILED' -and
+                (Get-FileSha256 $prepared) -ceq $State['failed_prepared_marker_sha256'])
+            if(-not $ignoredFailure) {
+                $pending=Read-BootstrapLifecycleJson $prepared
+                $sha=$pending['source_commit'];$activeSha=Split-Path -Leaf $ActiveRoot
+                if($sha -isnot [string] -or $sha -cnotmatch '^[0-9a-f]{40}$' -or
+                    ($sha -cne $activeSha -and $sha -cnotin @($State['failed_shas']) -and $sha -cne $State['failed_prepared_sha'])){throw 'failed_support_prepared_pending'}
+            }
+        }
+    }
+    $leaf=Get-BootstrapSharedPortableLeaf $ActiveRoot 'data_generation.ps1'
+    . $leaf
+    $sid=[string]$Policy['operator_sid']
+    $data=if($env:CONTAINER_AUDIT_DATA_ROOT){Get-StrictFullPath $env:CONTAINER_AUDIT_DATA_ROOT 'support data root'}else{Join-Path $local 'KMTech\ContainerAudit'}
+    $markers=@((Join-Path $data 'data-generation.json'),(Join-Path $local ('KMTech\DirectSync\container_audit\control\writer-session\data-generation\'+$sid+'.json')))
+    $present=$false;$before=@()
+    foreach($marker in $markers) {
+        if($null -ne (Read-KmtechDataGeneration $marker 'container_audit' $sid)){$present=$true}
+        $before+=if(Test-Path -LiteralPath $marker){Get-FileSha256 $marker}else{''}
+    }
+    if(-not $present){throw 'failed_support_generation_unknown'}
+    Assert-ContainerDataGenerationTarget $ActiveRoot $sid $local $data $ActiveRoot
+    for($index=0;$index -lt $markers.Count;$index++) {
+        $after=if(Test-Path -LiteralPath $markers[$index]){Get-FileSha256 $markers[$index]}else{''}
+        if($after -cne $before[$index]){throw 'failed_support_generation_changed'}
+    }
+    Assert-BootstrapSupportQuiescent $Root
+}
+
+function Get-BootstrapSupportedLifecycleContext([string]$Root,[string]$Operation='inspect',[string]$ExpectedFromCommit='',[switch]$FailedSupportPreflight,$SelfIdentity=$null) {
     # Read-only counterpart of auto_update.resolve_lifecycle_context, called
     # through the existing byte-pinned bootstrap library before PlanOnly.
     if($Operation -cnotin @('inspect','install','register','uninstall','user_remove')){throw 'lifecycle_operation_invalid'}
@@ -4053,10 +4142,12 @@ function Get-BootstrapSupportedLifecycleContext([string]$Root,[string]$Operation
         if($managed){
             if($present -contains $false){throw 'lifecycle_control_incomplete'}
             $policy,$pointer,$state=@($records|ForEach-Object {Read-BootstrapLifecycleJson $_})
+            $failedSupport=($state['phase'] -ceq 'FAILED' -and $Operation -ceq 'install' -and
+                (($FailedSupportPreflight -and $null -eq $SelfIdentity) -or (-not $FailedSupportPreflight -and $null -ne $SelfIdentity)))
             if($policy['schema'] -cne 'container-audit-startup-update-policy-v1' -or
                 $pointer['schema'] -cne 'container-audit-startup-update-v1' -or
                 $state['schema'] -cne 'container-audit-startup-update-v1' -or
-                $state['phase'] -cnotin @('CONFIRMED','DEFERRED','ROLLED_BACK')){throw 'lifecycle_transition_requires_recovery'}
+                ($state['phase'] -cnotin @('CONFIRMED','DEFERRED','ROLLED_BACK') -and -not $failedSupport)){throw 'lifecycle_transition_requires_recovery'}
             $activeSha=$pointer['sha']
             if($activeSha -isnot [string] -or $activeSha -cnotmatch '^[0-9a-f]{40}$'){throw 'lifecycle_active_manifest_mismatch'}
             if(($state['phase'] -ceq 'CONFIRMED' -and $state['candidate_sha'] -cne $activeSha) -or
@@ -4107,6 +4198,7 @@ function Get-BootstrapSupportedLifecycleContext([string]$Root,[string]$Operation
                 if($field -ceq '/t:Task/t:Actions/t:Exec/t:Arguments' -and $node.InnerText -ceq $previousArguments){continue}
                 if(-not(Test-BootstrapTaskReadbackValue $field $node.InnerText $wanted[$field])){throw 'lifecycle_task_absence_or_unknown'}
             }
+            if($failedSupport){Assert-BootstrapFailedSupportState $rootFull $policy $state $activeRoot $SelfIdentity}
             $after=@($records|ForEach-Object {Read-BootstrapLifecycleJson $_})
             for($index=0;$index -lt 3;$index++){
                 if(-not(Test-BootstrapLifecycleJsonEqual $after[$index] @($policy,$pointer,$state)[$index])){throw 'lifecycle_state_changed_during_verification'}

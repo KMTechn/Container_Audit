@@ -128,9 +128,9 @@ def _authenticated_support_removal_source(installed_app_root):
         ), required=True, expected_entrypoint="app/Container_Audit.py")
         if detail.get("status") != "PASS":
             raise ValueError("installed removal code integrity is not proven")
-        records, snapshot = [], None
+        records, snapshot, failed_support = [], None, False
         if installed_root.name == "current":
-            from auto_update import SCHEMA, read_json, version_bundle
+            from auto_update import SCHEMA, assert_failed_support_quiescent, read_json, version_bundle
 
             control = installed_root.parent / "update-control"
             assert_path_has_no_reparse_components(control, label="removal update control")
@@ -142,11 +142,12 @@ def _authenticated_support_removal_source(installed_app_root):
                 snapshot = [read_json(path) for path in records]
                 policy, pointer, state = snapshot
                 phase, active_sha = state.get("phase"), pointer.get("sha")
+                failed_support = phase == "FAILED"
                 # Installation/placement DEFERRED records carry no transition ID.
                 # Match lifecycle resolution's phase-specific SHA relationships.
                 if (policy.get("schema") != "container-audit-startup-update-policy-v1"
                         or pointer.get("schema") != SCHEMA or state.get("schema") != SCHEMA
-                        or phase not in {"CONFIRMED", "DEFERRED", "ROLLED_BACK"}
+                        or (phase not in {"CONFIRMED", "DEFERRED", "ROLLED_BACK"} and not failed_support)
                         or (phase == "CONFIRMED" and state.get("candidate_sha") != active_sha)
                         or (phase == "ROLLED_BACK" and state.get("previous_sha") != active_sha)):
                     raise ValueError("removal active release selection differs")
@@ -187,9 +188,11 @@ def _authenticated_support_removal_source(installed_app_root):
                 )
             if records and [read_json(path) for path in records] != snapshot:
                 raise ValueError("removal active selection changed during verification")
+            if failed_support:
+                assert_failed_support_quiescent(control, policy, state)
             # Proof work and the source scope's final inventory readback stay
             # outside writer admission. Nothing is cached beyond this probe.
-            scope = _SUPPORT_REMOVAL_RELEASE.set(dict(release))
+            scope = _SUPPORT_REMOVAL_RELEASE.set({**release, "require_existing_generation": failed_support})
             try:
                 try:
                     yield
@@ -198,6 +201,8 @@ def _authenticated_support_removal_source(installed_app_root):
                     raise
             finally:
                 _SUPPORT_REMOVAL_RELEASE.reset(scope)
+            if failed_support:
+                assert_failed_support_quiescent(control, policy, state)
         if records and [read_json(path) for path in records] != snapshot:
             raise ValueError("removal active selection changed during probe")
     except DataGenerationBlocked:
@@ -436,6 +441,8 @@ def record_before_data_open(data_root, *, probe_only=False):
         paths = marker_paths(data_root, sid)
         decision = generation.probe_downgrade(paths, release["version"], app_id="container_audit",
                                               subject_sid=sid, target_build_id=release["build_id"])
+        if release.get("require_existing_generation") and (not decision["allowed"] or decision.get("version") is None):
+            raise ValueError("failed support removal generation is not proven")
         if not decision["allowed"]:
             raise DataGenerationBlocked(decision)
         if probe_only:
