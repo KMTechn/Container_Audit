@@ -148,6 +148,8 @@ def _retired_fixture(tmp_path, fault='', *, historical=False):
         encoding='utf-8-sig',
     )
     result = _ps(retire, env)
+    (tmp_path / "retire-preparation-stdout-private.txt").write_text(result.stdout, encoding="utf-8")
+    (tmp_path / "retire-preparation-stderr-private.txt").write_text(result.stderr, encoding="utf-8")
     assert result.returncode == 0, result.stderr
     legacy = Path(env['LOCALAPPDATA']) / 'KMTech/DirectSync/container_audit'
     receipt = legacy / 'status/current_user_removal.json'
