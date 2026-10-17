@@ -1384,7 +1384,7 @@ function Write-InstallationTransactionTerminalFailure {
     $fields=ConvertTo-KmtechPublicRecord -Fields ([ordered]@{status='FAILED';stage='canonical_install';
         reason_code='INSTALLER_CANONICAL_FAILURE';exit_code=1;report_status='REPORT_UNAVAILABLE'}) `
         -AllowedCodes @('FAILED','canonical_install','INSTALLER_CANONICAL_FAILURE','REPORT_UNAVAILABLE') -SafeMessages @()
-    Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+($fields|ConvertTo-Json -Compress))
+    Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+([regex]::Replace(($fields|ConvertTo-Json -Compress), '[^\x00-\x7f]', {param($unit) '\u{0:x4}' -f [int][char]$unit.Value})))
 }
 
 function Remove-InstallationMemoryTransport($Transport,[switch]$AfterSeal) {
@@ -2426,7 +2426,7 @@ function Start-BootstrapNormalProducerWrapper([string]$Line,$Caller,[string[]]$E
         $public=ConvertTo-KmtechPublicRecord -Fields ([ordered]@{status='FAILED';stage='normal_producer_launch';
             reason_code='NORMAL_PRODUCER_COMMAND_TOO_LONG';command_utf16_count=$Line.Length;command_limit_count=1023}) `
             -AllowedCodes @('FAILED','normal_producer_launch','NORMAL_PRODUCER_COMMAND_TOO_LONG') -SafeMessages @()
-        [Console]::Out.WriteLine('CONTAINER_AUDIT_NORMAL_PRODUCER='+($public|ConvertTo-Json -Compress))
+        [Console]::Out.WriteLine('CONTAINER_AUDIT_NORMAL_PRODUCER='+([regex]::Replace(($public|ConvertTo-Json -Compress), '[^\x00-\x7f]', {param($unit) '\u{0:x4}' -f [int][char]$unit.Value})))
         throw 'NORMAL_PRODUCER_COMMAND_TOO_LONG'
     }
     return [ContainerAuditCanonicalUserProcess]::StartLimitedWithOverrides($Line,[string]$Caller.sid,[int]$Caller.session_id,$EnvironmentNames,$EnvironmentValues)
@@ -2972,11 +2972,11 @@ function Get-BootstrapSharedPortableLeaf([string]$Root, [string]$Leaf = 'portabl
             throw 'Shared installer input must be a file.'
         }
     }
-    $expectedManifestSha = '8c310e69a97c613dbfc3405b17e2ca9f15290a4373c98c140510ea16b9d94c84'
+    $expectedManifestSha = '9bdace18db6c6f124ca02418376f4005b8a46b4e82a64033a0407f7c7e988c37'
     if ((Get-Item -LiteralPath $lockPath).Length -gt 65536) { throw 'Shared consumer lock is oversized.' }
     $lock = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if (@($lock.PSObject.Properties.Name).Count -ne 2 -or
-        $lock.version -cne '0.3.6' -or $lock.manifest_sha256 -cne $expectedManifestSha) {
+        $lock.version -cne '0.3.7' -or $lock.manifest_sha256 -cne $expectedManifestSha) {
         throw 'Shared consumer lock pin mismatch.'
     }
     if ((Get-FileSha256 $manifestPath) -cne $expectedManifestSha) {

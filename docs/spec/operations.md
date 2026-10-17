@@ -1669,6 +1669,10 @@ Registration retains string profile-path arguments after shared resolution. Inva
 <a id="ca-installer-public-failure"></a>
 ### 설치 자식의 공개 실패 줄
 
+공개 실패 줄은 기존 출력 채널에서 `<앱 접두>=` + compact JSON 객체 하나 + CRLF로 쓴다. CRLF 앞 바이트는 모두 0x20–0x7E다. JSON을 만든 뒤 U+007F보다 큰 UTF-16 코드 단위를 각각 소문자 네 자리 `\uXXXX`로 이스케이프하며, 서로게이트 짝도 단위마다 처리한다. 필드 이름·차례·그 밖의 JSON 이스케이프와 종료 코드는 유지한다. 콘솔 코드 페이지나 전역 출력 인코딩을 바꾸지 않는다.
+
+공개 설치기의 마지막 실패 경계는 준비 진단·문장 가림·private 진단을 각각 독립적으로 시도한다. 그 진단이 실패해도 공개 실패 레코드와 기존 실패 종료 코드를 낸다. 공개 변환 또는 writer까지 실패하면 변환 helper에 기대지 않는 상수 레코드 하나로 `REPORT_UNAVAILABLE`을 알리며 원 예외 문장·경로·위임 값은 싣지 않는다.
+
 공통 계약 0절의 `public_record`/`ConvertTo-KmtechPublicRecord`와 공개 벡터 6개(767ece42ad23dbbcacee4bb98509b35749655017664476ae3d05d852784eb5a5)를 따른다. onboarding·읽기 전용 preflight·제거·교체 lifecycle 복구의 실패는 `CONTAINER_AUDIT_INSTALLER_FAILURE=` 뒤 compact JSON 레코드 하나다. 고정 코드·단계·안내, 예외 형식 이름, 모듈·함수·줄과 허용된 식별자만 공개한다. 데이터 세대의 거부·미확인도 기존 고정 안내를 각각 `DATA_GENERATION_REFUSED`·`DATA_GENERATION_UNKNOWN`으로 전달하여 읽기·변경 차단을 유지한다. 예외 문장·child 출력·자유 문장·중첩 원인 객체는 공개하지 않는다. 형식에 맞지 않는 값은 빼고 `nonconforming_fields`와 `PUBLIC_FIELD_NONCONFORMING`을 남긴다.
 
 onboarding/removal/lifecycle의 사용자 경로와 update-control에는 작업 사용자·관리자만 읽는다는 기존 ACL 증명이 없다. 공개 실패 줄은 `REPORT_UNAVAILABLE`을 표시하고 원문을 새 파일에 쓰지 않는다. 혼합 상태 보고서는 같은 키·타입을 유지하며 자유 진단 필드만 `SUPPORT_FAILURE`로 저장한다. 실패 보고서와 공개 줄은 원인 예외의 형식 이름과 가장 안쪽 앱 프레임의 모듈·함수·줄 번호를 보존한다. 원인 예외에 traceback이 없으면 바깥 예외의 앱 프레임을 사용하며, 예외 문장·지역 변수·파일 경로는 위치 필드에 넣지 않는다. 보고서 게시 실패에도 공개 줄의 위치 정보는 유지한다. identity/profile/credential/receipt/queue/lease/status와 설치기 인증·재개 bindings는 원 값을 보존한다. 알려진 비밀 값이 machine metadata에 섞이면 기존 공통 검사로 temp를 열기 전에 거절한다. preflight는 진단 보고서를 만들려고 자료를 변경하지 않는다.

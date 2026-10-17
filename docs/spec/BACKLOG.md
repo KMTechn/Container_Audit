@@ -1,5 +1,16 @@
 ﻿## 목표 명세 고칠 목록(10/11)
 
+10/17 sub-297 덩어리 3b: G42 최상위 실패 경계의 준비 진단·가림·private 진단을 각각 격리하고,
+공개 writer 실패에는 helper가 필요 없는 상수 실패 줄을 둔다. 부분 출력 뒤 예외에도 공개 줄은 하나다.
+G35는 제거 quiesce 영수증과 같은 파일의 제어 파일 metadata 읽기 7곳에 숨김 포함을 적용했으며,
+공용 0.3.7(정본 repin 83420a3, 코드 11f4bf3)의 manifest·lock·실행 핀과 writer inventory를 갱신했다.
+G31은 조건부 감사 `failure_code`와 fallback 진단 `reason_code`가 없어도 기존 「없음」 처리를 유지한다.
+선택 칸을 뺀 JSON의 실제 소비 함수에 PS5.1/PS7 StrictMode 회귀를 추가했다.
+G36은 설치기·설치 도우미·업데이트/복구 공개 줄의 JSON 생성 뒤 비ASCII UTF-16 단위를 이스케이프한다.
+공통 벡터 5개와 PS5.1/PS7 × 949/65001의 원시 바이트·JSON 복원을 대조한다.
+종결 전 관련 시험 전수 대조와 독립 검토가 남으며, 퇴역 첫 자식 진단 보존 시험은 준비 단계의
+DATA_GENERATION_UNKNOWN과 배포본 관문 입력에 관해 레인 답을 기다린다(sub-297 QUESTION/RESULT).
+
 10/17 sub-291 G53·G28 고침: 검증한 제거 실행 사슬과 허용된 키트/SSH 조상만 census에서 제외하며 경로 끝 구분자와 PID 생성 identity를 재확인한다. 퇴역 제거는 exact old helper를 직접 상승시킨다. 공개 관리자 제거는 작업자 미실행·프로필 부재·SID 영수증·로컬 계정 사용 불가 중 하나를 먼저 증명한다. 타 사용자 HKCU 쓰기 없이 SID 영수증 재발행과 보호 worker_removal_proof를 더했다. 격리 시험·남은 실제 PC 수용은 sub-291 RESULT가 정본이다.
 
 10/17 sub-276 G46 닫음: Observe가 기존 bootstrap 판정에 맞는 GUI·relay launcher를 소유자 조회·역할 분류 전에 제외한다. 되돌림 READY는 실제 relay 하나로만 확인하며 실제 relay 둘·relay 부재는 확인하지 않는다. READY·census 판정 본문과 G41 동시 relay 요청의 단일 실행을 유지한다.

@@ -71,7 +71,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '43b67845c82983e01ab5b412ce9947bc3f1b240595d590099f4e507e8110c86e'
+$ExpectedBootstrapIntegritySha256 = '0cc17ebb856f3673769970126d75d64ac66967ad3eb2514502c8c622e1cdbfd0'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -397,10 +397,28 @@ function Get-WriterContractSessionMutexName(
 }
 function Write-CanonicalInstallationPublicRecord($Failure=$null,[int]$ExitCode=0) {
     $guidance='자료를 보존하고 관리자 지원 복구를 요청하세요.'
+    $replacementFailureCode=$null
+    $replacement=$null
+    if($null -ne $audit){
+        if($audit -is [Collections.IDictionary]){
+            if($audit.Contains('code_replacement')){$replacement=$audit['code_replacement']}
+        }else{
+            $property=$audit.PSObject.Properties['code_replacement']
+            if($null -ne $property){$replacement=$property.Value}
+        }
+    }
+    if($null -ne $replacement){
+        if($replacement -is [Collections.IDictionary]){
+            if($replacement.Contains('failure_code')){$replacementFailureCode=$replacement['failure_code']}
+        }else{
+            $property=$replacement.PSObject.Properties['failure_code']
+            if($null -ne $property){$replacementFailureCode=$property.Value}
+        }
+    }
     $elevationRecovered=($ExitCode -ne 0 -and $null -ne $audit -and
         [string]$audit.status -ceq 'FAILED_ROLLED_BACK' -and [bool]$audit.rollback.runtime_restored -and
         -not $canonicalWriterFenceActive -and
-        [string]$audit.code_replacement.failure_code -ceq 'CONTAINER_PLACEMENT_ELEVATION_FAILED')
+        [string]$replacementFailureCode -ceq 'CONTAINER_PLACEMENT_ELEVATION_FAILED')
     if($elevationRecovered){$guidance='관리자 권한 요청을 완료하지 못했습니다. 이번 설치의 변경을 되돌렸습니다. 관리자 실행을 다시 확인하세요.'}
     $fields=[ordered]@{status=if($ExitCode){'FAILED'}else{'PASS'};stage='canonical_install';
         reason_code=if($ExitCode){'INSTALLER_CANONICAL_FAILURE'}else{'INSTALLER_CHILD_RESULT'};
@@ -436,7 +454,7 @@ function Write-CanonicalInstallationPublicRecord($Failure=$null,[int]$ExitCode=0
     if(Get-Command ConvertTo-KmtechPublicRecord -ErrorAction SilentlyContinue){
         $fields=ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes @('RECOVERY_REQUIRED','PASS','FAILED','canonical_install','INSTALLER_CANONICAL_FAILURE','INSTALLER_CHILD_RESULT','REPORT_UNAVAILABLE','CONTAINER_PLACEMENT_ELEVATION_FAILED','FAILED_ROLLED_BACK') -SafeMessages @($guidance)
     }
-    Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+($fields|ConvertTo-Json -Depth 4 -Compress))
+    Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+([regex]::Replace(($fields|ConvertTo-Json -Depth 4 -Compress), '[^\x00-\x7f]', {param($unit) '\u{0:x4}' -f [int][char]$unit.Value})))
 }
 function Assert-WriterSessionPublicContract(
     [string]$Path,
@@ -3951,7 +3969,11 @@ function Get-CanonicalMachineHelperReason([string]$Stdout,[string]$Code='') {
     if (-not $Code) {
         $lines=@(([string]$Stdout) -split '\r?\n' | Where-Object { $_ -clike 'installation_failure_summary=*' })
         if ($lines.Count) {
-            try { $Code=[string](($lines[-1].Substring('installation_failure_summary='.Length) | ConvertFrom-Json).reason_code) } catch { $Code='' }
+            try {
+                $diagnostic=$lines[-1].Substring('installation_failure_summary='.Length) | ConvertFrom-Json
+                $property=$diagnostic.PSObject.Properties['reason_code']
+                $Code=if($null -ne $property){[string]$property.Value}else{''}
+            } catch { $Code='' }
         }
     }
     if ($Code -cin $allowed) { return $Code }
@@ -4012,7 +4034,7 @@ function Write-CanonicalMachinePublicRecord([string]$Code,[string]$Status='FAILE
         'MACHINE_REMOVAL_WORKER_PART_PENDING',
         'PASS_MACHINE_WORKER_PENDING','PASS_UNINSTALLED_DATA_PRESERVED','PASS_RESTORED_VERIFIED','REPORT_UNAVAILABLE',
         'MACHINE_RECOVERY_CHILD_UNRECORDED','MACHINE_RECOVERY_CHILD_IDENTITY_INVALID','MACHINE_RECOVERY_CHILD_ACTIVE','MACHINE_RECOVERY_CHILD_EXIT_UNPROVEN',$reason) -SafeMessages @($message,$summary)
-    Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+($public|ConvertTo-Json -Depth 4 -Compress))
+    Write-Output ('CONTAINER_AUDIT_INSTALL_CANONICAL='+([regex]::Replace(($public|ConvertTo-Json -Depth 4 -Compress), '[^\x00-\x7f]', {param($unit) '\u{0:x4}' -f [int][char]$unit.Value})))
 }
 
 function Get-CanonicalMachineArtifactPaths([string]$State,[string]$Root='') {
@@ -7080,19 +7102,31 @@ finally {
 
 } catch {
     $outputFailure=$_
-    if ($null -ne $machineWorker) { Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED'; exit 4 }
+    if ($null -ne $machineWorker) {
+        try { $publicFailureRecord=Write-CanonicalMachinePublicRecord 'MACHINE_INSTALL_FAILED' }
+        catch { $publicFailureRecord='CONTAINER_AUDIT_INSTALL_CANONICAL={"status":"FAILED","code":"MACHINE_INSTALL_FAILED","stage":"machine_install","guidance":"\uc790\ub8cc\ub97c \ubcf4\uc874\ud558\uace0 \uad00\ub9ac\uc790 \uc9c0\uc6d0 \ubcf5\uad6c\ub97c \uc694\uccad\ud558\uc138\uc694.","report_status":"REPORT_UNAVAILABLE"}' }
+        Write-Output $publicFailureRecord
+        exit 4
+    }
     if (-not $enteredPlacementTry -and -not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRetiredRemoval) {
         if (-not $Script:CanonicalPreparationAdmissionFailed) {
-            Write-CanonicalPreparationAdmissionFailure ([string](Get-Variable auditPath -ValueOnly -ErrorAction SilentlyContinue)) `
-                ([string](Get-Variable evidenceFull -ValueOnly -ErrorAction SilentlyContinue)) `
-                ([string](Get-Variable source -ValueOnly -ErrorAction SilentlyContinue)) $Script:CanonicalInstallerSourceInventorySha256 $outputFailure
+            try {
+                Write-CanonicalPreparationAdmissionFailure ([string](Get-Variable auditPath -ValueOnly -ErrorAction SilentlyContinue)) `
+                    ([string](Get-Variable evidenceFull -ValueOnly -ErrorAction SilentlyContinue)) `
+                    ([string](Get-Variable source -ValueOnly -ErrorAction SilentlyContinue)) $Script:CanonicalInstallerSourceInventorySha256 $outputFailure
+            } catch { $publicMessage='PREPARATION_DIAGNOSTICS_UNAVAILABLE' }
         }
         $publicMessage='FAILED_PREPARATION_ADMISSION'
     } else {
-        $publicMessage=ConvertTo-KmtechRedactedSinkText -Text $outputFailure.Exception.Message -UserLine
+        try { $publicMessage=ConvertTo-KmtechRedactedSinkText -Text $outputFailure.Exception.Message -UserLine }
+        catch { $publicMessage='FAILURE_DIAGNOSTICS_UNAVAILABLE' }
     }
-    if(Get-Command Write-InstallationCaughtFailure -ErrorAction SilentlyContinue){Write-InstallationCaughtFailure $outputFailure}
-    Write-CanonicalInstallationPublicRecord -Failure $outputFailure -ExitCode 1
+    try {
+        if(Get-Command Write-InstallationCaughtFailure -ErrorAction SilentlyContinue){Write-InstallationCaughtFailure $outputFailure}
+    } catch { $publicMessage='PRIVATE_DIAGNOSTICS_UNAVAILABLE' }
+    try { $publicFailureRecord=Write-CanonicalInstallationPublicRecord -Failure $outputFailure -ExitCode 1 }
+    catch { $publicFailureRecord='CONTAINER_AUDIT_INSTALL_CANONICAL={"status":"FAILED","code":"INSTALLER_CANONICAL_FAILURE","stage":"canonical_install","guidance":"\uc790\ub8cc\ub97c \ubcf4\uc874\ud558\uace0 \uad00\ub9ac\uc790 \uc9c0\uc6d0 \ubcf5\uad6c\ub97c \uc694\uccad\ud558\uc138\uc694.","report_status":"REPORT_UNAVAILABLE"}' }
+    Write-Output $publicFailureRecord
     exit 1
 } finally {
     try {

@@ -85,7 +85,7 @@ function Write-InstallationHelperPublicRecord([Collections.IDictionary]$Fields) 
         default{$messages[0]}
     }
     $public=ConvertTo-KmtechPublicRecord -Fields $Fields -AllowedCodes @('PASS','FAILED','installer_helper','REPORT_UNAVAILABLE','HIBERBOOT_ENABLED','HIBERBOOT_DISABLED','HIBERBOOT_UNKNOWN') -SafeMessages $messages
-    Write-Output ('CONTAINER_AUDIT_INSTALL_HELPER='+($public|ConvertTo-Json -Depth 4 -Compress))
+    Write-Output ('CONTAINER_AUDIT_INSTALL_HELPER='+([regex]::Replace(($public|ConvertTo-Json -Depth 4 -Compress), '[^\x00-\x7f]', {param($unit) '\u{0:x4}' -f [int][char]$unit.Value})))
 }
 function Get-InstallationHelperPublicFailure($Failure, [int]$ExitCode) {
     $exception=if($Failure -is [Exception]){$Failure}else{$Failure.Exception}
@@ -306,7 +306,7 @@ function Invoke-SelfElevated {
                 $logFull = Get-StrictFullPath $ElevationLogPath 'ElevationLogPath'
                 Assert-NoReparsePoint $logFull 'elevation log'
                 if ((Test-Path -LiteralPath $logFull -PathType Leaf) -and
-                    (Get-Item -LiteralPath $logFull).Length -le 65536) {
+                    (Get-Item -Force -LiteralPath $logFull).Length -le 65536) {
                     $lastEntry = Get-Content -LiteralPath $logFull -Encoding UTF8 -Tail 1 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
                     if ([int]$lastEntry.process_id -eq [int]$process.Id -and
                         [string]$lastEntry.status -ceq 'PREFLIGHT_FAILED' -and
@@ -337,7 +337,7 @@ function Write-ContainerSupportedRemovalJournal([int[]]$ControllerProcessIds) {
     if (-not (Test-InstallationEvidencePrivileged)) { throw 'REMOVAL_JOURNAL_PROTECTED_AUTHORITY_REQUIRED' }
     Assert-NoReparsePoint $UninstallAuditPath 'supported removal audit'
     if ($UninstallAuditSha256 -cnotmatch '^[0-9a-f]{64}$' -or
-        (Get-Item -LiteralPath $UninstallAuditPath).Length -gt 131072 -or
+        (Get-Item -Force -LiteralPath $UninstallAuditPath).Length -gt 131072 -or
         (Get-FileSha256 $UninstallAuditPath) -cne $UninstallAuditSha256) { throw 'REMOVAL_JOURNAL_AUDIT_CHANGED' }
     $origin=Get-Content -LiteralPath $UninstallAuditPath -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson
     $active=Read-ContainerWriterFence
@@ -404,7 +404,7 @@ function Write-ContainerRollbackContinuation([string]$AuditPath,[string]$AuditSh
     Assert-InstallationEvidenceWriteRoot $Script:InstallationEvidenceRoot
     Assert-InstallationEvidenceProtectedPath $Script:InstallationEvidenceRoot
     Assert-BootstrapNoReparsePoint $AuditPath 'rollback origin audit' -PathOnly
-    if ($AuditSha256 -cnotmatch '^[0-9a-f]{64}$' -or (Get-Item -LiteralPath $AuditPath).Length -gt 1048576 -or
+    if ($AuditSha256 -cnotmatch '^[0-9a-f]{64}$' -or (Get-Item -Force -LiteralPath $AuditPath).Length -gt 1048576 -or
         (Get-FileSha256 $AuditPath) -cne $AuditSha256) {throw 'Rollback origin audit hash/size differs.'}
     $origin=Get-Content -LiteralPath $AuditPath -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
     $active=Read-ContainerWriterFence
@@ -497,7 +497,7 @@ function Write-ContainerRollbackContinuationAuthority {
     $previous=Read-BootstrapRollbackContinuationAuthority $record $RollbackContinuationPath $RollbackContinuationSha256 $prior
     if(@(Get-Process -Id ([int]$record.owner_process_id) -ErrorAction SilentlyContinue).Count){throw 'Rollback original owner is alive or reused.'}
     Assert-BootstrapNoReparsePoint $WriterFencePreparedReceiptPath 'rollback renewed preparation' -PathOnly
-    if((Get-Item -LiteralPath $WriterFencePreparedReceiptPath).Length -gt 65536 -or
+    if((Get-Item -Force -LiteralPath $WriterFencePreparedReceiptPath).Length -gt 65536 -or
         (Get-FileSha256 $WriterFencePreparedReceiptPath) -cne $WriterFencePreparedReceiptSha256){throw 'Rollback renewed preparation bytes differ.'}
     $prepared=Get-Content -LiteralPath $WriterFencePreparedReceiptPath -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
     if((Get-FileSha256 $WriterFencePreparedReceiptPath) -cne $WriterFencePreparedReceiptSha256 -or $prepared.secret_values_recorded -ne $false){throw 'Rollback renewed preparation changed or records secrets.'}
@@ -545,7 +545,7 @@ function Complete-ContainerRollbackContinuation {
     $state=Get-BootstrapVerifiedReplacementRestoreState $receipt ([string]$record.receipt_binding_path) $installRootFull 'container_audit' ([string]$record.transaction_id) (Get-FileSha256 $BootstrapScriptPath)
     if ([string]$state.status -cne 'RESTORED') {throw 'Rollback completion requires exact restored code.'}
     Assert-BootstrapNoReparsePoint $RollbackAuditPath 'rollback completion audit' -PathOnly
-    if ((Get-Item -LiteralPath $RollbackAuditPath).Length -gt 1048576 -or (Get-FileSha256 $RollbackAuditPath) -cne $RollbackAuditSha256) {throw 'Rollback completion audit differs.'}
+    if ((Get-Item -Force -LiteralPath $RollbackAuditPath).Length -gt 1048576 -or (Get-FileSha256 $RollbackAuditPath) -cne $RollbackAuditSha256) {throw 'Rollback completion audit differs.'}
     $audit=Get-Content -LiteralPath $RollbackAuditPath -Raw -Encoding UTF8|ConvertFrom-Json
     if ([string]$audit.status -cnotin @('PASS_RESTORED_VERIFIED_DATA_PRESERVED','FAILED_ROLLED_BACK') -or
         $audit.rollback.code_exact -isnot [bool] -or -not $audit.rollback.code_exact -or
@@ -732,7 +732,7 @@ function Read-ContainerRemovalWorkerReceipt($Binding) {
     $path=Join-Path ([string]$Binding.local_appdata_root) 'KMTech\DirectSync\container_audit\status\current_user_removal.json'
     Assert-ContainerRemovalBoundary $path
     if (-not(Test-Path -LiteralPath $path -PathType Leaf -ErrorAction Stop)) { return $null }
-    if ((Get-Item -LiteralPath $path -ErrorAction Stop).Length -gt 65536) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+    if ((Get-Item -Force -LiteralPath $path -ErrorAction Stop).Length -gt 65536) { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
     $receipt=Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop|ConvertFrom-Json
     $receipt|Add-Member -NotePropertyName path -NotePropertyValue $path -Force
     return $receipt
@@ -2621,7 +2621,7 @@ if ($Uninstall.IsPresent) {
     Assert-NoReparsePoint $quiesceFull 'current-user removal receipt'
     if ($ExpectedQuiesceReceiptSha256 -cnotmatch '^[0-9a-f]{64}$' -or
         (Get-FileSha256 $quiesceFull) -cne $ExpectedQuiesceReceiptSha256 -or
-        (Get-Item -LiteralPath $quiesceFull).Length -gt 65536) { throw 'Removal current-user receipt binding differs.' }
+        (Get-Item -Force -LiteralPath $quiesceFull).Length -gt 65536) { throw 'Removal current-user receipt binding differs.' }
     $quiesce = Get-Content -LiteralPath $quiesceFull -Raw -Encoding UTF8 | ConvertFrom-Json
     if ([string]$quiesce.status -cne 'PASS_DATA_PRESERVED' -or [string]$quiesce.state_scope -cne 'current_user' -or
         $quiesce.data_preserved -isnot [bool] -or -not $quiesce.data_preserved -or

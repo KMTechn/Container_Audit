@@ -306,17 +306,17 @@ $childExitCode=$LASTEXITCODE
 if($childExitCode -ne 0){
     $failure=[InvalidOperationException]::new('STARTUP_UPDATE_FAILURE')
     $public=Get-StartupUpdatePublicFailure $failure $childExitCode
-    [Console]::Out.WriteLine('CONTAINER_AUDIT_UPDATE='+($public|ConvertTo-Json -Depth 4 -Compress))
+    [Console]::Out.WriteLine('CONTAINER_AUDIT_UPDATE='+([regex]::Replace(($public|ConvertTo-Json -Depth 4 -Compress), '[^\x00-\x7f]', {param($unit) '\u{0:x4}' -f [int][char]$unit.Value})))
 }
 exit $childExitCode
 } catch {
     if($script:StartupUpdateBootstrapLoaded){
         $public=Get-StartupUpdatePublicFailure $_ 1
-        [Console]::Out.WriteLine('CONTAINER_AUDIT_UPDATE='+($public|ConvertTo-Json -Depth 4 -Compress))
+        [Console]::Out.WriteLine('CONTAINER_AUDIT_UPDATE='+([regex]::Replace(($public|ConvertTo-Json -Depth 4 -Compress), '[^\x00-\x7f]', {param($unit) '\u{0:x4}' -f [int][char]$unit.Value})))
     } else {
         # Before the pinned policy can be loaded, only a fully fixed record is
         # emitted; this is not a second validation/redaction implementation.
-        [Console]::Out.WriteLine('CONTAINER_AUDIT_UPDATE={"status":"FAILED","stage":"startup_update","reason_code":"STARTUP_UPDATE_FAILURE","exit_code":1,"report_status":"REPORT_UNAVAILABLE","guidance":"기존 설치 상태와 예약 작업을 확인하고 관리자 지원 복구를 요청하세요."}')
+        [Console]::Out.WriteLine('CONTAINER_AUDIT_UPDATE={"status":"FAILED","stage":"startup_update","reason_code":"STARTUP_UPDATE_FAILURE","exit_code":1,"report_status":"REPORT_UNAVAILABLE","guidance":"\uae30\uc874 \uc124\uce58 \uc0c1\ud0dc\uc640 \uc608\uc57d \uc791\uc5c5\uc744 \ud655\uc778\ud558\uace0 \uad00\ub9ac\uc790 \uc9c0\uc6d0 \ubcf5\uad6c\ub97c \uc694\uccad\ud558\uc138\uc694."}')
     }
     exit 1
 }

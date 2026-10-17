@@ -69,7 +69,7 @@ try {
 }
 $childOutput=$null
 $public=ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes @('PASS','FAILED','protected_admin_install','SUPPORT_RESULT','SUPPORT_FAILURE','REPORT_UNAVAILABLE') -SafeMessages @('설정 파일과 설치 경로를 확인하고 다시 실행하세요.')
-Write-Output ('CONTAINER_AUDIT_SUPPORT='+($public|ConvertTo-Json -Depth 4 -Compress))
+Write-Output ('CONTAINER_AUDIT_SUPPORT='+([regex]::Replace(($public|ConvertTo-Json -Depth 4 -Compress), '[^\x00-\x7f]', {param($unit) '\u{0:x4}' -f [int][char]$unit.Value})))
 if($childCode -ne 0){exit 1}
 
 $mode = if ($DryRun) { "dry-run" } else { "installed" }

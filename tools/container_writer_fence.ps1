@@ -1,7 +1,7 @@
 ﻿Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
 Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 Set-StrictMode -Version Latest
-$Script:ContainerAtomicBootstrapSha256 = '43b67845c82983e01ab5b412ce9947bc3f1b240595d590099f4e507e8110c86e'
+$Script:ContainerAtomicBootstrapSha256 = '0cc17ebb856f3673769970126d75d64ac66967ad3eb2514502c8c622e1cdbfd0'
 if (-not (Get-Command 'Invoke-ContainerAtomicReplace' -CommandType Function -ErrorAction SilentlyContinue)) {
     # Preserve a caller's already verified/in-memory bootstrap library. Cold imports
     # evaluate precisely the pinned bytes, not a second path read after verification.
@@ -26,7 +26,7 @@ $Script:ContainerWriterFenceTupleVersion = 'container-audit-deployment-session-a
 $Script:ContainerWriterFenceSessionMutexPrefix = 'Local\KMTech.ContainerAudit.DeploymentSession.'
 $Script:ContainerWriterFenceAdmissionMutexName = 'Local\KMTech.ContainerAudit.WriterAdmission.v1'
 $Script:ContainerWriterFenceAdmissionProductionRoot = ''
-$Script:ContainerWriterFenceInventorySha256 = 'e2dc870dd7aaaa8f8e938709512bc1ce423cae0c7420adcf24dba30263329f00'
+$Script:ContainerWriterFenceInventorySha256 = 'a79a0a0aeb0cd8fac184bd7d339a34c7596835df65d9e2a6bc12754344718ad2'
 $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''
 $Script:ContainerWriterFenceMaximumBytes = 262144
 $Script:ContainerWriterFenceActiveFields = @(
@@ -644,7 +644,7 @@ function Write-ContainerMachineRecoveryGuidance($Fence,[string]$ControlRoot) {
     $state=Split-Path -Parent (Split-Path -Parent (Get-ContainerWriterFenceControlRoot $ControlRoot))
     if ($Fence.owner_kind -ceq 'canonical_installer' -and (Split-Path -Leaf $state) -ieq 'machine-install') {
         $path='install-audit\canonical-portable-'+[string]$Fence.replacement_transaction_id+'.json'
-        [Console]::Error.WriteLine('CONTAINER_AUDIT_MACHINE_RECOVERY='+(@{guidance=('Recovery: -RecoverMachineInstallation; audit: '+$path)}|ConvertTo-Json -Compress))
+        [Console]::Error.WriteLine('CONTAINER_AUDIT_MACHINE_RECOVERY='+([regex]::Replace((@{guidance=('Recovery: -RecoverMachineInstallation; audit: '+$path)}|ConvertTo-Json -Compress), '[^\x00-\x7f]', {param($unit) '\u{0:x4}' -f [int][char]$unit.Value})))
     }
 }
 
