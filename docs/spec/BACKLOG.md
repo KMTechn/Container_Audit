@@ -1,5 +1,7 @@
 ﻿## 목표 명세 고칠 목록(10/11)
 
+10/17 sub-290 G55·G56 꼴 relay 재시도·G43 닫음(기준일 115 제어 코드): bootstrap 감독을 내구 단계 시각의 창 끝+15초까지 늘리되 시작+480초로 제한한다. 후보 정상 종료 대기 시작도 내구 기록한다. 같은 GUI claim 뒤 실제 trial relay를 다시 관측하며 bootstrap 프로세스의 nonce마다 최대 3회/간격 2초 이상으로 시작한다. OSError 세 번 실패는 사용자 지원 기록의 `TRIAL_RELAY_START_FAILED`로 남긴다. 멈춤 표지가 있으면 포인터·표지를 보존한 `DEFERRED`·`UPDATE_RELAY_STOP_REQUESTED`로 적용을 미루며 recovery_pending은 두지 않는다. 사용자 시작은 REQUEST_APPLY 없이 현재 화면을 연다. 정식 멈춤 PC는 업데이트 날 전에 onboarding한다. 고정 current 교체 장치와 실제 배포본·현장/VM 수용은 별도 레인 회차이며, 이번 고침은 115 설치본에 들어갈 제어 코드다.
+
 10/17 sub-276 G46 닫음: Observe가 기존 bootstrap 판정에 맞는 GUI·relay launcher를 소유자 조회·역할 분류 전에 제외한다. 되돌림 READY는 실제 relay 하나로만 확인하며 실제 relay 둘·relay 부재는 확인하지 않는다. READY·census 판정 본문과 G41 동시 relay 요청의 단일 실행을 유지한다.
 
 10/17 sub-268 G41·G45: 복구 GUI의 relay 소실과 relay만 살아 있을 때의 GUI 막힘 P1을 수정했다. relay 요청은 원 시작 경계, GUI 요청은 허용 상태·정착 claim·검증된 relay 하나의 생성 경계를 사용한다. 일반 복구 증명·상태 보존·안내+20을 유지하며 SYSTEM guard/READY 소비자와 세대 정착을 격리 회귀로 확인한다. 실제 로그온·pythonw 수용은 별도다.
