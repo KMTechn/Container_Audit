@@ -23,6 +23,23 @@ import tools.direct_sync_relay_runner as runner_module
 from tools.direct_sync_relay_runner import main
 
 
+def _assert_scan_public_output(output, source_file, *, failed_source):
+    assert "direct_sync_scan_failed_source_file=" not in output
+    assert str(source_file) not in output
+    prefix = "CONTAINER_AUDIT_SUPPORT="
+    support_lines = [line for line in output.splitlines() if line.startswith(prefix)]
+    if not failed_source:
+        assert support_lines == []
+        return
+    assert len(support_lines) == 1
+    record = json.loads(support_lines[0][len(prefix):])
+    assert record["stage"] == "relay_runtime"
+    assert record["reason_code"] == "SUPPORT_RESULT"
+    assert record["report_status"] == "REPORT_UNAVAILABLE"
+    assert record["guidance"] == "자료를 보존하고 관리자 지원 복구를 요청하세요."
+    assert not any("path" in name or name.endswith("_file") for name in record)
+
+
 @pytest.fixture
 def fixed_runner_clock(monkeypatch):
     from types import SimpleNamespace
@@ -542,7 +559,7 @@ def test_runner_scan_source_dir_reports_terminal_dedupe_as_blocked(tmp_path, cap
     args = runner_args(tmp_path, scan_dir=sync_dir)
 
     assert main(args) == 0
-    capsys.readouterr()
+    _assert_scan_public_output(capsys.readouterr().out, csv_path, failed_source=False)
     with sqlite3.connect(tmp_path / "relay.sqlite3") as conn:
         conn.execute("UPDATE direct_sync_relay_batches SET status = ?", (RELAY_STATUS_FAILED_PERMANENT,))
         conn.commit()
@@ -553,7 +570,7 @@ def test_runner_scan_source_dir_reports_terminal_dedupe_as_blocked(tmp_path, cap
     assert "direct_sync_relay_status=existing_terminal_blocked" in output
     assert "direct_sync_scan_enqueued_count=0" in output
     assert "direct_sync_scan_attempted_count=1" in output
-    assert f"direct_sync_scan_failed_source_file={csv_path}" in output
+    _assert_scan_public_output(output, csv_path, failed_source=True)
     assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"][RELAY_STATUS_FAILED_PERMANENT] == 1
     status = json.loads((tmp_path / "runtime" / "status.json").read_text(encoding="utf-8"))
     assert status["scan_attempted_count"] == 1
@@ -1019,7 +1036,7 @@ def test_runner_scan_source_committed_operator_review_delta_blocks_progress(tmp_
     args = runner_args(tmp_path, scan_dir=sync_dir)
 
     assert main(args) == 0
-    capsys.readouterr()
+    _assert_scan_public_output(capsys.readouterr().out, csv_path, failed_source=False)
     first_row = relay_rows(tmp_path / "relay.sqlite3")[0]
     with sqlite3.connect(tmp_path / "relay.sqlite3") as conn:
         conn.execute(
@@ -1054,7 +1071,9 @@ def test_runner_scan_source_committed_operator_review_delta_blocks_progress(tmp_
     assert "direct_sync_relay_status=existing_terminal_blocked" in output
     assert "direct_sync_scan_enqueued_count=0" in output
     assert "direct_sync_scan_attempted_count=1" in output
-    assert f"direct_sync_scan_failed_source_file={csv_path}" in output
+    _assert_scan_public_output(output, csv_path, failed_source=True)
+    status = json.loads((tmp_path / "runtime" / "status.json").read_text(encoding="utf-8"))
+    assert status["scan_failed_source_file"] == str(csv_path)
     assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {RELAY_STATUS_OPERATOR_REVIEW: 1}
     rows = relay_rows(tmp_path / "relay.sqlite3")
     assert len(rows) == 1
@@ -1068,7 +1087,7 @@ def test_runner_scan_source_uncommitted_operator_review_delta_blocks_progress(tm
     args = runner_args(tmp_path, scan_dir=sync_dir)
 
     assert main(args) == 0
-    capsys.readouterr()
+    _assert_scan_public_output(capsys.readouterr().out, csv_path, failed_source=False)
     first_row = relay_rows(tmp_path / "relay.sqlite3")[0]
     with sqlite3.connect(tmp_path / "relay.sqlite3") as conn:
         conn.execute(
@@ -1096,7 +1115,9 @@ def test_runner_scan_source_uncommitted_operator_review_delta_blocks_progress(tm
     assert "direct_sync_relay_status=existing_terminal_blocked" in output
     assert "direct_sync_scan_enqueued_count=0" in output
     assert "direct_sync_scan_attempted_count=1" in output
-    assert f"direct_sync_scan_failed_source_file={csv_path}" in output
+    _assert_scan_public_output(output, csv_path, failed_source=True)
+    status = json.loads((tmp_path / "runtime" / "status.json").read_text(encoding="utf-8"))
+    assert status["scan_failed_source_file"] == str(csv_path)
     assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {RELAY_STATUS_OPERATOR_REVIEW: 1}
     rows = relay_rows(tmp_path / "relay.sqlite3")
     assert len(rows) == 1
@@ -1295,7 +1316,8 @@ def test_runner_scan_source_dir_filters_broad_csv_glob_to_container_logs(tmp_pat
 def test_runner_scan_source_dir_rejects_bad_container_csv_header(tmp_path, capsys):
     sync_dir = tmp_path / "sync"
     sync_dir.mkdir()
-    (sync_dir / "이적작업이벤트로그_bad_20260622.csv").write_text(
+    csv_path = sync_dir / "이적작업이벤트로그_bad_20260622.csv"
+    csv_path.write_text(
         "not,timestamp,event,details\n1,2,3,4\n",
         encoding="utf-8",
     )
@@ -1307,7 +1329,9 @@ def test_runner_scan_source_dir_rejects_bad_container_csv_header(tmp_path, capsy
     assert "direct_sync_relay_status=enqueue_error" in output
     assert "direct_sync_scan_enqueued_count=0" in output
     assert "direct_sync_scan_attempted_count=1" in output
-    assert "direct_sync_scan_failed_source_file=" in output
+    _assert_scan_public_output(output, csv_path, failed_source=True)
+    status = json.loads((tmp_path / "runtime" / "status.json").read_text(encoding="utf-8"))
+    assert status["scan_failed_source_file"] == str(csv_path)
     assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {}
 
 
@@ -1500,7 +1524,7 @@ def test_runner_scan_source_dir_records_backpressure_warning_and_continues(tmp_p
 
 def test_runner_honors_operator_pause_before_scan_enqueue(tmp_path, capsys):
     sync_dir = tmp_path / "sync"
-    write_container_csv(sync_dir)
+    csv_path = write_container_csv(sync_dir)
     pause_path = tmp_path / "control" / "pause.json"
     pause_path.parent.mkdir(parents=True)
     pause_path.write_text(
@@ -1525,13 +1549,15 @@ def test_runner_honors_operator_pause_before_scan_enqueue(tmp_path, capsys):
     assert "direct_sync_relay_status=paused_by_operator" in output
     assert "direct_sync_scan_enqueued_count=0" in output
     assert "direct_sync_scan_attempted_count=1" in output
-    assert "direct_sync_scan_failed_source_file=" in output
+    _assert_scan_public_output(output, csv_path, failed_source=True)
+    status = json.loads((tmp_path / "runtime" / "status.json").read_text(encoding="utf-8"))
+    assert status["scan_failed_source_file"] == str(csv_path)
     assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {}
 
 
 def test_runner_invalid_operator_pause_marker_returns_blocked_exit(tmp_path, capsys):
     sync_dir = tmp_path / "sync"
-    write_container_csv(sync_dir)
+    csv_path = write_container_csv(sync_dir)
     pause_path = tmp_path / "control" / "pause.json"
     pause_path.parent.mkdir(parents=True)
     pause_path.write_text("{not-json}", encoding="utf-8")
@@ -1543,5 +1569,7 @@ def test_runner_invalid_operator_pause_marker_returns_blocked_exit(tmp_path, cap
     assert "direct_sync_relay_status=blocked_operator_control" in output
     assert "direct_sync_scan_enqueued_count=0" in output
     assert "direct_sync_scan_attempted_count=1" in output
-    assert "direct_sync_scan_failed_source_file=" in output
+    _assert_scan_public_output(output, csv_path, failed_source=True)
+    status = json.loads((tmp_path / "runtime" / "status.json").read_text(encoding="utf-8"))
+    assert status["scan_failed_source_file"] == str(csv_path)
     assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {}
