@@ -39,7 +39,7 @@ if($case -eq 'reported_hash_mismatch'){
 function Invoke-InstallationElevationCapture {
     param($Target,$Arguments,$AuditBase,$Sid)
     $codes=if($case -eq 'different_failure_code'){@('other')}else{@('CHILD_STREAM_IO_OR_ACL_FAILURE')}
-    [pscustomobject]@{Id=42;ExitCode=0;Streams=@{stdout=[pscustomobject]@{path=$capturePath;sha256='different-digest'}};
+    [pscustomobject]@{Id=42;ExitCode=0;Streams=@{stdout=[pscustomobject]@{path=$capturePath;sha256='different-digest'};stderr=[pscustomobject]@{path=$capturePath;sha256='different-digest'}};
         EvidenceSummary=[pscustomobject]@{recording_failed=($case -ne 'unreported_missing_path');failure_codes=$codes}}
 }
 $arguments=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File','helper.ps1','-Uninstall')
