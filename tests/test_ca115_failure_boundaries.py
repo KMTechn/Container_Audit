@@ -385,3 +385,21 @@ def test_python_recovery_failure_uses_ascii_for_each_vector(capsys):
         assert line.encode("ascii")
         record = json.loads(line.split("=", 1)[1])
         assert vector["text"] in record["guidance"]
+
+
+def test_python_support_failure_uses_ascii_for_each_vector(monkeypatch, capsys):
+    import auto_update
+
+    vectors = json.loads((ROOT / "tests/fixtures/g36_public_line_vectors.json").read_text(
+        encoding="utf-8"))["vectors"]
+    for vector in vectors:
+        monkeypatch.setattr(auto_update, "support_record", lambda *args, **kwargs: {
+            "message": vector["text"]})
+        auto_update.emit_support_record(stage="trial")
+        raw = capsys.readouterr().out.encode("ascii")
+        assert raw.endswith(b"\n")
+        line = raw.decode("ascii").strip()
+        assert line.startswith("CONTAINER_AUDIT_SUPPORT=")
+        body = line.split("=", 1)[1]
+        assert body == '{"message":' + vector["expected_json_string_ascii"] + '}'
+        assert json.loads(body) == {"message": vector["text"]}
