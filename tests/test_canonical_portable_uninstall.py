@@ -406,6 +406,21 @@ function Write-InstallationCaughtFailure($Failure) {
     [IO.File]::AppendAllText((Join-Path $env:CA_UNINSTALL_ROOT 'caught-failure-private.jsonl'),(($record|ConvertTo-Json -Depth 6 -Compress)+[Environment]::NewLine),[Text.UTF8Encoding]::new($false))
     & $script:FixtureCaughtFailureWriter $Failure
 }
+
+$script:FixtureInitializeEvidence=${function:Initialize-InstallationEvidence}
+function Initialize-InstallationEvidence {
+    param([string]$BasePath,[string]$OperatorSid,[string[]]$SensitiveValues=@())
+    try { & $script:FixtureInitializeEvidence $BasePath $OperatorSid $SensitiveValues }
+    catch {
+        $failure=$_;$types=@();$exception=$failure.Exception
+        while($null -ne $exception){$types+=$exception.GetType().FullName;$exception=$exception.InnerException}
+        $run=Get-Variable -Name InstallationProtectedRunRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        $length=if($run){([string]$run+'\'+[IO.Path]::GetFileName($BasePath)+'.evidence.'+$PID).Length}else{0}
+        $record=@{types=$types;input_path_chars=$BasePath.Length;protected_run_chars=([string]$run).Length;derived_root_chars=$length}
+        try {[IO.File]::WriteAllText((Join-Path $env:CA_UNINSTALL_ROOT 'evidence-path-lengths-private.json'),($record|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))}catch{}
+        throw $failure
+    }
+}
 '''
 
 
