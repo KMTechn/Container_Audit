@@ -19,6 +19,11 @@ from tests.test_transfer_hold_transport import seal_runtime
 pytestmark = pytest.mark.usefixtures("fixed_operation_lease_clock", "owned_tk_workers")
 
 
+def pick_worker(app, name):
+    """D-05 뒤: 작업자는 늘 직접 고른다 — 예전 자동 시작이 하던 일을 같은 문(_select_worker)으로."""
+    return app._select_worker(name, source="grid")
+
+
 def _registry(path, name="tester", *, used=True):
     registry = WorkerRegistry(str(path))
     registry.register(name)
@@ -78,7 +83,7 @@ def test_remembered_and_manual_start_store_bind_then_recover_and_scan(
         return True
     app._schedule_startup_transfer_recovery = recover
     if automatic:
-        app._start_remembered_worker(registry.recent_worker())
+        pick_worker(app, registry.recent_worker())
     else:
         app.start_work()
     assert order == ["save:START_PENDING", "save:ACTIVE", "bound:recovery"]
@@ -115,7 +120,8 @@ def test_uncertain_remembered_login_stays_on_selection(flow, windows, tmp_path, 
         app.transfer_seal_coordinator.client = None
     starts = []
     app.start_work = lambda **kwargs: starts.append(kwargs)
-    app._start_remembered_worker(remembered)
+    # D-05: 켤 때 자동 시작 0 — 고르기 화면에 그대로 머문다
+    assert app.worker_name == ''
     assert screen["value"] == "selection"
     assert app.worker_name == "" and not app._work_session_identity_bound
     assert starts == [] and windows == []
@@ -168,7 +174,7 @@ def test_failed_automatic_session_save_preserves_memory_and_sends_no_held_work(t
     # An unsuccessful start retains name history but durably requires selection (sub-167).
     remembered_payload["automatic_start_enabled"] = False
     try:
-        app._start_remembered_worker(registry.recent_worker())
+        pick_worker(app, registry.recent_worker())
         assert saves == ["START_PENDING"]
         assert screen["value"] == "selection" and selected["name"] == "other-worker"
         assert app.worker_name == "" and not app._work_session_identity_bound
@@ -179,7 +185,7 @@ def test_failed_automatic_session_save_preserves_memory_and_sends_no_held_work(t
         assert hold.path.read_bytes() == original
         assert json.loads(Path(registry.registry_path).read_text(encoding="utf-8")) == remembered_payload
         assert not WorkerRegistry(registry.registry_path).automatic_start_enabled()
-        assert windows == []
+        assert windows == ["showerror"]  # D-05: 직접 시작 — 실패는 오류 창 하나
     finally:
         lane.close_idle()
         root.run_until(lambda: lane.state == "CLOSED")
@@ -214,7 +220,8 @@ def test_removed_last_worker_does_not_start_an_older_registry_row(flow, windows,
     app._work_session_identity_bound = False
     screen["value"] = "selection"
     assert registry.recent_worker() == "previous"
-    app._start_remembered_worker(registry.recent_worker())
+    # D-05: 켤 때 자동 시작 0 — 고르기 화면에 그대로 머문다
+    assert app.worker_name == ''
     assert screen["value"] == "selection" and app.worker_name == ""
     assert not app._work_session_identity_bound and windows == []
 
@@ -226,7 +233,7 @@ def test_existing_worker_change_remembers_new_name_for_restart(flow, windows, tm
     screen, selected = _login(app, registry, tmp_path)
     app._begin_or_resume_work_session = MethodType(ContainerAudit._begin_or_resume_work_session, app)
     app._schedule_startup_transfer_recovery = lambda: True
-    app._start_remembered_worker(registry.recent_worker())
+    pick_worker(app, registry.recent_worker())
     app._cancel_all_jobs = lambda: None
     app._invalidate_pending_scan_callbacks = lambda: None
     app._reset_master_label_replacement_state = lambda: None
@@ -238,7 +245,7 @@ def test_existing_worker_change_remembers_new_name_for_restart(flow, windows, tm
     app.worker_name = ""
     screen["value"] = "selection"
     app._work_session_identity_bound = False
-    app._start_remembered_worker(WorkerRegistry(registry.registry_path).recent_worker())
+    pick_worker(app, WorkerRegistry(registry.registry_path).recent_worker())
     assert app.worker_name == "next" and screen["value"] == "work"
 
 
@@ -259,7 +266,7 @@ def test_recent_names_within_the_same_second_remember_the_last_start(tmp_path, m
     assert registry.recent_worker() == "a-later"
 
 
-def test_real_constructor_automatically_starts_after_durable_binding(tmp_path, monkeypatch, windows):
+def test_real_constructor_does_not_start_any_worker_by_itself(tmp_path, monkeypatch, windows):
     class Root(FakeTkRoot):
         tk = object()
         def run_one(self):
@@ -314,10 +321,12 @@ def test_real_constructor_automatically_starts_after_durable_binding(tmp_path, m
     app = ContainerAudit()
     try:
         assert screen["value"] == "selection" and app.worker_name == ""
-        root.run_until(lambda: screen["value"] == "work")
-        assert app.worker_name == "tester" and app._work_session_identity_bound
-        assert admitted == [(True, "ACTIVE")]
-        assert app._load_work_session_state()["worker_name"] == "tester"
+        for _ in range(60):  # 유한 — 켠 뒤 걸린 job 을 돌려 봐도 자동 시작은 없다
+            if not root.run_one():
+                break
+        assert screen["value"] == "selection" and app.worker_name == ""
+        assert not app._work_session_identity_bound and admitted == []
+        assert selected["name"] == "tester"  # 가짜 고르기 칸 값은 그대로 — 시작을 부른 쪽이 없다
         assert windows == []
     finally:
         lane = app._ui_lane
@@ -339,7 +348,7 @@ def test_verified_offline_start_remembers_worker_with_no_window(startup, monkeyp
     app._schedule_startup_transfer_recovery = lambda: True
     result = ca._prepare_gui_startup()
     try:
-        app._start_remembered_worker(registry.recent_worker())
+        pick_worker(app, registry.recent_worker())
         assert app.worker_name == "tester" and screen["value"] == "work"
         from tests.test_work_details_visibility import catalog_notice_text
         assert "회사 서버 품목 목록" in catalog_notice_text(app)
@@ -375,7 +384,7 @@ def test_automatic_login_keeps_foreign_held_bundle_and_real_transport_guard(
         seen.append(coordinator.attempt(intent).status)
         return True
     app._schedule_startup_transfer_recovery = recover
-    app._start_remembered_worker(registry.recent_worker())
+    pick_worker(app, registry.recent_worker())
     if save_failure:
         assert seen == [] and screen["value"] == "selection"
         assert app.worker_name == "" and not app._work_session_identity_bound
@@ -385,4 +394,4 @@ def test_automatic_login_keeps_foreign_held_bundle_and_real_transport_guard(
         assert seen == ["RETRY_WAIT" if same_bundle else "ACKED"]
     assert len(posts) == (0 if same_bundle else 1)
     assert hold.path.read_bytes() == original
-    assert windows == []
+    assert windows == (["showerror"] if save_failure else [])

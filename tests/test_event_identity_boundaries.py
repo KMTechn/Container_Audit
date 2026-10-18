@@ -91,6 +91,7 @@ EVENT_SITES = {
     ('Container_Audit.py', '_intercept_active_tray_phs2_scan', '_log_event', 'ACTIVE_TRAY_PHS2_SCAN_REJECTED', 1): 'new',
     ('Container_Audit.py', '_intercept_active_tray_phs2_scan', '_log_event', 'ACTIVE_TRAY_PHS2_SCAN_INTERCEPTED', 1): 'new',
     ('Container_Audit.py', '_process_barcode_logic', '_log_event', 'SCAN_COMMAND_UNKNOWN', 1): 'new',
+    ('Container_Audit.py', '_refuse_scan_during_notice', '_log_event', 'SCAN_REFUSED_DURING_NOTICE', 1): 'new',
     ('Container_Audit.py', '_process_barcode_steps', '_log_event', '<dynamic>', 1): 'new',
     ('Container_Audit.py', '_process_barcode_steps', '_log_event', '<dynamic>', 2): 'new',
     ('Container_Audit.py', '_process_barcode_steps', '_log_event', '<dynamic>', 3): 'new',

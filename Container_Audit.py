@@ -35,6 +35,7 @@ from urllib.parse import urlsplit
 
 # Capture this process's start before application imports and startup work.
 _APP_PROCESS_STARTED_AT = datetime.datetime.now(datetime.timezone.utc)
+NOTICE_SCAN_REFUSAL_TEXT = "경고를 확인하기 전에는 스캔을 받지 않습니다\n[확인]을 누르거나 Esc 키를 누르세요"
 _APP_STOP_DEFERRED_MESSAGE = '관리자가 프로그램 종료를 요청했습니다.\n지금 트레이를 마친 뒤 [종료] 를 누르세요.'
 
 from runtime_dependency_guard import install_charset_normalizer_block
@@ -1356,7 +1357,6 @@ class ContainerAudit:
         self._setup_core_ui_structure()
         self._setup_styles()
         self.root.bind('<Configure>', self._schedule_responsive_style_refresh, add="+")
-        remembered_worker = self.worker_registry.recent_worker()
         self.show_worker_input_screen()
         self._poll_event_log_notice()
         
@@ -1369,8 +1369,7 @@ class ContainerAudit:
         )
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self._start_app_stop_poll()
-        # Registration/catalog startup finishes before the Tk callback runs.
-        self.root.after(0, lambda: self._start_remembered_worker(remembered_worker))
+        # No automatic start: every launch waits on the worker selection screen.
 
     ####################################################################
     # 30일 최고 기록 관리
@@ -3384,7 +3383,7 @@ class ContainerAudit:
         )
         self._worker_login_name_label.pack()
         workers = self._worker_selection_names()
-        self.worker_entry_var = tk.StringVar(value=workers[0] if workers else "")
+        self.worker_entry_var = tk.StringVar(value="")  # 미리 고르지 않음 — 작업자가 직접 고른다
         self.worker_entry = ttk.Combobox(
             center_frame,
             textvariable=self.worker_entry_var,
@@ -3433,7 +3432,7 @@ class ContainerAudit:
             workers = self._worker_selection_names()
             self.worker_entry.configure(values=workers)
             if not getattr(self, "worker_name", "") and self.worker_entry.get() not in workers:
-                self._set_worker_entry_value(workers[0] if workers else "")
+                self._set_worker_entry_value("")
         notice = getattr(self, "_worker_roster_notice", None)
         if notice is not None:
             try:
@@ -3834,6 +3833,7 @@ class ContainerAudit:
         return name
 
     def _disable_remembered_worker_start(self) -> bool:
+        # 시작 때 자동으로 쓰는 곳은 없어졌다(D-05). 이 칸은 파일 꼴을 지키려고 예전처럼 적어 둘 뿐이다.
         registry = getattr(self, "worker_registry", None)
         if registry is None:
             return True
@@ -3844,46 +3844,29 @@ class ContainerAudit:
             return False
         return True
 
-    def _start_remembered_worker(self, worker_name: Optional[str]) -> None:
-        if (not worker_name or self.worker_name
-                or self._work_session_recovery_blocked
-                or getattr(self, "_storage_failure_manual_start", False)
-                or self.transfer_seal_coordinator.client is None):
-            return
-        remembered_name = worker_name
-        row = None
-        try:
-            roster = getattr(self, "worker_roster", None)
-            if roster is not None and (roster.has_rows or self.worker_registry.recent_worker_id()):
-                row = roster.active_worker(worker_id=self.worker_registry.recent_worker_id(), name=worker_name)
-                if row is None:
-                    self._disable_remembered_worker_start()
-                    return
-                self.worker_registry.bind_worker_id(worker_name, row["worker_id"])
-                worker_name = row["display_name"]
-            if (not self.worker_registry.automatic_start_enabled()
-                or self.worker_registry.recent_worker() != remembered_name
-                    or (worker_choice_label(row) if row is not None else worker_name) not in self._worker_selection_names()
-                    or (Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE).exists()
-                    or self._paired_preflight_store().unidentified_pending()):
-                return
-            previous_session = self._load_work_session_state()
-            if previous_session and previous_session["worker_name"] != remembered_name:
-                # Removing the latest registry row must not log in an older
-                # remembered worker from the remaining history.
-                return
-            store = self._preflight_hold_store()
-            if store.exists():
-                held = store.load()
-                if held.worker == worker_name or held.state == HOLD_DRAINING:
-                    return
-        except (OSError, ValueError, PreflightHoldError, PairedHandoffError):
-            return
-        self._set_worker_entry_value(worker_choice_label(row) if row is not None else worker_name)
-        self.start_work(_automatic=True)
+    WORKER_SELECT_SOURCES = ("combo", "grid", "tag_scan")
 
-    def start_work(self, event=None, *, _automatic=False):
-        worker_name = self._ensure_worker_login_name(self.worker_entry.get())
+    def _select_worker(self, worker, *, source):
+        """The one door every worker choice passes: combo, grid button, later a name-tag scan.
+
+        Start and shift change both end on the selection screen, so they reach
+        the session only through here. ``tag_scan`` is reserved; nothing sends it yet.
+        """
+        if source not in self.WORKER_SELECT_SOURCES:
+            raise ValueError(f"unknown worker selection source: {source!r}")
+        label = str(worker or "").strip()
+        if not label:
+            self.show_status_message("작업자를 고르세요", self.COLOR_DANGER, duration=0)
+            return None
+        if source != "combo":
+            self._set_worker_entry_value(label)
+        return self._start_selected_worker(label)
+
+    def start_work(self, event=None):
+        return self._select_worker(self.worker_entry.get(), source="combo")
+
+    def _start_selected_worker(self, label):
+        worker_name = self._ensure_worker_login_name(label)
         if not worker_name:
             return
         protected_admin_authenticated = bool(
@@ -3947,10 +3930,7 @@ class ContainerAudit:
             message = ('작업 시작 기록을 남기지 못했습니다\n다시 시도하세요. 또 안 되면 현장 관리자에게 알리세요\n코드: outbox')
             if getattr(self, "_storage_failure_blocked", False):
                 message = self._storage_failure_stop_message()
-            if _automatic:
-                self.show_status_message(message, self.COLOR_DANGER, duration=0)
-            else:
-                messagebox.showerror("작업 시작 기록 대기", message, parent=self.root)
+            messagebox.showerror("작업 시작 기록 대기", message, parent=self.root)
             return
         self._work_session_identity_bound = True
         self._refresh_worker_roster()
@@ -12317,6 +12297,10 @@ class ContainerAudit:
         self.scan_entry = tk.Entry(parent_frame, justify='center', font=(self.DEFAULT_FONT, initial_center_metrics["entry_font"], 'bold'), bd=1, relief=tk.SOLID, bg=self.COLOR_INPUT_BG, fg=self.COLOR_TEXT, insertbackground=self.COLOR_PRIMARY, selectbackground=self.COLOR_PRIMARY, selectforeground='white', highlightbackground=self.COLOR_PRIMARY_SOFT, highlightcolor=self.COLOR_PRIMARY, highlightthickness=2, validate='key', validatecommand=vcmd)
         self.scan_entry.grid(row=3, column=0, sticky='ew', ipady=initial_center_metrics["entry_ipady"], padx=30)
         self.scan_entry.bind('<Return>', self.process_barcode)
+        # A blocking band closes the entry, so scanner characters are kept here
+        # and refused out loud on Enter; Esc closes the band like the button.
+        self.scan_entry.bind('<Key>', self._on_scan_entry_key_during_notice, add='+')
+        self.scan_entry.bind('<Escape>', self._on_scan_entry_escape_during_notice, add='+')
         self.notice_frame = tk.Frame(
             parent_frame,
             bg=self.COLOR_SURFACE_ALT,
@@ -15056,6 +15040,56 @@ class ContainerAudit:
             block_reason or "처리 중이라 이번 스캔은 받지 않았습니다. 다시 스캔하세요."
         )
 
+    def _notice_blocks_scan(self) -> bool:
+        """True while a blocking band owns the screen and a scan is not its answer.
+
+        Operator review, partial-submit confirmation and inline choices keep
+        their own scan meaning and are not covered here.
+        """
+        try:
+            if not self._warning_state_presenter().state.is_blocking:
+                return False
+            if self._operator_review_blocks_mutation():
+                return False
+            if getattr(self, "_inline_scan_choices", None):
+                return False
+            if getattr(self, "_partial_submit_confirmation", None):
+                return False
+            return self._precommand_operator_review_retry_context() is None
+        except (AttributeError, TypeError):
+            return False
+
+    def _on_scan_entry_key_during_notice(self, event=None) -> None:
+        if not self._notice_blocks_scan():
+            self._notice_scan_buffer = ""
+            return
+        char = str(getattr(event, "char", "") or "")
+        if len(char) == 1 and char.isprintable():
+            self._notice_scan_buffer = (getattr(self, "_notice_scan_buffer", "") + char)[-512:]
+
+    def _on_scan_entry_escape_during_notice(self, event=None):
+        if self._notice_blocks_scan():
+            self._acknowledge_active_notice()
+            return "break"
+        return None
+
+    def _refuse_scan_during_notice(self, raw_barcode: str = "") -> None:
+        """Refuse a scan out loud while the band stays: sound, band text, local event."""
+        self._notice_scan_buffer = ""
+        if raw_barcode:
+            self._clear_consumed_scan_entry(raw_barcode)
+        self._scan_refusal_visible = True
+        self._start_warning_beep()
+        try:
+            self._render_warning_state()
+        except (AttributeError, tk.TclError):
+            pass
+        notice = self._warning_state_presenter().state.active_notice
+        self._log_event(
+            "SCAN_REFUSED_DURING_NOTICE",
+            detail={"notice": str(getattr(notice, "code", "") or "")},
+        )
+
     def _refuse_entry_scan(self, message: str) -> None:
         self._start_warning_beep()
         self.show_status_message(message, self.COLOR_DANGER, duration=0)
@@ -15145,11 +15179,16 @@ class ContainerAudit:
             self._refuse_entry_scan("프로그램 준비 중입니다. 잠시 뒤 다시 스캔하세요.")
             return
         raw_barcode = self.scan_entry.get().strip()
+        captured_during_notice = str(getattr(self, "_notice_scan_buffer", "") or "").strip()
+        self._notice_scan_buffer = ""
         if self._reject_residual_tag(raw_barcode):
             self._clear_consumed_scan_entry(raw_barcode)
             return
         if self._handle_partial_submission_scan(raw_barcode):
             self._clear_consumed_scan_entry(raw_barcode)
+            return
+        if (raw_barcode or captured_during_notice) and self._notice_blocks_scan():
+            self._refuse_scan_during_notice(raw_barcode)
             return
         if raw_barcode and getattr(self, "_progress_visible", False):
             self._hide_logistics_progress(raw_barcode)
@@ -16817,6 +16856,10 @@ class ContainerAudit:
                     title = "서버 전송 대기 없음"
                     message = "완료는 이 PC에 저장했습니다."
 
+        if notice is None or not notice.blocking:
+            self._scan_refusal_visible = False
+        elif getattr(self, "_scan_refusal_visible", False):
+            message = f"{message}\n{NOTICE_SCAN_REFUSAL_TEXT}"
         if getattr(self, "_deferred_app_stop_request", None) and _APP_STOP_DEFERRED_MESSAGE not in message:
             message += "\n" + _APP_STOP_DEFERRED_MESSAGE
 
@@ -16900,7 +16943,11 @@ class ContainerAudit:
                     )
             scan_entry = getattr(self, "scan_entry", None)
             if scan_entry is not None:
-                scan_entry.configure(state=tk.DISABLED if state.is_blocking else tk.NORMAL)
+                scan_entry.configure(
+                    state=tk.DISABLED
+                    if state.is_blocking and not getattr(self, "_inline_scan_choices", None)
+                    else tk.NORMAL
+                )
             current_instruction = getattr(self, "current_item_label", None)
             if current_instruction is not None:
                 if state.is_blocking:
@@ -17045,6 +17092,8 @@ class ContainerAudit:
             return
         presenter = self._warning_state_presenter()
         presenter.acknowledge()
+        self._scan_refusal_visible = False
+        self._notice_scan_buffer = ""
         self._stop_warning_beep()
         # Restore the ordinary working display before rendering the cleared
         # notice. Rendering only the warning band leaves overridden values

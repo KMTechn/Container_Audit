@@ -180,6 +180,10 @@ def _alerts(app: Any, presenter_state: Any, notes: List[Dict[str, Any]], now: da
         elif not app._operator_review_blocks_mutation():
             band["choices"] = [{"id": "ack", "text": "확인", "go": "command:ack", "default": True}]
             band["tail"] = "빈 Enter · Esc = 확인"
+            if _attr(app, "_scan_refusal_visible"):  # 막는 동안 들어온 스캔을 거절한 뒤 — 거절 글 두 줄
+                first, second = ca.NOTICE_SCAN_REFUSAL_TEXT.splitlines()
+                band["text"] = f"{notice.title} — {first}"
+                band["tail"] = second
         alerts.append(band)
     if _attr(app, "is_idle"):
         alerts.append({"kind": "quiet", "text": "휴식 상태 — 스캔하면 작업을 다시 시작합니다", "tail": "7분 넘게 스캔 없음"})
@@ -742,6 +746,11 @@ class CaProcessor:
             return {"accepted": True, "verdict": None, "message": "", "sound": None, "result": None}
         if self._answer is not None:  # 물음이 열려 있음 — 스캔은 그만두기가 아니라 미접수(먼저 답)
             return {"accepted": False, "verdict": None, "message": "먼저 화면의 물음에 답하세요", "sound": None, "result": None}
+        if raw.strip() and self.app._notice_blocks_scan():  # 띠가 막는 동안 — 처리 0, 보이게 거절
+            self.app._refuse_scan_during_notice()
+            text = ca.NOTICE_SCAN_REFUSAL_TEXT
+            return {"accepted": False, "verdict": None, "message": text, "sound": None,
+                    "result": {"kind": "bad", "text": text}}
         if self.view == "held":
             self.view = None  # 한 단계 안 화면에서 찍어도 작업 화면으로 돌아가 처리
         self._enter(raw)
@@ -1146,7 +1155,7 @@ class CaProcessor:
             else:
                 self._registration_name = None
         self.view = None
-        return self._run_menu_action(self.app.start_work)
+        return self._run_menu_action(lambda: self.app._select_worker(str(label), source="grid"))
 
     def _cmd_register_worker(self, _id: Any, args: Dict[str, Any]) -> Dict[str, Any]:
         name = str(args.get("name") or "").strip()

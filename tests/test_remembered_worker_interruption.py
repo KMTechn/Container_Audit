@@ -8,7 +8,7 @@ import Container_Audit as ca
 
 from Container_Audit import ContainerAudit
 from worker_registry import WorkerRegistry
-from tests.test_remembered_worker_start import _login, _registry
+from tests.test_remembered_worker_start import _login, _registry, pick_worker
 from tests.test_w9scanonly_workflow import flow, windows, COMPACT_QR, ITEM
 from tests.test_scanonly_review_regressions import public_scan
 
@@ -28,7 +28,7 @@ def _started(flow, tmp_path):
     app._cancel_all_jobs = lambda: None
     app._invalidate_pending_scan_callbacks = lambda: None
     app._reset_master_label_replacement_state = lambda: None
-    app._start_remembered_worker(registry.recent_worker())
+    pick_worker(app, registry.recent_worker())
     assert app.worker_name == "previous"
     return app, registry, screen, selected
 
@@ -39,7 +39,7 @@ def _restart(flow, tmp_path):
     screen, _selected = _login(fresh, registry, tmp_path)
     fresh._begin_or_resume_work_session = MethodType(ContainerAudit._begin_or_resume_work_session, fresh)
     fresh._schedule_startup_transfer_recovery = lambda: True
-    fresh._start_remembered_worker(registry.recent_worker())
+    # D-05: 다시 켜도 자동 시작 0 — 고르기 화면에 머문다
     return fresh, screen
 
 
@@ -94,6 +94,8 @@ def test_worker_change_interruption_cannot_record_previous_worker(flow, windows,
             app.start_work()
     fresh, screen = _restart(flow, tmp_path)
     if point == "started":
+        assert fresh.worker_name == "" and screen["value"] == "selection"  # D-05: 자동 시작 0
+        pick_worker(fresh, "next")
         assert fresh.worker_name == "next" and screen["value"] == "work"
         public_scan(fresh, COMPACT_QR + "|QT=2")
         public_scan(fresh, ITEM + "-SERIAL-001")
@@ -127,6 +129,8 @@ def test_disable_write_failure_aborts_change_before_session_close(flow, windows,
     if replaced:
         assert fresh.worker_name == "" and screen["value"] == "selection"
     else:
+        assert fresh.worker_name == "" and screen["value"] == "selection"  # D-05: 자동 시작 0
+        pick_worker(fresh, "previous")
         assert fresh.worker_name == "previous" and screen["value"] == "work"
 
 
@@ -160,6 +164,8 @@ def test_session_end_requires_selection_except_same_worker_app_close(flow, windo
     assert app._load_work_session_state()["phase"] == "CLOSED"
     fresh, screen = _restart(flow, tmp_path)
     if reason == "app_close":
+        assert fresh.worker_name == "" and screen["value"] == "selection"  # D-05: 자동 시작 0
+        pick_worker(fresh, "previous")
         assert fresh.worker_name == "previous" and screen["value"] == "work"
     else:
         assert fresh.worker_name == "" and screen["value"] == "selection"
@@ -215,4 +221,6 @@ def test_refused_or_cancelled_change_keeps_same_worker_start(flow, windows, tmp_
     assert app.worker_name == "previous" and app._work_session_identity_bound
     assert (tmp_path / "workers.json").read_bytes() == before
     fresh, screen = _restart(flow, tmp_path)
+    assert fresh.worker_name == "" and screen["value"] == "selection"  # D-05: 자동 시작 0
+    pick_worker(fresh, "previous")
     assert fresh.worker_name == "previous" and screen["value"] == "work"

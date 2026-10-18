@@ -130,27 +130,6 @@ def test_invalid_reply_cannot_empty_the_cache(tmp_path):
         no_cache.apply({**response(), "unchanged": True}, requested_version=None)
 
 
-@pytest.mark.parametrize("status", ["ACTIVE", "DISABLED", "absent", "offline", "replaced"])
-def test_remembered_start_checks_roster_and_upgrades_legacy_id(flow, windows, tmp_path, status):
-    app = flow(transition=False)
-    registry = _registry(tmp_path / "workers.json")
-    screen, selected = _login(app, registry, tmp_path)
-    worker = row(status=status if status in {"ACTIVE", "DISABLED"} else "ACTIVE")
-    app.worker_roster = store(tmp_path, *( [row("another-worker")] if status == "absent" else [worker])) if status != "offline" else None
-    if status == "replaced":
-        registry.bind_worker_id("tester", str(uuid.uuid4()))
-    starts = []
-    app.start_work = lambda **kwargs: starts.append((selected["name"], kwargs))
-    app._start_remembered_worker(registry.recent_worker())
-    assert bool(starts) == (status in {"ACTIVE", "offline"})
-    if status == "ACTIVE":
-        assert registry.recent_worker_id() == worker["worker_id"]
-        assert starts == [("tester", {"_automatic": True})]
-    elif status in {"DISABLED", "absent", "replaced"}:
-        assert not registry.automatic_start_enabled()
-    assert windows == [] and screen["value"] == "selection"
-
-
 def test_selection_is_roster_only_and_recent_order_is_by_id(flow, windows, tmp_path):
     app = flow(transition=False)
     registry = _registry(tmp_path / "workers.json", "local")
@@ -423,7 +402,8 @@ def test_normal_empty_roster_keeps_local_selection_and_remembered_start(flow, wi
     assert "이 PC" in app._worker_roster_notice_text()
     assert registry.automatic_start_enabled()
     app._refresh_worker_roster = lambda: None
-    app._start_remembered_worker(registry.recent_worker())
+    from tests.test_remembered_worker_start import pick_worker
+    pick_worker(app, "tester")
     assert app.worker_name == "tester" and app._work_session_identity_bound
     assert app._roster_allows_new_tray()
     assert windows == []
@@ -444,8 +424,7 @@ def test_nonempty_roster_without_selectable_rows_never_falls_back(flow, windows,
     assert "이 PC" not in app._worker_roster_notice_text()
     starts = []
     app.start_work = lambda **kwargs: starts.append(kwargs)
-    app._start_remembered_worker(registry.recent_worker())
-    assert starts == [] and not registry.automatic_start_enabled()
+    assert starts == [] and app.worker_name == ""  # D-05: 자동 시작 0
     assert windows == []
 
 

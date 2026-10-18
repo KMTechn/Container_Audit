@@ -929,3 +929,5 @@ sub-298 소스 구현: 최초 격리 journal·원 작업자·현품표·격리 �
 - 검증 근거는 w9firstupd sub-292 RESULT와 연결한다. 115 ZIP/VM 실제 FAILED 지원 출구 회차는 별도 실물 수용이며 소스 시험으로 완료를 주장하지 않는다.
 
 - 115 합침 검토 고침: G59 증명 실패는 Exception까지만 받아 ACTIVE_WRITER_FENCE로 거절하고 예외 이름만 감사에 남긴다. 제거 표지의 worker_removal_proof와 WORKER_PART 행은 포장과 같은 키·값으로 같은 증명 객체에서 기록한다. G60 시험은 tests/ 경로만 제외하고 G36 문서는 DEL 포함 범위를 명시한다. 집중 회귀는 tests/test_g59_failed_installer_removal.py와 tests/test_ca115_integration.py에서 확인한다.
+
+- D-01·D-05 고침(이적): 막는 띠 중 스캔은 보이게 거절(SCAN_REFUSED_DURING_NOTICE, 로컬 전용)·켤 때 자동 시작 없음·작업자 고르기는 `_select_worker` 한 문. 남은 일: registry 의 automatic_start_enabled 쓰기(disable/mark_recent)는 읽는 곳이 없어졌으니 다음 정리에서 뺄 수 있다.
