@@ -15017,6 +15017,9 @@ class ContainerAudit:
         if getattr(self, "_scan_callback_pending", False):
             # A scanner's second Enter: the scheduled callback owns this value.
             self._mark_scan_unaccepted(block_reason)
+            if getattr(self, "_notice_scan_injected", False):
+                # Collected characters were only carried through the entry.
+                self._clear_consumed_scan_entry(raw_barcode)
             return
         if not self._clear_consumed_scan_entry(raw_barcode):
             self._refuse_entry_scan(
@@ -15172,6 +15175,10 @@ class ContainerAudit:
             blocking = False
         if blocking:
             self._show_scan_refusal(message)
+        if not blocking and getattr(self, "_notice_scan_injected", False):
+            # Collected-characters path with no visible band text: still "not taken".
+            self._mark_scan_unaccepted(message)
+            return
         self.show_status_message(message, self.COLOR_DANGER, duration=0)
 
     def _refuse_scans_behind_save(self, message: str) -> str:
@@ -15297,7 +15304,10 @@ class ContainerAudit:
                 self.scan_entry.insert(0, captured_during_notice)
                 raw_barcode = self.scan_entry.get().strip()
             except (AttributeError, tk.TclError):
-                pass
+                # Never fall through as an empty Enter that closes the band.
+                self._mark_scan_unaccepted("스캔을 받지 못했습니다. 다시 스캔하세요")
+                self._start_warning_beep()
+                return
         elif captured_during_notice and raw_barcode and not self._notice_blocks_scan():
             # Old characters stay in the entry: they are processed, the collected scan is not.
             self._last_scan_unaccepted_text = ""

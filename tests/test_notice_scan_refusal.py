@@ -314,3 +314,44 @@ def test_bridge_answers_accepted_false_when_old_characters_stay_in_the_entry():
     app.scan_entry.value = "OLD"
     reply = _bridge(app).scan(SCAN, {})
     assert reply["accepted"] is False and "이전 글자가 남아" in reply["message"]
+
+
+# --- 3차 손질: P3-A 칸 비우기, P3-B 주입 실패는 미접수, P3-C 안 보이는 거절도 미접수 -----------
+
+def _bound(app, *names):
+    for name in names:
+        setattr(app, name, getattr(ContainerAudit, name).__get__(app))
+
+
+def test_pending_branch_clears_injected_characters_but_keeps_plain_input():
+    app = _review_app()
+    _bound(app, "_mark_scan_unaccepted", "_clear_consumed_scan_entry", "_hold_or_refuse_entry_scan")
+    app._set_scan_callback_pending = lambda pending: setattr(app, "_scan_callback_pending", pending)
+    app._scan_callback_pending = True
+    app.scan_entry.state, app.scan_entry.value = "normal", SCAN
+    app._notice_scan_injected = True
+    app._hold_or_refuse_entry_scan(SCAN, "처리 오류를 확인해야")
+    assert app.scan_entry.value == ""
+    app.scan_entry.value, app._notice_scan_injected = SCAN, False
+    app._hold_or_refuse_entry_scan(SCAN, "처리 오류를 확인해야")
+    assert app.scan_entry.value == SCAN  # 평상시 갈래: 입력값 유지
+
+
+def test_insert_failure_while_injecting_is_unaccepted_not_a_blank_enter():
+    app = _review_app()
+    _bound(app, "_mark_scan_unaccepted")
+    app._notice_scan_buffer = SCAN
+    app._notice_scan_stamp = app.clock.t
+    app.scan_entry.insert = lambda *a: (_ for _ in ()).throw(ca.tk.TclError("boom"))
+    app._render_warning_state = lambda: None
+    app.process_barcode()
+    assert app._last_scan_unaccepted_text == "스캔을 받지 못했습니다. 다시 스캔하세요"
+    assert "beep" in app.calls and app.warning_presenter.state.is_blocking  # 띠 그대로
+
+
+def test_invisible_refusal_on_the_collected_path_is_marked_unaccepted():
+    app = _app(blocking=False)
+    _bound(app, "_mark_scan_unaccepted")
+    app._notice_scan_injected = True
+    app._refuse_entry_scan("받지 않았습니다. 다시 스캔하세요.")
+    assert app._last_scan_unaccepted_text == "받지 않았습니다. 다시 스캔하세요."
