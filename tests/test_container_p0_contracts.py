@@ -485,6 +485,10 @@ def test_supervisor_defer_denies_worker_and_audit_failure_keeps_active_owner(
     monkeypatch.setattr("Container_Audit.messagebox.showwarning", lambda *_a, **_k: None)
     app._log_event = lambda *_args, **_kwargs: True
     _linked_test_pin(app, reject=True)
+    # M124: the tray's own worker defers without a PIN; a non-owner is PIN-gated.
+    app.worker_name = "다른작업자"
+    # Decline the "hold only this item" prompt that follows a rejected PIN.
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda *_a, **_k: False)
 
     assert app._defer_blocked_current_tray_for_supervisor(confirm=False) is False
     assert (tmp_path / "current.json").exists()
@@ -1500,6 +1504,11 @@ def test_supervisor_quarantine_is_audited_and_restorable_by_original_worker(
     app._log_event = lambda event, detail=None, **kwargs: audits.append(
         (event, detail, kwargs)
     ) or True
+    app.local_events_folder = app.save_folder
+    app._admin_pin_effect_audited = lambda event, key: any(
+        row[0] == event and (row[1] or {}).get("operation_key") == key
+        for row in audits
+    )
     monkeypatch.setattr(
         "Container_Audit.messagebox.askyesno",
         lambda *args, **kwargs: True,
@@ -1548,8 +1557,8 @@ def test_supervisor_quarantine_is_audited_and_restorable_by_original_worker(
     if resume_after_move:
         restore = _PreflightScanHoldStore.restore_quarantined
         with monkeypatch.context() as interrupted:
-            def after_move(hold_store, filepath):
-                restore(hold_store, filepath)
+            def after_move(hold_store, filepath, **kwargs):
+                restore(hold_store, filepath, **kwargs)
                 raise KeyboardInterrupt("owned restore interruption")
             interrupted.setattr(_PreflightScanHoldStore, "restore_quarantined", after_move)
             with pytest.raises(KeyboardInterrupt):
@@ -1565,8 +1574,12 @@ def test_supervisor_quarantine_is_audited_and_restorable_by_original_worker(
     assert any(row[0] == "PHS2_PREFLIGHT_HOLD_RESTORED" for row in audits)
 
 
-def test_unverified_worker_cannot_quarantine_hold_from_operations(tmp_path, monkeypatch):
+def test_non_owner_worker_cannot_quarantine_hold_without_pin(tmp_path, monkeypatch):
+    # M124: the hold's own worker may isolate it without a PIN; anyone else needs one.
     module, app, store = _preflight_hold_ownership_app(tmp_path, monkeypatch)
+    app.worker_name = "other-worker"
+    # Decline the "hold only this item" prompt that follows a rejected PIN.
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda *_a, **_k: False)
     store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
     store.append("PRODUCT-A")
     store.mark_failed(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
@@ -1598,6 +1611,14 @@ def test_restore_mark_failed_error_keeps_durable_hold_inside_mutation_gate(
     monkeypatch,
 ):
     module, app, store = _preflight_hold_ownership_app(tmp_path, monkeypatch)
+    _linked_test_pin(app)
+    restore_events = []
+    app.local_events_folder = app.save_folder
+    app._admin_pin_effect_audited = lambda event, key: any(
+        name == event and (detail or {}).get("operation_key") == key
+        for name, detail in restore_events
+    )
+    app._log_event = lambda event, detail=None, **kwargs: restore_events.append((event, detail)) or True
     store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
     store.append("PRODUCT-A")
     store.mark_draining()
@@ -1627,6 +1648,13 @@ def test_restore_audit_rollback_error_keeps_durable_hold_inside_mutation_gate(
     monkeypatch,
 ):
     module, app, store = _preflight_hold_ownership_app(tmp_path, monkeypatch)
+    _linked_test_pin(app)
+    restore_events = []
+    app.local_events_folder = app.save_folder
+    app._admin_pin_effect_audited = lambda event, key: any(
+        name == event and (detail or {}).get("operation_key") == key
+        for name, detail in restore_events
+    )
     store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
     store.append("PRODUCT-A")
     store.mark_failed(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
@@ -1634,7 +1662,9 @@ def test_restore_audit_rollback_error_keeps_durable_hold_inside_mutation_gate(
         app._preflight_hold_quarantine_directory(),
         reason="fixture",
     )
-    app._log_event = lambda *args, **kwargs: False
+    app._log_event = lambda event, detail=None, **kwargs: (
+        restore_events.append((event, detail)) or event != "PHS2_PREFLIGHT_HOLD_RESTORED"
+    )
 
     def fail_quarantine(*args, **kwargs):
         raise module.PreflightHoldError("forced restore rollback error")
@@ -3201,7 +3231,7 @@ def test_direct_sync_footer_keeps_checking_neutral_and_counted_review_red():
 
     app._apply_direct_sync_health(pending)
     assert app.direct_sync_status_label.options["fg"] == app.COLOR_TEXT_SUBTLE
-    assert app.direct_sync_status_label.options["text"] == "확인 중"
+    assert app.direct_sync_status_label.options["text"] == "첫 이적 때 확인"
 
     app._apply_direct_sync_health(review)
     assert app.direct_sync_status_label.options["fg"] == app.COLOR_DANGER
@@ -3211,7 +3241,7 @@ def test_direct_sync_footer_keeps_checking_neutral_and_counted_review_red():
     # An unreadable queue with no counted rows must never look like success.
     blocked = health_module.RelayHealth("blocked", 0, 0, 0, "", "", "", "queue_unreadable")
     app._apply_direct_sync_health(blocked)
-    assert app.direct_sync_status_label.options["text"] == "확인 중"
+    assert app.direct_sync_status_label.options["text"] == "첫 이적 때 확인"
     assert "queue_unreadable" not in app.direct_sync_status_label.options["text"]
     assert health_module.relay_health_detail_model(blocked)["진단 코드"] == "queue_unreadable"
 
@@ -3220,7 +3250,7 @@ def test_direct_sync_footer_keeps_checking_neutral_and_counted_review_red():
     assert app.direct_sync_status_label.options["fg"] == app.COLOR_TEXT_SUBTLE
     # G10 adds observed connection and last successful send beside the queue.
     # An empty local queue alone supplies no observation of the server link.
-    assert app.direct_sync_status_label.options["text"] == "확인 중"
+    assert app.direct_sync_status_label.options["text"] == "첫 이적 때 확인"
 
 
 def test_gui_completion_is_nonblocking_and_persists_on_worker(tmp_path):
