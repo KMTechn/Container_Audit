@@ -779,3 +779,20 @@ def test_native_current_work_and_checked_tray_image_survive_screen_rebuild(nativ
     root.update()
     assert app.current_work_name_label.cget('text') == '현품표 대기'
     assert app.current_work_detail_label.cget('text') == '품목 코드 -\n목표 -'
+
+
+def test_native_closed_entry_keeps_scan_keys_and_keypad_enter_bound(native_operator):
+    """D-01: real (withdrawn) Tk — the closed entry still carries the key/paste/Enter bindings."""
+    app, _center, _right = native_operator
+    _tray(app, ['AAA2270730100-001'])
+    app.warning_presenter.present(Notice(
+        code='scan.duplicate', title='중복 스캔', message='이미 처리된 제품입니다.',
+        severity=NoticeSeverity.ERROR, blocking=True))
+    app._render_warning_state()
+    app.root.update()
+    assert str(app.scan_entry.cget('state')) == 'disabled'
+    for sequence in ('<Key>', '<Return>', '<KP_Enter>', '<Escape>', '<<Paste>>'):
+        assert app.scan_entry.bind(sequence), sequence
+    app.scan_entry.event_generate('<Key>', keysym='a')  # no focus on a withdrawn root; must not raise
+    app.root.update()
+    assert str(app.scan_entry.cget('state')) == 'disabled'

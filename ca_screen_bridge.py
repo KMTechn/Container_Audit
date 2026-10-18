@@ -751,6 +751,16 @@ class CaProcessor:
             text = ca.NOTICE_SCAN_REFUSAL_TEXT
             return {"accepted": False, "verdict": None, "message": text, "sound": None,
                     "result": {"kind": "bad", "text": text}}
+        if raw.strip() and self.app._notice_button_captures_scan() and not self.app._notice_blocks_scan():
+            # 담당자 확인·사전 검토 재시도 중: 입력칸 상태에 기대지 않고 같은 글자를 기존 길로 넘긴다
+            self.app._scan_refusal_text = ""
+            self.app._notice_scan_put(raw)
+            self.app.process_barcode()
+            text = str(getattr(self.app, "_scan_refusal_text", "") or "")
+            if text and getattr(self.app, "_scan_refusal_visible", False):
+                return {"accepted": False, "verdict": None, "message": text,
+                        "sound": None, "result": {"kind": "bad", "text": text}}
+            return {"accepted": True, "verdict": None, "message": "", "sound": None, "result": None}
         if self.view == "held":
             self.view = None  # 한 단계 안 화면에서 찍어도 작업 화면으로 돌아가 처리
         self._enter(raw)

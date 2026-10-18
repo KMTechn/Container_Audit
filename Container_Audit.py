@@ -5752,6 +5752,7 @@ class ContainerAudit:
         self.scan_entry = tk.Entry(panel, font=(self.DEFAULT_FONT, int(18*self.scale_factor)), justify='center')
         self.scan_entry.grid(row=4, column=0, columnspan=2, sticky='ew')
         self.scan_entry.bind('<Return>', self.process_barcode)
+        self.scan_entry.bind('<KP_Enter>', self.process_barcode)
         self._progress_panel = panel
         self._progress_visible = True
         panel.place(x=0, y=0, relwidth=1, relheight=1)
@@ -12297,9 +12298,11 @@ class ContainerAudit:
         self.scan_entry = tk.Entry(parent_frame, justify='center', font=(self.DEFAULT_FONT, initial_center_metrics["entry_font"], 'bold'), bd=1, relief=tk.SOLID, bg=self.COLOR_INPUT_BG, fg=self.COLOR_TEXT, insertbackground=self.COLOR_PRIMARY, selectbackground=self.COLOR_PRIMARY, selectforeground='white', highlightbackground=self.COLOR_PRIMARY_SOFT, highlightcolor=self.COLOR_PRIMARY, highlightthickness=2, validate='key', validatecommand=vcmd)
         self.scan_entry.grid(row=3, column=0, sticky='ew', ipady=initial_center_metrics["entry_ipady"], padx=30)
         self.scan_entry.bind('<Return>', self.process_barcode)
+        self.scan_entry.bind('<KP_Enter>', self.process_barcode)
         # A blocking band closes the entry, so scanner characters are kept here
         # and refused out loud on Enter; Esc closes the band like the button.
         self.scan_entry.bind('<Key>', self._on_scan_entry_key_during_notice, add='+')
+        self.scan_entry.bind('<<Paste>>', self._on_scan_entry_paste_during_notice)
         self.scan_entry.bind('<Escape>', self._on_scan_entry_escape_during_notice, add='+')
         self.notice_frame = tk.Frame(
             parent_frame,
@@ -15063,8 +15066,18 @@ class ContainerAudit:
         except (AttributeError, TypeError):
             return False
 
+    NOTICE_SCAN_BUFFER_SECONDS = 1.0
+
+    def _notice_now(self) -> float:
+        return time.monotonic()
+
     def _notice_button_captures_scan(self) -> bool:
-        """Scanner characters on the [확인] button belong to a scan, review or not."""
+        """Scanner characters on a closed entry or the [확인] button belong to a scan.
+
+        True for every blocking band except inline choices and the partial-submit
+        confirmation, whose scans already answer the band; operator review and
+        pre-command retry are included (their scans reach the existing path).
+        """
         try:
             return bool(
                 self._warning_state_presenter().state.is_blocking
@@ -15074,30 +15087,53 @@ class ContainerAudit:
         except (AttributeError, TypeError):
             return False
 
-    def _on_notice_button_key(self, event=None) -> None:
+    def _notice_scan_put(self, text: str) -> None:
+        now = self._notice_now()
+        buffer = str(getattr(self, "_notice_scan_buffer", "") or "")
+        if buffer and now - float(getattr(self, "_notice_scan_stamp", now)) > self.NOTICE_SCAN_BUFFER_SECONDS:
+            buffer = ""  # a stray key long ago is not part of this scan
+        text = "".join(ch for ch in str(text or "") if ch.isprintable())
+        self._notice_scan_buffer = (buffer + text)[-512:]
+        self._notice_scan_stamp = now
+
+    def _notice_scan_take(self) -> str:
+        """Hand over the collected scan once; stale or band-less text is dropped."""
+        buffer = str(getattr(self, "_notice_scan_buffer", "") or "")
+        self._notice_scan_buffer = ""
+        if not buffer or not self._notice_button_captures_scan():
+            return ""
+        if self._notice_now() - float(getattr(self, "_notice_scan_stamp", 0.0)) > self.NOTICE_SCAN_BUFFER_SECONDS:
+            return ""
+        return buffer.strip()
+
+    def _on_notice_key(self, event=None) -> None:
         if not self._notice_button_captures_scan():
             self._notice_scan_buffer = ""
             return
         char = str(getattr(event, "char", "") or "")
         if len(char) == 1 and char.isprintable():
-            self._notice_scan_buffer = (getattr(self, "_notice_scan_buffer", "") + char)[-512:]
+            self._notice_scan_put(char)
+
+    _on_notice_button_key = _on_notice_key
+    _on_scan_entry_key_during_notice = _on_notice_key
+
+    def _on_scan_entry_paste_during_notice(self, event=None):
+        if not self._notice_button_captures_scan():
+            return None
+        try:
+            pasted = str(self.root.clipboard_get() or "")
+        except (AttributeError, tk.TclError):
+            pasted = ""
+        self._notice_scan_put(pasted.strip().splitlines()[0] if pasted.strip() else "")
+        return "break"
 
     def _on_notice_button_return(self, event=None):
-        captured = str(getattr(self, "_notice_scan_buffer", "") or "").strip()
-        if captured and self._notice_button_captures_scan():
-            self._refuse_scan_during_notice()  # the button is not pressed
+        if str(getattr(self, "_notice_scan_buffer", "") or "").strip() and self._notice_button_captures_scan():
+            self.process_barcode()  # scan end: refused or sent to the existing path; button not pressed
             return "break"
         self._notice_scan_buffer = ""
         self._acknowledge_active_notice()
         return None
-
-    def _on_scan_entry_key_during_notice(self, event=None) -> None:
-        if not self._notice_blocks_scan():
-            self._notice_scan_buffer = ""
-            return
-        char = str(getattr(event, "char", "") or "")
-        if len(char) == 1 and char.isprintable():
-            self._notice_scan_buffer = (getattr(self, "_notice_scan_buffer", "") + char)[-512:]
 
     def _on_scan_entry_escape_during_notice(self, event=None):
         if self._notice_blocks_scan():
@@ -15105,17 +15141,23 @@ class ContainerAudit:
             return "break"
         return None
 
+    def _show_scan_refusal(self, text: str) -> None:
+        """Put the refusal text under the band that stays (status messages are dropped there)."""
+        self._scan_refusal_visible = True
+        self._scan_refusal_text = str(text or "")
+        self._scan_refusal_serial = int(getattr(self, "_scan_refusal_serial", 0)) + 1
+        try:
+            self._render_warning_state()
+        except (AttributeError, tk.TclError):
+            pass
+
     def _refuse_scan_during_notice(self, raw_barcode: str = "") -> None:
         """Refuse a scan out loud while the band stays: sound, band text, local event."""
         self._notice_scan_buffer = ""
         if raw_barcode:
             self._clear_consumed_scan_entry(raw_barcode)
-        self._scan_refusal_visible = True
         self._start_warning_beep()
-        try:
-            self._render_warning_state()
-        except (AttributeError, tk.TclError):
-            pass
+        self._show_scan_refusal(NOTICE_SCAN_REFUSAL_TEXT)
         notice = self._warning_state_presenter().state.active_notice
         self._log_event(
             "SCAN_REFUSED_DURING_NOTICE",
@@ -15124,6 +15166,12 @@ class ContainerAudit:
 
     def _refuse_entry_scan(self, message: str) -> None:
         self._start_warning_beep()
+        try:
+            blocking = self._warning_state_presenter().state.is_blocking
+        except (AttributeError, TypeError):
+            blocking = False
+        if blocking:
+            self._show_scan_refusal(message)
         self.show_status_message(message, self.COLOR_DANGER, duration=0)
 
     def _refuse_scans_behind_save(self, message: str) -> str:
@@ -15207,12 +15255,35 @@ class ContainerAudit:
 
     def process_barcode(self, event=None):
         """UI의 스캔 엔트리에서 바코드를 읽어 로직을 실행합니다."""
+        self._notice_scan_injected = False
+        try:
+            return self._process_barcode_entry(event)
+        finally:
+            if getattr(self, "_notice_scan_injected", False):
+                self._notice_scan_injected = False
+                try:  # the closed entry was opened only to carry the scan
+                    if self._warning_state_presenter().state.is_blocking:
+                        self._render_warning_state()
+                except (AttributeError, tk.TclError):
+                    pass
+
+    def _process_barcode_entry(self, event=None):
         if getattr(self, "_startup_update_pending", False):
             self._refuse_entry_scan("프로그램 준비 중입니다. 잠시 뒤 다시 스캔하세요.")
             return
         raw_barcode = self.scan_entry.get().strip()
-        captured_during_notice = str(getattr(self, "_notice_scan_buffer", "") or "").strip()
-        self._notice_scan_buffer = ""
+        captured_during_notice = self._notice_scan_take()
+        if captured_during_notice and not raw_barcode and not self._notice_blocks_scan():
+            # Operator review / pre-command retry: the characters become a real scan
+            # on the existing path (its own refusal, sound and meaning).
+            try:
+                self.scan_entry.configure(state=tk.NORMAL)
+                self.scan_entry.delete(0, tk.END)
+                self.scan_entry.insert(0, captured_during_notice)
+                raw_barcode = self.scan_entry.get().strip()
+                self._notice_scan_injected = True
+            except (AttributeError, tk.TclError):
+                pass
         if self._reject_residual_tag(raw_barcode):
             self._clear_consumed_scan_entry(raw_barcode)
             return
@@ -16890,8 +16961,9 @@ class ContainerAudit:
 
         if notice is None or not notice.blocking:
             self._scan_refusal_visible = False
+            self._notice_scan_buffer = ""
         elif getattr(self, "_scan_refusal_visible", False):
-            message = f"{message}\n{NOTICE_SCAN_REFUSAL_TEXT}"
+            message = f"{message}\n{getattr(self, '_scan_refusal_text', '') or NOTICE_SCAN_REFUSAL_TEXT}"
         if getattr(self, "_deferred_app_stop_request", None) and _APP_STOP_DEFERRED_MESSAGE not in message:
             message += "\n" + _APP_STOP_DEFERRED_MESSAGE
 

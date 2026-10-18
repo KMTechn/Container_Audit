@@ -307,9 +307,10 @@ def test_next_label_during_final_product_save_is_retained(flow, windows, monkeyp
     finally:
         release.set()
 
-def test_automatic_other_worker_restore_uses_inline_notice(flow, windows, monkeypatch):
+def test_other_worker_hold_after_choosing_is_kept_with_inline_notice(flow, windows, monkeypatch):
+    # 자동 시작 없음: 작업자를 고른 뒤(복원은 고른 뒤 길) 다른 사람의 남은 보류는 제자리 보존 + 인라인 안내.
     app = flow(transition=False)
-    snapshot = SimpleNamespace(worker='another-operator', state='WAITING_LABEL', master_raw=COMPACT_QR,
+    snapshot = SimpleNamespace(error_code=None, worker='another-operator', state='WAITING_LABEL', master_raw=COMPACT_QR,
                                to_payload=lambda: {'worker': 'another-operator'})
     monkeypatch.setattr(app, '_preflight_hold_store', lambda: SimpleNamespace(
         exists=lambda: True, load=lambda: snapshot))

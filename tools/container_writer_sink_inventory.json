@@ -1193,11 +1193,11 @@
       ],
       "file": "ca_screen_bridge.py",
       "kind": "function",
-      "line": 1265,
+      "line": 1275,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 1271,
+          "line": 1281,
           "operation": "path.open",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -10851,7 +10851,7 @@
       "tools.register_container_audit_worker_pc"
     ]
   },
-  "inventory_sha256": "779792d70d9cb28e3216920d339ad2d44e2710414407880a4d2e998c759ba499",
+  "inventory_sha256": "5b002ba2391297eb0d33bcb0137a18288acf86150a8bbfc6db7c9618b47a53bd",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -25206,7 +25206,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 23594,
+      "line": 23698,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -26118,7 +26118,7 @@
       "direct_mutation_site_count": 1,
       "file": "ca_screen_bridge.py",
       "function": "ca_screen_bridge._write_screen_startup_record",
-      "line": 1265,
+      "line": 1275,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },

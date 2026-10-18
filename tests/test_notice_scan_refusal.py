@@ -181,9 +181,12 @@ def test_button_focus_scan_then_enter_is_refused_and_button_not_pressed(review):
     assert app._on_notice_button_return(SimpleNamespace(char="\r")) == "break"
     assert app.warning_presenter.state.is_blocking  # 단추 안 눌림 — 띠 그대로
     assert "beep" in app.calls and "stop_beep" not in app.calls
-    assert [name for name, _ in app.events] == ["SCAN_REFUSED_DURING_NOTICE"]
     assert getattr(app, "_notice_scan_buffer", "") == ""
-    assert app.notice_message_label.text.endswith(NOTICE_SCAN_REFUSAL_TEXT)
+    if review:  # 담당자 확인 중은 기존 거절 길(오류 문구)로 간다
+        assert app.events == [] and "처리 오류를 확인해야" in app.notice_message_label.text
+    else:
+        assert [name for name, _ in app.events] == ["SCAN_REFUSED_DURING_NOTICE"]
+        assert app.notice_message_label.text.endswith(NOTICE_SCAN_REFUSAL_TEXT)
 
 
 @pytest.mark.parametrize("review", [False, True], ids=["ordinary", "operator-review"])
@@ -199,3 +202,83 @@ def test_button_focus_keys_are_ignored_without_a_band():
     app = _app(blocking=False)
     _type_on_button(app, SCAN)
     assert getattr(app, "_notice_scan_buffer", "") == ""
+
+
+# --- P2-1 담당자 확인·사전 검토 재시도 중, P3 붙여넣기·1 초·KP_Enter ---------------------------------
+
+class _Clock:
+    def __init__(self):
+        self.t = 100.0
+
+
+def _review_app():
+    app = _app()
+    app._ui_lane_fault_blocked = True  # 담당자 확인 중
+    app.clock = _Clock()
+    app._notice_now = lambda: app.clock.t
+    assert app._operator_review_blocks_mutation() and not app._notice_blocks_scan()
+    return app
+
+
+def _admission_refusals(app):
+    return [c[1] for c in app.calls if isinstance(c, tuple) and c[0] == "status"]
+
+
+def test_operator_review_entry_scan_is_refused_by_the_existing_path_with_sound():
+    app = _review_app()
+    _type_like_scanner(app, SCAN)
+    app.process_barcode()
+    assert not [c for c in app.calls if isinstance(c, tuple) and c[0] == "logic"]
+    assert "beep" in app.calls and app.warning_presenter.state.is_blocking
+    assert _admission_refusals(app) and "처리 오류를 확인해야" in _admission_refusals(app)[-1]
+    assert getattr(app, "_notice_scan_buffer", "") == ""
+
+
+def test_operator_review_button_focus_scan_is_refused_not_acknowledged():
+    app = _review_app()
+    _type_on_button(app, SCAN)
+    assert app._on_notice_button_return(SimpleNamespace(char="\r")) == "break"
+    assert "beep" in app.calls and app.warning_presenter.state.is_blocking
+    assert not [c for c in app.calls if isinstance(c, tuple) and c[0] == "logic"]
+
+
+def test_operator_review_bridge_answers_accepted_false():
+    app = _review_app()
+    app._notice_scan_put = ContainerAudit._notice_scan_put.__get__(app)
+    reply = _bridge(app).scan(SCAN, {})
+    assert reply["accepted"] is False and "처리 오류를 확인해야" in reply["message"]
+    assert ("enter", SCAN) not in app.calls and "beep" in app.calls
+    assert app.warning_presenter.state.is_blocking
+
+
+def test_paste_during_band_is_collected_and_refused_on_enter():
+    app = _app()
+    app.root = SimpleNamespace(clipboard_get=lambda: SCAN + "\n", after=lambda *a, **k: None)
+    assert app._on_scan_entry_paste_during_notice(SimpleNamespace()) == "break"
+    assert app.scan_entry.value == ""
+    app.process_barcode()
+    assert [n for n, _ in app.events] == ["SCAN_REFUSED_DURING_NOTICE"]
+
+
+def test_buffer_is_dropped_after_one_second_so_a_blank_enter_confirms():
+    app = _app()
+    app.clock = _Clock()
+    app._notice_now = lambda: app.clock.t
+    app._on_scan_entry_key_during_notice(SimpleNamespace(char="x"))
+    app.clock.t += 1.5
+    app.process_barcode()
+    assert app.events == [] and not app.warning_presenter.state.is_blocking  # 빈 Enter = 확인
+
+
+def test_buffer_is_cleared_when_the_band_closes():
+    app = _app()
+    app._on_scan_entry_key_during_notice(SimpleNamespace(char="x"))
+    app.warning_presenter.acknowledge()
+    app._render_warning_state()
+    assert app._notice_scan_buffer == ""
+
+
+def test_keypad_enter_is_bound_like_return():
+    import inspect
+    src = inspect.getsource(ContainerAudit)
+    assert src.count("bind('<Return>', self.process_barcode)") == src.count("bind('<KP_Enter>', self.process_barcode)") >= 2
