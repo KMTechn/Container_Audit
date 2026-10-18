@@ -337,10 +337,8 @@ def test_start_pane_lists_the_roster_and_starts_through_the_entry(flow):
     app._worker_roster_notice_text = lambda: "이름을 고르세요. 목록에 없으면 『새 이름 등록』을 누르세요."
     app.worker_registry = SimpleNamespace(recent_worker=lambda: "작업자 05", list_workers=lambda: [])
     started = []
-    def start_work(*args, **kwargs):
-        started.append(app.worker_entry.get())
-        return True
-    app.start_work = start_work
+    app._set_worker_entry_value = lambda value: app.worker_entry.insert(0, value)
+    app._start_selected_worker = lambda label: started.append(label) or True  # 격자 단추도 _select_worker 한 문을 지난다
     app.worker_entry = ScannerEntry("")
     processor = CaProcessor(app)
     state = processor.state()

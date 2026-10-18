@@ -116,12 +116,20 @@ def test_public_scanner_continues_after_short_notice(flow, windows, following):
         assert app.current_tray.master_label_code == OTHER_LABEL + '|QT=1', str(app.statuses[-3:])
     assert windows == []
 
-def test_public_scanner_accepts_member_after_nonmember_notice(flow, windows):
+def test_public_scanner_refuses_during_nonmember_notice_then_accepts_member_after_ack(flow, windows):
     app = _active(flow)
     real_notice(app)
     public_scan(app, ITEM + '-OUTSIDE-999')
     assert app.current_tray.scanned_barcodes == []
     _pump_until(app.root, lambda: not app._ui_task_lane().is_busy())
+    # D-01: 띠가 떠 있는 동안의 스캔은 받지 않고 보이게 거절한다. 확인한 뒤 다시 찍으면 받는다.
+    app.scan_entry = ScannerEntry(ITEM + '-SERIAL-001')
+    app.process_barcode()
+    assert app.current_tray.scanned_barcodes == [] and app._warning_state_presenter().state.is_blocking
+    assert app._scan_refusal_visible is True
+    app.scan_entry = ScannerEntry('')
+    app.process_barcode()  # 빈 Enter = 확인
+    assert not app._warning_state_presenter().state.is_blocking
     app.scan_entry = ScannerEntry(ITEM + '-SERIAL-001')
     app.process_barcode()
     if app.root.jobs:
