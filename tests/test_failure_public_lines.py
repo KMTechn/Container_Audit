@@ -115,7 +115,7 @@ def test_generation_refusal_keeps_fixed_guidance_in_flat_record(tmp_path, monkey
                 raise ValueError(private)
             raise DataGenerationBlocked({'status': 'UNKNOWN' if unknown else 'REFUSE'})
         except Exception as cause:
-            raise onboarding.CurrentUserOnboardingError(guidance, report_path=tmp_path / 'unpublished.json') from cause
+            raise onboarding.CurrentUserOnboardingError(guidance, report_path=tmp_path / 'unpublished.json', reason_code="DATA_GENERATION_UNKNOWN" if unknown else "DATA_GENERATION_REFUSED") from cause
     record = _public(_invoke(_cli(monkeypatch, tmp_path, 'onboarding', operation), capsys), private,
                      expected_reason='DATA_GENERATION_UNKNOWN' if unknown else 'DATA_GENERATION_REFUSED',
                      expected_guidance=guidance)
@@ -330,3 +330,71 @@ def test_packaged_dependency_trace_reports_the_application_caller(tmp_path, monk
     assert fields == {'exception_type': 'builtins.ValueError',
                       'location_module': 'owned_application',
                       'location_function': 'fail', 'location_line': 2}
+
+
+def test_unregistered_multiline_onboarding_error_keeps_last_line(tmp_path):
+    failure = onboarding.CurrentUserOnboardingError(
+        "unregistered first line\nunregistered last line",
+        report_path=tmp_path / "failure.json",
+    )
+    assert failure.args == ("unregistered last line",)
+    assert str(failure) == "unregistered last line"
+
+
+@pytest.mark.parametrize("kind", ("refused", "unknown", "unregistered"))
+def test_codeless_onboarding_error_keeps_generic_public_guidance(tmp_path, capsys, kind):
+    from kmtech_shared import data_generation as generation
+    message = (generation.REFUSAL_MESSAGE if kind == "refused" else
+               generation.UNKNOWN_MESSAGE if kind == "unknown" else
+               "unregistered first line\nunregistered last line")
+    failure = onboarding.CurrentUserOnboardingError(message, report_path=tmp_path / "failure.json")
+    assert len(str(failure).splitlines()) == 1
+    assert failure.reason_code == ""
+    onboarding.emit_installer_failure(failure, "onboarding")
+    streams = capsys.readouterr()
+    _public(streams.out + streams.err, "not-present-private-fixture",
+            expected_reason="INSTALLER_CHILD_FAILURE",
+            expected_guidance=onboarding.INSTALLER_SAFE_MESSAGES[0])
+
+
+@pytest.mark.parametrize("refused", (True, False))
+def test_coded_generation_public_json_has_no_control_bytes(tmp_path, capsys, refused):
+    from kmtech_shared import data_generation as generation
+    reason = "DATA_GENERATION_REFUSED" if refused else "DATA_GENERATION_UNKNOWN"
+    guidance = generation.REFUSAL_MESSAGE if refused else generation.UNKNOWN_MESSAGE
+    failure = onboarding.CurrentUserOnboardingError(
+        guidance, report_path=tmp_path / "failure.json", reason_code=reason,
+    )
+    assert len(str(failure).splitlines()) == 1
+    onboarding.emit_installer_failure(failure, "onboarding")
+    streams = capsys.readouterr()
+    raw = streams.out + streams.err
+    assert raw.endswith("\n")
+    line = raw[:-1].encode("utf-8")
+    assert line and all(0x20 <= byte <= 0x7F for byte in line)
+    _public(raw, "not-present-private-fixture", expected_reason=reason, expected_guidance=guidance)
+
+
+@pytest.mark.parametrize("source", ("user_relay.py", "tools/active_work_probe.py"))
+@pytest.mark.parametrize("refused", (True, False))
+def test_generation_plain_print_fragment_preserves_registered_message_bytes(capsys, source, refused):
+    import ast
+    from types import SimpleNamespace
+    from kmtech_shared import data_generation as generation
+    root = Path(__file__).resolve().parents[1]
+    tree = ast.parse((root / source).read_bytes())
+    prints = []
+    for handler in ast.walk(tree):
+        if (isinstance(handler, ast.ExceptHandler) and isinstance(handler.type, ast.Name)
+                and handler.type.id == "DataGenerationBlocked"):
+            prints.extend(statement for statement in handler.body
+                          if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call)
+                          and isinstance(statement.value.func, ast.Name) and statement.value.func.id == "print")
+    assert len(prints) == 1
+    guidance = generation.REFUSAL_MESSAGE if refused else generation.UNKNOWN_MESSAGE
+    exec(compile(ast.Module(body=prints, type_ignores=[]), source, "exec"),
+         {"exc": SimpleNamespace(user_message=guidance)})
+    streams = capsys.readouterr()
+    raw = streams.out + streams.err
+    assert raw.endswith("\n")
+    assert raw.encode("utf-8") == (guidance + "\n").encode("utf-8")

@@ -370,15 +370,14 @@ def emit_installer_failure(error: BaseException, stage: str) -> int:
         reason = "DATA_GENERATION_REFUSED" if refused else "DATA_GENERATION_UNKNOWN"
         guidance = generation.REFUSAL_MESSAGE if refused else generation.UNKNOWN_MESSAGE
     else:
-        # Identity-readback failures already use these two fixed G messages.
-        # Accept only the project exception and exact registered constants;
-        # arbitrary exception sentences remain private.
+        # Identity-readback failures carry a code independent of presentation.
+        # Arbitrary exception sentences remain private.
         for entry in chain:
-            if isinstance(entry, CurrentUserOnboardingError) and entry.args and type(entry.args[0]) is str:
-                if entry.args[0] in (generation.REFUSAL_MESSAGE, generation.UNKNOWN_MESSAGE):
-                    guidance = entry.args[0]
-                    reason = ("DATA_GENERATION_REFUSED" if guidance == generation.REFUSAL_MESSAGE
-                              else "DATA_GENERATION_UNKNOWN")
+            if isinstance(entry, CurrentUserOnboardingError) and type(entry.reason_code) is str:
+                if entry.reason_code in ("DATA_GENERATION_REFUSED", "DATA_GENERATION_UNKNOWN"):
+                    reason = entry.reason_code
+                    guidance = (generation.REFUSAL_MESSAGE if reason == "DATA_GENERATION_REFUSED"
+                                else generation.UNKNOWN_MESSAGE)
                     break
     fields = {
         "status": "FAILED", "stage": stage, "reason_code": reason,
@@ -1962,11 +1961,14 @@ def preflight_current_user_onboarding(app_root, *, environ=None, target_release_
     except DataGenerationBlocked as exc:
         raise CurrentUserOnboardingError(
             exc.user_message, report_path=paths.onboarding_report_path, status="FAILED",
+            reason_code=("DATA_GENERATION_REFUSED" if exc.decision.get("status") == "REFUSE"
+                         else "DATA_GENERATION_UNKNOWN"),
         ) from exc
     except Exception as exc:
         from kmtech_shared import data_generation as generation
         raise CurrentUserOnboardingError(
             generation.UNKNOWN_MESSAGE, report_path=paths.onboarding_report_path, status="FAILED",
+            reason_code="DATA_GENERATION_UNKNOWN",
         ) from exc
     if inputs[1] is not None and inputs[1].credential_error is not None:
         raise CurrentUserOnboardingError(
@@ -2150,6 +2152,8 @@ def onboard_current_user(
         except DataGenerationBlocked as exc:
             raise CurrentUserOnboardingError(
                 exc.user_message, report_path=paths.onboarding_report_path, status="FAILED",
+                reason_code=("DATA_GENERATION_REFUSED" if exc.decision.get("status") == "REFUSE"
+                             else "DATA_GENERATION_UNKNOWN"),
             ) from exc
         if prepared_inputs[2] != expected_input_binding:
             raise CurrentUserOnboardingError(
@@ -2360,6 +2364,8 @@ def onboard_current_user(
     except DataGenerationBlocked as exc:
         raise CurrentUserOnboardingError(
             exc.user_message, report_path=paths.onboarding_report_path, status="FAILED",
+            reason_code=("DATA_GENERATION_REFUSED" if exc.decision.get("status") == "REFUSE"
+                         else "DATA_GENERATION_UNKNOWN"),
         ) from exc
     except CurrentUserOnboardingError as exc:
         report["status"] = exc.status
@@ -2417,6 +2423,8 @@ def remove_current_user_setup(
         except DataGenerationBlocked as exc:
             raise CurrentUserOnboardingError(
                 exc.user_message, report_path=paths.removal_report_path, status="FAILED",
+                reason_code=("DATA_GENERATION_REFUSED" if exc.decision.get("status") == "REFUSE"
+                             else "DATA_GENERATION_UNKNOWN"),
             ) from exc
         with writer_admission("current_user_setup_removal"):
             ensure_user_runtime_directory(status_dir)
@@ -2553,6 +2561,8 @@ def restore_current_user_lifecycle_after_replacement(
     except DataGenerationBlocked as exc:
         raise CurrentUserOnboardingError(
             exc.user_message, report_path=report_path, status="FAILED",
+            reason_code=("DATA_GENERATION_REFUSED" if exc.decision.get("status") == "REFUSE"
+                         else "DATA_GENERATION_UNKNOWN"),
         ) from exc
     owner_paths = _owner_artifact_paths(paths)
     if report_path == receipt_path or report_path in {

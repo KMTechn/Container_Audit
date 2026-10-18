@@ -724,6 +724,7 @@ Main의 새 QA 소유 배정 뒤 Web이 발행한 단회 recovery를 기존 지�
 설치기 공개 레코드 producer는 PASS·FAILED 모두 같은 ASCII 규칙을 적용한다. 상태별로 출력 채널·필드·JSON 복원 의미를 바꾸지 않는다.
 
 설치 공개 실패 줄은 기존 출력 채널에서 `<앱 접두>=` + JSON 객체 하나(-Compress) + CRLF이며 CRLF 앞 바이트는 0x20–0x7F(ASCII, DEL 포함)다. JSON 생성 뒤 U+007F보다 큰 UTF-16 코드 단위를 소문자 16진 네 자리 `\uXXXX`로 바꾼다(서로게이트 단위마다). 필드 이름·차례·다른 이스케이프는 앱 생산자 그대로다. PS5.1/PS7 및 콘솔 949/65001에서 공통 벡터의 바이트와 JSON 복원 값이 같아야 한다. `< > & '`의 엔진별 직렬화 차이는 이 계약의 동일 바이트 시험에 넣지 않는다.
+표지 없는 사람용 stdout(pythonw relay·부르지 않는 probe)은 이 한 줄 표지 계약의 대상 밖이다.
 
 Installer failures preserve the original redacted message, line, inner chain,
 HResult/native error and ordered stage start/end/result. Finite installer children
