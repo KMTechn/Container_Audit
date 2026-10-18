@@ -12350,7 +12350,11 @@ class ContainerAudit:
             pady=4,
         )
         self.notice_ack_button.grid(row=0, column=2, sticky='e', padx=(8, 10), pady=6)
-        self.notice_ack_button.bind('<Return>', lambda _event: self._acknowledge_active_notice())
+        # Focus on [확인] (also during operator review): scanner characters are
+        # kept and their Enter ends the scan instead of pressing the button.
+        self.notice_ack_button.bind('<Key>', self._on_notice_button_key, add='+')
+        self.notice_ack_button.bind('<Return>', self._on_notice_button_return)
+        self.notice_ack_button.bind('<KP_Enter>', self._on_notice_button_return)
         self.notice_ack_button.bind('<Escape>', lambda _event: self._acknowledge_active_notice())
         self.phs_label_exchange_button = ttk.Button(
             self.notice_frame,
@@ -15058,6 +15062,34 @@ class ContainerAudit:
             return self._precommand_operator_review_retry_context() is None
         except (AttributeError, TypeError):
             return False
+
+    def _notice_button_captures_scan(self) -> bool:
+        """Scanner characters on the [확인] button belong to a scan, review or not."""
+        try:
+            return bool(
+                self._warning_state_presenter().state.is_blocking
+                and not getattr(self, "_inline_scan_choices", None)
+                and not getattr(self, "_partial_submit_confirmation", None)
+            )
+        except (AttributeError, TypeError):
+            return False
+
+    def _on_notice_button_key(self, event=None) -> None:
+        if not self._notice_button_captures_scan():
+            self._notice_scan_buffer = ""
+            return
+        char = str(getattr(event, "char", "") or "")
+        if len(char) == 1 and char.isprintable():
+            self._notice_scan_buffer = (getattr(self, "_notice_scan_buffer", "") + char)[-512:]
+
+    def _on_notice_button_return(self, event=None):
+        captured = str(getattr(self, "_notice_scan_buffer", "") or "").strip()
+        if captured and self._notice_button_captures_scan():
+            self._refuse_scan_during_notice()  # the button is not pressed
+            return "break"
+        self._notice_scan_buffer = ""
+        self._acknowledge_active_notice()
+        return None
 
     def _on_scan_entry_key_during_notice(self, event=None) -> None:
         if not self._notice_blocks_scan():

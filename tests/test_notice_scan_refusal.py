@@ -165,3 +165,37 @@ def test_empty_selection_starts_nothing_and_says_so():
     app.worker_entry = SimpleNamespace(get=lambda: "")
     assert app.start_work() is None
     assert ("status", "작업자를 고르세요") in app.calls
+
+
+def _type_on_button(app, text):
+    for char in text:
+        app._on_notice_button_key(SimpleNamespace(char=char))
+
+
+@pytest.mark.parametrize("review", [False, True], ids=["ordinary", "operator-review"])
+def test_button_focus_scan_then_enter_is_refused_and_button_not_pressed(review):
+    app = _app()
+    app._ui_lane_fault_blocked = review  # 담당자 확인 중과 같은 규칙
+    assert app._operator_review_blocks_mutation() is review
+    _type_on_button(app, SCAN)
+    assert app._on_notice_button_return(SimpleNamespace(char="\r")) == "break"
+    assert app.warning_presenter.state.is_blocking  # 단추 안 눌림 — 띠 그대로
+    assert "beep" in app.calls and "stop_beep" not in app.calls
+    assert [name for name, _ in app.events] == ["SCAN_REFUSED_DURING_NOTICE"]
+    assert getattr(app, "_notice_scan_buffer", "") == ""
+    assert app.notice_message_label.text.endswith(NOTICE_SCAN_REFUSAL_TEXT)
+
+
+@pytest.mark.parametrize("review", [False, True], ids=["ordinary", "operator-review"])
+def test_button_focus_blank_enter_keeps_todays_meaning(review):
+    app = _app()
+    app._ui_lane_fault_blocked = review
+    assert app._on_notice_button_return(SimpleNamespace(char="\r")) is None
+    assert not app.warning_presenter.state.is_blocking
+    assert app.events == []
+
+
+def test_button_focus_keys_are_ignored_without_a_band():
+    app = _app(blocking=False)
+    _type_on_button(app, SCAN)
+    assert getattr(app, "_notice_scan_buffer", "") == ""
