@@ -264,7 +264,8 @@ function Install-BootstrapEmergencyShortcut([string]$InstallRoot) {
                 return [pscustomobject]@{status='PRESERVED_FOREIGN';published=@();preserved=@([pscustomobject]@{shortcut_path=$path;status='FOREIGN_LINK_PRESERVED'})}
             }
             if([string]$link.WorkingDirectory -ieq $root -and $link.WindowStyle -eq 7){
-                return [pscustomobject]@{status='RETAINED';published=@();preserved=@([pscustomobject]@{shortcut_path=$path;status='OWNED_LINK_RETAINED'})}
+                return [pscustomobject]@{status='RETAINED';published=@();preserved=@([pscustomobject]@{location='emergency';shortcut_path=$path;target_path=[string]$link.TargetPath;
+                    arguments=[string]$link.Arguments;working_directory=[string]$link.WorkingDirectory;status='OWNED_LINK_RETAINED'})}
             }
             $status='UPDATED'
         }else{

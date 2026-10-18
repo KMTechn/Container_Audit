@@ -71,7 +71,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = 'f6b68b800409946a6844d84065efa13de50f19d30d967a7aba89f86654dc8965'
+$ExpectedBootstrapIntegritySha256 = 'feeca3a894d18652c3ed4c28648ea4201f0ac84a744bfcde73a7ac0a9c78bfda'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -4178,7 +4178,8 @@ function Get-CanonicalMachineShortcutPlacement([string]$Root,[string]$Directory=
                 $owned=([string]$existing.target_path -ieq $target -and $existing.arguments -ceq $arguments -and
                     [string]$existing.working_directory -ieq $working)
             }catch{}
-            if($owned){return [pscustomobject]@{path=$path;owned=$true;preserved=@($preserved)+@([pscustomobject]@{shortcut_path=$path;status='OWNED_LINK_RETAINED'})}}
+            if($owned){return [pscustomobject]@{path=$path;owned=$true;preserved=@($preserved)+@([pscustomobject]@{location=[string]$existing.location;shortcut_path=[string]$existing.shortcut_path;
+                target_path=[string]$existing.target_path;arguments=[string]$existing.arguments;working_directory=[string]$existing.working_directory;status='OWNED_LINK_RETAINED'})}}
             $preserved+=@([pscustomobject]@{shortcut_path=$path;status='UNRELATED_LINK_PRESERVED'})
             $suffix++;$path=Join-Path $Directory ('KMTech 이적 검사 (새 프로그램 '+$suffix+').lnk')
         }
@@ -4232,9 +4233,13 @@ function Set-CanonicalPublishedShortcuts($Audit,[object[]]$Results) {
         }|ForEach-Object {$_.preserved})
         if($preserved.Count -eq 0){throw 'SHORTCUT_PUBLICATION_READBACK_REQUIRED'}
     }
+    $retained=@($Results|Where-Object {$null -ne $_ -and $null -ne $_.PSObject.Properties['preserved']}|
+        ForEach-Object {$_.preserved}|Where-Object {$null -ne $_ -and [string]$_.status -ceq 'OWNED_LINK_RETAINED'})
     if(-not $Audit.Contains('shortcuts')){$Audit['shortcuts']=[ordered]@{published=@()}}
     if($Audit.shortcuts -is [Collections.IDictionary]){$Audit.shortcuts['published']=@($published)}
     else{$Audit.shortcuts|Add-Member -NotePropertyName published -NotePropertyValue @($published) -Force}
+    if($Audit.shortcuts -is [Collections.IDictionary]){$Audit.shortcuts['preserved']=@($retained)}
+    else{$Audit.shortcuts|Add-Member -NotePropertyName preserved -NotePropertyValue @($retained) -Force}
 }
 
 function Get-CanonicalWorkerPreparationPaths($Worker) {
