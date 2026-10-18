@@ -15016,7 +15016,7 @@ class ContainerAudit:
         """
         if getattr(self, "_scan_callback_pending", False):
             # A scanner's second Enter: the scheduled callback owns this value.
-            self.show_status_message(block_reason, self.COLOR_DANGER, duration=0)
+            self._mark_scan_unaccepted(block_reason)
             return
         if not self._clear_consumed_scan_entry(raw_barcode):
             self._refuse_entry_scan(
@@ -15256,6 +15256,7 @@ class ContainerAudit:
     def process_barcode(self, event=None):
         """UI의 스캔 엔트리에서 바코드를 읽어 로직을 실행합니다."""
         self._notice_scan_injected = False
+        self._last_scan_unaccepted_text = ""
         try:
             return self._process_barcode_entry(event)
         finally:
@@ -15266,6 +15267,17 @@ class ContainerAudit:
                         self._render_warning_state()
                 except (AttributeError, tk.TclError):
                     pass
+                except Exception as exc:  # the entry must not stay open unnoticed
+                    print(f"스캔 입력칸 다시 닫기 실패: {exc.__class__.__name__}")
+                    try:
+                        self._start_warning_beep()
+                    except Exception:
+                        pass
+
+    def _mark_scan_unaccepted(self, text: str) -> None:
+        """One place that says "this scan was not taken"; the screen bridge reads it."""
+        self._last_scan_unaccepted_text = str(text or "")
+        self.show_status_message(self._last_scan_unaccepted_text, self.COLOR_DANGER, duration=0)
 
     def _process_barcode_entry(self, event=None):
         if getattr(self, "_startup_update_pending", False):
@@ -15277,13 +15289,21 @@ class ContainerAudit:
             # Operator review / pre-command retry: the characters become a real scan
             # on the existing path (its own refusal, sound and meaning).
             try:
+                # Set first: if configure/delete/insert fails the finally in
+                # process_barcode still closes the entry again.
+                self._notice_scan_injected = True
                 self.scan_entry.configure(state=tk.NORMAL)
                 self.scan_entry.delete(0, tk.END)
                 self.scan_entry.insert(0, captured_during_notice)
                 raw_barcode = self.scan_entry.get().strip()
-                self._notice_scan_injected = True
             except (AttributeError, tk.TclError):
                 pass
+        elif captured_during_notice and raw_barcode and not self._notice_blocks_scan():
+            # Old characters stay in the entry: they are processed, the collected scan is not.
+            self._last_scan_unaccepted_text = ""
+            self._mark_scan_unaccepted(
+                "입력칸에 이전 글자가 남아 있어 이번 스캔은 처리되지 않았습니다. 다시 스캔하세요."
+            )
         if self._reject_residual_tag(raw_barcode):
             self._clear_consumed_scan_entry(raw_barcode)
             return

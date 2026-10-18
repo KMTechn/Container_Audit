@@ -282,3 +282,35 @@ def test_keypad_enter_is_bound_like_return():
     import inspect
     src = inspect.getsource(ContainerAudit)
     assert src.count("bind('<Return>', self.process_barcode)") == src.count("bind('<KP_Enter>', self.process_barcode)") >= 2
+
+
+# --- 2차 손질: N-1 다시 닫기, N-2 다리 accepted 는 실제 결과 ---------------------------------
+
+def test_insert_failure_while_injecting_still_closes_the_entry_again():
+    app = _review_app()
+    app._notice_scan_buffer = SCAN
+    app.scan_entry.insert = lambda *a: (_ for _ in ()).throw(ca.tk.TclError("boom"))
+    app._render_warning_state = lambda: setattr(app.scan_entry, "state", "disabled")
+    app.process_barcode()
+    assert app.scan_entry.state == "disabled"  # 칸이 다시 닫혔다
+    assert app._notice_scan_injected is False
+
+
+def test_bridge_answers_accepted_false_when_a_scan_callback_is_pending():
+    app = _review_app()
+    app._notice_scan_put = ContainerAudit._notice_scan_put.__get__(app)
+    app._scan_callback_pending = True
+    reply = _bridge(app).scan(SCAN, {})
+    assert reply["accepted"] is False and "처리 오류를 확인해야" in reply["message"]
+    assert "beep" not in app.calls  # 상태 글만 쓰는 길 — 그래도 다리는 미접수
+    assert not [c for c in app.calls if isinstance(c, tuple) and c[0] == "logic"]
+
+
+def test_bridge_answers_accepted_false_when_old_characters_stay_in_the_entry():
+    app = _review_app()
+    app._notice_scan_put = ContainerAudit._notice_scan_put.__get__(app)
+    app._notice_scan_buffer = ""
+    app.scan_entry.state = "normal"
+    app.scan_entry.value = "OLD"
+    reply = _bridge(app).scan(SCAN, {})
+    assert reply["accepted"] is False and "이전 글자가 남아" in reply["message"]

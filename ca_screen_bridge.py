@@ -754,8 +754,13 @@ class CaProcessor:
         if raw.strip() and self.app._notice_button_captures_scan() and not self.app._notice_blocks_scan():
             # 담당자 확인·사전 검토 재시도 중: 입력칸 상태에 기대지 않고 같은 글자를 기존 길로 넘긴다
             self.app._scan_refusal_text = ""
+            self.app._last_scan_unaccepted_text = ""
             self.app._notice_scan_put(raw)
             self.app.process_barcode()
+            unaccepted = str(getattr(self.app, "_last_scan_unaccepted_text", "") or "")
+            if unaccepted:  # 처리 층이 「이 스캔은 받지 않았다」 고 알린 길
+                return {"accepted": False, "verdict": None, "message": unaccepted,
+                        "sound": None, "result": {"kind": "bad", "text": unaccepted}}
             text = str(getattr(self.app, "_scan_refusal_text", "") or "")
             if text and getattr(self.app, "_scan_refusal_visible", False):
                 return {"accepted": False, "verdict": None, "message": text,
