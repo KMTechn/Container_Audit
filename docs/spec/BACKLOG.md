@@ -13,7 +13,7 @@
 10/17 sub-290 G55·G56 꼴 relay 재시도·G43 닫음(기준일 115 제어 코드): bootstrap 감독을 내구 단계 시각의 창 끝+15초까지 늘리되 시작+480초로 제한한다. 후보 정상 종료 대기 시작도 내구 기록한다. 같은 GUI claim 뒤 실제 trial relay를 다시 관측하며 bootstrap 프로세스의 nonce마다 최대 3회/간격 2초 이상으로 시작한다. OSError 세 번 실패는 사용자 지원 기록의 `TRIAL_RELAY_START_FAILED`로 남긴다. 멈춤 표지가 있으면 포인터·표지를 보존한 `DEFERRED`·`UPDATE_RELAY_STOP_REQUESTED`로 적용을 미루며 recovery_pending은 두지 않는다. 사용자 시작은 REQUEST_APPLY 없이 현재 화면을 연다. 정식 멈춤 PC는 업데이트 날 전에 onboarding한다. 고정 current 교체 장치와 실제 배포본·현장/VM 수용은 별도 레인 회차이며, 이번 고침은 115 설치본에 들어갈 제어 코드다.
 10/17 sub-297 덩어리 3b 집중 고침: G42 진단 재예외와 공개 writer 부분 출력, G35 숨김 제어 파일 읽기 7곳,
 G31 조건부 failure_code/reason_code 읽기, G36 공개 레코드의 코드 페이지 차이를 고쳤다.
-공용 0.3.7(repinned 83420a3, 코드 11f4bf3)의 manifest·lock·실행 핀·vendor metadata와 writer inventory를 갱신했다.
+공용 0.3.8(repinned 32b893d7fa8b, 코드 8075642)의 manifest·lock·실행 핀·vendor metadata와 writer inventory를 갱신했다.
 공개 producer는 PASS·FAILED 모두 ASCII JSON이며 PS5.1/PS7 × 949/65001 원시 바이트와 복원 값을 대조한다.
 최소 JSON 7형식의 실제 StrictMode 소비 회귀와 보호 퇴역 캡처·Save·journal 직접 회귀를 확인했다.
 퇴역 첫 진단 전문은 보호 감사/journal에 보존하고 공개 stdout은 고정 레코드/허용 참조로 제한한다.

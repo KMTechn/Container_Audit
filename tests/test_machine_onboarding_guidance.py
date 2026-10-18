@@ -21,7 +21,7 @@ def test_install_server_change_uses_existing_refusal_guidance():
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "owned-guidance", "exec"), namespace)
     failure = SimpleNamespace(status="RECOVERY_REQUIRED", report_path=Path("owned-report.json"), __cause__=None)
     namespace["_show_first_run_onboarding_error"](failure)
-    assert messages == ["설치 주소가 바뀌었습니다. 관리자에게 알려 주세요."]
+    assert messages == ['회사 서버 주소가 설치 때와 다릅니다.\n현장 관리자에게 알리세요.']
     assert observations == [(("finish", "FIRST_RUN_SETUP_REQUIRED"), {"refused": True})]
 
 @pytest.mark.parametrize("status,expected", [

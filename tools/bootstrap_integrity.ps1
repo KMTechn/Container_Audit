@@ -2972,11 +2972,11 @@ function Get-BootstrapSharedPortableLeaf([string]$Root, [string]$Leaf = 'portabl
             throw 'Shared installer input must be a file.'
         }
     }
-    $expectedManifestSha = '9bdace18db6c6f124ca02418376f4005b8a46b4e82a64033a0407f7c7e988c37'
+    $expectedManifestSha = '3ff5ea08f684f0c35e008ab1b3d816b03d69e3b6d4b72e34b70ba0db11e765a7'
     if ((Get-Item -LiteralPath $lockPath).Length -gt 65536) { throw 'Shared consumer lock is oversized.' }
     $lock = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if (@($lock.PSObject.Properties.Name).Count -ne 2 -or
-        $lock.version -cne '0.3.7' -or $lock.manifest_sha256 -cne $expectedManifestSha) {
+        $lock.version -cne '0.3.8' -or $lock.manifest_sha256 -cne $expectedManifestSha) {
         throw 'Shared consumer lock pin mismatch.'
     }
     if ((Get-FileSha256 $manifestPath) -cne $expectedManifestSha) {
@@ -3050,7 +3050,7 @@ function Assert-ContainerDataGenerationTarget(
             -AppId 'container_audit' -SubjectSid $TargetSid -TargetBuildId ([string]$metadata.source_commit)
     }
     catch {
-        throw '이 PC의 자료 판을 확인할 수 없어 옛 판으로 되돌릴 수 없습니다. 자료와 확인 기록을 보존하고 관리자 지원 복구를 요청하세요.'
+        throw "이 PC의 자료 판을 확인하지 못해 프로그램을 열 수 없습니다.`n현장 관리자에게 알리세요."
     }
     if (-not $decision.allowed) { throw $decision.message }
 }

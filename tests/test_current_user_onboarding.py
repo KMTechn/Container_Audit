@@ -283,7 +283,7 @@ def test_installed_server_change_blocks_ready_and_sends_nothing(installed_server
                                        credential_loader=_credential_loader)
     assert state["status"] == "RECOVERY_REQUIRED"
     assert state["reason_code"] == "INSTALL_SERVER_ORIGIN_CHANGED"
-    assert state["reason"] == "설치 주소가 바뀌었습니다. 관리자에게 알려 주세요."
+    assert state["reason"] == "회사 서버 주소가 설치 때와 다릅니다.\n현장 관리자에게 알리세요."
     with pytest.raises(CurrentUserOnboardingError) as failure:
         onboard_current_user(
             paths.app_root, environ=environment, require_bootstrap_integrity=False,

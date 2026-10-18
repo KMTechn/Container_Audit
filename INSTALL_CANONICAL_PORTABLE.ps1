@@ -71,7 +71,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = 'a470bf2abb522f1e60a7f3db930d8c508f03cdbbb35a4c9f84d67489a3742f41'
+$ExpectedBootstrapIntegritySha256 = 'f6b68b800409946a6844d84065efa13de50f19d30d967a7aba89f86654dc8965'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -2175,7 +2175,7 @@ function Get-CanonicalOnboardingInputBinding([string]$Root,[string]$TargetReleas
         $record=ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes (@(
             'FAILED','onboarding_preflight','INSTALLER_CHILD_FAILURE','REPORT_UNAVAILABLE',
             'DATA_GENERATION_REFUSED','DATA_GENERATION_UNKNOWN') + $writerFailureCodes) `
-            -SafeMessages @('자료를 보존하고 관리자 지원 복구를 요청하세요.','이 PC의 자료가 새 판으로 이미 열려 옛 판으로 되돌릴 수 없습니다. 같은 새 판을 다시 시작하거나 고친 판으로 지원 업데이트하세요. 관리자 지원 복구는 설치 전 백업과 옛 판을 함께 복원해야 합니다.','이 PC의 자료 판을 확인할 수 없어 옛 판으로 되돌릴 수 없습니다. 자료와 확인 기록을 보존하고 관리자 지원 복구를 요청하세요.')
+            -SafeMessages @('자료를 보존하고 관리자 지원 복구를 요청하세요.',"이 PC의 자료는 더 새 판에서 이미 열려 이 판으로는 열 수 없습니다.`n현장 관리자에게 알리세요.","이 PC의 자료 판을 확인하지 못해 프로그램을 열 수 없습니다.`n현장 관리자에게 알리세요.")
         if($record.Contains('public_record_code')){throw 'PUBLIC_FIELD_NONCONFORMING'}
         $expectedFailureExit=if($record.reason_code -cin $writerFailureCodes){23}else{4}
         if($record.status -cne 'FAILED' -or $record.stage -cne 'onboarding_preflight' -or
@@ -4999,7 +4999,7 @@ foreach ($inputName in $containerExternalInputs) {
     try {
         $inputFull = Full ($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($inputValue)) $inputName
     } catch {
-        throw '이 PC의 자료 판을 확인할 수 없어 옛 판으로 되돌릴 수 없습니다. 자료와 확인 기록을 보존하고 관리자 지원 복구를 요청하세요.'
+        throw "이 PC의 자료 판을 확인하지 못해 프로그램을 열 수 없습니다.`n현장 관리자에게 알리세요."
     }
     Set-Variable -Name $inputName -Value $inputFull
     Assert-ContainerDataGenerationTarget -CandidateRoot $source -TargetSid $operatorSid `
@@ -5020,7 +5020,7 @@ if (-not $Uninstall -and -not $RestoreVerifiedReplacement -and -not $CompleteRet
         try {
             $inputFull = Full ($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($inputValue)) $inputName
         } catch {
-            throw '이 PC의 자료 판을 확인할 수 없어 옛 판으로 되돌릴 수 없습니다. 자료와 확인 기록을 보존하고 관리자 지원 복구를 요청하세요.'
+            throw "이 PC의 자료 판을 확인하지 못해 프로그램을 열 수 없습니다.`n현장 관리자에게 알리세요."
         }
         Assert-ContainerDataGenerationTarget -CandidateRoot $source -TargetSid $operatorSid `
             -LocalAppDataRoot $lad -DataRoot (Split-Path -Parent $inputFull) -HelperRoot $source

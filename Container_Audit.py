@@ -23237,7 +23237,7 @@ def _first_run_onboarding_enabled() -> bool:
 
 
 MACHINE_ONBOARDING_ERROR_MESSAGES = {
-    "RECOVERY_REQUIRED": '설치 주소가 바뀌었습니다.\n현장 관리자에게 알리세요.',
+    "RECOVERY_REQUIRED": '회사 서버 주소가 설치 때와 다릅니다.\n현장 관리자에게 알리세요.',
     "PENDING_WORKER_SID_MISMATCH": '이 프로그램은 다른 작업자 계정에 설치되었습니다.\n지정된 작업자 계정으로 로그인하거나 현장 관리자에게 알리세요.',
     "MACHINE_ONBOARDING_FAILED": '작업자 계정의 설치 마무리를 확인하지 못했습니다\n현장 관리자에게 알리세요',
 }
