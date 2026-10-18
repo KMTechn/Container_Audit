@@ -72,8 +72,7 @@ def test_direct_application_marker_denies_old_code_without_bootstrap_marker(tmp_
     result = probe([tmp_path / "machine.json", user])
     assert result["status"] == "REFUSE"
     assert result["allowed"] is False
-    assert "옛 판으로 되돌릴 수 없습니다" in result["message"]
-    assert "백업" in result["message"]
+    assert result["message"].encode("utf-8") == '이 PC의 자료는 더 새 판에서 이미 열려 이 판으로는 열 수 없습니다.\n현장 관리자에게 알리세요.'.encode("utf-8")
     assert probe([user], "v2.0.99")["allowed"]
     assert probe([user], "v2.0.100")["allowed"]
 

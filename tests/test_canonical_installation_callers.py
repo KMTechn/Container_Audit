@@ -480,9 +480,19 @@ def test_public_late_restore_uses_fresh_owner_preserves_history_and_is_repeatabl
             registry_before = json.loads((tmp_path / 'registry.json').read_text(encoding='utf-8-sig'))
             refused = _public_restore(tmp_path, env, source, install, receipt, replacement['receipt_sha256'])
             assert refused.returncode == 1
-            notice = ('이 PC의 자료 판을 확인할 수 없어 옛 판으로 되돌릴 수 없습니다. '
-                      '자료와 확인 기록을 보존하고 관리자 지원 복구를 요청하세요.')
-            assert notice in refused.stderr + refused.stdout
+            refusal_public_lines = []
+            for refusal_stream in (refused.stdout, refused.stderr):
+                for refusal_line in refusal_stream.split("\n"):
+                    refusal_line = refusal_line.removesuffix("\r")
+                    assert all(0x20 <= byte <= 0x7F for byte in refusal_line.encode("utf-8"))
+                    refusal_public_lines.append(refusal_line)
+            refusal_prefix = "CONTAINER_AUDIT_INSTALL_CANONICAL="
+            refusal_records = [json.loads(line[len(refusal_prefix):])
+                               for line in refusal_public_lines if line.startswith(refusal_prefix)]
+            assert len(refusal_records) == 1
+            assert refusal_records[0]["status"] == "FAILED"
+            assert refusal_records[0]["reason_code"] == "INSTALLER_CANONICAL_FAILURE"
+            assert refusal_records[0]["guidance"] == "자료를 보존하고 관리자 지원 복구를 요청하세요."
             audit = json.loads((tmp_path / 'restore-audit.json').read_text(encoding='utf-8-sig'))
             assert audit['operation'] == 'RESTORE_VERIFIED_REPLACEMENT'
             assert audit['status'] == 'FAILED_RESTORE_RUNTIME_RECOVERED'

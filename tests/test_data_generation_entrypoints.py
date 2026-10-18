@@ -191,7 +191,7 @@ try {{ Assert-ContainerDataGenerationTarget @args }} catch {{ $blocked=$true; $m
     after = run_functions(tmp_path, root / "tools/bootstrap_integrity.ps1", names, script, engine=engine)
     assert after.returncode == 0, after.stdout + after.stderr
     report = json.loads(after.stdout)
-    assert report["blocked"] and "옛 판으로 되돌릴 수 없습니다" in report["message"]
+    assert report["blocked"] and report["message"].encode("utf-8") == '이 PC의 자료는 더 새 판에서 이미 열려 이 판으로는 열 수 없습니다.\n현장 관리자에게 알리세요.'.encode("utf-8")
     assert marker.read_bytes() == preserved and metadata.exists()
     compatible = tmp_path / "compatible"
     compatible.mkdir()
