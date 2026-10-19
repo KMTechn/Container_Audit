@@ -108,6 +108,7 @@ from item_catalog_sync import (
 from legacy_state_migration import migrate_legacy_code_root_state
 from logistics_runtime_profile import (
     PROFILE_PATH_ENV as LOGISTICS_RUNTIME_PROFILE_PATH_ENV,
+    app_profile_env_value,
     REQUIRED_ENV as LOGISTICS_RUNTIME_REQUIRED_ENV,
     legacy_label_transition_enabled,
     load_logistics_runtime_profile,
@@ -433,7 +434,7 @@ def apply_startup_geometry(
 def _current_user_logistics_profile_path() -> str:
     """Explicit or onboarded current-user profile; "" leaves optional own selection."""
 
-    explicit_user_profile = os.getenv(LOGISTICS_PROFILE_PATH_ENV, "").strip()
+    explicit_user_profile = app_profile_env_value()
     if not explicit_user_profile and not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             app_root = (
@@ -695,7 +696,7 @@ def _private_update_request_kwargs(url: str) -> Dict[str, Any]:
             if getattr(sys, "frozen", False)
             else Path(__file__).resolve().parent
         )
-        profile_path = os.getenv(LOGISTICS_PROFILE_PATH_ENV, "").strip()
+        profile_path = app_profile_env_value()
         if not profile_path:
             profile_path = str(
                 resolve_current_user_onboarding_paths(app_root).logistics_profile_path
@@ -23916,7 +23917,7 @@ def _prepare_gui_startup(*, data_root=None):
                     raise DataRootUnavailableError("GUI data root is unavailable")
                 from logistics_runtime_profile import resolve_logistics_profile_path
                 profile_candidates = [resolve_logistics_profile_path()]
-                profile_override = os.getenv(LOGISTICS_PROFILE_PATH_ENV, "").strip()
+                profile_override = app_profile_env_value()
                 if profile_override:
                     profile_candidates.append(resolve_owner_path(profile_override))
                 profile_candidates = [path for path in profile_candidates if path.is_file()]

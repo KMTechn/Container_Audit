@@ -31,8 +31,8 @@ def main(argv: list[str] | None = None) -> int:
         effective_profile_path = resolve_logistics_profile_path(args.profile_path)
         args.profile_path = str(effective_profile_path)
         if args.optional and not str(original_profile_path).strip() and not effective_profile_path.exists():
-            from logistics_runtime_profile import PROFILE_PATH_ENV
-            if not str(os.environ.get(PROFILE_PATH_ENV) or '').strip():
+            from logistics_runtime_profile import app_profile_env_value
+            if not app_profile_env_value():
                 print(json.dumps({'status':'optional-not-configured'}, sort_keys=True))
                 return 0
         if not (args.optional and not effective_profile_path.is_file()):
