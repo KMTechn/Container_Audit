@@ -267,6 +267,66 @@ def test_ca_stale_callback_does_not_clear_a_new_scan():
     assert app.accepted == [SECOND]
 
 
+def record_refusals(app):
+    notices, sounds = [], []
+    def rejected(text):
+        notices.append(text)
+        app._last_scan_unaccepted_text = text
+    app._mark_scan_unaccepted = rejected
+    app._start_warning_beep = lambda: sounds.append(True)
+    return notices, sounds
+
+
+@pytest.mark.parametrize('failure', ['delete_exception', 'snapshot_mismatch'])
+def test_ca_failed_consumption_discards_snapshot_and_requires_new_scan(failure):
+    app = ca_app()
+    notices, sounds = record_refusals(app)
+    app.scan_entry.insert(0, FIRST)
+    app.process_barcode()
+    if failure == 'delete_exception':
+        app.scan_entry.fail_delete = 1
+    else:
+        app.scan_entry.value += '_unexpected_tail'
+    app.root.drain()
+    assert app.scan_entry.get() == ''
+    assert app.accepted == []
+    assert notices and '다시 스캔하세요' in notices[-1]
+    assert sounds
+    app.scan_entry.insert(0, SECOND)
+    app.process_barcode()
+    app.root.drain()
+    assert app.accepted == [SECOND]
+
+
+@pytest.mark.parametrize('transport', ['tk', 'bridge'])
+def test_ca_permanent_consumption_failure_blocks_later_enters(transport):
+    app = ca_app()
+    notices, sounds = record_refusals(app)
+    tray = app.current_tray
+    app.scan_entry.insert(0, FIRST)
+    app.process_barcode()
+    app.scan_entry.fail_delete = 100
+    app.root.drain()
+    assert notices[-1] == '입력 칸 오류 — 프로그램을 다시 켜세요'
+    assert app.accepted == []
+    app.scan_entry.fail_delete = 0
+    app.scan_entry.value = SECOND
+    if transport == 'tk':
+        app.process_barcode()
+    else:
+        bridge = type('Bridge', (), CA_BRIDGE)()
+        bridge.app, bridge.view, bridge._scan_answer, bridge._answer = app, None, None, None
+        app._notice_button_captures_scan = lambda: False
+        response = bridge.scan(SECOND, {})
+        assert response['accepted'] is False
+        assert response['message'] == '입력 칸 오류 — 프로그램을 다시 켜세요'
+    app.root.drain()
+    assert app.accepted == []
+    assert app.current_tray is tray
+    assert notices[-1] == '입력 칸 오류 — 프로그램을 다시 켜세요'
+    assert len(sounds) >= 2
+
+
 @pytest.mark.parametrize('failure', ['disabled', 'ignored', 'read_error'])
 def test_ca_bridge_requires_verified_empty_entry_before_injection(failure):
     app = ca_app()
