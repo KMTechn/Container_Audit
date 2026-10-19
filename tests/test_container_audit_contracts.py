@@ -4400,8 +4400,8 @@ def test_load_current_tray_state_discards_state_already_completed(tmp_path, monk
         },
     )
     monkeypatch.setattr(
-        container_audit_module.messagebox,
-        "askyesno",
+        app,
+        "_confirm_saved_tray_discard",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("restore prompt should not open")),
     )
 
@@ -4428,8 +4428,8 @@ def test_load_current_tray_state_restores_completed_state_when_discard_audit_fai
     app._log_event = lambda *args, **kwargs: False
     errors = []
     monkeypatch.setattr(
-        container_audit_module.messagebox,
-        "askyesno",
+        app,
+        "_confirm_saved_tray_discard",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("restore prompt should not open")),
     )
     monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
@@ -4479,8 +4479,8 @@ def test_load_current_tray_state_warns_when_completed_state_delete_fails(tmp_pat
     ) or True
     warnings = []
     monkeypatch.setattr(
-        container_audit_module.messagebox,
-        "askyesno",
+        app,
+        "_confirm_saved_tray_discard",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("restore prompt should not open")),
     )
     monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: warnings.append(args))
@@ -4900,7 +4900,7 @@ def test_load_current_tray_state_takeover_delete_preserves_file_when_discard_log
     )
     errors = []
     monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: False)
-    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: True)
+    monkeypatch.setattr(app, "_confirm_saved_tray_discard", lambda *args, **kwargs: True)
     monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
     app._load_current_tray_state(_recovery_choice=False)
