@@ -2,6 +2,7 @@
 from types import SimpleNamespace as NS
 
 import pytest
+import ca_screen_bridge as screen
 
 from tests import test_g86_scan_input_ownership as g
 
@@ -194,7 +195,6 @@ def test_broken_input_survives_completion_lane_state_refresh(busy):
 
 def test_broken_input_persists_in_screen_result_alerts_and_fingerprint():
     import datetime
-    import ca_screen_bridge as screen
     state = NS(active_notice=None, completion=None, last_normal_scan="")
     tray = NS(master_label_code="", scanned_barcodes=[], tray_size=0)
     app = NS(current_tray=tray, _warning_state_presenter=lambda: NS(state=state),
@@ -208,3 +208,33 @@ def test_broken_input_persists_in_screen_result_alerts_and_fingerprint():
     alerts = screen._alerts(app, state, [], datetime.datetime.now())
     assert alerts and alerts[0]["text"] == RESTART
     assert screen.fingerprint(app, "work", [], None) != before
+
+
+@pytest.mark.parametrize("permanent", [False, True])
+def test_first_tk_read_failure_uses_shared_cleanup_before_another_scan(permanent):
+    app = g.ca_app()
+    notices, sounds = feedback(app)
+    tray = app.current_tray
+    app.scan_entry.insert("end", g.FIRST)
+    get, calls = app.scan_entry.get, []
+    def read():
+        calls.append(True)
+        if permanent or len(calls) == 1:
+            raise g.TclError("synthetic read failure")
+        return get()
+    app.scan_entry.get = read
+    app.process_barcode()
+    app.root.drain()
+    assert app.accepted == [] and app.current_tray is tray
+    assert notices and sounds
+    assert bool(getattr(app, "_scan_entry_broken", False)) is permanent
+    app.scan_entry.get = get
+    if permanent:
+        assert notices[-1] == RESTART
+        assert bridge_for(app).scan(g.SECOND, {})["accepted"] is False
+    else:
+        assert app.scan_entry.get() == "" and "다시 스캔" in notices[-1]
+        app.scan_entry.insert("end", g.SECOND)
+        app.process_barcode()
+        app.root.drain()
+        assert app.accepted == [g.SECOND]
