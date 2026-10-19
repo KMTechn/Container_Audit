@@ -259,6 +259,12 @@ def isolate_product_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         runtime_profile, "_machine_environment_value", machine_value_without_host_transition
     )
+    # A runner that pins KMTECH_TEST_CA_WRITER_ROOT makes every test share one
+    # control root, so a fence or data-generation marker that one test leaves
+    # would refuse every test after it. Start each test from an empty pinned root.
+    if _RUNNER_WRITER_ROOT and _resolved(root) == _resolved(_RUNNER_WRITER_ROOT):
+        _require_disposable_root(root, tmp_path)
+        _empty_directory(root)
 
 
 def _empty_directory(directory):
