@@ -19,9 +19,9 @@ SNAPSHOT_PATH = ROOT / SNAPSHOT_RELATIVE_PATH
 SHIPPED_PACKAGE_DIRS = ("kmtech_factory_contracts", "kmtech_shared", "vendor")
 # The new-screen bridge's pinned companion kit is analysed even before portable assembly.
 SCREEN_SHELL_DIR = "shell"
-SHELL_KIT_READY_VERSION = "v3.16.3"
-SHELL_KIT_READY_SHA256 = "a8183b660932778c08ebdf1ee24f137b4c2540a66207850afeff9990bbfb3198"
-SHELL_KIT_PYTHON_SHA256 = {'shell/bridge.py': '61654de8e21ba4652e2b56ca9eb4a8e0881bfff6f20c6bb1c6d2325ebaafcd29', 'shell/event_order.py': '48075f599c33bef1b9a3a283717d31f50f00ac2e71b1ebeb6970620b2275c146', 'shell/host.py': '1e3029ce38a7faad952aa56431076bf4d51c0d626f072968f1f07d73768f54b1', 'shell/journal.py': '5d486cde397f93d1b8d651fec273e667399c5860d1481cc86232341bb1a0aa4d', 'shell/pedal.py': 'fe19337649eddcc804398f410e022fce91bead708159ae3f82ae01dc790312f9', 'shell/scan_rules.py': 'a07e19eaac003b775adbe93fac86ce1536cf1e83729f7c654279e5f0c09f1504', 'shell/shell_fileio.py': 'b1d993c466d1df5161330c25389c35bd295b7f02a6c566b544bdac3072968101', 'shell/sound.py': 'a007064433046d9b1debfb183d1db28fb88f585230dcaa2937d175993f308504'}
+SHELL_KIT_READY_VERSION = "v3.16.3.1"
+SHELL_KIT_READY_SHA256 = "19389ecbdc0af9288f93015929975e5c603ff3c2066290d166742efea952ab71"
+SHELL_KIT_PYTHON_SHA256 = {'shell/bridge.py': '1a7e53db0d18f022d86d936d8666d5d13028873e8a10945cbd78f96995b1456b', 'shell/event_order.py': '48075f599c33bef1b9a3a283717d31f50f00ac2e71b1ebeb6970620b2275c146', 'shell/host.py': 'd3aaf6549fff429384ac262eaf32de5cf440daba1e220936e37579b231df5d02', 'shell/journal.py': '5d486cde397f93d1b8d651fec273e667399c5860d1481cc86232341bb1a0aa4d', 'shell/pedal.py': 'fe19337649eddcc804398f410e022fce91bead708159ae3f82ae01dc790312f9', 'shell/scan_rules.py': 'a07e19eaac003b775adbe93fac86ce1536cf1e83729f7c654279e5f0c09f1504', 'shell/shell_fileio.py': 'b1d993c466d1df5161330c25389c35bd295b7f02a6c566b544bdac3072968101', 'shell/sound.py': 'a007064433046d9b1debfb183d1db28fb88f585230dcaa2937d175993f308504'}
 SHELL_KIT_WRITE_MODULE = "shell.shell_fileio"
 SHELL_KIT_WRITE_SITES = ("append_bytes", "create_new", "truncate", "replace_atomic", "make_dirs", "probe_writable", "remove")
 SHELL_KIT_WRITER_SOURCE = "screen_shell_fileio"
@@ -3206,7 +3206,7 @@ def _shell_kit_delegated_fence(
         or not ready_path.is_file()
         or hashlib.sha256(ready_path.read_bytes()).hexdigest() != SHELL_KIT_READY_SHA256
     ):
-        raise InventoryError("screen shell kit must match the pinned SHELL-READY v3.16.3")
+        raise InventoryError("screen shell kit must match the pinned SHELL-READY v3.16.3.1")
     tree = parsed_modules[SHELL_KIT_WRITE_MODULE]["tree"]
     sites = next((ast.literal_eval(node.value) for node in tree.body
                   if isinstance(node, ast.Assign) and len(node.targets) == 1

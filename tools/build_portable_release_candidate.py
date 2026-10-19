@@ -203,7 +203,7 @@ THIRD_PARTY_EXCLUDED_PATHS = frozenset({
     "webview/lib/WebBrowserInterop.x64.dll",
     "webview/lib/WebBrowserInterop.x86.dll",
 })
-SHELL_BRIDGE_SOURCE_COMMIT = "65003a342d7c79f38ee078edd381a254af38cd07"
+SHELL_BRIDGE_SOURCE_COMMIT = "a6bebd2c25bb97b5662a4910dcbe84cf778dec62"
 FORBIDDEN_PACKAGE_NAMES = frozenset(
     {"PIL", "charset_normalizer", "cryptography", "pygame"}
 )
@@ -590,15 +590,15 @@ def _assert_screen_bundle(repo_root: Path, app_root: Path) -> dict[str, object]:
     ready_path = "shell/SHELL-READY-v3.16.json"
     ready_bytes = (app_root / ready_path).read_bytes()
     if hashlib.sha256(ready_bytes).hexdigest() != SHELL_KIT_READY_SHA256:
-        raise PortableBuildError("packet shell READY differs from the v3.16.3 pin")
+        raise PortableBuildError("packet shell READY differs from the v3.16.3.1 pin")
     ready = json.loads(ready_bytes)
     if ready.get("version") != SHELL_KIT_READY_VERSION:
-        raise PortableBuildError("packet shell version differs from the v3.16.3 pin")
+        raise PortableBuildError("packet shell version differs from the v3.16.3.1 pin")
     committed = _git_bytes(repo_root, "ls-tree", "-r", "--name-only", SHELL_BRIDGE_SOURCE_COMMIT, "--", "shell").decode().splitlines()
     installed_rows = []
     for row in ready["files"]:
         relative = Path(row["path"])
-        if relative.is_absolute() or ".." in relative.parts or relative.parts[0] != "shell-v3.16.3":
+        if relative.is_absolute() or ".." in relative.parts or relative.parts[0] != "shell-v3.16.3.1":
             raise PortableBuildError("packet shell READY path is outside its accepted source")
         installed_rows.append(("shell/" + Path(*relative.parts[1:]).as_posix(), row))
     expected = {name for name, _ in installed_rows} | {ready_path}
@@ -616,7 +616,7 @@ def _assert_screen_bundle(repo_root: Path, app_root: Path) -> dict[str, object]:
     if ui_manifest_path.read_bytes() != (repo_root / "ui/MANIFEST.json").read_bytes():
         raise PortableBuildError("packet UI manifest differs from source")
     ui_manifest = json.loads(ui_manifest_path.read_bytes())
-    if ui_manifest.get("app") != "ca" or ui_manifest.get("commit") != "384305a374dfc8c5604fc76af422059402103acd":
+    if ui_manifest.get("app") != "ca" or ui_manifest.get("commit") != "f7270a889311ebd35503bb2baafcc3e1be015853":
         raise PortableBuildError("packet UI differs from the accepted export")
     for row in ui_manifest["files"]:
         name = Path(row["path"])

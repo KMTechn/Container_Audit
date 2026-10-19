@@ -1,10 +1,10 @@
 {
  "schema": "ui-parts/1",
  "source": "WorkerAnalysisGUI-web",
- "commit": "384305a374dfc8c5604fc76af422059402103acd",
+ "commit": "f7270a889311ebd35503bb2baafcc3e1be015853",
  "dirty": false,
  "app": "ca",
- "parts_fingerprint": "656039c5ff58d742",
+ "parts_fingerprint": "6f5fdb3a832a5c8f",
  "files": [
   {
    "path": "app/ca/ca.css",
@@ -20,9 +20,9 @@
   },
   {
    "path": "app/ca/contract.json",
-   "sha256": "07c735e0b9cd4761423acacaa0de828be02b9555cf483308f430904a59244f8b",
-   "bytes": 30345,
-   "gzip": 6243
+   "sha256": "2d5886c72c5e4b76b84363bb107c0d1de0d40415fda8befc45c0e5ae1595f657",
+   "bytes": 30970,
+   "gzip": 6461
   },
   {
    "path": "app/ca/fixtures/admin-defer.json",
@@ -464,27 +464,27 @@
   },
   {
    "path": "app/frame.css",
-   "sha256": "787b7b855e4b8ff4b40eb105d8e23788576d1dfe26be7135745a3b786ed5ebd2",
-   "bytes": 33349,
-   "gzip": 8132
+   "sha256": "13c5709371c87c995105f529001b3754227a71ebc44b0afe6d602a0c87440194",
+   "bytes": 33720,
+   "gzip": 8225
   },
   {
    "path": "app/frame.js",
-   "sha256": "aac5e4cd490ac27b48e1f5c6671b6f3680c830a9f2a37f01534363c87ea9f352",
-   "bytes": 45217,
-   "gzip": 14287
+   "sha256": "f7ac9966238a5430352dede9d50731078b0293b571bccd8dd59c6939fdddc507",
+   "bytes": 43898,
+   "gzip": 13702
   },
   {
    "path": "app/scan.js",
-   "sha256": "e375a35a0bc4cfb8da8199f1d7926a9e3be6b45bd5f2671d0707a81fcac1daf1",
-   "bytes": 13604,
-   "gzip": 5136
+   "sha256": "b86f0cfdd6fecd53893bc42483a06f184840807b6d31ccbebffdf84707c190cc",
+   "bytes": 16385,
+   "gzip": 5477
   },
   {
    "path": "app/sheet.js",
-   "sha256": "0f0c1421063eacb5aa9bc4e96ae32e40b0aa2c96f4c0e5e2329488c22e9cee0e",
-   "bytes": 7654,
-   "gzip": 2981
+   "sha256": "0db6633d274b6fce3e6e34f6604a14815ecce7c134b34bfeb8d8b150d8c3734f",
+   "bytes": 9263,
+   "gzip": 2998
   },
   {
    "path": "app/transport.js",

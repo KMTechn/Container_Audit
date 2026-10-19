@@ -284,12 +284,12 @@ def test_shell_data_namespace_cannot_create_programdata_root(tmp_path, monkeypat
 
 def test_ready_is_exact_accepted_bytes_and_no_relaunch_module():
     payload = (ROOT / "shell/SHELL-READY-v3.16.json").read_bytes()
-    assert hashlib.sha256(payload).hexdigest() == "a8183b660932778c08ebdf1ee24f137b4c2540a66207850afeff9990bbfb3198"
+    assert hashlib.sha256(payload).hexdigest() == "19389ecbdc0af9288f93015929975e5c603ff3c2066290d166742efea952ab71"
     ready = json.loads(payload)
-    assert ready["version"] == "v3.16.3" and len(ready["files"]) == 19
+    assert ready["version"] == "v3.16.3.1" and len(ready["files"]) == 19
     for row in ready["files"]:
         relative = Path(row["path"])
-        assert relative.parts[0] == "shell-v3.16.3"
+        assert relative.parts[0] == "shell-v3.16.3.1"
         source = (ROOT / "shell" / Path(*relative.parts[1:])).read_bytes()
         assert len(source) == row["bytes"]
         assert hashlib.sha256(source).hexdigest() == row["sha256"]
