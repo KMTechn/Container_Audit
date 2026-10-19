@@ -399,7 +399,7 @@ def _new_failure_attempt():
 
 
 def _persist_failure_report(path: Path, report: dict[str, Any], error: BaseException,
-                            *, create_new: bool = False) -> None:
+                            *, create_new: bool = False, environ: Mapping[str, str] | None = None) -> None:
     from auto_update import _failure_details, mixed_status_record, public_record
     attempt = _FAILURE_ATTEMPT.get()
     if attempt:
@@ -415,7 +415,7 @@ def _persist_failure_report(path: Path, report: dict[str, Any], error: BaseExcep
         # their original-byte/fail-closed contract for READY and owner records.
         safe_report = mixed_status_record(report)
         writer = _write_json_atomic_create_new if create_new else _write_json_atomic
-        writer(path, safe_report)
+        writer(path, safe_report, environ=environ)
     except Exception:
         # Publication refusal must not replace the primary failure or advertise
         # an old pathname. The public boundary emits REPORT_UNAVAILABLE.
@@ -431,10 +431,12 @@ def _atomic_report_reference(path: Path, expected: bytes) -> dict[str, str]:
 
 
 @writer_sink("current_user_onboarding_storage")
-def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> dict[str, str]:
+def _write_json_atomic(path: Path, payload: Mapping[str, Any], *,
+                       environ: Mapping[str, str] | None = None) -> dict[str, str]:
     from atomic_replace import atomic_replace
-    from auto_update import serialize_machine_metadata
-    safe_text = serialize_machine_metadata(payload)
+    from auto_update import assert_machine_metadata_no_secrets
+    safe_text = json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2)
+    assert_machine_metadata_no_secrets(safe_text, environ=environ)
     ensure_user_runtime_directory(path.parent)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
@@ -450,11 +452,13 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> dict[str, str]
 
 
 @writer_sink("current_user_onboarding_storage")
-def _write_json_atomic_create_new(path: Path, payload: Mapping[str, Any]) -> dict[str, str]:
+def _write_json_atomic_create_new(path: Path, payload: Mapping[str, Any], *,
+                       environ: Mapping[str, str] | None = None) -> dict[str, str]:
     """Publish JSON atomically without ever replacing an existing pathname."""
 
-    from auto_update import serialize_machine_metadata
-    safe_text = serialize_machine_metadata(payload)
+    from auto_update import assert_machine_metadata_no_secrets
+    safe_text = json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2)
+    assert_machine_metadata_no_secrets(safe_text, environ=environ)
     ensure_user_runtime_directory(path.parent)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
@@ -2359,7 +2363,7 @@ def onboard_current_user(
                     "completed_at": _now(),
                 }
             )
-            _write_json_atomic(paths.onboarding_report_path, report)
+            _write_json_atomic(paths.onboarding_report_path, report, environ=environ)
             return report
     except DataGenerationBlocked as exc:
         raise CurrentUserOnboardingError(
@@ -2373,11 +2377,11 @@ def onboard_current_user(
             report["reason_code"] = exc.reason_code
         report["error_type"] = exc.__class__.__name__
         if attempt is None:
-            _persist_failure_report(paths.onboarding_report_path, report, exc)
+            _persist_failure_report(paths.onboarding_report_path, report, exc, environ=environ)
         else:
             with attempt.apply() as current:
                 if current:
-                    _persist_failure_report(paths.onboarding_report_path, report, exc)
+                    _persist_failure_report(paths.onboarding_report_path, report, exc, environ=environ)
         raise
     except Exception as exc:
         report["status"] = "FAILED"
@@ -2386,11 +2390,11 @@ def onboard_current_user(
         if isinstance(exc, DataGenerationBlocked):
             report["error_code"] = exc.decision["message_key"]
         if attempt is None:
-            _persist_failure_report(paths.onboarding_report_path, report, exc)
+            _persist_failure_report(paths.onboarding_report_path, report, exc, environ=environ)
         else:
             with attempt.apply() as current:
                 if current:
-                    _persist_failure_report(paths.onboarding_report_path, report, exc)
+                    _persist_failure_report(paths.onboarding_report_path, report, exc, environ=environ)
         raise CurrentUserOnboardingError(
             f"Container_Audit first-run onboarding failed: {exc}",
             report_path=paths.onboarding_report_path,
@@ -2467,7 +2471,7 @@ def remove_current_user_setup(
                 settled = _settle_failed_installer_removal()
                 if settled is not None:
                     report["abandoned_fence_settled"] = settled
-                _write_json_atomic(paths.removal_report_path, report)
+                _write_json_atomic(paths.removal_report_path, report, environ=environ)
             return report
         except CurrentUserOnboardingError as exc:
             report.update(
@@ -2476,7 +2480,7 @@ def remove_current_user_setup(
                     "error_type": exc.__class__.__name__,
                 }
             )
-            _persist_failure_report(paths.removal_report_path, report, exc)
+            _persist_failure_report(paths.removal_report_path, report, exc, environ=environ)
             raise
         except Exception as exc:
             report.update(
@@ -2485,7 +2489,7 @@ def remove_current_user_setup(
                     "error_type": exc.__class__.__name__,
                 }
             )
-            _persist_failure_report(paths.removal_report_path, report, exc)
+            _persist_failure_report(paths.removal_report_path, report, exc, environ=environ)
             raise CurrentUserOnboardingError(
                 f"Container_Audit current-user removal failed: {exc}",
                 report_path=paths.removal_report_path,
@@ -2863,7 +2867,7 @@ def restore_current_user_lifecycle_after_replacement(
             }
         )
         failure_stage = "REPORT_PERSISTENCE"
-        _write_json_atomic_create_new(report_path, report)
+        _write_json_atomic_create_new(report_path, report, environ=environ)
         return report
     except Exception as exc:
         containment_status = "NOT_REQUIRED"
@@ -2907,7 +2911,7 @@ def restore_current_user_lifecycle_after_replacement(
             }
         )
         try:
-            _persist_failure_report(report_path, report, exc, create_new=True)
+            _persist_failure_report(report_path, report, exc, create_new=True, environ=environ)
         except Exception as persistence_exc:
             raise CurrentUserOnboardingError(
                 "Container_Audit replacement lifecycle failure evidence could not be persisted",

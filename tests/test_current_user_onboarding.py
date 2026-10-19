@@ -487,11 +487,11 @@ def test_onboarding_starts_relay_after_releasing_admission(tmp_path, monkeypatch
         events.append("relay")
         return {"status": relay_status, "process_id": 123}
 
-    def write(path, report):
+    def write(path, report, **kwargs):
         if report.get("status") == "READY":
             assert held
             events.append("ready")
-        return original_write(path, report)
+        return original_write(path, report, **kwargs)
 
     monkeypatch.setattr(onboarding_module, "writer_admission", admission)
     monkeypatch.setattr(onboarding_module, "_write_json_atomic", write)
@@ -2066,3 +2066,53 @@ def _reject_implicit_contract_boundary(monkeypatch, request):
     monkeypatch.setattr(onboarding_module.PersistentPossessionKey, "open_existing", classmethod(deny))
     yield
     assert not calls, 'explicit fixture required: existing_possession_key_contract'
+
+
+@pytest.mark.parametrize("create_new", [False, True])
+def test_g88_machine_report_uses_only_supplied_environment(tmp_path, monkeypatch, create_new):
+    import uuid
+    import current_user_onboarding as module
+    marker = uuid.uuid4().hex
+    monkeypatch.setenv("G88_METADATA_TOKEN", marker)
+    target = tmp_path / "onboarding-report.json"
+    payload = {"data_root": marker, "status": "READY", "label": chr(0xC801)}
+    if not create_new:
+        _write_json(target, {"status": "OLD"})
+    writer = module._write_json_atomic_create_new if create_new else module._write_json_atomic
+    writer(target, payload, environ={})
+    assert json.loads(target.read_text(encoding="utf-8")) == payload
+    assert target.read_bytes() == (json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2) + "\n").encode("utf-8")
+
+
+def test_g88_machine_report_preserves_file_on_selected_secret(tmp_path):
+    import uuid
+    import current_user_onboarding as module
+    marker = uuid.uuid4().hex
+    target = tmp_path / "onboarding-report.json"
+    _write_json(target, {"status": "OLD"})
+    before = target.read_bytes()
+    with pytest.raises(ValueError):
+        module._write_json_atomic(target, {"data_root": marker}, environ={"G88_METADATA_TOKEN": marker})
+    assert target.read_bytes() == before
+
+
+@pytest.mark.usefixtures('existing_possession_key_contract')
+def test_g88_ready_onboarding_ignores_unrelated_process_secret(tmp_path, monkeypatch):
+    import uuid
+    marker = uuid.uuid4().hex
+    environment = {"LOCALAPPDATA": str(tmp_path / marker), "ProgramData": str(tmp_path / "programdata")}
+    app_root = _generation_packet(tmp_path, monkeypatch)
+    paths = resolve_current_user_onboarding_paths(app_root, environ=environment)
+    _ready_state(paths)
+    before = paths.credential_path.read_bytes()
+    monkeypatch.setenv("G88_METADATA_TOKEN", marker)
+    report = onboard_current_user(
+        app_root, environ=environment, require_bootstrap_integrity=False,
+        registration_runner=lambda _paths: pytest.fail("READY PC must reuse registration"),
+        profile_loader=_profile_loader, credential_loader=_credential_loader,
+        ledger_factory=_ledger_factory, autostart_installer=_autostart,
+        relay_launcher=_relay_start,
+    )
+    assert report["status"] == "READY"
+    assert json.loads(paths.onboarding_report_path.read_text(encoding="utf-8"))["status"] == "READY"
+    assert paths.credential_path.read_bytes() == before
