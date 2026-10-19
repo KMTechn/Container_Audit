@@ -33,7 +33,7 @@ def shell_for(processor):
 
 def enqueue(shell, raw, seq):
     future = Future()
-    meta = {'seq': seq, 'evidence': {'press_generation': True}}
+    meta = {'seq': seq, 'evidence': {'pedal_pressed': True}}
     shell._tasks.put_nowait(('scan', (raw, meta, 0, (False, 0)), future))
     return future
 
