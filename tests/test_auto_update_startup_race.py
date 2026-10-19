@@ -18,6 +18,8 @@ from tests.test_auto_update_endpoints import endpoint, hotfix_packet, OLD, NEW
 from tests.test_supported_lifecycle import installed
 from tests.update_mutex_namespace import isolate_update_mutex_names
 
+pytestmark = pytest.mark.usefixtures("clean_shared_writer_root")
+
 REAL_LOCK = updates.update_lock
 MONOTONIC, SLEEP = time.monotonic, time.sleep
 REPO = Path(updates.__file__).parent
