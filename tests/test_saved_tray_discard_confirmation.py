@@ -103,7 +103,7 @@ def recovery(monkeypatch, tmp_path):
     (tmp_path / app.CURRENT_TRAY_STATE_FILE).write_text('{}', encoding='utf-8')
     app.worker_name = 'current-worker'
     app.current_tray = ca.TraySession()
-    state = {'worker_name': 'previous-worker', 'master_label_code': 'headless-tray', 'operation_id': 'headless-operation'}
+    state = {'worker_name': 'previous-worker', 'master_label_code': 'headless-tray', 'operation_lease_id': 'headless-operation'}
     monkeypatch.setattr(ca, 'read_recovery_file', lambda *_a, **_k: SimpleNamespace(value=state, raw=b'{}', verified=True))
     for name in ('_resume_storage_failure_slots', 'show_worker_input_screen', 'show_status_message', '_show_field_notice'):
         monkeypatch.setattr(app, name, lambda *_a, **_k: None)
