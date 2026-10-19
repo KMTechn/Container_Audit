@@ -29,9 +29,9 @@ def test_invalidation_consumes_old_value_before_reopening(preserve_held):
     app.process_barcode()
     app._invalidate_pending_scan_callbacks(preserve_held_scans=preserve_held)
     assert app.scan_entry.get() == ""
-    assert notices and "다시 스캔" in notices[-1] and sounds
     app.scan_entry.insert("end", g.SECOND)
     app.root.drain()
+    assert notices and "다시 스캔" in notices[-1] and sounds
     assert app.scan_entry.get() == g.SECOND
     app.process_barcode()
     app.root.drain()
@@ -162,11 +162,49 @@ def test_broken_input_survives_actual_warning_rerender():
     app._scan_entry_broken = True
     app.scan_entry = g.Entry()
     title, message = {}, {}
-    app.notice_frame = NS(configure=lambda **_kw: None)
-    app.notice_title_label = NS(configure=lambda **kw: title.update(kw))
-    app.notice_message_label = NS(configure=lambda **kw: message.update(kw))
-    app._apply_notice_visibility = lambda: None
+    visible = {}
+    def widget(name, fields):
+        return NS(configure=lambda **kw: fields.update(kw),
+                  grid=lambda: visible.update({name: True}),
+                  grid_remove=lambda: visible.update({name: False}))
+    app.notice_frame = widget("frame", {})
+    app.notice_title_label = widget("title", title)
+    app.notice_message_label = widget("message", message)
     app._schedule_notice_message_wrap_refresh = lambda **_kw: None
     ContainerAudit._render_warning_state(app)
     assert app.scan_entry.state == "disabled"
     assert RESTART in (title.get("text"), message.get("text"))
+    assert visible == {"frame": True, "title": True, "message": True}
+
+
+
+@pytest.mark.parametrize("busy", [False, True])
+def test_broken_input_survives_completion_lane_state_refresh(busy):
+    app = g.ca_app()
+    notices, sounds = feedback(app)
+    app._scan_entry_broken = True
+    app._update_action_button_states = lambda: None
+    app._schedule_focus_return = lambda: None
+    refresh = g.methods("Container_Audit.py", {"_set_completion_lane_busy"})["_set_completion_lane_busy"]
+    refresh(app, busy)
+    assert app._completion_lane_busy is busy
+    assert app.scan_entry.state == "disabled"
+    assert notices and notices[-1] == RESTART and sounds
+
+
+def test_broken_input_persists_in_screen_result_alerts_and_fingerprint():
+    import datetime
+    import ca_screen_bridge as screen
+    state = NS(active_notice=None, completion=None, last_normal_scan="")
+    tray = NS(master_label_code="", scanned_barcodes=[], tray_size=0)
+    app = NS(current_tray=tray, _warning_state_presenter=lambda: NS(state=state),
+             _partial_submission_state=lambda: None,
+             _is_preflight_hold_supervisor=lambda: False)
+    before = screen.fingerprint(app, "work", [], None)
+    app._scan_entry_broken = True
+    result = screen._result(app, state, tray, 0, None)
+    assert result["kind"] == screen.RESULT_KIND[screen.NoticeSeverity.ERROR]
+    assert result["title"] == RESTART
+    alerts = screen._alerts(app, state, [], datetime.datetime.now())
+    assert alerts and alerts[0]["text"] == RESTART
+    assert screen.fingerprint(app, "work", [], None) != before

@@ -334,32 +334,39 @@ def test_ca_permanent_consumption_failure_blocks_later_enters(transport):
 @pytest.mark.parametrize('failure', ['disabled', 'ignored', 'read_error'])
 def test_ca_bridge_requires_verified_empty_entry_before_injection(failure):
     app = ca_app()
-    bridge = type('Bridge', (), CA_BRIDGE)()
+    bridge = type("Bridge", (), CA_BRIDGE)()
     bridge.app, bridge.view, bridge._scan_answer, bridge._answer = app, None, None, None
     app._notice_button_captures_scan = lambda: False
     app.scan_entry.insert(0, FIRST)
     get, delete = app.scan_entry.get, app.scan_entry.delete
     if failure == 'disabled':
-        app.scan_entry.configure(state='disabled')
+        app._preflight_scan_input_locked = True
+        app.scan_entry.configure(state="disabled")
     elif failure == 'ignored':
         app.scan_entry.delete = lambda *_args: None
     else:
         def unreadable():
-            raise TclError('entry read failed')
+            raise TclError("synthetic read failure")
         app.scan_entry.get = unreadable
     sounds = []
     app._start_warning_beep = lambda: sounds.append(True)
     response = bridge.scan(SECOND, {})
     app.root.drain()
-    assert response['accepted'] is False
-    assert '다시 스캔하세요' in response['message']
+    assert response["accepted"] is False
+    if failure == 'disabled':
+        assert response["message"]
+        assert not getattr(app, "_scan_entry_broken", False)
+    else:
+        assert response["message"] == "입력 칸 오류 — 프로그램을 다시 켜세요"
+        assert app._scan_entry_broken
     assert app.accepted == []
     assert sounds == [True]
     app.scan_entry.get, app.scan_entry.delete = get, delete
-    app.scan_entry.configure(state='normal')
+    app._preflight_scan_input_locked = False
+    app.scan_entry.configure(state="normal")
     bridge.scan(SECOND, {})
     app.root.drain()
-    assert app.accepted == [SECOND]
+    assert app.accepted == ([SECOND] if failure == 'disabled' else [])
 
 
 @pytest.mark.parametrize('case', ['injected_pending','injected_band_result','injected_accepted'])
