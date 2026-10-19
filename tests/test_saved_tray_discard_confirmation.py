@@ -40,6 +40,9 @@ class Widget:
     def grab_set(self):
         pass
 
+    def wait_visibility(self):
+        pass
+
     def wait_window(self):
         self.pump.dispatch(self)
 
@@ -153,7 +156,7 @@ def test_mouse_yes_keeps_downstream_deletion_sequence(recovery, monkeypatch):
     assert recovery[1][0][1] == (recovery[2],)
     assert recovery[1][0][2]['discarded_worker_name'] == 'previous-worker'
     assert recovery[1][2][1] == ('headless-operation',)
-    assert recovery[0].current_tray.master_label_code is None
+    assert recovery[0].current_tray.master_label_code == ca.TraySession().master_label_code
 
 
 def test_yes_has_no_keyboard_activation_and_initial_focus_is_no(recovery, monkeypatch):
