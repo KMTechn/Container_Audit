@@ -1,0 +1,348 @@
+{
+    "status": "CANCELLED",
+    "contract": {
+        "schema_version": 1,
+        "event_type": "TRAY_COMPLETE",
+        "idempotency_key": "tray-complete:transfer-intent-8629b4f5dd52be52f3e087e434e68dad",
+        "observed_at": "2026-09-06T09:00:00",
+        "projection_log_name": "이적작업이벤트로그_tester_20261019.csv",
+        "projection_worker_name": "tester",
+        "transfer_intent_id": "transfer-intent-8629b4f5dd52be52f3e087e434e68dad",
+        "was_restored_session": false,
+        "log_may_have_been_attempted": true,
+        "transfer_detail": {
+            "transfer_seal_schema_version": "container-audit-transfer-seal-v1",
+            "transfer_seal_intent_id": "transfer-intent-8629b4f5dd52be52f3e087e434e68dad",
+            "transfer_local_completion_id": "TRANSFER-LINKED-D0418E209BDE159D6F1C5B03",
+            "transfer_seal_status": "PREPARED",
+            "transfer_seal_idempotency_key": "container-seal:8629b4f5dd52be52f3e087e434e68dada25e60fecbff6e9f6576ed9dc8b67059",
+            "transfer_bundle_id": null,
+            "transfer_source_bundle_id": null,
+            "transfer_remainder_bundle_id": null,
+            "transfer_member_count": 0,
+            "transfer_membership_hash": null,
+            "transfer_seal_qr_sha256": null,
+            "transfer_seal_receipt_id": null,
+            "transfer_authority_scope_id": null,
+            "transfer_authority_epoch": null,
+            "transfer_ledger_plane": null,
+            "transfer_plane_epoch": null,
+            "transfer_inbound_iin": null,
+            "transfer_item_id": null,
+            "transfer_uom": null,
+            "transfer_entity_versions": {},
+            "terminal_operation_lease_id": "operation-lease-fixture-01",
+            "terminal_operation_lease_state": "LOCAL_COMPLETED",
+            "transfer_route_provenance": "CONTAINER_AUDIT_EXACT_PRODUCT_SCAN",
+            "transfer_seal_retryable": false,
+            "transfer_seal_error_code": null
+        },
+        "worker_record": {
+            "worker_id": null,
+            "worker_name_snapshot": "tester",
+            "enabled": false
+        }
+    },
+    "detail": {
+        "master_label_code": "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-COMPACT-001|CLC=AAA2270730100|LBL=LBL-COMPACT-001|HSH=aaaaaaaaaaaaaaaa",
+        "item_code": "AAA2270730100",
+        "item_name": "fixture item",
+        "item_spec": "fixture spec",
+        "spec": "fixture spec",
+        "scan_count": 1,
+        "tray_capacity": 3,
+        "scanned_product_barcodes": [
+            "AAA2270730100-SERIAL-001"
+        ],
+        "product_barcodes": [
+            "AAA2270730100-SERIAL-001"
+        ],
+        "work_time_sec": 0,
+        "error_count": 0,
+        "total_idle_seconds": 0.0,
+        "has_error_or_reset": false,
+        "is_partial_submission": true,
+        "is_restored_session": false,
+        "is_test_tray": false,
+        "start_time": "2026-09-06T09:00:00",
+        "end_time": "2026-09-06T09:00:00",
+        "master_label_fields": {
+            "PHS": "2",
+            "SRC": "KMTECH_INPUT_TAG",
+            "ITG": "ITAG-COMPACT-001",
+            "CLC": "AAA2270730100",
+            "LBL": "LBL-COMPACT-001",
+            "HSH": "aaaaaaaaaaaaaaaa"
+        },
+        "quantity_basis": "PRODUCT_BARCODE",
+        "confidence": "BARCODE",
+        "qty_uom": "piece",
+        "measure_code": "STATE_QTY",
+        "barcode_count": 1,
+        "input_tag_id": "ITAG-COMPACT-001",
+        "input_tag_label_id": "LBL-COMPACT-001",
+        "source_session_id": "ITAG-COMPACT-001",
+        "inspection_trace": {
+            "input_tag_id": "ITAG-COMPACT-001",
+            "input_tag_label_id": "LBL-COMPACT-001",
+            "master_label_phase": "2",
+            "inspection_session_key": "ITAG-COMPACT-001",
+            "master_label_identity_key": "qr:{\"CLC\":\"AAA2270730100\",\"HSH\":\"aaaaaaaaaaaaaaaa\",\"ITG\":\"ITAG-COMPACT-001\",\"LBL\":\"LBL-COMPACT-001\",\"PHS\":\"2\",\"SRC\":\"KMTECH_INPUT_TAG\"}"
+        },
+        "transfer_seal_schema_version": "container-audit-transfer-seal-v1",
+        "transfer_seal_intent_id": "transfer-intent-8629b4f5dd52be52f3e087e434e68dad",
+        "transfer_local_completion_id": "TRANSFER-LINKED-D0418E209BDE159D6F1C5B03",
+        "transfer_seal_status": "PREPARED",
+        "transfer_seal_idempotency_key": "container-seal:8629b4f5dd52be52f3e087e434e68dada25e60fecbff6e9f6576ed9dc8b67059",
+        "transfer_bundle_id": null,
+        "transfer_source_bundle_id": null,
+        "transfer_remainder_bundle_id": null,
+        "transfer_member_count": 0,
+        "transfer_membership_hash": null,
+        "transfer_seal_qr_sha256": null,
+        "transfer_seal_receipt_id": null,
+        "transfer_authority_scope_id": null,
+        "transfer_authority_epoch": null,
+        "transfer_ledger_plane": null,
+        "transfer_plane_epoch": null,
+        "transfer_inbound_iin": null,
+        "transfer_item_id": null,
+        "transfer_uom": null,
+        "transfer_entity_versions": {},
+        "terminal_operation_lease_id": "operation-lease-fixture-01",
+        "terminal_operation_lease_state": "LOCAL_COMPLETED",
+        "transfer_route_provenance": "CONTAINER_AUDIT_EXACT_PRODUCT_SCAN",
+        "transfer_seal_retryable": false,
+        "transfer_seal_error_code": null,
+        "idempotency_key": "tray-complete:transfer-intent-8629b4f5dd52be52f3e087e434e68dad"
+    },
+    "state": {
+        "worker_name": "tester",
+        "master_label_code": "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-COMPACT-001|CLC=AAA2270730100|LBL=LBL-COMPACT-001|HSH=aaaaaaaaaaaaaaaa",
+        "canonical_input_tag_qr": "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-COMPACT-001|CLC=AAA2270730100|LBL=LBL-COMPACT-001|HSH=aaaaaaaaaaaaaaaa",
+        "active_label_qr_payload": "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-COMPACT-001|CLC=AAA2270730100|LBL=LBL-COMPACT-001|HSH=aaaaaaaaaaaaaaaa",
+        "active_label_id": "LBL-COMPACT-001",
+        "active_label_business_date": "2026-08-01",
+        "active_label_worker_code": "fixture-worker",
+        "operation_lease_id": "operation-lease-fixture-01",
+        "item_code": "AAA2270730100",
+        "item_name": "fixture item",
+        "item_spec": "fixture spec",
+        "scanned_barcodes": [
+            "AAA2270730100-SERIAL-001"
+        ],
+        "scan_times": [
+            "2026-09-06T09:00:00"
+        ],
+        "tray_size": 3,
+        "mismatch_error_count": 0,
+        "total_idle_seconds": 0.0,
+        "stopwatch_seconds": 0,
+        "start_time": "2026-09-06T09:00:00",
+        "has_error_or_reset": false,
+        "is_test_tray": false,
+        "is_partial_submission": true,
+        "worker_id": null,
+        "worker_name_snapshot": "tester",
+        "known_member_barcodes": [
+            "AAA2270730100-SERIAL-001",
+            "AAA2270730100-SERIAL-002",
+            "AAA2270730100-SERIAL-003"
+        ],
+        "scan_completion_context": {
+            "local_completed_at": "2026-09-06T09:00:00",
+            "short_confirmed": true,
+            "exchange_idempotency_keys": [],
+            "tray_state": {
+                "worker_name": "tester",
+                "master_label_code": "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-COMPACT-001|CLC=AAA2270730100|LBL=LBL-COMPACT-001|HSH=aaaaaaaaaaaaaaaa",
+                "canonical_input_tag_qr": "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-COMPACT-001|CLC=AAA2270730100|LBL=LBL-COMPACT-001|HSH=aaaaaaaaaaaaaaaa",
+                "active_label_qr_payload": "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-COMPACT-001|CLC=AAA2270730100|LBL=LBL-COMPACT-001|HSH=aaaaaaaaaaaaaaaa",
+                "active_label_id": "LBL-COMPACT-001",
+                "active_label_business_date": "2026-08-01",
+                "active_label_worker_code": "fixture-worker",
+                "operation_lease_id": "operation-lease-fixture-01",
+                "item_code": "AAA2270730100",
+                "item_name": "fixture item",
+                "item_spec": "fixture spec",
+                "scanned_barcodes": [
+                    "AAA2270730100-SERIAL-001"
+                ],
+                "scan_times": [
+                    "2026-09-06T09:00:00"
+                ],
+                "tray_size": 3,
+                "mismatch_error_count": 0,
+                "total_idle_seconds": 0.0,
+                "stopwatch_seconds": 0,
+                "start_time": "2026-09-06T09:00:00",
+                "has_error_or_reset": false,
+                "is_test_tray": false,
+                "is_partial_submission": true,
+                "worker_id": null,
+                "worker_name_snapshot": "tester",
+                "known_member_barcodes": [
+                    "AAA2270730100-SERIAL-001",
+                    "AAA2270730100-SERIAL-002",
+                    "AAA2270730100-SERIAL-003"
+                ]
+            },
+            "device_id": "0xfixturepc",
+            "operator": "tester",
+            "worker_id": null,
+            "worker_name_snapshot": "tester",
+            "worker_record": {
+                "worker_id": null,
+                "worker_name_snapshot": "tester",
+                "enabled": false
+            }
+        },
+        "pending_completion_event": {
+            "schema_version": 1,
+            "event_type": "TRAY_COMPLETE",
+            "idempotency_key": "tray-complete:transfer-intent-8629b4f5dd52be52f3e087e434e68dad",
+            "observed_at": "2026-09-06T09:00:00",
+            "projection_log_name": "이적작업이벤트로그_tester_20261019.csv",
+            "projection_worker_name": "tester",
+            "transfer_intent_id": "transfer-intent-8629b4f5dd52be52f3e087e434e68dad",
+            "was_restored_session": false,
+            "log_may_have_been_attempted": true,
+            "transfer_detail": {
+                "transfer_seal_schema_version": "container-audit-transfer-seal-v1",
+                "transfer_seal_intent_id": "transfer-intent-8629b4f5dd52be52f3e087e434e68dad",
+                "transfer_local_completion_id": "TRANSFER-LINKED-D0418E209BDE159D6F1C5B03",
+                "transfer_seal_status": "PREPARED",
+                "transfer_seal_idempotency_key": "container-seal:8629b4f5dd52be52f3e087e434e68dada25e60fecbff6e9f6576ed9dc8b67059",
+                "transfer_bundle_id": null,
+                "transfer_source_bundle_id": null,
+                "transfer_remainder_bundle_id": null,
+                "transfer_member_count": 0,
+                "transfer_membership_hash": null,
+                "transfer_seal_qr_sha256": null,
+                "transfer_seal_receipt_id": null,
+                "transfer_authority_scope_id": null,
+                "transfer_authority_epoch": null,
+                "transfer_ledger_plane": null,
+                "transfer_plane_epoch": null,
+                "transfer_inbound_iin": null,
+                "transfer_item_id": null,
+                "transfer_uom": null,
+                "transfer_entity_versions": {},
+                "terminal_operation_lease_id": "operation-lease-fixture-01",
+                "terminal_operation_lease_state": "LOCAL_COMPLETED",
+                "transfer_route_provenance": "CONTAINER_AUDIT_EXACT_PRODUCT_SCAN",
+                "transfer_seal_retryable": false,
+                "transfer_seal_error_code": null
+            },
+            "worker_record": {
+                "worker_id": null,
+                "worker_name_snapshot": "tester",
+                "enabled": false
+            }
+        }
+    },
+    "intent_id": "transfer-intent-8629b4f5dd52be52f3e087e434e68dad",
+    "undo_state": {
+        "worker_name": "tester",
+        "master_label_code": "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-COMPACT-001|CLC=AAA2270730100|LBL=LBL-COMPACT-001|HSH=aaaaaaaaaaaaaaaa",
+        "canonical_input_tag_qr": "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-COMPACT-001|CLC=AAA2270730100|LBL=LBL-COMPACT-001|HSH=aaaaaaaaaaaaaaaa",
+        "active_label_qr_payload": "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-COMPACT-001|CLC=AAA2270730100|LBL=LBL-COMPACT-001|HSH=aaaaaaaaaaaaaaaa",
+        "active_label_id": "LBL-COMPACT-001",
+        "active_label_business_date": "2026-08-01",
+        "active_label_worker_code": "fixture-worker",
+        "operation_lease_id": "operation-lease-fixture-01",
+        "item_code": "AAA2270730100",
+        "item_name": "fixture item",
+        "item_spec": "fixture spec",
+        "scanned_barcodes": [
+            "AAA2270730100-SERIAL-001"
+        ],
+        "scan_times": [
+            "2026-09-06T09:00:00"
+        ],
+        "tray_size": 3,
+        "mismatch_error_count": 0,
+        "total_idle_seconds": 0.0,
+        "stopwatch_seconds": 0,
+        "start_time": "2026-09-06T09:00:00",
+        "has_error_or_reset": false,
+        "is_test_tray": false,
+        "is_partial_submission": false,
+        "worker_id": null,
+        "worker_name_snapshot": "tester",
+        "known_member_barcodes": [
+            "AAA2270730100-SERIAL-001",
+            "AAA2270730100-SERIAL-002",
+            "AAA2270730100-SERIAL-003"
+        ],
+        "pending_audit_events": [
+            {
+                "log_file_name": "이적작업이벤트로그_tester_20261019.csv",
+                "local_only": false,
+                "log_entry": {
+                    "timestamp": "2026-09-06T09:00:00",
+                    "worker_name": "tester",
+                    "event": "TRAY_COMPLETE",
+                    "details": "{\"master_label_code\": \"PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-COMPACT-001|CLC=AAA2270730100|LBL=LBL-COMPACT-001|HSH=aaaaaaaaaaaaaaaa\", \"item_code\": \"AAA2270730100\", \"item_name\": \"fixture item\", \"item_spec\": \"fixture spec\", \"spec\": \"fixture spec\", \"scan_count\": 1, \"tray_capacity\": 3, \"scanned_product_barcodes\": [\"AAA2270730100-SERIAL-001\"], \"product_barcodes\": [\"AAA2270730100-SERIAL-001\"], \"work_time_sec\": 0, \"error_count\": 0, \"total_idle_seconds\": 0.0, \"has_error_or_reset\": false, \"is_partial_submission\": true, \"is_restored_session\": false, \"is_test_tray\": false, \"start_time\": \"2026-09-06T09:00:00\", \"end_time\": \"2026-09-06T09:00:00\", \"master_label_fields\": {\"PHS\": \"2\", \"SRC\": \"KMTECH_INPUT_TAG\", \"ITG\": \"ITAG-COMPACT-001\", \"CLC\": \"AAA2270730100\", \"LBL\": \"LBL-COMPACT-001\", \"HSH\": \"aaaaaaaaaaaaaaaa\"}, \"quantity_basis\": \"PRODUCT_BARCODE\", \"confidence\": \"BARCODE\", \"qty_uom\": \"piece\", \"measure_code\": \"STATE_QTY\", \"barcode_count\": 1, \"input_tag_id\": \"ITAG-COMPACT-001\", \"input_tag_label_id\": \"LBL-COMPACT-001\", \"source_session_id\": \"ITAG-COMPACT-001\", \"inspection_trace\": {\"input_tag_id\": \"ITAG-COMPACT-001\", \"input_tag_label_id\": \"LBL-COMPACT-001\", \"master_label_phase\": \"2\", \"inspection_session_key\": \"ITAG-COMPACT-001\", \"master_label_identity_key\": \"qr:{\\\"CLC\\\":\\\"AAA2270730100\\\",\\\"HSH\\\":\\\"aaaaaaaaaaaaaaaa\\\",\\\"ITG\\\":\\\"ITAG-COMPACT-001\\\",\\\"LBL\\\":\\\"LBL-COMPACT-001\\\",\\\"PHS\\\":\\\"2\\\",\\\"SRC\\\":\\\"KMTECH_INPUT_TAG\\\"}\"}, \"transfer_seal_schema_version\": \"container-audit-transfer-seal-v1\", \"transfer_seal_intent_id\": \"transfer-intent-8629b4f5dd52be52f3e087e434e68dad\", \"transfer_local_completion_id\": \"TRANSFER-LINKED-D0418E209BDE159D6F1C5B03\", \"transfer_seal_status\": \"PREPARED\", \"transfer_seal_idempotency_key\": \"container-seal:8629b4f5dd52be52f3e087e434e68dada25e60fecbff6e9f6576ed9dc8b67059\", \"transfer_bundle_id\": null, \"transfer_source_bundle_id\": null, \"transfer_remainder_bundle_id\": null, \"transfer_member_count\": 0, \"transfer_membership_hash\": null, \"transfer_seal_qr_sha256\": null, \"transfer_seal_receipt_id\": null, \"transfer_authority_scope_id\": null, \"transfer_authority_epoch\": null, \"transfer_ledger_plane\": null, \"transfer_plane_epoch\": null, \"transfer_inbound_iin\": null, \"transfer_item_id\": null, \"transfer_uom\": null, \"transfer_entity_versions\": {}, \"terminal_operation_lease_id\": \"operation-lease-fixture-01\", \"terminal_operation_lease_state\": \"LOCAL_COMPLETED\", \"transfer_route_provenance\": \"CONTAINER_AUDIT_EXACT_PRODUCT_SCAN\", \"transfer_seal_retryable\": false, \"transfer_seal_error_code\": null, \"idempotency_key\": \"tray-complete:transfer-intent-8629b4f5dd52be52f3e087e434e68dad\", \"source_system\": \"container_audit\", \"source_transport_or_dataset\": \"legacy_transfer_csv\", \"raw_event_name\": \"TRAY_COMPLETE\", \"canonical_event_name\": \"TRAY_COMPLETE\", \"dispatch_key\": \"container_audit|legacy_transfer_csv|TRAY_COMPLETE\", \"identity_class\": \"LEGACY_FALLBACK\", \"integrity_requirement\": \"UNSIGNED_LEGACY_ALLOWED\", \"integrity_status\": \"UNSIGNED_LEGACY\", \"parser_mapping_version\": \"container-audit-plan-b-v1\"}"
+                },
+                "worker_record": {
+                    "worker_id": null,
+                    "worker_name_snapshot": "tester",
+                    "enabled": false
+                }
+            },
+            {
+                "log_file_name": "이적작업이벤트로그_tester_20261019.csv",
+                "local_only": true,
+                "log_entry": {
+                    "timestamp": "2026-09-06T09:00:00",
+                    "worker_name": "tester",
+                    "event": "TRAY_SHORT_CONFIRMATION_UNDONE",
+                    "details": "{\"completion_id\": \"tray-complete:transfer-intent-8629b4f5dd52be52f3e087e434e68dad\", \"stream_disposition\": \"LOCAL_ONLY_NOT_FOR_DIRECT_SYNC\", \"direct_sync_eligible\": false, \"stream_disposition_reason\": \"EXPLICIT_LOCAL_EVENT_TYPE\", \"idempotency_key\": \"short-undo:tray-complete:transfer-intent-8629b4f5dd52be52f3e087e434e68dad\", \"source_system\": \"container_audit\", \"source_transport_or_dataset\": \"legacy_transfer_csv\", \"raw_event_name\": \"TRAY_SHORT_CONFIRMATION_UNDONE\", \"canonical_event_name\": \"TRAY_SHORT_CONFIRMATION_UNDONE\", \"dispatch_key\": \"container_audit|legacy_transfer_csv|TRAY_SHORT_CONFIRMATION_UNDONE\", \"identity_class\": \"LEGACY_FALLBACK\", \"integrity_requirement\": \"UNSIGNED_LEGACY_ALLOWED\", \"integrity_status\": \"UNSIGNED_LEGACY\", \"parser_mapping_version\": \"container-audit-plan-b-v1\"}"
+                },
+                "worker_record": {
+                    "worker_id": null,
+                    "worker_name_snapshot": "tester",
+                    "enabled": false
+                }
+            }
+        ]
+    },
+    "undo_applied": false,
+    "pending_audit_events": [
+        {
+            "log_file_name": "이적작업이벤트로그_tester_20261019.csv",
+            "local_only": false,
+            "log_entry": {
+                "timestamp": "2026-09-06T09:00:00",
+                "worker_name": "tester",
+                "event": "TRAY_COMPLETE",
+                "details": "{\"master_label_code\": \"PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-COMPACT-001|CLC=AAA2270730100|LBL=LBL-COMPACT-001|HSH=aaaaaaaaaaaaaaaa\", \"item_code\": \"AAA2270730100\", \"item_name\": \"fixture item\", \"item_spec\": \"fixture spec\", \"spec\": \"fixture spec\", \"scan_count\": 1, \"tray_capacity\": 3, \"scanned_product_barcodes\": [\"AAA2270730100-SERIAL-001\"], \"product_barcodes\": [\"AAA2270730100-SERIAL-001\"], \"work_time_sec\": 0, \"error_count\": 0, \"total_idle_seconds\": 0.0, \"has_error_or_reset\": false, \"is_partial_submission\": true, \"is_restored_session\": false, \"is_test_tray\": false, \"start_time\": \"2026-09-06T09:00:00\", \"end_time\": \"2026-09-06T09:00:00\", \"master_label_fields\": {\"PHS\": \"2\", \"SRC\": \"KMTECH_INPUT_TAG\", \"ITG\": \"ITAG-COMPACT-001\", \"CLC\": \"AAA2270730100\", \"LBL\": \"LBL-COMPACT-001\", \"HSH\": \"aaaaaaaaaaaaaaaa\"}, \"quantity_basis\": \"PRODUCT_BARCODE\", \"confidence\": \"BARCODE\", \"qty_uom\": \"piece\", \"measure_code\": \"STATE_QTY\", \"barcode_count\": 1, \"input_tag_id\": \"ITAG-COMPACT-001\", \"input_tag_label_id\": \"LBL-COMPACT-001\", \"source_session_id\": \"ITAG-COMPACT-001\", \"inspection_trace\": {\"input_tag_id\": \"ITAG-COMPACT-001\", \"input_tag_label_id\": \"LBL-COMPACT-001\", \"master_label_phase\": \"2\", \"inspection_session_key\": \"ITAG-COMPACT-001\", \"master_label_identity_key\": \"qr:{\\\"CLC\\\":\\\"AAA2270730100\\\",\\\"HSH\\\":\\\"aaaaaaaaaaaaaaaa\\\",\\\"ITG\\\":\\\"ITAG-COMPACT-001\\\",\\\"LBL\\\":\\\"LBL-COMPACT-001\\\",\\\"PHS\\\":\\\"2\\\",\\\"SRC\\\":\\\"KMTECH_INPUT_TAG\\\"}\"}, \"transfer_seal_schema_version\": \"container-audit-transfer-seal-v1\", \"transfer_seal_intent_id\": \"transfer-intent-8629b4f5dd52be52f3e087e434e68dad\", \"transfer_local_completion_id\": \"TRANSFER-LINKED-D0418E209BDE159D6F1C5B03\", \"transfer_seal_status\": \"PREPARED\", \"transfer_seal_idempotency_key\": \"container-seal:8629b4f5dd52be52f3e087e434e68dada25e60fecbff6e9f6576ed9dc8b67059\", \"transfer_bundle_id\": null, \"transfer_source_bundle_id\": null, \"transfer_remainder_bundle_id\": null, \"transfer_member_count\": 0, \"transfer_membership_hash\": null, \"transfer_seal_qr_sha256\": null, \"transfer_seal_receipt_id\": null, \"transfer_authority_scope_id\": null, \"transfer_authority_epoch\": null, \"transfer_ledger_plane\": null, \"transfer_plane_epoch\": null, \"transfer_inbound_iin\": null, \"transfer_item_id\": null, \"transfer_uom\": null, \"transfer_entity_versions\": {}, \"terminal_operation_lease_id\": \"operation-lease-fixture-01\", \"terminal_operation_lease_state\": \"LOCAL_COMPLETED\", \"transfer_route_provenance\": \"CONTAINER_AUDIT_EXACT_PRODUCT_SCAN\", \"transfer_seal_retryable\": false, \"transfer_seal_error_code\": null, \"idempotency_key\": \"tray-complete:transfer-intent-8629b4f5dd52be52f3e087e434e68dad\", \"source_system\": \"container_audit\", \"source_transport_or_dataset\": \"legacy_transfer_csv\", \"raw_event_name\": \"TRAY_COMPLETE\", \"canonical_event_name\": \"TRAY_COMPLETE\", \"dispatch_key\": \"container_audit|legacy_transfer_csv|TRAY_COMPLETE\", \"identity_class\": \"LEGACY_FALLBACK\", \"integrity_requirement\": \"UNSIGNED_LEGACY_ALLOWED\", \"integrity_status\": \"UNSIGNED_LEGACY\", \"parser_mapping_version\": \"container-audit-plan-b-v1\"}"
+            },
+            "worker_record": {
+                "worker_id": null,
+                "worker_name_snapshot": "tester",
+                "enabled": false
+            }
+        },
+        {
+            "log_file_name": "이적작업이벤트로그_tester_20261019.csv",
+            "local_only": true,
+            "log_entry": {
+                "timestamp": "2026-09-06T09:00:00",
+                "worker_name": "tester",
+                "event": "TRAY_SHORT_CONFIRMATION_UNDONE",
+                "details": "{\"completion_id\": \"tray-complete:transfer-intent-8629b4f5dd52be52f3e087e434e68dad\", \"stream_disposition\": \"LOCAL_ONLY_NOT_FOR_DIRECT_SYNC\", \"direct_sync_eligible\": false, \"stream_disposition_reason\": \"EXPLICIT_LOCAL_EVENT_TYPE\", \"idempotency_key\": \"short-undo:tray-complete:transfer-intent-8629b4f5dd52be52f3e087e434e68dad\", \"source_system\": \"container_audit\", \"source_transport_or_dataset\": \"legacy_transfer_csv\", \"raw_event_name\": \"TRAY_SHORT_CONFIRMATION_UNDONE\", \"canonical_event_name\": \"TRAY_SHORT_CONFIRMATION_UNDONE\", \"dispatch_key\": \"container_audit|legacy_transfer_csv|TRAY_SHORT_CONFIRMATION_UNDONE\", \"identity_class\": \"LEGACY_FALLBACK\", \"integrity_requirement\": \"UNSIGNED_LEGACY_ALLOWED\", \"integrity_status\": \"UNSIGNED_LEGACY\", \"parser_mapping_version\": \"container-audit-plan-b-v1\"}"
+            },
+            "worker_record": {
+                "worker_id": null,
+                "worker_name_snapshot": "tester",
+                "enabled": false
+            }
+        }
+    ],
+    "undo_event": {
+        "event": "TRAY_SHORT_CONFIRMATION_UNDONE",
+        "completion_id": "tray-complete:transfer-intent-8629b4f5dd52be52f3e087e434e68dad"
+    }
+}

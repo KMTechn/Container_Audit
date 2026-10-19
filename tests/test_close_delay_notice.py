@@ -1,4 +1,5 @@
 """A delayed close reports once without replacing the admitted drain."""
+import csv
 from pathlib import Path
 from types import SimpleNamespace
 import threading
@@ -7,6 +8,7 @@ import pytest
 
 import Container_Audit as module
 from writer_session_fence import WriterFencedError
+from event_stream_policy import local_only_event_log_path
 from tk_serial_ui_lane import LaneTask
 from tests.test_scan_persistence_lane import ITEM, app, pump, rows
 
@@ -40,6 +42,12 @@ def close_clock(app, monkeypatch):
 
 @pytest.mark.parametrize("log_state", ["available", "denied", "closing"])
 def test_sixty_seconds_notifies_once_and_keeps_real_lane_drain(app, monkeypatch, log_state):
+    # G09 d0a8b54 routes APP_CLOSE_DELAY to the local-only CSV.
+    delay_path = local_only_event_log_path(
+        app.log_file_path, local_events_dir=getattr(app, "local_events_folder", ""))
+    def delay_rows():
+        with delay_path.open(encoding="utf-8-sig", newline="") as handle:
+            return list(csv.DictReader(handle))
     advance, messages, timers = close_clock(app, monkeypatch)
     entered, release, attempted = threading.Event(), threading.Event(), threading.Event()
     original_save, original_append = app._save_current_tray_state, module.append_event_log_entry_idempotent
@@ -90,15 +98,15 @@ def test_sixty_seconds_notifies_once_and_keeps_real_lane_drain(app, monkeypatch,
             assert attempted.wait(2)
             assert log_calls == ["APP_CLOSE_DELAY"]
         if log_state == "available":
-            pump(app, lambda: Path(app.log_file_path).exists()
-                 and sum(r["event"] == "APP_CLOSE_DELAY" for r in rows(app)) == 1)
+            pump(app, lambda: delay_path.exists()
+                 and sum(r["event"] == "APP_CLOSE_DELAY" for r in delay_rows()) == 1)
         if log_state == "denied":
             assert not getattr(app, "_event_log_outbox_instance", None) or not app._event_log_outbox_instance.has_unstaged
         release.set()
         pump(app, lambda: app.root.destroyed)
         assert not lane.worker_thread.is_alive() and not app.log_thread.is_alive()
         if log_state == "denied":
-            assert not Path(app.log_file_path).exists() or not any(r["event"] == "APP_CLOSE_DELAY" for r in rows(app))
+            assert not delay_path.exists() or not any(r["event"] == "APP_CLOSE_DELAY" for r in delay_rows())
     finally:
         release.set()
 

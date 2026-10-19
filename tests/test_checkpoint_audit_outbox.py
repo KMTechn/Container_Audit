@@ -1,5 +1,6 @@
 """CSV is a retryable projection of an already durable operator action."""
 import csv
+import hashlib
 import json
 from pathlib import Path
 
@@ -136,9 +137,8 @@ def test_synchronous_audit_replays_original_worker_time_and_path(flow, monkeypat
     assert not Path(tmp_path / 'later.csv').exists()
 
 
-@pytest.mark.parametrize('action,event', [('undo', 'SCAN_UNDO'), ('park', 'TRAY_PARKED'),
-                                        ('reset', 'TRAY_RESET'),
-                                        ('short_undo', 'TRAY_SHORT_CONFIRMATION_UNDONE')])
+# M125 6d60e16: retired cancellation is covered by historical replay and refusal below.
+@pytest.mark.parametrize('action,event', [('undo', 'SCAN_UNDO'), ('park', 'TRAY_PARKED'), ('reset', 'TRAY_RESET')])
 def test_crash_between_checkpoint_and_outbox_staging_replays_once(flow, windows, monkeypatch, tmp_path, action, event):
     app = _active(flow)
     app.parked_trays_dir = str(tmp_path / 'parked')
@@ -146,8 +146,6 @@ def test_crash_between_checkpoint_and_outbox_staging_replays_once(flow, windows,
     app._show_left_sidebar_view = lambda view: None
     app._start_stopwatch = lambda resume=False: None
     app._process_barcode_logic(ITEM + '-SERIAL-001')
-    if action == 'short_undo':
-        app._process_barcode_logic(COMPACT_QR)
     app.log_queue.join()
     stop_writer(app)
     def power_loss(state):
@@ -156,8 +154,7 @@ def test_crash_between_checkpoint_and_outbox_staging_replays_once(flow, windows,
         return True
     monkeypatch.setattr(app, '_stage_checkpoint_audit_events', power_loss)
     with pytest.raises(SystemExit, match='synthetic crash'):
-        {'undo': app.undo_last_scan, 'park': app.park_current_tray,
-         'reset': app.reset_current_work, 'short_undo': app._undo_short_confirmation}[action]()
+        {'undo': app.undo_last_scan, 'park': app.park_current_tray, 'reset': app.reset_current_work}[action]()
     restarted = flow(transition=False, root=Path(app.save_folder))
     restarted.parked_trays_dir = app.parked_trays_dir
     assert restarted._flush_pending_event_logs()
@@ -235,3 +232,80 @@ def test_unreadable_parked_checkpoint_preserves_source_and_does_not_stop_other_a
     assert app._flush_pending_event_logs()
     assert len(_rows(app, 'WORK_PAUSE')) == 1
     assert corrupt.read_bytes() == b'original unreadable checkpoint'
+
+
+@pytest.fixture
+def historical_short_cancel_checkpoint(tmp_path):
+    fixture = Path(__file__).parent / "fixtures" / "legacy_short_cancel_checkpoint"
+    manifest = json.loads((fixture / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["producer_commit"] == "8f10a60f38692df0de7f128e6e515a99136f081a"
+    restored = tmp_path / "historical-short-cancellation"
+    restored.mkdir()
+    original_rows = {}
+
+    def collect(value):
+        if isinstance(value, dict):
+            for event in value.get("pending_audit_events", []):
+                row = event["log_entry"]
+                if "TRAY_SHORT_CONFIRMATION_UNDONE" in row.values():
+                    original_rows[json.dumps(row, sort_keys=True)] = dict(row)
+            for nested in value.values():
+                collect(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect(nested)
+
+    for record in manifest["files"]:
+        relative = Path(record["path"])
+        assert not relative.is_absolute() and ".." not in relative.parts
+        data = (fixture / "files" / relative).read_bytes()
+        assert len(data) == record["bytes"]
+        assert hashlib.sha256(data).hexdigest() == record["sha256"]
+        target = restored / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        collect(json.loads(data.decode("utf-8-sig")))
+    assert len(original_rows) == 1
+    return restored, next(iter(original_rows.values()))
+
+
+def test_historical_short_cancellation_checkpoint_replays_original_audit_once(
+    flow, windows, historical_short_cancel_checkpoint
+):
+    root, original = historical_short_cancel_checkpoint
+    restarted = flow(transition=False, root=root)
+    assert restarted._flush_pending_event_logs()
+    row, = audit_rows(restarted, "TRAY_SHORT_CONFIRMATION_UNDONE")
+    assert row == original
+    assert json.loads(row["details"])["idempotency_key"]
+    assert restarted._flush_pending_event_logs()
+    assert audit_rows(restarted, "TRAY_SHORT_CONFIRMATION_UNDONE") == [row]
+    stop_writer(restarted)
+    again = flow(transition=False, root=root)
+    assert again._flush_pending_event_logs()
+    assert audit_rows(again, "TRAY_SHORT_CONFIRMATION_UNDONE") == [row]
+    assert windows == []
+
+
+def test_confirmed_partial_submission_cannot_be_undone_or_change_saved_bytes(flow, windows):
+    app = _active(flow)
+    app._process_barcode_logic(ITEM + '-SERIAL-001')
+    app._process_barcode_logic(COMPACT_QR)
+    assert app._partial_submission_state() is not None
+    assert app._confirm_partial_submission()
+    _pump_until(app.root, lambda: not app._ui_task_lane().is_busy()
+                and not app.current_tray.master_label_code)
+    app.log_queue.join()
+    stop_writer(app)
+
+    def saved_bytes():
+        root = Path(app.save_folder)
+        return {path.relative_to(root): path.read_bytes()
+                for path in root.rglob("*")
+                if path.is_file() and not path.is_symlink()}
+
+    before = saved_bytes()
+    assert before and any(path.suffix.lower() == ".csv" for path in before)
+    assert app._undo_short_confirmation() is False
+    assert saved_bytes() == before
+    assert windows == []

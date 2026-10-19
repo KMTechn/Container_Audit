@@ -1,0 +1,16 @@
+{
+  "producer_commit": "8f10a60f38692df0de7f128e6e515a99136f081a",
+  "parent_of": "6d60e16578f852b9c35cb8d73bcbc69b431e6d8b",
+  "source_test": "tests/test_checkpoint_audit_outbox.py::test_crash_between_checkpoint_and_outbox_staging_replays_once",
+  "capture_boundary": "after durable cancellation checkpoint, before outbox staging",
+  "current_checkpoint_name": "_current_tray_state_fixture.json",
+  "files": [
+    {
+      "path": "short_confirmations/168598bc42cd2431970a37462b4b8c025fef9da481f2cc333e2953c9341cf5a1.json",
+      "sha256": "3d6d09be75ac9ab57228c74d1430240442c46d3c4bf804e4b815fbeea0fd13bc",
+      "bytes": 24017,
+      "pending_audit": true
+    }
+  ],
+  "outbox_file_count": 0
+}
