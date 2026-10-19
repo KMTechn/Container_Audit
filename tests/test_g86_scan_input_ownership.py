@@ -267,6 +267,37 @@ def test_ca_stale_callback_does_not_clear_a_new_scan():
     assert app.accepted == [SECOND]
 
 
+@pytest.mark.parametrize('failure', ['disabled', 'ignored', 'read_error'])
+def test_ca_bridge_requires_verified_empty_entry_before_injection(failure):
+    app = ca_app()
+    bridge = type('Bridge', (), CA_BRIDGE)()
+    bridge.app, bridge.view, bridge._scan_answer, bridge._answer = app, None, None, None
+    app._notice_button_captures_scan = lambda: False
+    app.scan_entry.insert(0, FIRST)
+    get, delete = app.scan_entry.get, app.scan_entry.delete
+    if failure == 'disabled':
+        app.scan_entry.configure(state='disabled')
+    elif failure == 'ignored':
+        app.scan_entry.delete = lambda *_args: None
+    else:
+        def unreadable():
+            raise TclError('entry read failed')
+        app.scan_entry.get = unreadable
+    sounds = []
+    app._start_warning_beep = lambda: sounds.append(True)
+    response = bridge.scan(SECOND, {})
+    app.root.drain()
+    assert response['accepted'] is False
+    assert '다시 스캔하세요' in response['message']
+    assert app.accepted == []
+    assert sounds == [True]
+    app.scan_entry.get, app.scan_entry.delete = get, delete
+    app.scan_entry.configure(state='normal')
+    bridge.scan(SECOND, {})
+    app.root.drain()
+    assert app.accepted == [SECOND]
+
+
 @pytest.mark.parametrize('case', ['injected_pending','injected_band_result','injected_accepted'])
 def test_ca_bridge_injected_notice_then_next_scan_isolated(case):
     app = ca_app()
@@ -296,4 +327,3 @@ def test_ca_bridge_injected_notice_then_next_scan_isolated(case):
     bridge.scan(SECOND,{})
     app.root.drain()
     assert app.accepted == [SECOND]
-
