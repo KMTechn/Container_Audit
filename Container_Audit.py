@@ -15304,33 +15304,37 @@ class ContainerAudit:
     def _refuse_broken_scan_entry(self) -> bool:
         if not getattr(self, "_scan_entry_broken", False):
             return False
+        self._set_scan_callback_pending(bool(getattr(self, "_scan_callback_pending", False)))
         self._mark_scan_unaccepted("입력 칸 오류 — 프로그램을 다시 켜세요")
         self._start_warning_beep()
         return True
 
-    def _clear_consumed_scan_entry(self, raw_barcode: str, *, preserve_mismatch: bool = False) -> bool:
-        """Separate a refused snapshot from later input; stale owners preserve it."""
+    def _clear_consumed_scan_entry(self, raw_barcode: str | None, *, preserve_mismatch: bool = False) -> bool:
+        """Clear a captured value, or an unowned bridge/invalidation entry."""
         entry = getattr(self, "scan_entry", None)
         if entry is None:
             return True
         if getattr(self, "_scan_entry_broken", False):
             return False
-        failed = False
+        failed, current = False, ""
         try:
             try:
-                matches = entry.get().strip() == raw_barcode
+                current = entry.get().strip()
+                matches = raw_barcode is None or current == raw_barcode
             except (AttributeError, tk.TclError):
                 matches, failed = False, True
-            if preserve_mismatch and not matches:
+            owned_prefix = bool(raw_barcode and current.startswith(raw_barcode))
+            if preserve_mismatch and not matches and not owned_prefix and not failed:
                 return False
-            # No event dispatch occurs between snapshot, deletion and readback.
-            # A failed attempt refuses this scan even if cleanup then succeeds.
             for _ in range(2):
                 try:
                     if hasattr(entry, "configure"):
                         entry.configure(state=tk.NORMAL)
                     entry.delete(0, tk.END)
                     if not entry.get():
+                        if preserve_mismatch and (current or failed):
+                            self._mark_scan_unaccepted("다시 스캔하세요")
+                            self._start_warning_beep()
                         return matches and not failed
                 except (AttributeError, tk.TclError):
                     pass
@@ -15374,7 +15378,14 @@ class ContainerAudit:
     def _process_barcode_entry(self, event=None):
         if getattr(self, "_scan_entry_broken", False):
             return
-        raw_barcode = self.scan_entry.get().strip()
+        try:
+            raw_barcode = self.scan_entry.get().strip()
+        except (AttributeError, tk.TclError):
+            self._clear_consumed_scan_entry(None)
+            if not self._refuse_broken_scan_entry():
+                self._mark_scan_unaccepted("다시 스캔하세요")
+                self._start_warning_beep()
+            return
         if getattr(self, "_startup_update_pending", False):
             self._clear_consumed_scan_entry(raw_barcode)
             self._refuse_entry_scan("프로그램 준비 중입니다. 잠시 뒤 다시 스캔하세요.")
@@ -15446,6 +15457,15 @@ class ContainerAudit:
         self.root.after(0, self._process_barcode_if_current, raw_barcode, scan_epoch)
 
     def _invalidate_pending_scan_callbacks(self, *, preserve_held_scans: bool = False) -> None:
+        entry = getattr(self, "scan_entry", None)
+        interrupted = False
+        if entry is not None:
+            try:
+                interrupted = bool(entry.get())
+            except (AttributeError, tk.TclError):
+                interrupted = True
+            if not self._clear_consumed_scan_entry(None):
+                interrupted = True
         if getattr(self, "_partial_submit_confirmation", None):
             self._continue_partial_submission()
         self._scan_callback_epoch = int(getattr(self, "_scan_callback_epoch", 0)) + 1
@@ -15465,6 +15485,12 @@ class ContainerAudit:
                 self._refuse_entry_scan(notice)
         self._set_scan_callback_pending(False)
         self._cancel_master_preflight()
+        if interrupted:
+            if not self._refuse_broken_scan_entry():
+                try:
+                    self.root.after(0, self._refuse_entry_scan, "다시 스캔하세요")
+                except (AttributeError, tk.TclError):
+                    self._refuse_entry_scan("다시 스캔하세요")
 
     def _process_barcode_if_current(self, raw_barcode: str, scan_epoch: int) -> None:
         self._scan_callback_pending = False
@@ -15557,6 +15583,9 @@ class ContainerAudit:
         _durable_scan_id: str = "", _catalog_decision=None,
         _defer_persistence: bool = False, _offline_hold_switch: Optional[PreflightHoldSnapshot] = None,
     ):
+        if self.__dict__.get("_scan_entry_broken", False):
+            self._refuse_broken_scan_entry()
+            return False
         if self._reject_residual_tag(raw_barcode):
             return False
         if self._handle_partial_submission_scan(raw_barcode):
@@ -16401,6 +16430,7 @@ class ContainerAudit:
                         tk.DISABLED
                         if getattr(self, "_preflight_scan_input_locked", False)
                         or getattr(self, "_ui_close_requested", False)
+                        or getattr(self, "_scan_entry_broken", False)
                         else tk.NORMAL
                     )
                 )
@@ -16410,6 +16440,9 @@ class ContainerAudit:
             self._update_action_button_states()
         except (AttributeError, tk.TclError):
             pass
+        if getattr(self, "_scan_entry_broken", False):
+            self._refuse_broken_scan_entry()
+            return
         if busy:
             self.show_status_message(
                 "완료 처리 중",
@@ -17091,6 +17124,11 @@ class ContainerAudit:
         if getattr(self, "_deferred_app_stop_request", None) and _APP_STOP_DEFERRED_MESSAGE not in message:
             message += "\n" + _APP_STOP_DEFERRED_MESSAGE
 
+        broken_entry = bool(getattr(self, "_scan_entry_broken", False))
+        if broken_entry:
+            title = message = "입력 칸 오류 — 프로그램을 다시 켜세요"
+            severity = NoticeSeverity.ERROR
+
         palette = {
             NoticeSeverity.INFO: ("#EFF6FF", "#93C5FD", "#1D4ED8", self.COLOR_TEXT),
             NoticeSeverity.SUCCESS: ("#F0FDF4", "#86EFAC", "#166534", self.COLOR_TEXT),
@@ -17173,12 +17211,15 @@ class ContainerAudit:
             if scan_entry is not None:
                 scan_entry.configure(
                     state=tk.DISABLED
-                    if state.is_blocking and not getattr(self, "_inline_scan_choices", None)
+                    if broken_entry or (state.is_blocking and not getattr(self, "_inline_scan_choices", None))
                     else tk.NORMAL
                 )
             current_instruction = getattr(self, "current_item_label", None)
             if current_instruction is not None:
-                if state.is_blocking:
+                if broken_entry:
+                    current_instruction.configure(text="입력 칸 오류 — 프로그램을 다시 켜세요")
+                    self._blocking_instruction_visible = True
+                elif state.is_blocking:
                     current_instruction.configure(text="아래 안내를 확인하세요.")
                     self._blocking_instruction_visible = True
                 elif getattr(self, "_blocking_instruction_visible", False):
@@ -17192,7 +17233,9 @@ class ContainerAudit:
             status_card = getattr(self, "info_cards", {}).get('status')
             status_value = status_card.get('value') if status_card else None
             if status_value is not None:
-                if self._active_operator_review_snapshot() is not None:
+                if broken_entry:
+                    status_value.configure(text="입력 칸 오류 — 프로그램을 다시 켜세요", foreground=self.COLOR_DANGER)
+                elif self._active_operator_review_snapshot() is not None:
                     status_value.configure(text="담당자 확인", foreground=self.COLOR_DANGER)
                 elif notice is not None and notice.blocking:
                     duplicate_notice = "duplicate" in notice.code.lower() or "중복" in notice.title
@@ -17217,7 +17260,9 @@ class ContainerAudit:
                     status_value.configure(text="완료 기록 대기", foreground=self.COLOR_DANGER)
             status_label = getattr(self, "status_label", None)
             if status_label is not None:
-                if state.completion is not None and state.completion.blocks_completion:
+                if broken_entry:
+                    status_label.configure(text="입력 칸 오류 — 프로그램을 다시 켜세요", fg=self.COLOR_DANGER)
+                elif state.completion is not None and state.completion.blocks_completion:
                     if state.completion.outcome is CompletionOutcome.RETRY_WAIT:
                         status_label.configure(
                             text="스캔 중지 · 서버 승인 대기",
@@ -17251,7 +17296,9 @@ class ContainerAudit:
                 active_tray = bool(getattr(tray, "master_label_code", ""))
                 scan_count = len(getattr(tray, "scanned_barcodes", []) or [])
                 target_count = max(0, int(getattr(tray, "tray_size", 0) or 0))
-                if state.completion is not None and state.completion.blocks_completion:
+                if broken_entry:
+                    follow_up = "입력 칸 오류 — 프로그램을 다시 켜세요"
+                elif state.completion is not None and state.completion.blocks_completion:
                     follow_up = (
                         "스캔 중지 · 완료 기록 재시도 버튼 사용"
                         if state.completion.outcome is CompletionOutcome.LOCAL_EVENT_RETRY
@@ -17286,7 +17333,8 @@ class ContainerAudit:
     def _apply_notice_visibility(self) -> None:
         """Reserve the notice band for feedback and the selected exchange task."""
         state = self._warning_state_presenter().state
-        has_notice = bool(state.active_notice is not None or state.is_blocking
+        has_notice = bool(getattr(self, "_scan_entry_broken", False)
+                          or state.active_notice is not None or state.is_blocking
                           or getattr(self, "_deferred_app_stop_request", None))
         panel = getattr(self, "phs_label_exchange_frame", None)
         try:

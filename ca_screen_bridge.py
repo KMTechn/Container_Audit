@@ -169,6 +169,8 @@ def _choices(app: Any) -> List[Dict[str, Any]]:
 
 def _alerts(app: Any, presenter_state: Any, notes: List[Dict[str, Any]], now: datetime.datetime) -> List[Dict[str, Any]]:
     alerts: List[Dict[str, Any]] = []
+    if _attr(app, "_scan_entry_broken", False):
+        alerts.append({"kind": 'bad', "text": "입력 칸 오류 — 프로그램을 다시 켜세요"})
     notice = presenter_state.active_notice
     if notice is not None and notice.blocking:
         choices = _choices(app)
@@ -292,6 +294,14 @@ def _exchange(app: Any, master_label: Optional[str]) -> Optional[Dict[str, Any]]
 
 
 def _result(app: Any, presenter_state: Any, tray: Any, count: int, last_sound: Optional[str]) -> Dict[str, Any]:
+    if _attr(app, "_scan_entry_broken", False):
+        result = {"kind": RESULT_KIND[NoticeSeverity.ERROR],
+                  "title": "입력 칸 오류 — 프로그램을 다시 켜세요",
+                  "hint": "입력 칸 오류 — 프로그램을 다시 켜세요"}
+        sound = _sound_text(app, last_sound)
+        if sound:
+            result["sound"] = sound
+        return result
     partial = _attr(app, "_last_partial_submit_result")
     completion = presenter_state.completion
     notice = presenter_state.active_notice
@@ -529,6 +539,7 @@ def fingerprint(app: Any, view: Optional[str], notes: List[Dict[str, Any]], shee
     presenter_state = app._warning_state_presenter().state
     conn, queue = _conn(app)
     parts = (
+        bool(_attr(app, "_scan_entry_broken", False)),
         _attr(tray, "master_label_code"), len(_attr(tray, "scanned_barcodes") or []), _attr(tray, "tray_size"),
         repr(presenter_state), _attr(app, "_inline_exchange_mode"), _attr(app, "_last_inline_exchange"),
         bool(_attr(app, "_short_confirmation_undo")), app._partial_submission_state(),
@@ -958,24 +969,28 @@ class CaProcessor:
         return None
 
     def _enter(self, raw: str) -> bool:
-        """지금 시험(public_scan)과 같은 스캔 문 — 입력 칸에 넣고 process_barcode(빈 글 = 빈 Enter)."""
-        if self.app.__dict__.get("_scan_entry_broken", False):
-            self.app._refuse_broken_scan_entry()
+        """Inject only after shared cleanup and exact entry readback."""
+        if self.app._refuse_broken_scan_entry():
             return False
         entry = self.app.scan_entry
-        try:
-            entry.delete(0, tk.END)
-            cleared = not entry.get()
-        except Exception:
-            cleared = False
-        if not cleared:
-            self.app._mark_scan_unaccepted("스캔을 받지 못했습니다. 다시 스캔하세요.")
+        cleared = self.app._clear_consumed_scan_entry(None)
+        if cleared:
+            try:
+                if raw:
+                    entry.insert(0, raw)
+                injected = entry.get() == raw
+            except Exception:
+                injected = False
+            if injected:
+                self.app.process_barcode()
+                return True
+            self.app._clear_consumed_scan_entry(None)
+        if not self.app._refuse_broken_scan_entry():
+            message = self.app._scan_entry_admission_block_reason() if self.app.__dict__.get("_preflight_scan_input_locked", False) else ""
+            message = message or "다시 스캔하세요"
+            self.app._mark_scan_unaccepted(message)
             self.app._start_warning_beep()
-            return False
-        if raw:
-            entry.insert(0, raw)
-        self.app.process_barcode()
-        return True
+        return False
 
     def _invoke(self, widget_name: str) -> Dict[str, Any]:
         widget = _attr(self.app, widget_name)
