@@ -48,7 +48,7 @@ def _forms(tmp_path, shared):
         "case": profile.swapcase(),
         "slash": profile.replace("\\", "/"),
         "trailing": profile + "\\",
-        "verbatim": "\\?\\" + profile,
+        "verbatim": chr(92) * 2 + "?" + chr(92) + profile,
         "secret_dir_file": str(shared / "secrets" / "bearer-token.dpapi"),
         "junction": str(link / "runtime-profile.json"),
         "none": "",
