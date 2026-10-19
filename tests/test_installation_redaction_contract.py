@@ -10,7 +10,7 @@ from tests.powershell_contracts import run_functions
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/installation_redaction_vectors.json"
-assert hashlib.sha256(FIXTURE.read_bytes()).hexdigest() == "3106bccafd881396b7bbf1a6b3356ccd41853e4a74bbd7b6918ac2b6a599bfc7"
+assert hashlib.sha256(FIXTURE.read_bytes()).hexdigest() == "9f19eeef81d08093d956e4ad6f9a781b9648ce74da7a2eccd090cc7f202f01d3"
 VECTORS = json.loads(FIXTURE.read_bytes())["vectors"]
 
 

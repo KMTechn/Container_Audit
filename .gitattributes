@@ -12,3 +12,6 @@ tests/contracts/*.json text eol=lf
 tests/late_result_guard.py -text
 tools/validate_capture_bundle_v1.py -text
 shell/** -text
+docs/failure-redaction-contract.md text eol=lf
+docs/failure-redaction-contract.sha256.json text eol=lf
+tests/fixtures/installation_redaction_vectors.json text eol=lf
