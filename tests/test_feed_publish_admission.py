@@ -363,6 +363,15 @@ def test_fence_actors_only_declare_the_staging_path():
         references = [line.strip() for line in text.splitlines() if "staging_root" in line]
         if name == "INSTALL_THIS_PC.ps1":
             assert references == ["staging_root=(Join-Path $OperatorLocalAppDataRoot 'KMTech\\ContainerAudit\\updates')"]
+        elif name == "tools/bootstrap_integrity.ps1":
+            # FAILED reinstall preflight (BACKLOG G51) only READS the pending prepared.json
+            # through the already-declared staging_root: exactly one such line, never a declaration/write.
+            read_line = "$prepared=Join-Path ([string]$Policy['staging_root']) 'prepared.json'"
+            assert references == [read_line]
+            assert len(references) == 1
+            for write_shape in ("New-Item", "Set-Content", "Add-Content", "Out-File", "WriteAll", "staging_root']=", "staging_root'] ="):
+                assert write_shape not in references[0]
+            assert references[0].startswith("$prepared=Join-Path (")
         else:
             assert references == []
 
