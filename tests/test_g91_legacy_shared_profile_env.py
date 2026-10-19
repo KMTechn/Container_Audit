@@ -10,7 +10,10 @@ import pytest
 import logistics_runtime_profile as lrp
 from current_user_onboarding import onboard_current_user, resolve_current_user_onboarding_paths
 from tests import test_current_user_onboarding as base
-from tests.test_current_user_onboarding import _isolate_onboarding_control_root  # noqa: F401  (autouse)
+from tests.test_current_user_onboarding import (  # noqa: F401  (fixtures)
+    _isolate_onboarding_control_root,
+    existing_possession_key_contract,
+)
 
 ENV = "CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH"
 FAKE_PROFILE = b"legacy-shared-profile-fixture"
@@ -56,6 +59,7 @@ def _snap(*paths):
     return [(p.read_bytes(), p.stat().st_mtime_ns) for p in paths]
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 @pytest.mark.skipif(os.name != "nt", reason="Windows path rules")
 @pytest.mark.parametrize(
     "form", ["case", "slash", "trailing", "verbatim", "secret_dir_file", "junction", "none"]
