@@ -13,6 +13,8 @@ DRIVER = r'''
 param([string]$Metadata)
 $ErrorActionPreference='Stop'
 $m=Get-Content -LiteralPath $Metadata -Raw|ConvertFrom-Json
+# Bind the child machine fence namespace to this test fixture.
+$env:PROGRAMDATA=Join-Path (Split-Path -Parent $m.root) 'machine'
 . (Join-Path $m.repo 'tools/bootstrap_integrity.ps1')
 $script:stockCalls=0;$script:taskCalls=0;$script:censusCalls=0;$script:sharedCalls=0
 function Get-BootstrapReplacementTreeIdentity([string]$Root,[string]$DeclaredCodeRoot) {
