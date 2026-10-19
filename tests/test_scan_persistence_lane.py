@@ -677,7 +677,8 @@ def test_close_during_a_save_refuses_the_held_scan_out_loud(app, monkeypatch):
     finally:
         release.set()
     state = json.loads((Path(app.save_folder) / app.CURRENT_TRAY_STATE_FILE).read_text(encoding="utf-8"))
-    notice = "종료 전에 이어서 들어온 스캔 1개는 저장하지 않았습니다. 다시 실행한 뒤 그 제품을 다시 스캔하세요."
+    # Approved operator wording: 02d3f3e9fa6e, ContainerAudit.on_closing.
+    notice = '종료 전에 이어서 들어온 스캔 1개는 저장하지 않았습니다.\n다시 실행한 뒤 그 제품을 다시 스캔하세요.'
     assert state["scanned_barcodes"] == [ITEM + "-1"]
     assert app.error_sounds == [-1] and notice in _refusals(app)
     assert warnings == [("스캔 다시 필요", notice)]
