@@ -14473,7 +14473,7 @@ class ContainerAudit:
             self, "_preflight_hold_append_pending", False
         ):
             self.show_status_message(
-                "이전 보류 스캔을 저장하는 중입니다. 입력값을 유지합니다.",
+                "이전 보류 스캔을 저장하는 중입니다. 다시 스캔하세요.",
                 self.COLOR_DANGER,
                 duration=0,
             )
@@ -14510,6 +14510,7 @@ class ContainerAudit:
                 self._preflight_hold_append_pending = False
             self._set_preflight_scan_input_locked(True)
             if clear_entry_after_ack:
+                self._clear_consumed_scan_entry(raw)
                 self._set_scan_callback_pending(False)
             if isinstance(exc, PreflightHoldFull):
                 message = "보류 한도 초과 — 이번 스캔은 접수되지 않았습니다."
@@ -14523,6 +14524,7 @@ class ContainerAudit:
                 self._preflight_hold_append_pending = False
             self._set_preflight_scan_input_locked(True)
             if clear_entry_after_ack:
+                self._clear_consumed_scan_entry(raw)
                 self._set_scan_callback_pending(False)
             self.show_status_message(
                 "보류 저장 대기열이 가득 차 이번 스캔은 접수되지 않았습니다.",
@@ -15031,7 +15033,7 @@ class ContainerAudit:
         if getattr(self, "_ui_close_requested", False):
             return "종료 정리 중입니다. 이번 스캔은 접수되지 않았습니다."
         if getattr(self, "_scan_callback_pending", False):
-            return "이전 스캔 입력을 접수하는 중입니다. 입력값을 유지합니다."
+            return "이전 스캔 입력을 접수하는 중입니다. 다시 스캔하세요."
         if getattr(self, "_completion_lane_busy", False) and not behind_live_save:
             return "완료 처리 중이라 이번 스캔은 받지 않았습니다. 완료 뒤 다시 스캔하세요."
         if getattr(self, "_preflight_scan_input_locked", False):
@@ -15338,10 +15340,11 @@ class ContainerAudit:
         self.show_status_message(self._last_scan_unaccepted_text, self.COLOR_DANGER, duration=0)
 
     def _process_barcode_entry(self, event=None):
+        raw_barcode = self.scan_entry.get().strip()
         if getattr(self, "_startup_update_pending", False):
+            self._clear_consumed_scan_entry(raw_barcode)
             self._refuse_entry_scan("프로그램 준비 중입니다. 잠시 뒤 다시 스캔하세요.")
             return
-        raw_barcode = self.scan_entry.get().strip()
         captured_during_notice = self._notice_scan_take()
         if captured_during_notice and not raw_barcode and not self._notice_blocks_scan():
             # Operator review / pre-command retry: the characters become a real scan
@@ -15437,6 +15440,8 @@ class ContainerAudit:
             return
         try:
             if scan_epoch != getattr(self, "_scan_callback_epoch", 0):
+                # The stale callback may consume only the value it still owns.
+                self._clear_consumed_scan_entry(raw_barcode)
                 return
             block_reason = self._scan_entry_admission_block_reason()
             if block_reason or getattr(self, "_scans_behind_save", None):
@@ -16191,7 +16196,7 @@ class ContainerAudit:
         ))
         if not admission.accepted:
             steps.close()
-            self.show_status_message("이전 스캔 저장 중입니다. 입력값을 유지합니다.", self.COLOR_DANGER)
+            self.show_status_message("이전 스캔 저장 중입니다. 다시 스캔하세요.", self.COLOR_DANGER)
             return False
         self._scan_persistence_task_handle = admission.handle
         self._live_scan_save_pending = True

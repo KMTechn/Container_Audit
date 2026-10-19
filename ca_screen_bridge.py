@@ -776,7 +776,10 @@ class CaProcessor:
             return {"accepted": True, "verdict": None, "message": "", "sound": None, "result": None}
         if self.view == "held":
             self.view = None  # 한 단계 안 화면에서 찍어도 작업 화면으로 돌아가 처리
-        self._enter(raw)
+        if self._enter(raw) is False:
+            text = "스캔을 받지 못했습니다. 다시 스캔하세요."
+            return {"accepted": False, "verdict": None, "message": text, "sound": None,
+                    "result": {"kind": "bad", "text": text}}
         return {"accepted": True, "verdict": None, "message": "", "sound": None, "result": None}
 
     def command(self, name: str, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -954,16 +957,22 @@ class CaProcessor:
         self.note({"kind": "warn", "text": '시험 트레이 품목 선택은 새 화면에 없습니다\n현장 관리자에게 알리세요'})
         return None
 
-    def _enter(self, raw: str) -> None:
+    def _enter(self, raw: str) -> bool:
         """지금 시험(public_scan)과 같은 스캔 문 — 입력 칸에 넣고 process_barcode(빈 글 = 빈 Enter)."""
         entry = self.app.scan_entry
         try:
             entry.delete(0, tk.END)
+            cleared = not entry.get()
         except Exception:
-            pass
+            cleared = False
+        if not cleared:
+            self.app._mark_scan_unaccepted("스캔을 받지 못했습니다. 다시 스캔하세요.")
+            self.app._start_warning_beep()
+            return False
         if raw:
             entry.insert(0, raw)
         self.app.process_barcode()
+        return True
 
     def _invoke(self, widget_name: str) -> Dict[str, Any]:
         widget = _attr(self.app, widget_name)
