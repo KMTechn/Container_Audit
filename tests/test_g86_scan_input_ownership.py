@@ -256,8 +256,11 @@ def test_ca_bridge_refusal_then_next_scan_isolated(case):
     assert app.accepted == [SECOND]
 
 
-def test_ca_stale_callback_does_not_clear_a_new_scan():
+@pytest.mark.parametrize('residual', [False, True])
+def test_ca_stale_callback_does_not_clear_a_new_scan(residual):
     app = ca_app()
+    if residual:
+        app._reject_residual_tag = lambda raw: raw == FIRST
     app._scan_callback_epoch = 1
     app.scan_entry.insert(0, SECOND)
     app._process_barcode_if_current(FIRST, 0)
