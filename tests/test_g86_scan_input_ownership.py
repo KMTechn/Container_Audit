@@ -104,6 +104,7 @@ CA_NAMES = {'process_barcode','_process_barcode_entry','_process_barcode_if_curr
             '_scan_entry_admission_block_reason','_hold_or_refuse_entry_scan',
             '_clear_consumed_scan_entry','_set_scan_callback_pending','_refuse_entry_scan','_mark_scan_unaccepted',
             '_hold_scan_during_preflight','_invalidate_pending_scan_callbacks'}
+CA_NAMES.add("_refuse_broken_scan_entry")
 CA = methods('Container_Audit.py', CA_NAMES)
 CA_BRIDGE = methods('ca_screen_bridge.py', {'scan','_enter'}, {'ca': NS(NOTICE_SCAN_REFUSAL_TEXT='scan refused')})
 

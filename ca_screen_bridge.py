@@ -777,7 +777,7 @@ class CaProcessor:
         if self.view == "held":
             self.view = None  # 한 단계 안 화면에서 찍어도 작업 화면으로 돌아가 처리
         if self._enter(raw) is False:
-            text = "스캔을 받지 못했습니다. 다시 스캔하세요."
+            text = str(getattr(self.app, "_last_scan_unaccepted_text", "") or "스캔을 받지 못했습니다. 다시 스캔하세요.")
             return {"accepted": False, "verdict": None, "message": text, "sound": None,
                     "result": {"kind": "bad", "text": text}}
         return {"accepted": True, "verdict": None, "message": "", "sound": None, "result": None}
@@ -959,6 +959,9 @@ class CaProcessor:
 
     def _enter(self, raw: str) -> bool:
         """지금 시험(public_scan)과 같은 스캔 문 — 입력 칸에 넣고 process_barcode(빈 글 = 빈 Enter)."""
+        if self.app.__dict__.get("_scan_entry_broken", False):
+            self.app._refuse_broken_scan_entry()
+            return False
         entry = self.app.scan_entry
         try:
             entry.delete(0, tk.END)

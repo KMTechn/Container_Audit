@@ -14442,8 +14442,10 @@ class ContainerAudit:
                 and self._owns_worker_record(snapshot.to_payload())
                 and canonical_master_label_key(raw) == canonical_master_label_key(snapshot.master_raw)
                 and not self._ui_task_lane().is_busy() and not getattr(self, "_master_preflight_poll_job", None)):
-                if clear_entry_after_ack:
-                    self._clear_consumed_scan_entry(raw)
+                if clear_entry_after_ack and not self._clear_consumed_scan_entry(raw):
+                    if not self._refuse_broken_scan_entry():
+                        self._refuse_entry_scan("스캔을 받지 못했습니다. 다시 스캔하세요.")
+                    return False
                 fields = validate_compact_phs2_fields(self._parse_new_format_qr(snapshot.master_raw))
                 self._retry_offline_preflight(self._master_preflight_epoch, snapshot.master_raw,
                     fields, self._item_catalog().find_by_code(fields["CLC"]))
@@ -14456,8 +14458,10 @@ class ContainerAudit:
                     and not getattr(self, "_preflight_hold_switch_pending", False)
                     and not getattr(self, "_ui_close_requested", False)
                     and canonical_master_label_key(raw) != canonical_master_label_key(snapshot.master_raw)):
-                if clear_entry_after_ack:
-                    self._clear_consumed_scan_entry(raw)
+                if clear_entry_after_ack and not self._clear_consumed_scan_entry(raw):
+                    if not self._refuse_broken_scan_entry():
+                        self._refuse_entry_scan("스캔을 받지 못했습니다. 다시 스캔하세요.")
+                    return False
                 self._process_barcode_logic(raw, _offline_hold_switch=snapshot)
                 return bool(getattr(self, "_preflight_hold_switch_pending", False))
             # The pending label is already held; a label is never a product.
@@ -14496,6 +14500,8 @@ class ContainerAudit:
             if clear_entry_after_ack:
                 self._clear_consumed_scan_entry(raw)
                 self._set_scan_callback_pending(False)
+            if self._refuse_broken_scan_entry():
+                return
             if getattr(self, "_preflight_offline_error_code", ""):
                 self._show_preflight_offline_notice()
                 return
@@ -14512,6 +14518,8 @@ class ContainerAudit:
             if clear_entry_after_ack:
                 self._clear_consumed_scan_entry(raw)
                 self._set_scan_callback_pending(False)
+            if self._refuse_broken_scan_entry():
+                return
             if isinstance(exc, PreflightHoldFull):
                 message = "보류 한도 초과 — 이번 스캔은 접수되지 않았습니다."
             else:
@@ -15281,6 +15289,7 @@ class ContainerAudit:
             return
         disabled = bool(
             pending
+            or getattr(self, "_scan_entry_broken", False)
             or getattr(self, "_preflight_scan_input_locked", False)
             or getattr(self, "_phs_label_candidate_pending", False)
             or getattr(self, "_phs_reconciliation_resolve_pending", False)
@@ -15292,21 +15301,41 @@ class ContainerAudit:
         except (AttributeError, tk.TclError):
             pass
     
-    def _clear_consumed_scan_entry(self, raw_barcode: str) -> bool:
-        """Consume only the captured value, even while Tk input is locked."""
+    def _refuse_broken_scan_entry(self) -> bool:
+        if not getattr(self, "_scan_entry_broken", False):
+            return False
+        self._mark_scan_unaccepted("입력 칸 오류 — 프로그램을 다시 켜세요")
+        self._start_warning_beep()
+        return True
+
+    def _clear_consumed_scan_entry(self, raw_barcode: str, *, preserve_mismatch: bool = False) -> bool:
+        """Separate a refused snapshot from later input; stale owners preserve it."""
         entry = getattr(self, "scan_entry", None)
         if entry is None:
             return True
+        if getattr(self, "_scan_entry_broken", False):
+            return False
+        failed = False
         try:
-            if entry.get().strip() != raw_barcode:
+            try:
+                matches = entry.get().strip() == raw_barcode
+            except (AttributeError, tk.TclError):
+                matches, failed = False, True
+            if preserve_mismatch and not matches:
                 return False
-            # Tk ignores delete on a disabled Entry. This synchronous change
-            # runs without dispatching events, so no next scan can interleave.
-            if hasattr(entry, "configure"):
-                entry.configure(state=tk.NORMAL)
-            entry.delete(0, tk.END)
-            return True
-        except (AttributeError, tk.TclError):
+            # No event dispatch occurs between snapshot, deletion and readback.
+            # A failed attempt refuses this scan even if cleanup then succeeds.
+            for _ in range(2):
+                try:
+                    if hasattr(entry, "configure"):
+                        entry.configure(state=tk.NORMAL)
+                    entry.delete(0, tk.END)
+                    if not entry.get():
+                        return matches and not failed
+                except (AttributeError, tk.TclError):
+                    pass
+                failed = True
+            self._scan_entry_broken = True
             return False
         finally:
             self._set_scan_callback_pending(
@@ -15333,6 +15362,9 @@ class ContainerAudit:
                         self._start_warning_beep()
                     except Exception:
                         pass
+            if (getattr(self, "_scan_entry_broken", False)
+                    and getattr(self, "_last_scan_unaccepted_text", "") != "입력 칸 오류 — 프로그램을 다시 켜세요"):
+                self._refuse_broken_scan_entry()
 
     def _mark_scan_unaccepted(self, text: str) -> None:
         """One place that says "this scan was not taken"; the screen bridge reads it."""
@@ -15340,6 +15372,8 @@ class ContainerAudit:
         self.show_status_message(self._last_scan_unaccepted_text, self.COLOR_DANGER, duration=0)
 
     def _process_barcode_entry(self, event=None):
+        if getattr(self, "_scan_entry_broken", False):
+            return
         raw_barcode = self.scan_entry.get().strip()
         if getattr(self, "_startup_update_pending", False):
             self._clear_consumed_scan_entry(raw_barcode)
@@ -15437,26 +15471,28 @@ class ContainerAudit:
         if self._reject_residual_tag(raw_barcode):
             self._clear_consumed_scan_entry(raw_barcode)
             self._set_scan_callback_pending(False)
+            self._refuse_broken_scan_entry()
             return
         try:
             if scan_epoch != getattr(self, "_scan_callback_epoch", 0):
                 # The stale callback may consume only the value it still owns.
-                self._clear_consumed_scan_entry(raw_barcode)
+                self._clear_consumed_scan_entry(raw_barcode, preserve_mismatch=True)
                 return
             block_reason = self._scan_entry_admission_block_reason()
             if block_reason or getattr(self, "_scans_behind_save", None):
                 self._hold_or_refuse_entry_scan(raw_barcode, block_reason)
                 return
             if not self._clear_consumed_scan_entry(raw_barcode):
-                self.show_status_message(
-                    "스캐너 입력을 확인할 수 없어 이전 입력을 접수하지 않았습니다.",
-                    self.COLOR_DANGER,
-                    duration=0,
-                )
+                if not getattr(self, "_scan_entry_broken", False):
+                    self._mark_scan_unaccepted("스캔을 받지 못했습니다. 다시 스캔하세요.")
+                    self._start_warning_beep()
                 return
             self._process_barcode_logic(raw_barcode)
         finally:
             self._set_scan_callback_pending(False)
+            if (getattr(self, "_scan_entry_broken", False)
+                    and getattr(self, "_last_scan_unaccepted_text", "") != "입력 칸 오류 — 프로그램을 다시 켜세요"):
+                self._refuse_broken_scan_entry()
 
     def _show_field_notice(self, title, message, **options):
         if getattr(self, "_storage_failure_blocked", False):
