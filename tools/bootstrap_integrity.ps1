@@ -4088,8 +4088,8 @@ function Assert-BootstrapFailedSupportState([string]$Root,$Policy,$State,[string
             }
         }
     }
-    $leaf=Get-BootstrapSharedPortableLeaf $ActiveRoot 'data_generation.ps1'
-    . $leaf
+    $dataGenerationLeaf=Get-BootstrapSharedPortableLeaf $ActiveRoot 'data_generation.ps1'
+    . $dataGenerationLeaf
     $sid=[string]$Policy['operator_sid']
     $data=if($env:CONTAINER_AUDIT_DATA_ROOT){Get-StrictFullPath $env:CONTAINER_AUDIT_DATA_ROOT 'support data root'}else{Join-Path $local 'KMTech\ContainerAudit'}
     $markers=@((Join-Path $data 'data-generation.json'),(Join-Path $local ('KMTech\DirectSync\container_audit\control\writer-session\data-generation\'+$sid+'.json')))

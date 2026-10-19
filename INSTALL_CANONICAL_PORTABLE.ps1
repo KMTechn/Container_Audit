@@ -4940,7 +4940,9 @@ if ($rollbackContinuation) {
 }
 Assert-CanonicalOperatingWorkerAccount $canonicalOperation ([bool]$rollbackContinuation)
 # Supported FAILED preflight needs authenticated shared generation definitions.
-. (Get-BootstrapSharedPortableLeaf $PSScriptRoot 'data_generation.ps1')
+# 앞 :79–80 의 portable 적재 뒤 이 변수는 읽지 않는다 — 도출기 승인 이름($sharedLeaf)으로 공용 세대 정의를 다시 적재
+$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'data_generation.ps1'
+. $sharedLeaf
 $supportedContext=$null
 $supportedPlacement=$false
 $installedCodeRoot=$install
