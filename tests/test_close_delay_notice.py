@@ -11,7 +11,8 @@ from tk_serial_ui_lane import LaneTask
 from tests.test_scan_persistence_lane import ITEM, app, pump, rows
 
 
-NOTICE = "종료가 끝나지 않았습니다. 창을 그대로 두고 관리자에게 알리세요."
+# Approved worker copy: 02d3f3e9fa6e (Container_Audit.py:17044).
+NOTICE = '종료가 끝나지 않았습니다.\n창을 그대로 두고 현장 관리자에게 알리세요.'
 
 
 def close_clock(app, monkeypatch):

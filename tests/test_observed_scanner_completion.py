@@ -260,7 +260,8 @@ def test_future_lease_warning_waits_then_ack_retries_same_signed_lease(tmp_path,
         assert "잠시 기다린 뒤" in message
         assert "자동 재조회" in message
         assert "다시 스캔하지 마세요" in message
-        assert "IT 담당자" in message
+        # Approved worker copy: 02d3f3e9fa6e (Container_Audit.py:13462).
+        assert ' 현장 관리자에게 알리세요\n코드: IT' in message
 
     app._warning_state_presenter().present(Notice(
         code="clock-fixture", title=app.warnings[-1][0],

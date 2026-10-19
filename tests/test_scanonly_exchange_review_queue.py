@@ -221,6 +221,7 @@ def test_inline_exchange_displays_saved_pending_company_confirmation(flow, windo
         app._process_barcode_logic(value)
     _pump_until(app.root, lambda: not app._ui_task_lane().is_busy())
     messages = [str(status[0]) for status in app.statuses]
-    assert any("저장됨" in message and "회사 서버 확인 중" in message for message in messages)
+    # Approved worker copy: 02d3f3e9fa6e (Container_Audit.py:21916).
+    assert '제품 교환을 저장했습니다\n계속 스캔하세요\n자세히: 회사 서버에서 확인하는 중입니다' in messages
     assert not any("제품을 교환했습니다" in message for message in messages)
     assert windows == []

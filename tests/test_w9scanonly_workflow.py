@@ -379,7 +379,9 @@ def test_short_completion_has_explicit_shortage_notice(flow, windows, scan_clock
     text = " ".join(str(args) for args in app.statuses)
     if notice is not None:
         text += f" {notice.title} {notice.message}"
-    assert "부족 2개로 확정" in text, "short completion must show the shortage, distinct from full completion"
+    text += "".join(str(part) for warning in app.warnings for part in warning[:2])
+    # Approved partial-submission question: 6d60e16 (_request_partial_submission).
+    assert '3개 중 1개(2개 부족)\n현품표 한 번 더·Enter = 부분 제출 / 제품 스캔·Esc = 계속 작업' in text
     assert windows == []
 
 

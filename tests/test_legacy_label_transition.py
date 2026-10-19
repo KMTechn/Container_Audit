@@ -322,7 +322,8 @@ def test_off_rejects_a_13_digit_label_at_tray_start_before_any_product_scan(flow
     assert app.current_tray.master_label_code == ""
     assert app.current_tray.scanned_barcodes == []
     assert app.warnings[0][0] == LEGACY_REJECTION_TITLE
-    assert "새 시스템 이전 방식입니다. 관리자에게 알려 주세요" in app.warnings[0][1]
+    # Approved worker copy: 02d3f3e9fa6e (Container_Audit.py:2776).
+    assert '옛 현품표를 받을 수 없습니다\n현장 관리자에게 알리세요\n코드: PHS=2' in app.warnings[0][1]
     # The next scan is read as a label again, never as a product of that tray.
     assert app.warnings[1][0] == "작업 시작 오류"
     assert _rows(app) == []
@@ -1142,7 +1143,8 @@ def test_on_phs2_label_the_central_check_blocks_becomes_a_local_tray_with_its_he
     assert app.current_tray.master_label_code == COMPACT_QR
     assert app.current_tray.operation_lease_id == ""
     assert app.current_tray.transition_reasons == [reason]
-    assert any(f"중앙 확인 실패({reason})" in status[0] for status in app.statuses)
+    # Approved worker copy: 02d3f3e9fa6e (Container_Audit.py:13419).
+    assert any(status[0] == f'현품표를 확인하지 못했습니다\n자세히: {reason} · 과도기 작업(새 기록 제외)' for status in app.statuses)
     _submit(app, monkeypatch)
 
     [row] = _rows(app, "TRAY_COMPLETE")

@@ -12,7 +12,8 @@ from tests.test_print_submission_budget import (
 )
 
 
-BUSY_NOTICE = '이전 인쇄가 아직 프린터 대기열에 있습니다 — 프린터 대기열을 확인한 뒤 다시 누르세요'
+# Approved worker copy: 02d3f3e9fa6e (phs_label_workflow.py:371).
+BUSY_NOTICE = '이전 인쇄가 아직 프린터 대기열에 있습니다\n프린터 대기열을 확인한 뒤 다시 누르세요'
 
 
 def setup_ui(app, root, monkeypatch, reconciliation, *, confirmed=False):
