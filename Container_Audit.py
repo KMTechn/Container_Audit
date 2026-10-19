@@ -15469,7 +15469,9 @@ class ContainerAudit:
     def _process_barcode_if_current(self, raw_barcode: str, scan_epoch: int) -> None:
         self._scan_callback_pending = False
         if self._reject_residual_tag(raw_barcode):
-            self._clear_consumed_scan_entry(raw_barcode)
+            self._clear_consumed_scan_entry(
+                raw_barcode, preserve_mismatch=scan_epoch != getattr(self, "_scan_callback_epoch", 0)
+            )
             self._set_scan_callback_pending(False)
             self._refuse_broken_scan_entry()
             return
