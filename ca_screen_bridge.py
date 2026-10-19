@@ -662,6 +662,7 @@ class CaProcessor:
         self._credentials: Optional[Tuple[str, str]] = None
         self._preflight_restore: Optional[Dict[str, Any]] = None
         self._restore_preflight_handler: Any = None
+        self._restore_discard_confirmation: Any = None
         self._admin_notes: Optional[List[Dict[str, Any]]] = None
         self._fingerprint = ""
         self._registration_name: Optional[str] = None
@@ -685,6 +686,10 @@ class CaProcessor:
 
         ca.play_sound = play_sound  # type: ignore[assignment]
         app._prompt_blocked_work_admin_pin = self._take_credentials
+        discard_confirmation = _attr(app, "_confirm_saved_tray_discard")
+        if callable(discard_confirmation):
+            self._restore_discard_confirmation = discard_confirmation
+            app._confirm_saved_tray_discard = self.dialogs.askyesno
         restore = _attr(app, "restore_quarantined_preflight_hold")
         if callable(restore):
             self._restore_preflight_handler = restore
@@ -699,6 +704,9 @@ class CaProcessor:
         self._watch_job = app.root.after(WATCH_MS, self._watch)
 
     def shutdown(self) -> None:
+        if self._restore_discard_confirmation is not None:
+            self.app._confirm_saved_tray_discard = self._restore_discard_confirmation
+            self._restore_discard_confirmation = None
         if self._restore_preflight_handler is not None:
             self.app.restore_quarantined_preflight_hold = self._restore_preflight_handler
             self._restore_preflight_handler = None

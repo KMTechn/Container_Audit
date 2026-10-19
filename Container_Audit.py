@@ -5084,6 +5084,57 @@ class ContainerAudit:
             state[OPERATOR_REVIEW_STATE_KEY] = operator_review
         return state
 
+    def _confirm_saved_tray_discard(self, title, message):
+        """G74: only the affirmative button's mouse release can discard saved work."""
+        accepted = False
+        dialog = None
+        try:
+            dialog = tk.Toplevel(self.root)
+            dialog.title(title)
+            dialog.transient(self.root)
+            dialog.resizable(False, False)
+
+            def finish(value=False):
+                nonlocal accepted
+                accepted = value
+                dialog.destroy()
+                return "break"
+
+            tk.Label(dialog, text=message, wraplength=520, justify=tk.LEFT).pack(
+                padx=20, pady=(20, 10))
+            tk.Label(
+                dialog,
+                text="지우려면 마우스로 「예」 를 누르세요 · 스캔·Enter 는 아니오로 처리됩니다",
+                wraplength=520, justify=tk.LEFT,
+            ).pack(padx=20, pady=(0, 16))
+            buttons = tk.Frame(dialog)
+            buttons.pack(padx=20, pady=(0, 20))
+            no = tk.Button(buttons, text="아니오(지우지 않음)", default=tk.ACTIVE,
+                           command=finish)
+            no.pack(side=tk.LEFT, padx=6)
+            yes = tk.Button(buttons, text="예, 영구 삭제", takefocus=0,
+                            default=tk.DISABLED, underline=-1)
+            yes.pack(side=tk.LEFT, padx=6)
+            yes.bind("<ButtonRelease-1>", lambda _event: finish(True))
+            yes.bind("<KeyPress>", lambda _event: "break")
+            for key in ("<Return>", "<KP_Enter>", "<Escape>"):
+                dialog.bind(key, lambda _event: finish())
+                yes.bind(key, lambda _event: finish())
+            dialog.protocol("WM_DELETE_WINDOW", finish)
+            dialog.wait_visibility()
+            dialog.grab_set()
+            no.focus_set()
+            dialog.wait_window()
+        except Exception:
+            return False
+        finally:
+            if dialog is not None:
+                try:
+                    dialog.destroy()
+                except Exception:
+                    pass
+        return accepted
+
     def _load_current_tray_state(self, *, _recovery_choice="pending"):
         self._resume_storage_failure_slots()
         if getattr(self, "_storage_failure_blocked", False):
@@ -5360,7 +5411,7 @@ class ContainerAudit:
                         self.current_tray = TraySession()
                         self.show_worker_input_screen()
                         return
-                    if messagebox.askyesno("작업 삭제", "이전 작업을 영구적으로 삭제하시겠습니까?\n(이 작업은 복구할 수 없습니다.)"):
+                    if self._confirm_saved_tray_discard("작업 삭제", "이전 작업을 영구적으로 삭제하시겠습니까?\n(이 작업은 복구할 수 없습니다.)"):
                         if not self._log_saved_tray_discarded(
                             saved_state,
                             reason='restore_takeover_declined_delete_confirmed',

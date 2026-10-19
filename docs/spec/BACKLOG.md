@@ -1,3 +1,4 @@
+- w9firstupd / G74 보호 P2·기준일: 이전 작업 영구 삭제 질문을 Tk 마우스 승인 전용으로 바꾸고 기본·Enter·취소·실패는 아니오로 고정했다. 새 화면은 기존 물음 판과 스캔 거절을 유지한다. 일곱 경로 RED→GREEN 및 승인 뒤 처리 바이트 보존은 sub-345 결과에 남긴다. 실제 창·현장 스캐너는 별도 확인이다.
 - w9firstupd / G63·G64 P3: 제품 고침 0. 주인이 멈춘 뒤 우리 코드가 그 폴더 앞뒤를 대는 SQLite 읽기 자리는 0 이고, active_work_probe 는 앱·키트 흐름에서 부름 0 이다. 규칙은 contracts.md 「CA-C01」 끝 두 문단.
 
 10/18 sub-314 P3-1→P2·P3-4: 미증명 새 배치 제거 표지는 worker_removal_proof=null·WORKER_PART 행 없음으로 남긴다. writer 거절 모듈에 NullHandler를 붙여 logging 미설정 stderr 줄을 막는다. 기존 거절 감사에는 예외 이름을 담을 칸이 없어 새 칸을 만들지 않는다.
