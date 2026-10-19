@@ -639,7 +639,7 @@ def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit
                 continue
             if not value:
                 continue
-            if len(value) < 4:
+            if _is_short_secret_value(value):
                 notes.append(policy["short_marker"].format(name=name))
             else:
                 selected.append((name, value))
@@ -745,16 +745,25 @@ def redact_json_for_sink(value, environ: Mapping[str, str] = os.environ):
 
 
 
+def _is_short_secret_value(value) -> bool:
+    """One shared boundary: the diagnostic redactor and the metadata check skip these."""
+    return len(value) < 4
+
+
 def assert_machine_metadata_no_secrets(text: str, environ=None) -> None:
-    """Reject known secret bytes before any metadata file or temp is opened."""
+    """Reject known secret bytes before any metadata file or temp is opened.
+
+    Only the supplied environment is inspected; omitting it means an empty one.
+    Callers pass the environment they write for (the process one when there is none).
+    """
     policy = _sink_policy()
-    environment = os.environ if environ is None else environ
+    environment = {} if environ is None else environ
     for name, value in environment.items():
         explicit = name in policy["environment_names"]
         if not explicit and (not re.search(policy["sensitive_pattern"], name)
                              or re.search(policy["path_pattern"], name)):
             continue
-        if not value:
+        if not value or _is_short_secret_value(value):
             continue
         if (not explicit and ((re.search(policy["identifier_name_pattern"], name)
                                and re.fullmatch(policy["identifier_value_pattern"], value))
@@ -768,9 +777,9 @@ def assert_machine_metadata_no_secrets(text: str, environ=None) -> None:
             raise ValueError("MACHINE_METADATA_SECRET_DETECTED")
 
 
-def serialize_machine_metadata(payload: Mapping[str, Any]) -> str:
+def serialize_machine_metadata(payload: Mapping[str, Any], environ: Mapping[str, str] | None = None) -> str:
     text = json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2)
-    assert_machine_metadata_no_secrets(text)
+    assert_machine_metadata_no_secrets(text, environ=os.environ if environ is None else environ)
     return text
 
 

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'tools/bootstrap_integrity.ps1'
 FUNCTIONS = [
     'Get-StrictFullPath', 'Get-FileSha256', 'Assert-BootstrapNoReparsePoint',
-    'Protect-InstallationText', 'ConvertTo-KmtechRedactedSinkText', 'Get-InstallationFailureDetails',
+    'Test-InstallationShortSecretValue', 'Protect-InstallationText', 'ConvertTo-KmtechRedactedSinkText', 'Get-InstallationFailureDetails',
     'Set-InstallationEvidenceAcl', 'Initialize-InstallationEvidence',
     'Test-InstallationEvidencePrivileged', 'Assert-InstallationEvidenceWriteRoot',
     'Write-InstallationEvidenceEvent', 'Set-InstallationEvidenceStage',

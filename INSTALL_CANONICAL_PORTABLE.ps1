@@ -1319,7 +1319,7 @@ function ConvertTo-CanonicalAuditJson($Value,[switch]$PrivateDiagnostics) {
             try{Write-InstallationEvidenceEvent @{event='CANONICAL_DIAGNOSTIC_REPORT';diagnostics=$diagnostics.ToArray()}}catch{}
         }
         $json=($copy|ConvertTo-Json -Depth 40 -Compress)+"`n"
-        Assert-InstallationMachineMetadataNoSecrets $json
+        Assert-InstallationMachineMetadataNoSecrets $json -Environment ([Environment]::GetEnvironmentVariables('Process'))
         return $json
     }
     # Redact a valid in-memory envelope first. Budget diagnostic strings before
@@ -1402,7 +1402,7 @@ function New-CanonicalWriterFencePreparedReceipt(
     }
     New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
     $json = ($payload | ConvertTo-Json -Depth 8) + "`n"
-    Assert-InstallationMachineMetadataNoSecrets $json
+    Assert-InstallationMachineMetadataNoSecrets $json -Environment ([Environment]::GetEnvironmentVariables('Process'))
     $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($json)
     $stream = New-Object IO.FileStream($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
     try {
@@ -3166,7 +3166,7 @@ function Get-CanonicalOfficialLegacyRelayAdmission([string]$ReportPath='') {
 function Save-CanonicalOfficialLegacyRelayPreimage($Before,[string]$Root) {
     Assert-InstallationEvidenceWriteRoot $Root
     # A task preimage may contain author/SID for restoration, never an env secret.
-    Assert-InstallationMachineMetadataNoSecrets $Before.xml
+    Assert-InstallationMachineMetadataNoSecrets $Before.xml -Environment ([Environment]::GetEnvironmentVariables('Process'))
     $path=Join-Path $Root 'official-v2.0.33-relay-preimage.xml'
     if(Test-Path -LiteralPath $path){throw 'OFFICIAL_LEGACY_PREIMAGE_ALREADY_EXISTS'}
     [IO.File]::WriteAllText($path,$Before.xml,[Text.UTF8Encoding]::new($false))
@@ -3175,7 +3175,7 @@ function Save-CanonicalOfficialLegacyRelayPreimage($Before,[string]$Root) {
     $recordPath=Join-Path $Root 'official-v2.0.33-relay-preimage.json'
     if(Test-Path -LiteralPath $recordPath){throw 'OFFICIAL_LEGACY_PREIMAGE_ALREADY_EXISTS'}
     $recordJson=$record|ConvertTo-Json -Depth 8 -Compress
-    Assert-InstallationMachineMetadataNoSecrets $recordJson
+    Assert-InstallationMachineMetadataNoSecrets $recordJson -Environment ([Environment]::GetEnvironmentVariables('Process'))
     [IO.File]::WriteAllText($recordPath,$recordJson,[Text.UTF8Encoding]::new($false))
     Set-InstallationEvidenceAcl $recordPath $operatorSid
     return [pscustomobject]@{path=$recordPath;sha256=(Sha $recordPath);identity=$Before.identity;xml_sha256=[string]$record.xml_sha256}
@@ -3268,7 +3268,7 @@ function Save-CanonicalOfficialLegacyRelayTransitionPointer($Binding,[switch]$Re
         identity_sha256=$proof.identity_sha256;install_root=$install;operator_sid=$operatorSid}
     $report|Add-Member -MemberType NoteProperty -Name official_legacy_relay_transition -Value $pointer -Force
     $text=$report|ConvertTo-Json -Depth 20 -Compress
-    Assert-InstallationMachineMetadataNoSecrets $text
+    Assert-InstallationMachineMetadataNoSecrets $text -Environment ([Environment]::GetEnvironmentVariables('Process'))
     [void]($text|ConvertFrom-ContainerWriterFenceJson)
     $temporary=$onboardingPath+'.tmp.'+[Guid]::NewGuid().ToString('N')
     $bytes=[Text.UTF8Encoding]::new($false).GetBytes($text+"`n")

@@ -952,7 +952,7 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     from auto_update import assert_machine_metadata_no_secrets, mixed_status_record
     payload = mixed_status_record(payload)
     encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    assert_machine_metadata_no_secrets(encoded)
+    assert_machine_metadata_no_secrets(encoded, environ=os.environ)
     ensure_user_runtime_directory(path.parent)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
@@ -973,7 +973,7 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
 def _prepare_status_temp(path: Path, payload: Mapping[str, Any]) -> Path:
     from auto_update import assert_machine_metadata_no_secrets, mixed_status_record
     encoded = json.dumps(mixed_status_record(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    assert_machine_metadata_no_secrets(encoded)
+    assert_machine_metadata_no_secrets(encoded, environ=os.environ)
     ensure_user_runtime_directory(path.parent)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:

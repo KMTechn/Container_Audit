@@ -120,7 +120,7 @@ def test_shared_powershell_vectors(tmp_path, engine, vector):
     # Inputs are private synthetic files so large vectors never become argv/env.
     path = tmp_path / "vector.json"
     path.write_text(json.dumps({"text": _text(vector), "environment": vector["environ"]}), encoding="utf-8")
-    result = run_functions(tmp_path, ROOT / "tools/bootstrap_integrity.ps1", ["Protect-InstallationText", "ConvertTo-KmtechRedactedSinkText"], r'''
+    result = run_functions(tmp_path, ROOT / "tools/bootstrap_integrity.ps1", ["Test-InstallationShortSecretValue", "Protect-InstallationText", "ConvertTo-KmtechRedactedSinkText"], r'''
 $vector=Get-Content -LiteralPath $env:CA_VECTOR_PATH -Raw -Encoding UTF8|ConvertFrom-Json
 $environment=@{}
 foreach($property in $vector.environment.PSObject.Properties){$environment[$property.Name]=$property.Value}
@@ -133,7 +133,7 @@ Protect-InstallationText $vector.text -1 -Environment $environment -CommonOnly
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 def test_utf8_head_tail_budget_preserves_last_exception(engine, tmp_path):
-    result = run_functions(tmp_path, ROOT / "tools/bootstrap_integrity.ps1", ["Protect-InstallationText", "ConvertTo-KmtechRedactedSinkText"], r'''
+    result = run_functions(tmp_path, ROOT / "tools/bootstrap_integrity.ps1", ["Test-InstallationShortSecretValue", "Protect-InstallationText", "ConvertTo-KmtechRedactedSinkText"], r'''
 $text='HEAD-'+('가나다'*40000)+' ValueError: last synthetic exception'
 $safe=Protect-InstallationText $text -1 -Environment @{} -CommonOnly
 if([Text.Encoding]::UTF8.GetByteCount($safe) -gt 65536 -or -not $safe.StartsWith('HEAD-') -or -not $safe.EndsWith('ValueError: last synthetic exception')){throw 'UTF8 head/tail bound differs.'}
@@ -169,13 +169,13 @@ def test_process_identifier_powershell_machine_metadata_follows_shared_contract(
     path = tmp_path / 'process-vector.json'
     path.write_text(json.dumps({'environment': environment, 'allowed': vector['id'].endswith('-kept')}), encoding='utf-8')
     result = run_functions(tmp_path, ROOT / 'tools/bootstrap_integrity.ps1',
-        ['Protect-InstallationText', 'Assert-InstallationMachineMetadataNoSecrets'], r'''
+        ['Test-InstallationShortSecretValue', 'Protect-InstallationText', 'Assert-InstallationMachineMetadataNoSecrets'], r'''
 $vector=Get-Content -LiteralPath $env:CA_VECTOR_PATH -Raw -Encoding UTF8|ConvertFrom-Json
 foreach($p in $vector.environment.PSObject.Properties){[Environment]::SetEnvironmentVariable($p.Name,[string]$p.Value,'Process')}
 foreach($p in $vector.environment.PSObject.Properties){
     $text=@{process_identity=[string]$p.Value}|ConvertTo-Json -Compress
     $rejected=$false
-    try{Assert-InstallationMachineMetadataNoSecrets $text}catch{$rejected=$true}
+    try{Assert-InstallationMachineMetadataNoSecrets $text -Environment ([Environment]::GetEnvironmentVariables('Process'))}catch{$rejected=$true}
     if($rejected -eq $vector.allowed){throw 'process identifier metadata policy differs'}
 }
 'PASS'

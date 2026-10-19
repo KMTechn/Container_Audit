@@ -23,7 +23,7 @@ def _write_packet(root, source_root, build="a" * 40):
     literal = str(root).replace("'", "''")
     result = run_functions(root.parent, source_root / "tools/bootstrap_integrity.ps1", [
         "Get-StrictFullPath", "Get-RelativeCodePath", "Get-FileSha256", "Get-CodeInventory",
-        "Get-InventoryAggregate", "Protect-InstallationText",
+        "Get-InventoryAggregate", "Test-InstallationShortSecretValue", "Protect-InstallationText",
         "Assert-InstallationMachineMetadataNoSecrets", "Write-Utf8Json", "Write-BootstrapIntegrityRecord", "Invoke-ContainerAtomicReplaceOnce", "Invoke-ContainerAtomicReplace"], f"""
 $BootstrapIntegritySchema='container-audit-bootstrap-integrity-v1'
 $BootstrapIntegrityFileName='bootstrap-integrity.json'

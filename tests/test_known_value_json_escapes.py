@@ -142,7 +142,7 @@ def test_powershell_text_and_published_bytes(tmp_path, engine):
     inputs = tmp_path / 'synthetic.json'
     inputs.write_text(json.dumps([{'value': value, 'text': text} for value, text in cases()]), encoding='utf-8')
     # Import only top-level function ASTs; installer entrypoints never execute.
-    result = run_functions(tmp_path, ROOT / 'tools/bootstrap_integrity.ps1', ['Protect-InstallationText'], r'''
+    result = run_functions(tmp_path, ROOT / 'tools/bootstrap_integrity.ps1', ['Test-InstallationShortSecretValue', 'Protect-InstallationText'], r'''
 $parseErrors=$null
 $tree=[Management.Automation.Language.Parser]::ParseFile($env:ESC_SOURCE,[ref]$null,[ref]$parseErrors)
 if($parseErrors.Count){throw 'PROBE_SOURCE_PARSE_FAILED'}
@@ -220,7 +220,7 @@ def test_python_consumer_cap_refuses_known_value():
 
 @pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
 def test_powershell_consumer_final_text_refuses_known_value(tmp_path, engine):
-    result = run_functions(tmp_path, ROOT / 'tools/bootstrap_integrity.ps1', ['Protect-InstallationText'], r'''
+    result = run_functions(tmp_path, ROOT / 'tools/bootstrap_integrity.ps1', ['Test-InstallationShortSecretValue', 'Protect-InstallationText'], r'''
 $tree=[Management.Automation.Language.Parser]::ParseFile($env:ESC_SOURCE,[ref]$null,[ref]$null)
 foreach($node in $tree.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){
  $parent=$node.Parent;$nested=$false

@@ -94,7 +94,7 @@ def signed_packet(tmp_path, monkeypatch, signed_proof):
         literal = str(packet).replace("'", "''")
         result = run_functions(tmp_path, source / "tools/bootstrap_integrity.ps1", [
             "Get-StrictFullPath", "Get-RelativeCodePath", "Get-FileSha256", "Get-CodeInventory",
-            "Get-InventoryAggregate", "Protect-InstallationText",
+            "Get-InventoryAggregate", "Test-InstallationShortSecretValue", "Protect-InstallationText",
             "Assert-InstallationMachineMetadataNoSecrets", "Write-Utf8Json",
             "Write-BootstrapIntegrityRecord", "Invoke-ContainerAtomicReplaceOnce", "Invoke-ContainerAtomicReplace"], f"""
 $BootstrapIntegritySchema='container-audit-bootstrap-integrity-v1'
@@ -188,7 +188,7 @@ def test_python_packet_generation_identity(tmp_path, monkeypatch):
     literal = str(packet).replace("'", "''")
     result = run_functions(tmp_path, source_root / "tools/bootstrap_integrity.ps1",
         ["Get-StrictFullPath", "Get-RelativeCodePath", "Get-FileSha256", "Get-CodeInventory",
-         "Get-InventoryAggregate", "Protect-InstallationText",
+         "Get-InventoryAggregate", "Test-InstallationShortSecretValue", "Protect-InstallationText",
          "Assert-InstallationMachineMetadataNoSecrets", "Write-Utf8Json",
          "Write-BootstrapIntegrityRecord", "Invoke-ContainerAtomicReplaceOnce", "Invoke-ContainerAtomicReplace"], f"""
 $BootstrapIntegritySchema='container-audit-bootstrap-integrity-v1'
@@ -468,7 +468,7 @@ def test_real_feed_floor_builder_integrity_and_runtime(tmp_path, metadata_build,
     literal = str(output).replace("'", "''")
     result = run_functions(tmp_path, Path(onboarding.__file__).resolve().parent / "tools/bootstrap_integrity.ps1", [
         "Get-StrictFullPath", "Get-RelativeCodePath", "Get-FileSha256", "Get-CodeInventory",
-        "Get-InventoryAggregate", "Protect-InstallationText", "Assert-InstallationMachineMetadataNoSecrets",
+        "Get-InventoryAggregate", "Test-InstallationShortSecretValue", "Protect-InstallationText", "Assert-InstallationMachineMetadataNoSecrets",
         "Invoke-ContainerAtomicReplaceOnce", "Invoke-ContainerAtomicReplace",
         "Write-Utf8Json", "Write-BootstrapIntegrityRecord"], f"""
 $BootstrapIntegritySchema='container-audit-bootstrap-integrity-v1'

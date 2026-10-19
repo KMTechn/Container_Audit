@@ -590,6 +590,11 @@ function Test-BootstrapPrivilegedOwnerSid([string]$Sid) {
     )
 }
 
+function Test-InstallationShortSecretValue([string]$Value) {
+    # One shared boundary: the diagnostic redactor and the machine metadata check skip these.
+    return $Value.Length -lt 4
+}
+
 function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Configuration, [switch]$LiteralOnly, [Collections.IDictionary]$Environment, [switch]$CommonOnly, [switch]$NoTruncate, [switch]$KnownOnly) {
     $policy=@{environment_names=@('DEFECT_FINAL_DEFECT_CLAIM_TOKEN','DEFECT_FINAL_DEFECT_INTAKE_CLAIM_TOKEN','DEFECT_LINKED_MANIFEST_LOCK_API_TOKEN','DEFECT_LOGISTICS_API_TOKEN','DEFECT_RETURN_MANIFEST_API_TOKEN','DEFECT_SERVER_ACTIVE_LOCK_TOKEN','DEFECT_TRANSFER_MANIFEST_API_TOKEN','INSPECTION_WORKER_WAREHOUSE_RESPONSE_EXPORT_TOKEN','KMTECH_DEFECT_WRITER_DELEGATION_TOKEN','KMTECH_REWORK_TEMP_NG_CANDIDATE_TOKEN','KMTECH_REWORK_TEMP_NG_CLAIM_TOKEN','REWORK_ENROLLMENT_RESTORE_TOKEN','REWORK_LOGISTICS_API_TOKEN','CONTAINER_AUDIT_ENROLLMENT_TOKEN','CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','CONTAINER_RUNTIME_SECRET','KM_LOGISTICS_INSTALL_BEARER_TOKEN','WORKER_ANALYSIS_LOGISTICS_API_TOKEN','KMTECH_LABEL_WRITER_DELEGATION_TOKEN','PRODUCER_SELF_ENROLL_TOKEN','DIRECT_SYNC_AUTH_TOKEN','PRODUCER_API_TOKEN','LOGISTICS_API_TOKEN');sensitive_pattern='(?i)(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_?KEY|API_?KEY|COOKIE|SESSION_?KEY|DELEGATION|BEARER|ENROLLMENT_CODE|RESTORE_CODE|ADMIN_PIN)';path_pattern='(?i)_(FILE|PATH|DIR|ROOT)$';digest_pattern='(?i)_(sha256s?|fingerprint|hash)$';short_digest_pattern='(?i)(pin|otp|password)';identifier_name_pattern='(?i)_(TRANSACTION|SESSION|ATTEMPT)_ID\z';identifier_value_pattern='^(?:[0-9A-Fa-f]{32}|[0-9A-Fa-f]{64}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\z';env_marker='[REDACTED:{0}]';field_marker='[REDACTED:field]';short_marker='[REDACTION_NOTE:short_value_skipped:{0}]';full_byte_cap=65536;head_byte_cap=8192;truncation_marker="`n[TRUNCATED: {0} bytes omitted]`n"}
     $policy.process_identifier_patterns=@{
@@ -609,16 +614,16 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
                 if($name -match $pattern -and $value -cmatch $policy.process_identifier_patterns[$pattern]){$identifier=$true;break}
             }
             if($name -cnotin $policy.environment_names -and $identifier){continue}
-            if($value.Length -lt 4){$notes+=($policy.short_marker -f $name);continue}
+            if(Test-InstallationShortSecretValue $value){$notes+=($policy.short_marker -f $name);continue}
             $values+=,@{name=[string]$name;value=$value}
         }
     }
     # Explicit secret arguments can be supplied before their process env exists.
     $known=Get-Variable -Name InstallationEvidenceSensitiveValues -Scope Script -ErrorAction SilentlyContinue
-    if($null -ne $known){foreach($value in $known.Value){if($value -is [string] -and $value.Length -ge 4){$values+=,@{name='field';value=$value}}}}
+    if($null -ne $known){foreach($value in $known.Value){if($value -is [string] -and -not (Test-InstallationShortSecretValue $value)){$values+=,@{name='field';value=$value}}}}
     foreach($name in @('CanonicalWriterFenceDelegationToken','WriterFenceDelegationToken')){
         $value=Get-Variable -Name $name -ValueOnly -ErrorAction SilentlyContinue
-        if($value -is [string] -and $value.Length -ge 4){$values+=,@{name='CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN';value=$value}}
+        if($value -is [string] -and -not (Test-InstallationShortSecretValue $value)){$values+=,@{name='CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN';value=$value}}
     }
     foreach($entry in @($values|Sort-Object @{Expression={$_.value.Length};Descending=$true},@{Expression={$_.name}})){
         $marker=$policy.env_marker -f $entry.name
@@ -2157,7 +2162,7 @@ function Invoke-InstallationTransactionCoordinator($Configuration) {
         $handoverRecord|Add-Member -NotePropertyName helper_started_at_utc -NotePropertyValue (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
         $handoverRecord|Add-Member -NotePropertyName helper_command_sha256 -NotePropertyValue (Get-BootstrapStringSha256 ([string]$ownProcess.CommandLine))
         $handoverText=$handoverRecord|ConvertTo-Json -Depth 40 -Compress
-        Assert-InstallationMachineMetadataNoSecrets $handoverText
+        Assert-InstallationMachineMetadataNoSecrets $handoverText -Environment ([Environment]::GetEnvironmentVariables('Process'))
         $handover=[Text.UTF8Encoding]::new($false).GetBytes($handoverText)
         Write-InstallationTransactionFile (Join-Path $Script:InstallationProtectedRunRoot 'handover.json') $handover ([string]$Configuration.operator_sid)
         Publish-InstallationTransactionResponse $Configuration 'authority-ready' 'AUTHORITY_READY' @{
@@ -3068,17 +3073,19 @@ function Get-InventoryAggregate([object[]]$Inventory) {
     }
 }
 
-function Assert-InstallationMachineMetadataNoSecrets([string]$Json) {
+function Assert-InstallationMachineMetadataNoSecrets([string]$Json, [Collections.IDictionary]$Environment = $null) {
     # Authentication documents preserve their exact bytes. Reject secret
     # content before opening even a temporary file; diagnostics use the sink
     # redactor instead. The selection policy remains one common constant.
+    # Only the supplied environment is inspected: omitting it means an empty
+    # one, so every caller passes the environment it writes for.
     $policy=Protect-InstallationText -Configuration
-    $environment=[Environment]::GetEnvironmentVariables('Process')
+    if($null -eq $Environment){$Environment=@{}}
     $selected=[Collections.Generic.List[string]]::new()
-    foreach($name in $environment.Keys){
+    foreach($name in $Environment.Keys){
         $explicit=$name -cin $policy.environment_names
         if(-not $explicit -and ($name -notmatch $policy.sensitive_pattern -or $name -match $policy.path_pattern)){continue}
-        $value=[string]$environment[$name]
+        $value=[string]$Environment[$name]
         if(-not $value){continue}
         $identifier=$name -match $policy.identifier_name_pattern -and $value -cmatch $policy.identifier_value_pattern
         foreach($pattern in $policy.process_identifier_patterns.Keys){
@@ -3094,8 +3101,12 @@ function Assert-InstallationMachineMetadataNoSecrets([string]$Json) {
         if($value -is [string] -and $value){$selected.Add($value)}
     }
     foreach($value in $selected){
+        if(Test-InstallationShortSecretValue $value){continue}
         $quoted=ConvertTo-Json -InputObject $value -Compress
-        $variants=@($value,$quoted.Substring(1,$quoted.Length-2),$value.Replace("'","''"),$value.Replace('"','""'))
+        $jsonVariant=$quoted.Substring(1,$quoted.Length-2)
+        # JSON written with ASCII-only escapes spells non-ASCII characters as \uXXXX.
+        $asciiVariant=[regex]::Replace($jsonVariant,'[^\x00-\x7F]',[Text.RegularExpressions.MatchEvaluator]{param($m) '\u'+([int][char]$m.Value).ToString('x4')})
+        $variants=@($value,$jsonVariant,$asciiVariant,$value.Replace("'","''"),$value.Replace('"','""'))
         foreach($variant in $variants){
             if($Json.Contains($variant)){throw 'BOOTSTRAP_MACHINE_METADATA_SECRET_DETECTED'}
         }
@@ -3104,7 +3115,7 @@ function Assert-InstallationMachineMetadataNoSecrets([string]$Json) {
 function Write-Utf8Json([string]$Path, $Payload) {
     $temporary = "$Path.tmp.$PID"
     $json = (($Payload | ConvertTo-Json -Depth 40).Replace("`r`n","`n")) + "`n"
-    Assert-InstallationMachineMetadataNoSecrets $json
+    Assert-InstallationMachineMetadataNoSecrets $json -Environment ([Environment]::GetEnvironmentVariables('Process'))
     [IO.File]::WriteAllText($temporary, $json, (New-Object Text.UTF8Encoding($false)))
     Invoke-ContainerAtomicReplace $temporary $Path -Mode WriteThrough
 }

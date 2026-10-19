@@ -436,7 +436,7 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any], *,
     from atomic_replace import atomic_replace
     from auto_update import assert_machine_metadata_no_secrets
     safe_text = json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2)
-    assert_machine_metadata_no_secrets(safe_text, environ=environ)
+    assert_machine_metadata_no_secrets(safe_text, environ=os.environ if environ is None else environ)
     ensure_user_runtime_directory(path.parent)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
@@ -458,7 +458,7 @@ def _write_json_atomic_create_new(path: Path, payload: Mapping[str, Any], *,
 
     from auto_update import assert_machine_metadata_no_secrets
     safe_text = json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2)
-    assert_machine_metadata_no_secrets(safe_text, environ=environ)
+    assert_machine_metadata_no_secrets(safe_text, environ=os.environ if environ is None else environ)
     ensure_user_runtime_directory(path.parent)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:

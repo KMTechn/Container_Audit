@@ -36,7 +36,7 @@ def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any])
     from atomic_replace import atomic_replace
     from auto_update import assert_machine_metadata_no_secrets
     encoded = json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    assert_machine_metadata_no_secrets(encoded)
+    assert_machine_metadata_no_secrets(encoded, environ=os.environ)
     target = Path(path)
     ensure_user_runtime_directory(target.parent)
     temp_path = target.with_name(f"{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")

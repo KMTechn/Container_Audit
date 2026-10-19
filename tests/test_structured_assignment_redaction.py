@@ -143,7 +143,7 @@ def test_powershell_structured_value_is_removed_as_a_whole(tmp_path, engine, sha
     payload = tmp_path / 'input.json'
     payload.write_text(json.dumps({'text': text, 'fragments': fragments}), encoding='utf-8')
     result = run_functions(tmp_path, Path(__file__).resolve().parents[1] / 'tools/bootstrap_integrity.ps1',
-                           ['Protect-InstallationText', 'ConvertTo-KmtechRedactedSinkText'], r'''
+                           ['Test-InstallationShortSecretValue', 'Protect-InstallationText', 'ConvertTo-KmtechRedactedSinkText'], r'''
 $sample=Get-Content -LiteralPath $env:CA_STRUCTURED_INPUT -Raw -Encoding UTF8|ConvertFrom-Json
 $outputs=@{common=(Protect-InstallationText $sample.text -1 -Environment @{} -CommonOnly);
  public=(ConvertTo-KmtechRedactedSinkText $sample.text -UserLine);
@@ -185,7 +185,7 @@ def test_shared_powershell_structured_sinks(tmp_path, engine, vector):
     payload = tmp_path / 'input.json'
     payload.write_text(json.dumps({'text': vector['text'], 'fragments': fragments}), encoding='utf-8')
     result = run_functions(tmp_path, Path(__file__).resolve().parents[1] / 'tools/bootstrap_integrity.ps1',
-                           ['Protect-InstallationText', 'ConvertTo-KmtechRedactedSinkText', 'Get-InstallationFailureDetails'], r'''
+                           ['Test-InstallationShortSecretValue', 'Protect-InstallationText', 'ConvertTo-KmtechRedactedSinkText', 'Get-InstallationFailureDetails'], r'''
 $sample=Get-Content -LiteralPath $env:CA_STRUCTURED_INPUT -Raw -Encoding UTF8|ConvertFrom-Json
 $outputs=@{common=(Protect-InstallationText $sample.text -1 -Environment @{} -CommonOnly);
  public_line=(ConvertTo-KmtechRedactedSinkText $sample.text -UserLine);
