@@ -939,3 +939,5 @@ sub-298 소스 구현: 최초 격리 journal·원 작업자·현품표·격리 �
 - D-01·D-05 고침(이적): 막는 띠 중 스캔은 보이게 거절(SCAN_REFUSED_DURING_NOTICE, 로컬 전용)·켤 때 자동 시작 없음·작업자 고르기는 `_select_worker` 한 문. 남은 일: registry 의 automatic_start_enabled 쓰기(disable/mark_recent)는 읽는 곳이 없어졌으니 다음 정리에서 뺄 수 있다.
 - 11/15 정리: worker_registry 의 automatic_start_enabled 쓰기(disable_automatic_start·mark_recent)를 함께 뺀다(D-05 뒤 읽는 곳 없음, 지금은 파일 꼴 바뀜 0 으로 둠).
 - G88(machine metadata 비밀 거절): 계약 #31 다음 판 본 판을 들였다. 선택 판(JSON 낱말 `true/false/null`·숫자 낱말 경계)은 보류이며 흔한 4자 값은 거절한다. 남은 일: Python 코드포인트와 PowerShell UTF-16 길이 판정이 BMP 밖 문자에서 갈리는 경계는 계약 개정 때 한 기준으로 맞춘다(지금은 시험으로 현재 동작을 고정).
+
+- 기준일 P2(이적, 10/20): 사용자 몫 제거 길이 fence 읽기 오류를 모두 `ACTIVE_WRITER_FENCE` 로 바꾸던 것(dcffaf8 `_writer_admission`, 875f785 `_claim_current_user_removal_fence`)을 fence 내용 결속 불일치(`WriterFenceBindingError`: 앱·상태·소유·식별자·해시 모양)만으로 좁혔다. 선언 목록 핀(`writer_inventory_sha256`) 불일치와 모양·경로·읽기 오류 등 그 밖의 등록된 원인 코드는 operations.md 의 「등록된 원인 코드 보존」 대로 원래 코드로 올린다. 거절·종료 코드 23·닫힘은 그대로. 독립 검토 대기.

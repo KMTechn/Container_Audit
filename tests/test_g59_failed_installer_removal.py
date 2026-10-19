@@ -362,3 +362,21 @@ function Load-TestFunction([string]$Path,[string[]]$Names) {
     report = onboarding.remove_current_user_setup(case.app)
     assert_settled(case, report)
     gate("G59_AFTER_WORKER_FENCE_CHECK")
+
+
+@pytest.mark.parametrize(
+    "tampered,code,fenced",
+    [("app_id", "ACTIVE_WRITER_FENCE", True), ("writer_inventory_sha256", "FENCE_BINDING_INVALID", False)],
+    ids=["fence-names-another-app", "fence-pins-another-inventory"],
+)
+def test_removal_reports_active_fence_only_for_unrelated_fence_content(removal_case, tampered, code, fenced):
+    case = removal_case
+    case.payload[tampered] = "0" * 64 if tampered.endswith("sha256") else "another_app"
+    case.publish()
+    with pytest.raises(fence.WriterFenceError) as caught:
+        onboarding.remove_current_user_setup(case.app)
+    assert caught.value.code == code
+    assert isinstance(caught.value, fence.WriterFencedError) is fenced
+    assert case.path.read_bytes() == case.original
+    assert case.registry_deletes == 0
+    assert not (case.root / "settled").exists()

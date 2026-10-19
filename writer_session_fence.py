@@ -148,6 +148,14 @@ class WriterFencedError(WriterFenceError):
     """A writer was denied without mutating application or fence state."""
 
 
+class WriterFenceBindingError(WriterFenceError):
+    """The fence content does not name this application's writer session.
+
+    Only this failure is reported as ACTIVE_WRITER_FENCE by the current-user
+    removal path; every other registered fence code keeps its own value.
+    """
+
+
 def _canonical_tuple(*values: str) -> str:
     return "\n".join(unicodedata.normalize("NFC", str(value)) for value in values)
 
@@ -334,7 +342,6 @@ def _validate_active_fence(payload: Mapping[str, Any]) -> dict[str, Any]:
         or not _HEX_32.fullmatch(str(value.get("replacement_transaction_id") or ""))
         or not _HEX_64.fullmatch(str(value.get("orchestrator_sha256") or ""))
         or not _HEX_64.fullmatch(str(value.get("writer_contract_sha256") or ""))
-        or value.get("writer_inventory_sha256") != WRITER_INVENTORY_SHA256
         or _parse_utc(value.get("session_started_at_utc")) is None
         or _parse_utc(value.get("activated_at_utc")) is None
         or value.get("secret_values_recorded") is not False
@@ -344,6 +351,8 @@ def _validate_active_fence(payload: Mapping[str, Any]) -> dict[str, Any]:
         or any(not isinstance(item, str) or not item for item in delegated_sources)
         or delegated_sources != sorted(set(delegated_sources))
     ):
+        raise WriterFenceBindingError("FENCE_BINDING_INVALID", "writer fence binding differs")
+    if value.get("writer_inventory_sha256") != WRITER_INVENTORY_SHA256:
         raise WriterFenceError("FENCE_BINDING_INVALID", "writer fence binding differs")
     expected_mutex = session_authority_mutex_name(
         value["session_id"],
@@ -635,7 +644,7 @@ def _writer_admission(
             )
         try:
             active = active_fence(root, environ=values)
-        except WriterFenceError as exc:
+        except WriterFenceBindingError as exc:
             if selected_source == "current_user_setup_removal" and getattr(_WRITER_LOCAL, "removal_scope", None):
                 raise WriterFencedError("ACTIVE_WRITER_FENCE", "writer denied by the active deployment fence") from exc
             raise
@@ -933,7 +942,7 @@ def _claim_current_user_removal_fence() -> None:
     try:
         root = canonical_control_root()
         active = active_fence(root)
-    except WriterFenceError as exc:
+    except WriterFenceBindingError as exc:
         raise WriterFencedError("ACTIVE_WRITER_FENCE", "writer denied by the active deployment fence") from exc
     if active is not None and not _delegation_matches(
         active, source="current_user_setup_removal", environ=os.environ,
