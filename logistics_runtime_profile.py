@@ -501,7 +501,7 @@ def app_profile_env_value(environ: Mapping[str, str] | None = None) -> str:
         if not _LEGACY_SHARED_IGNORED_NOTED:
             _LEGACY_SHARED_IGNORED_NOTED = True
             try:
-                print(f"{PROFILE_PATH_ENV} ignored: points at the legacy shared profile location")
+                print(f"{PROFILE_PATH_ENV} ignored: points at the legacy shared profile location", file=sys.stderr)
             except Exception:
                 pass
         return ""
