@@ -280,20 +280,52 @@ def _empty_directory(directory):
             os.unlink(entry.path)
 
 
+# The runner's own pin, read before any test changes the environment.
+_RUNNER_WRITER_ROOT = os.environ.get("KMTECH_TEST_CA_WRITER_ROOT", "")
+
+
+def _link_like(path):
+    return os.path.islink(path) or os.path.isjunction(path)
+
+
+def _resolved(path):
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _require_disposable_root(root, test_directory):
+    """Allow emptying only the test's own temp tree or the runner-pinned root."""
+    if _link_like(root):
+        pytest.fail("writer control root is a link; refusing to empty it")
+    inside = _resolved(root) == _resolved(test_directory) or _resolved(root).startswith(
+        _resolved(test_directory).rstrip(os.sep) + os.sep)
+    if inside:
+        return
+    if _RUNNER_WRITER_ROOT:
+        if _link_like(_RUNNER_WRITER_ROOT):
+            pytest.fail("runner writer root is a link; refusing to empty it")
+        if _resolved(root) == _resolved(_RUNNER_WRITER_ROOT):
+            return
+    pytest.fail("writer control root is neither the test temp tree nor the runner-pinned root")
+
+
 @pytest.fixture
-def clean_shared_writer_root(isolate_product_state):
+def clean_shared_writer_root(isolate_product_state, tmp_path):
     """Empty the writer control root around one test.
 
     A runner that sets KMTECH_TEST_CA_WRITER_ROOT before pytest starts makes
     tests/sitecustomize.py return that one directory from every
     canonical_control_root() call. Fence and data-generation files written by
-    one test would then stay for every test after it.
+    one test would then stay for every test after it. Nothing is removed unless
+    the root is inside this test's tmp_path or is exactly the runner-pinned
+    path, and a link is never removed or followed.
     """
     import writer_session_fence as fence
 
     root = fence.canonical_control_root()
+    _require_disposable_root(root, tmp_path)
     _empty_directory(root)
     yield
+    _require_disposable_root(root, tmp_path)
     _empty_directory(root)
 
 
