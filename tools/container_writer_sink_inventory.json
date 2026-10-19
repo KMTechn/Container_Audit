@@ -375,11 +375,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 5679,
+      "line": 5730,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 5683,
+          "line": 5734,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -1193,11 +1193,11 @@
       ],
       "file": "ca_screen_bridge.py",
       "kind": "function",
-      "line": 1280,
+      "line": 1288,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 1286,
+          "line": 1294,
           "operation": "path.open",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -10851,7 +10851,7 @@
       "tools.register_container_audit_worker_pc"
     ]
   },
-  "inventory_sha256": "cfc58cd8f0492f8c5078165ddba3c0f3446d4058b19e110fbb8eeecc6663382d",
+  "inventory_sha256": "370240f000621854fd458de19642d32b03e316894e43e0ea6efa11b348d2d318",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -25206,7 +25206,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 23728,
+      "line": 23779,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -25214,7 +25214,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 5679,
+      "line": 5730,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -26118,7 +26118,7 @@
       "direct_mutation_site_count": 1,
       "file": "ca_screen_bridge.py",
       "function": "ca_screen_bridge._write_screen_startup_record",
-      "line": 1280,
+      "line": 1288,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },
