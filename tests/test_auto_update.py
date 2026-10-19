@@ -386,13 +386,16 @@ def test_engine_candidate_exit_selects_generation_compatible_code_without_revert
 
 def test_pending_gui_scan_does_not_enter_preflight_or_business_mutation():
     from Container_Audit import ContainerAudit
+    from tests.test_container_audit_contracts import DummyScanEntry
 
     app = object.__new__(ContainerAudit)
     app._startup_update_pending = True
+    app.scan_entry = DummyScanEntry("pending-scan")
     refusals = []
     app._refuse_entry_scan = refusals.append
     app.process_barcode()
     assert len(refusals) == 1
+    assert app.scan_entry.get() == ""
 
 
 def test_relay_logon_launches_gui_and_ordinary_trial_relay_on_the_same_data_root(monkeypatch, tmp_path):

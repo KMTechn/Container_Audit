@@ -817,6 +817,7 @@ class DummyScanEntry:
 
     def delete(self, *_args):
         self.deleted = True
+        self.value = ""
 
 
 class FakeDownloadResponse:
@@ -6066,7 +6067,7 @@ def test_process_barcode_runs_delayed_scan_when_epoch_is_current():
     assert processed == ["AAA2270730100-001"]
 
 
-def test_process_barcode_preserves_delayed_scan_after_session_epoch_changes():
+def test_process_barcode_discards_owned_delayed_scan_after_session_epoch_changes():
     app = _headless_app()
     app.root = CapturingRoot()
     app.scan_entry = DummyScanEntry("AAA2270730100-001")
@@ -6079,8 +6080,8 @@ def test_process_barcode_preserves_delayed_scan_after_session_epoch_changes():
     callback, args = app.root.calls[0]
     callback(*args)
 
-    assert app.scan_entry.deleted is False
-    assert app.scan_entry.get() == "AAA2270730100-001"
+    assert app.scan_entry.deleted is True
+    assert app.scan_entry.get() == ""
     assert processed == []
 
 
