@@ -972,6 +972,12 @@ class CaProcessor:
         """Inject only after shared cleanup and exact entry readback."""
         if self.app._refuse_broken_scan_entry():
             return False
+        if (self.app.__dict__.get("_scan_callback_pending", False)
+                or self.app.__dict__.get("_preflight_hold_append_pending", False)):
+            message = self.app._scan_entry_admission_block_reason() or "다시 스캔하세요"
+            self.app._mark_scan_unaccepted(message)
+            self.app._start_warning_beep()
+            return False
         entry = self.app.scan_entry
         cleared = self.app._clear_consumed_scan_entry(None)
         if cleared:
