@@ -44,7 +44,7 @@ def test_app_return_is_not_implicitly_success(flow, monkeypatch, route, outcome)
     else:
         from tests.test_observed_scanner_completion import ScannerEntry
         app.worker_entry = ScannerEntry("")
-        app.start_work = action
+        app._select_worker = action
         reply = processor.command("start_work", {"id": "worker"})
     assert reply["ok"] is (outcome == "success")
     if outcome == "unknown":
