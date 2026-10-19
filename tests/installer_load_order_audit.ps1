@@ -23,8 +23,61 @@ function Container($Node){
            $p -is [Management.Automation.Language.NamedBlockAst]){return $p}
     }
 }
+function Scope($Node){
+    for($p=$Node.Parent;$null -ne $p;$p=$p.Parent){
+        if($p -is [Management.Automation.Language.ScriptBlockAst]){return $p}
+    }
+}
+function VariableLeaf($Command,$Variable){
+    if($Command.CommandElements.Count -ne 1){return ''}
+    $scope=Scope $Command
+    if($null -eq $scope){return ''}
+    $name=$Variable.VariablePath.UserPath
+    $assignments=@($scope.FindAll({param($n)
+        $n -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $n.Left -is [Management.Automation.Language.VariableExpressionAst] -and
+        $n.Left.VariablePath.UserPath -ieq $name
+    },$true) | Where-Object {
+        [object]::ReferenceEquals((Scope $_),$scope) -and
+        $_.Extent.EndOffset -le $Command.Extent.StartOffset
+    } | Sort-Object {$_.Extent.StartOffset})
+    if(-not $assignments.Count){return ''}
+    # Inspect the last write even when it is unknown; never reuse an older leaf.
+    $assignment=$assignments[-1]
+    $ancestors=@();for($p=$Command.Parent;$null -ne $p;$p=$p.Parent){$ancestors+=,$p}
+    if($assignment.Operator -ne [Management.Automation.Language.TokenKind]::Equals -or
+       $ancestors -notcontains (Container $assignment)){return ''}
+    $right=$assignment.Right
+    while($true){
+        if($right -is [Management.Automation.Language.StatementBlockAst] -and $right.Statements.Count -eq 1){
+            $right=$right.Statements[0];continue
+        }
+        if($right -is [Management.Automation.Language.PipelineAst] -and $right.PipelineElements.Count -eq 1){
+            $right=$right.PipelineElements[0];continue
+        }
+        if($right -is [Management.Automation.Language.CommandExpressionAst]){$right=$right.Expression;continue}
+        if($right -is [Management.Automation.Language.ParenExpressionAst]){$right=$right.Pipeline;continue}
+        break
+    }
+    if($right -isnot [Management.Automation.Language.CommandAst] -or
+       $right.GetCommandName() -ine 'Get-BootstrapSharedPortableLeaf' -or $right.Redirections.Count){return ''}
+    $arguments=@($right.CommandElements)
+    if($arguments.Count -notin @(2,3) -or
+       $arguments[1] -is [Management.Automation.Language.CommandParameterAst] -or
+       ($arguments[1] -is [Management.Automation.Language.VariableExpressionAst] -and $arguments[1].Splatted)){return ''}
+    if($arguments.Count -eq 2){return 'portable'} # The helper's literal default.
+    if($arguments[2] -isnot [Management.Automation.Language.StringConstantExpressionAst]){return ''}
+    if($arguments[2].Value -ceq 'data_generation.ps1'){return 'data'}
+    if($arguments[2].Value -ceq 'portable.ps1'){return 'portable'}
+    return ''
+}
 function Leaf($Command){
     if($Command.InvocationOperator -ne [Management.Automation.Language.TokenKind]::Dot){return ''}
+    $target=$Command.CommandElements[0]
+    if($target -is [Management.Automation.Language.VariableExpressionAst] -and
+       $target.VariablePath.UserPath -notin @('writerFenceHelperPath','BootstrapIntegrityFunctions')){
+        return VariableLeaf $Command $target
+    }
     $body=$Command.Extent.Text
     if($body -match 'data_generation\.ps1'){return 'data'}
     if($body -match 'writerFenceHelperPath|writer_fence\.ps1'){return 'fence'}

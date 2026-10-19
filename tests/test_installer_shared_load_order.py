@@ -53,6 +53,82 @@ def test_pre_shared_load_call_graph_has_no_shared_only_dependency(tmp_path, engi
 
 
 @pytest.mark.parametrize("engine", ["powershell.exe", "pwsh.exe"])
+@pytest.mark.parametrize(("assignments", "expected_leaf", "helper"), [
+    pytest.param("$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot",
+                 "portable", "Test-PortableLeaf", id="default-portable"),
+    pytest.param("$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'portable.ps1'",
+                 "portable", "Test-PortableLeaf", id="literal-portable"),
+    pytest.param("$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'data_generation.ps1'",
+                 "data", "Test-DataLeaf", id="literal-data"),
+    pytest.param("", None, "Test-DataLeaf", id="missing-assignment"),
+    pytest.param("$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot $leafName",
+                 None, "Test-DataLeaf", id="nonliteral-leaf"),
+    pytest.param("$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'other.ps1'",
+                 None, "Test-DataLeaf", id="unapproved-leaf"),
+    pytest.param("$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'data_generation.ps1'\n"
+                 "$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'portable.ps1'",
+                 "portable", "Test-PortableLeaf", id="last-portable"),
+    pytest.param("$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'portable.ps1'\n"
+                 "$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'data_generation.ps1'",
+                 "data", "Test-DataLeaf", id="last-data"),
+    pytest.param("$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'data_generation.ps1'\n"
+                 "$sharedLeaf = $unknownLeaf",
+                 None, "Test-DataLeaf", id="last-unknown"),
+    pytest.param("$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'data_generation.ps1'\n"
+                 "$sharedLeaf += $unknownLeaf",
+                 None, "Test-DataLeaf", id="compound-reassignment"),
+    pytest.param("function Set-OtherScope {\n"
+                 " $sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'data_generation.ps1'\n}",
+                 None, "Test-DataLeaf", id="other-scope-only"),
+    pytest.param("$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'data_generation.ps1'\n"
+                 "function Set-OtherScope {\n"
+                 " $sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'portable.ps1'\n}",
+                 "data", "Test-DataLeaf", id="ignore-other-scope"),
+    pytest.param("$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'data_generation.ps1'\n"
+                 "$otherLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'portable.ps1'",
+                 "data", "Test-DataLeaf", id="ignore-other-variable"),
+    pytest.param("$SHAREDLEAF = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'data_generation.ps1'",
+                 "data", "Test-DataLeaf", id="case-insensitive-variable"),
+    pytest.param("$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'data_generation.ps1'\n"
+                 "if ($condition) { $sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot 'portable.ps1' }",
+                 None, "Test-DataLeaf", id="conditional-reassignment"),
+])
+def test_dot_sourced_leaf_variable_uses_nearest_literal_assignment(
+        tmp_path, engine, assignments, expected_leaf, helper, host_program_data_guard):
+    if not shutil.which(engine):
+        pytest.skip(f"{engine} is required")
+    host_program_data_guard.assert_unchanged()
+    library = tmp_path / "library"
+    for relative, content in {
+        "kmtech_shared/powershell/portable.ps1": "function Test-PortableLeaf {}\n",
+        "kmtech_shared/powershell/data_generation.ps1": "function Test-DataLeaf {}\n",
+        "tools/bootstrap_integrity.ps1": "",
+        "tools/container_writer_fence.ps1": "",
+    }.items():
+        path = library / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    lines = [*assignments.splitlines(), ". $sharedLeaf", helper,
+             ". (Get-BootstrapSharedPortableLeaf $PSScriptRoot 'portable.ps1')",
+             ". (Get-BootstrapSharedPortableLeaf $PSScriptRoot 'data_generation.ps1')"]
+    source = tmp_path / "synthetic-installer.ps1"
+    source.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    result, audit = _audit_load_order(tmp_path, engine, source, library)
+    variable_line = len(assignments.splitlines()) + 1
+    variable_imports = [row for row in audit["frontiers"] if row["line"] == variable_line]
+    if expected_leaf is None:
+        assert not variable_imports, "Unknown assignments must not admit a shared library"
+        assert result.returncode == 1
+        assert any(helper in row["dependencies"] for row in audit["frontiers"])
+    else:
+        assert variable_imports
+        assert {row["leaf"] for row in variable_imports} == {expected_leaf}
+        assert result.returncode == 0
+        assert all(not row["dependencies"] for row in audit["frontiers"])
+    host_program_data_guard.assert_unchanged()
+
+
+@pytest.mark.parametrize("engine", ["powershell.exe", "pwsh.exe"])
 @pytest.mark.parametrize("caller", ["same-worker", "other-worker"])
 def test_explicit_worker_evidence_plan_only_in_fresh_process(tmp_path, engine, caller, host_program_data_guard):
     executable = shutil.which(engine)
