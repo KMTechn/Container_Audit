@@ -19,6 +19,8 @@ import auto_update as update
 import writer_session_fence as fence
 from tests.test_writer_session_fence import _active_payload, _write_active
 
+pytestmark = pytest.mark.usefixtures("clean_shared_writer_root")
+
 
 NAMES = ("manifest.json", "manifest.sig", "packet.zip")
 

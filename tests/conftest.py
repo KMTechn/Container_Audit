@@ -261,6 +261,43 @@ def isolate_product_state(tmp_path, monkeypatch):
     )
 
 
+def _empty_directory(directory):
+    """Remove everything below ``directory`` without following links."""
+    try:
+        entries = list(os.scandir(directory))
+    except FileNotFoundError:
+        return
+    for entry in entries:
+        if entry.is_symlink() or entry.is_junction():
+            if entry.is_dir(follow_symlinks=False):
+                os.rmdir(entry.path)
+            else:
+                os.unlink(entry.path)
+        elif entry.is_dir(follow_symlinks=False):
+            _empty_directory(entry.path)
+            os.rmdir(entry.path)
+        else:
+            os.unlink(entry.path)
+
+
+@pytest.fixture
+def clean_shared_writer_root(isolate_product_state):
+    """Empty the writer control root around one test.
+
+    A runner that sets KMTECH_TEST_CA_WRITER_ROOT before pytest starts makes
+    tests/sitecustomize.py return that one directory from every
+    canonical_control_root() call. Fence and data-generation files written by
+    one test would then stay for every test after it.
+    """
+    import writer_session_fence as fence
+
+    root = fence.canonical_control_root()
+    _empty_directory(root)
+    yield
+    _empty_directory(root)
+
+
+
 # Automated GUI/contract runs must never reach the operator's audio device.
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
