@@ -4327,6 +4327,169 @@ function Save-CanonicalMachineFailureAudit([string]$Path,$Audit) {
     try { Save $Path $Audit }
     catch { Write-Utf8Json $Path $Audit }
 }
+function ConvertTo-CanonicalRemovalIoPath([string]$Path) {
+    if ($Path.Length -lt 240 -or $Path.StartsWith('\\?\')) { return $Path }
+    $native=$Path.Replace('/','\')
+    if ($native.StartsWith('\\')) { return '\\?\UNC\'+$native.Substring(2) }
+    return '\\?\'+$native
+}
+function Find-CanonicalRemovalMoveJournal([string]$Application,[string]$Run) {
+    # The helper writes removal-move-journal.jsonl inside its evidence directory; the run
+    # id in the first record binds it to this transaction. Other runs' journals are ignored.
+    $parent=Join-Path $Application 'removal-evidence'
+    if (-not (Test-Path -LiteralPath $parent -PathType Container)) { return $null }
+    Assert-BootstrapNoReparsePoint $parent 'removal evidence' -PathOnly
+    $found=@()
+    foreach ($directory in @([IO.Directory]::GetDirectories($parent))) {
+        $candidate=Join-Path $directory 'removal-move-journal.jsonl'
+        if (-not [IO.File]::Exists($candidate)) { continue }
+        $reader=[IO.File]::OpenText($candidate)
+        try { $first=$reader.ReadLine() } finally { $reader.Dispose() }
+        $header=$null
+        try { if ($first) { $header=$first | ConvertFrom-Json } } catch {}
+        if ($null -ne $header -and [string]$header.record -ceq 'HEADER' -and [string]$header.run_id -ceq $Run) { $found+=$candidate }
+    }
+    if ($found.Count -gt 1) { throw 'MACHINE_RECOVERY_REMOVAL_JOURNAL_AMBIGUOUS' }
+    if ($found.Count -eq 0) { return $null }
+    return $found[0]
+}
+function Get-CanonicalRemovalFileSha256([string]$Path) {
+    $hasher=[Security.Cryptography.SHA256]::Create();$stream=$null
+    try { $stream=[IO.File]::OpenRead((ConvertTo-CanonicalRemovalIoPath $Path)); return ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace('-','').ToLowerInvariant() }
+    finally { if ($null -ne $stream) { $stream.Dispose() };$hasher.Dispose() }
+}
+function Restore-CanonicalRemovalFromMoveJournal([string]$Root,[string]$Run) {
+    # Puts back exactly the files the removal helper moved into removal-evidence, from its move
+    # journal. Everything is checked first (evidence bytes, no conflicting file at the old place);
+    # nothing is moved when any record contradicts the disk. Returns $null when no journal exists.
+    $application=Split-Path -Parent $Root
+    $journal=Find-CanonicalRemovalMoveJournal $application $Run
+    if ($null -eq $journal) { return $null }
+    $evidence=Split-Path -Parent $journal
+    $applicationPrefix=$application.TrimEnd('\')+'\';$evidencePrefix=$evidence.TrimEnd('\')+'\'
+    Assert-BootstrapNoReparsePoint $application 'removal restore application' -PathOnly
+    if ((Get-Item -LiteralPath $journal).Length -gt 67108864) { throw 'MACHINE_RECOVERY_REMOVAL_JOURNAL_TOO_LARGE' }
+    $lines=@([IO.File]::ReadAllLines($journal,[Text.UTF8Encoding]::new($false)))
+    $records=New-Object Collections.ArrayList
+    for ($index=0;$index -lt $lines.Count;$index++) {
+        if (-not $lines[$index].Trim()) { continue }
+        try { [void]$records.Add(($lines[$index] | ConvertFrom-Json)) }
+        catch { if ($index -eq $lines.Count-1) { break }; throw 'MACHINE_RECOVERY_REMOVAL_JOURNAL_INVALID' }
+    }
+    $header=$records[0]
+    if ([string]$header.record -cne 'HEADER' -or [string]$header.schema -cne 'container-audit-removal-move-journal-v1' -or
+        [string]$header.run_id -cne $Run -or -not (Same ([string]$header.application) $application) -or
+        -not (Same ([string]$header.evidence) $evidence)) { throw 'MACHINE_RECOVERY_REMOVAL_JOURNAL_BINDING_DIFFERS' }
+    $moves=@();$directories=@();$markerIntent=$false
+    foreach ($record in @($records | Select-Object -Skip 1)) {
+        switch ([string]$record.record) {
+            'MOVE' {
+                if (-not ([string]$record.path).StartsWith($applicationPrefix,[StringComparison]::OrdinalIgnoreCase) -or
+                    -not ([string]$record.destination).StartsWith($evidencePrefix,[StringComparison]::OrdinalIgnoreCase) -or
+                    [string]$record.sha256 -cnotmatch '^[0-9a-f]{64}$') { throw 'MACHINE_RECOVERY_REMOVAL_JOURNAL_INVALID' }
+                $moves+=$record
+            }
+            'DIR' {
+                if (-not ([string]$record.path).StartsWith($applicationPrefix,[StringComparison]::OrdinalIgnoreCase)) { throw 'MACHINE_RECOVERY_REMOVAL_JOURNAL_INVALID' }
+                $directories+=$record
+            }
+            'MARKER_INTENT' { $markerIntent=$true;$markerPath=[string]$record.path }
+            'RESTORED' {}
+            default { throw 'MACHINE_RECOVERY_REMOVAL_JOURNAL_INVALID' }
+        }
+    }
+    # Pass 1: verify. Moved files must still be intact in evidence; unmoved files must be unchanged.
+    $restore=@()
+    foreach ($move in $moves) {
+        $sourceIo=ConvertTo-CanonicalRemovalIoPath ([string]$move.path);$destinationIo=ConvertTo-CanonicalRemovalIoPath ([string]$move.destination)
+        $sourcePresent=[IO.File]::Exists($sourceIo);$destinationPresent=[IO.File]::Exists($destinationIo)
+        if ($sourcePresent -and $destinationPresent) { throw 'MACHINE_RECOVERY_REMOVAL_RESTORE_CONFLICT' }
+        if ($destinationPresent) {
+            if ((Get-CanonicalRemovalFileSha256 ([string]$move.destination)) -cne [string]$move.sha256) { throw 'MACHINE_RECOVERY_REMOVAL_EVIDENCE_DIFFERS' }
+            $restore+=$move
+        } elseif ($sourcePresent) {
+            if ((Get-CanonicalRemovalFileSha256 ([string]$move.path)) -cne [string]$move.sha256) { throw 'MACHINE_RECOVERY_REMOVAL_CURRENT_DIFFERS' }
+        } else { throw 'MACHINE_RECOVERY_REMOVAL_SOURCE_MISSING' }
+    }
+    $ourMarker=$false
+    if ($markerIntent -and [IO.File]::Exists($markerPath)) {
+        $marker=$null
+        try { $marker=Get-Content -LiteralPath $markerPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch {}
+        if ($null -ne $marker -and [string]$marker.schema -ceq 'container-audit-supported-removal-v1' -and
+            [string]$marker.lifecycle_state -ceq 'REMOVED' -and (Same ([string]$marker.evidence_root) $evidence)) { $ourMarker=$true }
+    }
+    # Pass 2: act. The marker this removal wrote goes first (it may occupy a restored marker's place).
+    if ($ourMarker) { [IO.File]::Delete($markerPath) }
+    foreach ($record in @($directories | Sort-Object { ([string]$_.path).Length })) {
+        $directoryIo=ConvertTo-CanonicalRemovalIoPath ([string]$record.path)
+        if (-not [IO.Directory]::Exists($directoryIo)) {
+            [void][IO.Directory]::CreateDirectory($directoryIo)
+            if ([string]$record.sddl) {
+                $acl=New-Object Security.AccessControl.DirectorySecurity
+                $acl.SetSecurityDescriptorSddlForm([string]$record.sddl)
+                Set-Acl -LiteralPath $directoryIo -AclObject $acl
+                if ((Get-BootstrapAclComparisonKey ([string](Get-Acl -LiteralPath $directoryIo).Sddl)) -cne (Get-BootstrapAclComparisonKey ([string]$record.sddl))) {
+                    throw 'MACHINE_RECOVERY_REMOVAL_DIRECTORY_ACL_DIFFERS'
+                }
+            }
+        }
+        if (([IO.File]::GetAttributes($directoryIo) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'MACHINE_RECOVERY_REMOVAL_BOUNDARY_REDIRECTED' }
+    }
+    foreach ($move in $restore) {
+        $sourceIo=ConvertTo-CanonicalRemovalIoPath ([string]$move.path)
+        [IO.File]::Move((ConvertTo-CanonicalRemovalIoPath ([string]$move.destination)),$sourceIo)
+        if ((Get-CanonicalRemovalFileSha256 ([string]$move.path)) -cne [string]$move.sha256 -or
+            ([IO.File]::GetLastWriteTimeUtc($sourceIo)).Ticks -ne [int64]$move.written_utc_ticks) { throw 'MACHINE_RECOVERY_REMOVAL_RESTORE_READBACK_FAILED' }
+    }
+    foreach ($record in @($directories | Sort-Object { ([string]$_.path).Length } -Descending)) {
+        $directoryIo=ConvertTo-CanonicalRemovalIoPath ([string]$record.path)
+        [IO.Directory]::SetCreationTimeUtc($directoryIo,[DateTime]::new([int64]$record.created_utc_ticks,[DateTimeKind]::Utc))
+        [IO.Directory]::SetLastWriteTimeUtc($directoryIo,[DateTime]::new([int64]$record.written_utc_ticks,[DateTimeKind]::Utc))
+        [IO.File]::SetAttributes($directoryIo,[IO.FileAttributes]([int]$record.attributes -band 12583))
+    }
+    try { [IO.File]::AppendAllText($journal,((@{record='RESTORED';files=$restore.Count}|ConvertTo-Json -Compress)+"`n"),[Text.UTF8Encoding]::new($false)) } catch {}
+    return [ordered]@{status='RESTORED';files=[int]$restore.Count;directories=[int]@($directories).Count;marker_removed=$ourMarker;
+        evidence_root=$evidence;journal=$journal}
+}
+function Restore-CanonicalRemovalScheduledTasks([string]$Evidence) {
+    # Best effort: recreate the scheduled tasks the helper deleted (their XML is in evidence) and
+    # re-enable the legacy relay task it only disabled. Never gates the code restore proof.
+    $result=[ordered]@{status='NONE';tasks=@()}
+    try {
+        $rows=@()
+        foreach ($file in @([IO.Directory]::GetFiles($Evidence,'*.json'))) {
+            $record=$null
+            try { $record=Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json } catch { continue }
+            if ($null -ne $record -and $null -ne $record.PSObject.Properties['name'] -and $null -ne $record.PSObject.Properties['xml'] -and
+                [string]$record.name -cmatch '^[A-Za-z0-9._-]+$' -and [string]$record.xml) { $rows+=$record }
+        }
+        if (-not $rows.Count) { return $result }
+        $service=New-Object -ComObject Schedule.Service
+        $service.Connect()
+        $folder=$service.GetFolder('\')
+        $failed=$false
+        foreach ($record in $rows) {
+            try {
+                $present=$true
+                try { $task=$folder.GetTask([string]$record.name) } catch { $present=$false }
+                if ($present) { if ([string]$record.name -ieq 'direct-sync-relay-container-audit') { $task.Enabled=$true } }
+                else { [void]$folder.RegisterTask([string]$record.name,[string]$record.xml,6,$null,$null,0) }
+                $result.tasks+=@([ordered]@{name=[string]$record.name;state='RESTORED'})
+            } catch { $failed=$true;$result.tasks+=@([ordered]@{name=[string]$record.name;state='UNPROVEN'}) }
+        }
+        $result.status=if($failed){'PARTIAL'}else{'RESTORED'}
+    } catch { $result.status='UNPROVEN' }
+    return $result
+}
+function Get-CanonicalMachineRecoveryEntry($Audit,[string]$AuditPath) {
+    $operation=if($Audit -is [Collections.IDictionary]){[string]$Audit['operation']}else{[string]$Audit.operation}
+    $generic='RecoverMachineInstallation: exact machine audit path/SHA256 and original admitted packet/worker required'
+    if ($operation -cne 'UNINSTALL') { return $generic }
+    # The entry that accepts an unfinished or failed removal audit (the same one an install uses).
+    return 'RecoverMachineInstallation (UNINSTALL audit): from an administrator PowerShell run INSTALL_CANONICAL_PORTABLE.ps1 '+
+        '-RecoverMachineInstallation -SourceRoot <original admitted packet> -WorkerAccount <worker account> '+
+        '-MachineRecoveryAuditPath "'+$AuditPath+'" -MachineRecoveryAuditSha256 <SHA256 of that audit file>'
+}
 function Restore-CanonicalMachineInstallationPrestate($Worker,[string]$Source,[string]$Root,$Manifest,$Prestate,
     [string[]]$PlacementArguments,[string]$Receipt,[string]$AuditPath,$Audit,$AuthorityLease) {
     $state=Get-ContainerMachineInstallStateRoot
@@ -4336,13 +4499,26 @@ function Restore-CanonicalMachineInstallationPrestate($Worker,[string]$Source,[s
     $startup=ConvertFrom-CanonicalMachineArtifactJournal $Prestate.startup_before
     $artifacts=ConvertFrom-CanonicalMachineArtifactJournal $Prestate.artifact_before
     $proof=[ordered]@{child_exit='UNPROVEN';code_restore='UNPROVEN';artifact_restore='UNPROVEN';worker_run_restore='NOT_CHANGED';worker_directory_restore='NOT_CHANGED'}
+    $auditOperation=if($Audit -is [Collections.IDictionary]){[string]$Audit['operation']}else{[string]$Audit.operation}
+    $removalOperation=($auditOperation -ceq 'UNINSTALL')
+    $removalRestoreUsed=$false;$rollbackSteps=@()
     if ($null -eq $Audit.compensation_child) { $Audit.compensation_child=@{status='NOT_STARTED'} }
     if ([string]$Audit.placement_child.status -cin @('NOT_STARTED','EXITED') -and
         [string]$Audit.compensation_child.status -cin @('NOT_STARTED','EXITED')) { $proof.child_exit='PASS' }
     if ($proof.child_exit -ceq 'PASS') {
         try {
             if (-not (Test-CanonicalMachineCodePrestate $Root ([string]$Prestate.before_manifest_sha256) @())) {
-                if ([string]$Prestate.before_manifest_sha256 -and (Test-Path -LiteralPath $Receipt -PathType Leaf)) {
+                if ($removalOperation) {
+                    # A removal moves code file by file into removal-evidence and journals each move;
+                    # the journal puts back exactly those files (bytes, times, directories).
+                    $removalRestoreUsed=$true
+                    Assert-BootstrapSupportQuiescent (Split-Path -Parent $Root) @()
+                    $restored=Restore-CanonicalRemovalFromMoveJournal $Root $run
+                    if ($null -eq $restored) { throw 'MACHINE_RECOVERY_REMOVAL_JOURNAL_ABSENT' }
+                    $rollbackSteps+=@('CODE_RESTORED_FROM_MOVE_JOURNAL')
+                    $Audit.removal_restore=[ordered]@{files=$restored.files;directories=$restored.directories;marker_removed=$restored.marker_removed}
+                    $Audit.code_replacement.status='RESTORED_AFTER_FAILURE'
+                } elseif ([string]$Prestate.before_manifest_sha256 -and (Test-Path -LiteralPath $Receipt -PathType Leaf)) {
                     $original=Read-BootstrapReplacementReceipt $Receipt (Sha $Receipt)
                     if ([string]$original.transaction_id -cne $run -or -not (Same ([string]$original.install_root) $Root) -or
                         [string]$original.old.manifest_sha256 -cne [string]$Prestate.before_manifest_sha256) { throw 'MACHINE_RECOVERY_REPLACEMENT_BINDING_DIFFERS' }
@@ -4379,9 +4555,27 @@ function Restore-CanonicalMachineInstallationPrestate($Worker,[string]$Source,[s
             }
             if (Test-CanonicalMachineCodePrestate $Root ([string]$Prestate.before_manifest_sha256) @()) {
                 Restore-CanonicalMachineArtifacts $startup
-                if (Test-CanonicalMachineCodePrestate $Root ([string]$Prestate.before_manifest_sha256) $startup) { $proof.code_restore='PASS' }
+                if (Test-CanonicalMachineCodePrestate $Root ([string]$Prestate.before_manifest_sha256) $startup) { $proof.code_restore='PASS';$rollbackSteps+=@('CODE_PRESTATE_VERIFIED') }
             }
-        } catch { $Audit.code_replacement.status='RESTORE_FAILED' }
+            if ($removalOperation -and $proof.code_restore -ceq 'PASS') {
+                # Scheduled tasks the helper deleted come back from its evidence (best effort, recorded).
+                $journalPath=Find-CanonicalRemovalMoveJournal (Split-Path -Parent $Root) $run
+                if ($null -ne $journalPath) {
+                    $taskRestore=Restore-CanonicalRemovalScheduledTasks (Split-Path -Parent $journalPath)
+                    $Audit.task_restore=[ordered]@{status=[string]$taskRestore.status;tasks=@($taskRestore.tasks)}
+                    $rollbackSteps+=@('SCHEDULED_TASKS_'+[string]$taskRestore.status)
+                }
+            }
+        } catch {
+            $Audit.code_replacement.status='RESTORE_FAILED'
+            if ($removalOperation) {
+                $rollbackSteps+=@('CODE_RESTORE_FAILED')
+                # Reason codes only (fixed upper-case tokens); never message text.
+                if ($_.Exception.Message -cmatch '^[A-Z][A-Z0-9_]{4,127}$') { $Audit.code_restore_failure_code=$_.Exception.Message }
+                $Audit.code_restore_failure_line=$_.InvocationInfo.ScriptLineNumber
+                $Audit.code_restore_failure_type=$_.Exception.GetType().FullName
+            }
+        }
     }
     if ([string]$Audit.compensation_child.status -cnotin @('NOT_STARTED','EXITED')) { $proof.child_exit='UNPROVEN' }
     if ($proof.code_restore -cne 'PASS') {
@@ -4393,6 +4587,7 @@ function Restore-CanonicalMachineInstallationPrestate($Worker,[string]$Source,[s
         $Audit.pending_restore='WITHHELD_CODE_PRESTATE_DIFFERS'
     } else { $Audit.pending_restore='CODE_AND_CONTROL_PRESTATE_VERIFIED' }
     try { Restore-CanonicalMachineArtifacts $artifacts; $proof.artifact_restore='PASS' } catch { $proof.artifact_restore='FAILED' }
+    if ($removalOperation) { $rollbackSteps+=@('ARTIFACTS_'+[string]$proof.artifact_restore) }
     if ($null -ne $Prestate.worker_preparation) {
         $proof.worker_run_restore='FAILED';$proof.worker_directory_restore='FAILED'
         if ([bool]$Worker.same_caller) {
@@ -4415,10 +4610,12 @@ function Restore-CanonicalMachineInstallationPrestate($Worker,[string]$Source,[s
     $Audit.worker_run_restore=$proof.worker_run_restore
     $Audit.worker_directory_restore=$proof.worker_directory_restore
     $Audit.fence_retained=$true
-    $Audit.support_recovery='RecoverMachineInstallation: exact machine audit path/SHA256 and original admitted packet/worker required'
-    try { Save-CanonicalMachineFailureAudit $AuditPath $Audit } catch {}
+    $Audit.support_recovery=Get-CanonicalMachineRecoveryEntry $Audit $AuditPath
     $proven=($proof.child_exit -ceq 'PASS' -and $proof.code_restore -ceq 'PASS' -and $proof.artifact_restore -ceq 'PASS' -and
         $proof.worker_run_restore -cin @('PASS','NOT_CHANGED') -and $proof.worker_directory_restore -cin @('PASS','NOT_CHANGED'))
+    if ($removalRestoreUsed) { $Audit.status=if($proven){'FAILED_ROLLED_BACK'}else{'ROLLBACK_FAILED'} }
+    if ($removalOperation) { $Audit.rollback_steps=@($rollbackSteps) }
+    try { Save-CanonicalMachineFailureAudit $AuditPath $Audit } catch {}
     if (-not $proven) { return $false }
     try {
         $proofPath=Join-Path $state ('install-audit\compensated-'+$run+'-'+[Guid]::NewGuid().ToString('N')+'.json')
@@ -4435,9 +4632,12 @@ function Restore-CanonicalMachineInstallationPrestate($Worker,[string]$Source,[s
             -ReplacementTransactionId $run -ReleaseAuthorizationPath $authorization.path -ReleaseAuthorizationSha256 $authorization.sha256 -AuthorityLease $AuthorityLease)
         $Audit.fence_retained=$false
         $Audit.fence_release='PROVEN_FAILURE_COMPENSATION'
+        if ($removalOperation) { $Audit.rollback_steps=@($rollbackSteps)+@('FENCE_RELEASED') }
         try { Save-CanonicalMachineFailureAudit $AuditPath $Audit } catch {}
         return $true
     } catch {
+        if ($removalRestoreUsed) { $Audit.status='ROLLBACK_FAILED' }
+        if ($removalOperation) { $Audit.rollback_steps=@($rollbackSteps)+@('FENCE_RELEASE_FAILED') }
         $Audit.fence_release_failure_type=$_.Exception.GetType().FullName
         $Audit.fence_release_failure_line=$_.InvocationInfo.ScriptLineNumber
         if ($_.Exception.Message -cmatch '^[A-Z][A-Z0-9_]{4,127}$') { $Audit.fence_release_failure_code=$_.Exception.Message }
@@ -4463,8 +4663,9 @@ function Read-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[stri
     $record.code_replacement=$replacement
     $run=[string]$record.run_id
     if ($run -cnotmatch '^[0-9a-f]{32}$' -or -not (Same $auditFull (Join-Path $state ('install-audit\canonical-portable-'+$run+'.json'))) -or
-        [string]$record.schema -cne 'container-audit-canonical-portable-install-v2' -or [string]$record.operation -cne 'INSTALL' -or
-        [string]$record.status -cnotin @('MACHINE_PREPARING','MACHINE_INSTALL_FAILED') -or -not (Same ([string]$record.install_root) $Root) -or
+        [string]$record.schema -cne 'container-audit-canonical-portable-install-v2' -or [string]$record.operation -cnotin @('INSTALL','UNINSTALL') -or
+        [string]$record.status -cnotin $(if([string]$record.operation -ceq 'UNINSTALL'){@('PREIMAGE_SAVED','MACHINE_INSTALL_FAILED','ROLLBACK_FAILED')}else{@('MACHINE_PREPARING','MACHINE_INSTALL_FAILED')}) -or
+        -not (Same ([string]$record.install_root) $Root) -or
         [string]$record.worker_sid -cne [string]$Worker.sid -or [string]$record.placement_child.status -cnotin @('NOT_STARTED','EXITED','EXIT_UNPROVEN') -or
         [string]$record.compensation_child.status -cnotin @('NOT_STARTED','EXITED','EXIT_UNPROVEN') -or
         [string]$record.source_manifest_sha256 -cne (Sha (Join-Path $Source 'portable-manifest.json'))) { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
@@ -4475,6 +4676,13 @@ function Read-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[stri
         (Sha $journal) -cne [string]$record.machine_prestate.sha256) { throw 'MACHINE_RECOVERY_PRESTATE_CHANGED' }
     $prestate=Get-Content -LiteralPath $journal -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson
     $fence=Read-ContainerWriterFence $control
+    # A removal audit must be bound to the removal recovery context saved before its first change.
+    $prestateOperation=if($null -ne $prestate.PSObject.Properties['operation']){[string]$prestate.operation}else{'INSTALL'}
+    $removalContext=if($null -ne $prestate.PSObject.Properties['removal_recovery']){$prestate.removal_recovery}else{$null}
+    if ($prestateOperation -cne [string]$record.operation -or
+        ([string]$record.operation -ceq 'UNINSTALL' -and ($null -eq $removalContext -or
+            [string]$removalContext.schema -cne 'container-audit-machine-removal-recovery-v1' -or
+            -not (Same ([string]$removalContext.application) (Split-Path -Parent $Root))))) { throw 'MACHINE_RECOVERY_AUTHORITY_BINDING_DIFFERS' }
     if ([string]$prestate.schema -cne 'container-audit-machine-install-prestate-v1' -or [string]$prestate.run_id -cne $run -or
         -not (Same ([string]$prestate.install_root) $Root) -or [string]$prestate.worker_sid -cne [string]$Worker.sid -or
         -not (Same ([string]$prestate.profile_root) ([string]$Worker.profile_root)) -or
@@ -4659,6 +4867,13 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
             startup_before=@(ConvertTo-CanonicalMachineArtifactJournal $startupBefore);worker_preparation=$workerPreparation;worker_run_before=$workerRunBefore;
             session_id=$Script:CanonicalWriterFenceSessionId;attempt_id=$Script:CanonicalWriterFenceAttemptId;orchestrator_sha256=Sha $PSCommandPath;
             prepared_receipt=$prepared;secret_values_recorded=$false}
+        if ($Uninstall) {
+            # Recovery context for a removal that fails or dies part-way (no secret values): where the
+            # helper journals each move and which operation to roll back. Saved before the first change.
+            $prestate.operation='UNINSTALL'
+            $prestate.removal_recovery=[ordered]@{schema='container-audit-machine-removal-recovery-v1';application=(Split-Path -Parent $Root);
+                evidence_parent=(Join-Path (Split-Path -Parent $Root) 'removal-evidence');journal_name='removal-move-journal.jsonl';run_id=$run}
+        }
         $privatePrestate=Join-Path $state ('install-audit\machine-prestate-'+$run)
         New-InstallationProtectedDirectory $privatePrestate 'S-1-5-32-544'
         $journal=Join-Path $privatePrestate 'prestate.json'

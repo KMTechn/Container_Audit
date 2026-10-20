@@ -2522,6 +2522,18 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
     $evidence = Join-Path $evidenceParent ([Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $evidence | Out-Null
     if (-not $testOverride) { Set-HardenedCodeAcl $evidence }
+    # A machine removal bound to a writer-fence transaction keeps an append-only move
+    # journal beside the moved evidence, so a failed or killed removal can be put back
+    # exactly (INSTALL_CANONICAL_PORTABLE.ps1 Restore-CanonicalRemovalFromMoveJournal).
+    # Records hold paths, hashes and file metadata only; no secret values.
+    $moveJournal = ''
+    if (-not $OnlyUncommittedCurrent -and $MachineControlRoot -and $WriterFenceReplacementTransactionId -cmatch '^[0-9a-f]{32}$') {
+        $moveJournal = Join-Path $evidence 'removal-move-journal.jsonl'
+        $journalEncoding = [Text.UTF8Encoding]::new($false)
+        $journalWrite = { param($Record) [IO.File]::AppendAllText($moveJournal, (($Record | ConvertTo-Json -Compress -Depth 4) + "`n"), $journalEncoding) }
+        & $journalWrite ([ordered]@{record='HEADER';schema='container-audit-removal-move-journal-v1';
+            run_id=$WriterFenceReplacementTransactionId;application=$application;evidence=$evidence;secret_values_recorded=$false})
+    }
     $failedTransition=Join-Path $application 'update-control\transition.json'
     if(Test-Path -LiteralPath $failedTransition -PathType Leaf) {
         $failedState=$null
@@ -2544,6 +2556,19 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
     if ($null -ne $workerRemovalProof) {
         $plan.decisions += @{path='application';disposition=('WORKER_PART_'+$workerRemovalProof.proof);worker_run_present=$workerRemovalProof.worker_run_present}
     }
+    if ($moveJournal) {
+        # Directories this removal may empty and delete: restore needs their ACL, attributes and times.
+        foreach ($directory in @($plan.directories | Sort-Object -Unique)) {
+            $directoryIo = Get-ContainerRemovalIoPath $directory
+            if (-not (Test-Path -LiteralPath $directoryIo -ErrorAction Stop)) { continue }
+            $directoryItem = Get-Item -LiteralPath $directoryIo -Force -ErrorAction Stop
+            if (-not $directoryItem.PSIsContainer) { continue }
+            $directorySddl = ''; $directorySddlUnreadable = $false
+            try { $directorySddl = [string](Get-Acl -LiteralPath $directoryIo -ErrorAction Stop).Sddl } catch { $directorySddlUnreadable = $true }
+            & $journalWrite ([ordered]@{record='DIR';path=$directory;attributes=[int]$directoryItem.Attributes;sddl=$directorySddl;
+                sddl_unreadable=$directorySddlUnreadable;created_utc_ticks=$directoryItem.CreationTimeUtc.Ticks;written_utc_ticks=$directoryItem.LastWriteTimeUtc.Ticks})
+        }
+    }
     $changedMetadataRoots = @(); $cleanupRetained = @()
     foreach ($path in $plan.artifacts) {
         $prefix = $application.TrimEnd('\') + '\'
@@ -2562,6 +2587,17 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
         # at the destination. The literal extended path stays inside evidence.
         $destinationIo = Get-ContainerRemovalIoPath $destination
         New-Item -ItemType Directory -Path (Split-Path -Parent $destinationIo) -Force | Out-Null
+        if ($moveJournal) {
+            # Intent is durable before the rename; restore decides by what is actually present.
+            $journalSha = if ($plan.hashes.ContainsKey($path)) { [string]$plan.hashes[$path] } else {
+                $journalHasher = [Security.Cryptography.SHA256]::Create(); $journalReader = $null
+                try { $journalReader = [IO.File]::OpenRead((Get-ContainerRemovalIoPath $path)); ([BitConverter]::ToString($journalHasher.ComputeHash($journalReader))).Replace('-','').ToLowerInvariant() }
+                finally { if ($null -ne $journalReader) { $journalReader.Dispose() }; $journalHasher.Dispose() }
+            }
+            $journalItem = Get-Item -LiteralPath (Get-ContainerRemovalIoPath $path) -Force -ErrorAction Stop
+            & $journalWrite ([ordered]@{record='MOVE';path=$path;destination=$destination;sha256=$journalSha;
+                bytes=[int64]$journalItem.Length;written_utc_ticks=$journalItem.LastWriteTimeUtc.Ticks})
+        }
         try {
             Move-Item -LiteralPath (Get-ContainerRemovalIoPath $path) -Destination $destinationIo -ErrorAction Stop
             if (Test-Path -LiteralPath (Get-ContainerRemovalIoPath $path) -ErrorAction Stop) { throw 'REMOVAL_PATH_ABSENCE_NOT_PROVEN' }
@@ -2589,6 +2625,7 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
         if(Test-Path -LiteralPath $current){throw 'TRANSACTION_REMOVAL_CODE_PREIMAGE_NOT_ABSENT'}
         return @{status='PASS';lifecycle_state='UNCOMMITTED_PLACEMENT_REMOVED';evidence_root=$evidence;retained_paths=@($remaining.retained_paths)}
     }
+    if ($moveJournal) { & $journalWrite ([ordered]@{record='MARKER_INTENT';path=$markerPath;evidence_root=$evidence}) }
     Write-ContainerStartupUpdateRecord -Path $markerPath -Payload @{
         schema='container-audit-supported-removal-v1'; lifecycle_state='REMOVED';
         worker_removal_proof=$workerRemovalProof

@@ -13,7 +13,7 @@ INSTALLER = Path(__file__).resolve().parents[1] / "INSTALL_CANONICAL_PORTABLE.ps
 def test_unproved_child_compensation_is_recorded_under_product_strict_mode(tmp_path, engine):
     result = run_functions(tmp_path, INSTALLER,
         ["Full", "Same", "ConvertFrom-CanonicalMachineArtifactJournal", "Restore-CanonicalMachineArtifacts",
-         "Restore-CanonicalMachineInstallationPrestate"], r'''
+         "Get-CanonicalMachineRecoveryEntry", "Restore-CanonicalMachineInstallationPrestate"], r'''
 Set-StrictMode -Version Latest
 $state=Join-Path $env:CA_CONTRACT_ROOT 'state'
 [void][IO.Directory]::CreateDirectory($state)

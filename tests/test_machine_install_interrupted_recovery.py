@@ -16,7 +16,7 @@ FUNCTIONS = [
     "Test-CanonicalMachineCodePrestate", "Save-CanonicalMachineFailureAudit",
     "Restore-CanonicalMachineInstallationPrestate", "Read-CanonicalMachineInstallationRecovery",
     "Invoke-CanonicalMachineInstallationRecovery", "Get-CanonicalMachinePlacementArguments",
-    "Write-CanonicalMachinePublicRecord",
+    "Write-CanonicalMachinePublicRecord", "Get-CanonicalMachineRecoveryEntry",
 ]
 
 

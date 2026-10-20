@@ -34,7 +34,7 @@ FUNCTIONS = [
 ]
 # Functions the fix adds; absent before the fix (RED run) so the harness still starts.
 OPTIONAL = ["Restore-CanonicalRemovalFromMoveJournal", "Restore-CanonicalRemovalScheduledTasks",
-            "ConvertTo-CanonicalRemovalIoPath", "Find-CanonicalRemovalMoveJournal"]
+            "ConvertTo-CanonicalRemovalIoPath", "Find-CanonicalRemovalMoveJournal", "Get-CanonicalRemovalFileSha256"]
 FUNCTIONS += [n for n in OPTIONAL if re.search(rf"(?m)^function {re.escape(n)}\b", INSTALLER_TEXT)]
 FUNCTIONS = [n for n in FUNCTIONS if re.search(rf"(?m)^function {re.escape(n)}\b", INSTALLER_TEXT)]
 
@@ -272,7 +272,7 @@ def test_dead_remover_is_recovered_exactly_and_can_remove_again(tmp_path, monkey
 
 
 @pytest.mark.parametrize("case, expected", [
-    ("dead_live_run", "MACHINE_RECOVERY_CHILD_ACTIVE"),
+    ("dead_live_run", "MACHINE_RECOVERY_CHILD_UNRECORDED"),
     ("dead_authority_busy", "CONTAINER_WRITER_SESSION_AUTHORITY_ALREADY_EXISTS"),
     ("dead_writer_running", "MACHINE_RECOVERY_COMPENSATION_UNPROVEN"),
 ])
@@ -314,8 +314,7 @@ def test_contradicting_records_keep_the_fence_and_change_nothing(tmp_path, monke
     assert outcome["fence_present"] and outcome["fence_retained"]
     assert outcome["code_restore"] == "UNPROVEN"
     assert _snapshot(app) == moved
-    if damage != "journal-absent":
-        assert outcome["status"] == "ROLLBACK_FAILED"
+    assert outcome["status"] == "ROLLBACK_FAILED"
 
 
 # ---- RED 1/3: the journal and recovery context exist before the first change
@@ -369,4 +368,6 @@ def test_failed_uninstall_guidance_names_the_exact_accepting_entry(tmp_path, mon
         assert token in text, text
     assert "-Uninstall" not in text
     # and that entry accepts the operation (recovery of a dead remover above); gate is not INSTALL-only
-    assert "operation -cne 'INSTALL'" not in INSTALLER_TEXT
+    gate = INSTALLER_TEXT[INSTALLER_TEXT.index("function Read-CanonicalMachineInstallationRecovery"):
+                          INSTALLER_TEXT.index("function Confirm-CanonicalMachineRecoveryChildExit")]
+    assert "-cnotin @('INSTALL','UNINSTALL')" in gate and "'PREIMAGE_SAVED'" in gate
