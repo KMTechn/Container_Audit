@@ -4488,6 +4488,7 @@ function Get-CanonicalMachineRecoveryEntry($Audit,[string]$AuditPath) {
     # The entry that accepts an unfinished or failed removal audit (the same one an install uses).
     return 'RecoverMachineInstallation (UNINSTALL audit): from an administrator PowerShell run INSTALL_CANONICAL_PORTABLE.ps1 '+
         '-RecoverMachineInstallation -SourceRoot <original admitted packet> -WorkerAccount <worker account> '+
+        '-WorkerSurveyInventory <READY inventory> '+
         '-MachineRecoveryAuditPath "'+$AuditPath+'" -MachineRecoveryAuditSha256 <SHA256 of that audit file>'
 }
 function Restore-CanonicalMachineInstallationPrestate($Worker,[string]$Source,[string]$Root,$Manifest,$Prestate,

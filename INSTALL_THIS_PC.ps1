@@ -2530,7 +2530,7 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
     if (-not $OnlyUncommittedCurrent -and $MachineControlRoot -and $WriterFenceReplacementTransactionId -cmatch '^[0-9a-f]{32}$') {
         $moveJournal = Join-Path $evidence 'removal-move-journal.jsonl'
         $journalEncoding = [Text.UTF8Encoding]::new($false)
-        $journalWrite = { param($Record) [IO.File]::AppendAllText($moveJournal, (($Record | ConvertTo-Json -Compress -Depth 4) + "`n"), $journalEncoding) }
+        $journalWrite = { param($Record) $journalBytes = $journalEncoding.GetBytes((($Record | ConvertTo-Json -Compress -Depth 4) + "`n")); $journalStream = [IO.File]::Open($moveJournal, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::Read); try { $journalStream.Write($journalBytes, 0, $journalBytes.Length); $journalStream.Flush($true) } finally { $journalStream.Dispose() } }
         & $journalWrite ([ordered]@{record='HEADER';schema='container-audit-removal-move-journal-v1';
             run_id=$WriterFenceReplacementTransactionId;application=$application;evidence=$evidence;secret_values_recorded=$false})
     }
@@ -2588,7 +2588,7 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
         $destinationIo = Get-ContainerRemovalIoPath $destination
         New-Item -ItemType Directory -Path (Split-Path -Parent $destinationIo) -Force | Out-Null
         if ($moveJournal) {
-            # Intent is durable before the rename; restore decides by what is actually present.
+            # Intent is flushed to disk (Flush($true)) before the rename; restore decides by what is actually present.
             $journalSha = if ($plan.hashes.ContainsKey($path)) { [string]$plan.hashes[$path] } else {
                 $journalHasher = [Security.Cryptography.SHA256]::Create(); $journalReader = $null
                 try { $journalReader = [IO.File]::OpenRead((Get-ContainerRemovalIoPath $path)); ([BitConverter]::ToString($journalHasher.ComputeHash($journalReader))).Replace('-','').ToLowerInvariant() }
