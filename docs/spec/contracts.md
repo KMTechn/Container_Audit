@@ -114,12 +114,17 @@ target-generation preflight 전용 호출에서만 사용할 수 있다.
 PID 미기록도 같은 run ID 프로세스가 0이면 인정한다. 같은 자식/run 프로세스가 살아 있거나 관측이 미확인이면 원 audit·fence·자료를 보존하고
 고정 원인 코드로 거절한다. audit·prestate·packet·작업자·fence tuple 결속은 유지한다.
 
-완료 설치의 예외는 INSTALL / PASS_MACHINE_WORKER_PENDING + 같은 결속 + 남은 fence +
-주인 종료 증명 한 조합이다. 같은 자식 종료 검사 뒤 설치된 current의 manifest·bootstrap
+완료 설치의 울타리 정리는 INSTALL / PASS_MACHINE_WORKER_PENDING + 같은 결속 + 남은 fence +
+주인 종료 증명 조건이다. 같은 자식 종료 검사 뒤 설치된 current의 manifest·bootstrap
 무결성을 확인하고 원 audit 해시와 결속을 authority 안에서 되읽어, 기존 PRODUCT_COMPLETE
 허가로 울타리만 해제한다. 보상·코드 제거·원 성공 감사 다시 쓰기는 하지 않는다. current나
 결속이 다르거나 종료 증명이 불충분하면 기존 실패 길과 fence 보존을 유지한다. 제거·복원
 성공 상태에는 이 허용을 넓히지 않는다([지원 재개](admin-installation.md#기계-배치-실패의-지원-재개)).
+
+보상 완료 FAILED_ROLLED_BACK은 같은 결속·남은 fence·주인/자식 종료 증명과 감사의 보상 증명을 확인한 뒤,
+current의 manifest·bootstrap 무결성이 prestate와 같을 때만 ROLLBACK_COMPLETE 허가로 울타리를 정리한다.
+새 설치 전 상태면 current 부재를 확인한다. 원 감사 바이트·FAILED_ROLLED_BACK 상태를 유지하고 보상은 재실행하지 않는다.
+확인이 어긋나면 거절하고 fence를 보존한다.
 
 작업자 선택은 ACTIVE 공용 명단과 이 PC에 내구 저장한 B 이름을 사용한다. 이름 등록·번호·재시도는 [이름 등록 B](worker-roster-b.md)가 정본이며 stage_a=false이다. v1 호환 조회는 그대로 유지한다. 기존 생산자 HMAC으로 `POST /api/worker-roster/v1/query`에 현장 ID와 `known_version`을 보내고 명단 응답만 262,144B까지 받는다. 시작·변경·60초 배경 조회는 writer admission 밖에서 수행하며 현재 조회 시도·로그인 epoch가 같은 응답만 적용한다. 조회 지연·실패는 스캔 내구 저장을 기다리게 하지 않는다.
 

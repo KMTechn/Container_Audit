@@ -96,6 +96,12 @@ manifest와 bootstrap 무결성을 검증하고 원 감사 결속을 authority �
 거절하고 울타리와 설치 상태를 보존한다. 남은 울타리가 없는 성공 감사나 다른 operation의
 성공 상태는 이 예외로 받지 않는다.
 
+보상 완료 감사 `FAILED_ROLLED_BACK`도 같은 결속·남은 fence·주인/자식 종료 증명 뒤
+울타리만 정리한다. 감사의 보상 증명과 현재 코드가 prestate의 manifest 및 bootstrap
+무결성에 맞아야 하며, 새 설치 전 상태였다면 `current`가 없어야 한다. 기존
+`ROLLBACK_COMPLETE` 허가를 사용하고 보상을 다시 실행하지 않는다. 원 감사 바이트와
+`FAILED_ROLLED_BACK` 상태를 유지하며, 맞지 않으면 울타리를 보존하고 거절한다.
+
 키트 설치/되돌림은 남은 fence를 직접 지우지 않는다. 원래 관리 패킷의 설치기를 이미
 승격된 지원 셸에서 `-RecoverMachineInstallation -MachineRecoveryAuditPath <기계 audit>
 -MachineRecoveryAuditSha256 <SHA256> -WorkerAccount <작업자 SID>
