@@ -84,13 +84,25 @@ Run·새 폴더 복원이 모두 확인되면 실패 승인 receipt로 fence를 
 
 ### 기계 배치 실패의 지원 재개
 
+설치(`INSTALL`) 성공 감사 `PASS_MACHINE_WORKER_PENDING`을 저장한 뒤 울타리 해제 전에
+끊긴 경우에는 같은 지원 입구가 **완료된 기계 배치의 울타리만 정리**한다. 원 audit 해시·
+설치 루트·패킷·작업자·prestate·fence tuple을 대조하고 원 authority를 독점하여 주인 종료를
+증명한 뒤, 기록된 자식과 같은 run ID 프로세스가 모두 끝났는지 확인한다. 설치된 `current`의
+manifest와 bootstrap 무결성을 검증하고 원 감사 결속을 authority 안에서 다시 읽어야 한다.
+맞으면 기존 PRODUCT_COMPLETE 허가와 release 영수증으로 해당 울타리만 해제한다. 배치 코드·
+바로 가기·PENDING·사용자 자료를 되돌리지 않으며 원 성공 감사 바이트와 상태를 보존한다.
+`PASS_MACHINE_RECOVERED`는 이 울타리 정리 성공이고 작업자 첫 onboarding은 여전히 필요하다.
+결속·current 무결성이 다르거나 주인/자식이 살아 있거나 관측이 미확인이면 기존 실패 길로
+거절하고 울타리와 설치 상태를 보존한다. 남은 울타리가 없는 성공 감사나 다른 operation의
+성공 상태는 이 예외로 받지 않는다.
+
 키트 설치/되돌림은 남은 fence를 직접 지우지 않는다. 원래 관리 패킷의 설치기를 이미
 승격된 지원 셸에서 `-RecoverMachineInstallation -MachineRecoveryAuditPath <기계 audit>
 -MachineRecoveryAuditSha256 <SHA256> -WorkerAccount <작업자 SID>
 -WorkerSurveyInventory <READY inventory>`로 호출한다. audit는 기계 상태의
 `install-audit/canonical-portable-<run>.json`이다. 이 입구는 audit·사전 상태 파일·원래
 패킷·작업자·fence tuple을 읽기로 대조하고 같은 authority를 새로 독점한 뒤 보상을
-재시도한다. 설치 감사는 `MACHINE_PREPARING`과 `MACHINE_INSTALL_FAILED`, 제거(`UNINSTALL`) 감사는
+재시도한다. 설치 감사의 보상 재개는 `MACHINE_PREPARING`과 `MACHINE_INSTALL_FAILED`, 제거(`UNINSTALL`) 감사는
 `PREIMAGE_SAVED`·`MACHINE_INSTALL_FAILED`·`ROLLBACK_FAILED`만 받는다(제거는 첫 변경 전에 사전 상태 파일에
 `operation`과 `removal_recovery`(옮김 기록 자리·run ID, 비밀 값 0)를 저장하며, 이 둘이 감사와 맞지 않으면
 `MACHINE_RECOVERY_AUTHORITY_BINDING_DIFFERS`). 제거 도우미는 코드 파일을 `removal-evidence\<id>`로 옮기기 직전마다
