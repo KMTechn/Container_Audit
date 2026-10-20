@@ -98,8 +98,8 @@ Run·새 폴더 복원이 모두 확인되면 실패 승인 receipt로 fence를 
 옮긴 파일만 정확히 제자리로(바이트·수정 시각·디렉터리) 되돌린다. 증거 바이트·옛 자리 파일·기록이 서로
 어긋나면 아무것도 옮기지 않고 거절하고 담장을 유지한다(`ROLLBACK_FAILED`). 성공하면 감사는 `FAILED_ROLLED_BACK`과
 `rollback_steps`가 되고 담장이 풀려 공식 `-Uninstall`·재설치 길이 다시 열린다. 제거 실패 감사의 `support_recovery` 는
-이 입구의 정확한 인수 꼴(`-RecoverMachineInstallation -SourceRoot -WorkerAccount -MachineRecoveryAuditPath
--MachineRecoveryAuditSha256`)을 가리킨다. 삭제된 예약 작업은 증거의 XML 로 최선 복원하고 결과만 `task_restore` 에
+이 입구의 정확한 인수 꼴(`-RecoverMachineInstallation -SourceRoot -WorkerAccount -WorkerSurveyInventory <READY inventory>
+-MachineRecoveryAuditPath -MachineRecoveryAuditSha256`)을 가리킨다. 삭제된 예약 작업은 증거의 XML 로 최선 복원하고 결과만 `task_restore` 에
 적는다(증명 조건 아님). 자식 상태
 `NOT_STARTED`·`EXITED`·`EXIT_UNPROVEN`만 받는다. 준비 중이거나 자식 종료가 미증명이면,
 이미 시작한 모든 자식의 기록된 `process_id`와 UTC `started_at_utc`를 현재 프로세스와
