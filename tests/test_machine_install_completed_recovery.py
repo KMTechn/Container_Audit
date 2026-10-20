@@ -193,7 +193,7 @@ def test_completed_installation_only_releases_proven_fence(tmp_path, engine, cas
             "tuple_differs": "MACHINE_RECOVERY_AUTHORITY_BINDING_DIFFERS",
             "commit_differs": "MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS",
             "owner_alive": "CONTAINER_WRITER_SESSION_AUTHORITY_ALREADY_EXISTS",
-            "live_child": "MACHINE_RECOVERY_CHILD_ACTIVE",
+            "live_child": "MACHINE_RECOVERY_CHILD_UNRECORDED",
             "process_unknown": "MACHINE_RECOVERY_CHILD_EXIT_UNPROVEN",
             "integrity_failure": "TEST_INTEGRITY_UNPROVEN",
             "installed_changed": "MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS",
