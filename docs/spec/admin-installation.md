@@ -90,7 +90,17 @@ Run·새 폴더 복원이 모두 확인되면 실패 승인 receipt로 fence를 
 -WorkerSurveyInventory <READY inventory>`로 호출한다. audit는 기계 상태의
 `install-audit/canonical-portable-<run>.json`이다. 이 입구는 audit·사전 상태 파일·원래
 패킷·작업자·fence tuple을 읽기로 대조하고 같은 authority를 새로 독점한 뒤 보상을
-재시도한다. `MACHINE_PREPARING`과 `MACHINE_INSTALL_FAILED`, 자식 상태
+재시도한다. 설치 감사는 `MACHINE_PREPARING`과 `MACHINE_INSTALL_FAILED`, 제거(`UNINSTALL`) 감사는
+`PREIMAGE_SAVED`·`MACHINE_INSTALL_FAILED`·`ROLLBACK_FAILED`만 받는다(제거는 첫 변경 전에 사전 상태 파일에
+`operation`과 `removal_recovery`(옮김 기록 자리·run ID, 비밀 값 0)를 저장하며, 이 둘이 감사와 맞지 않으면
+`MACHINE_RECOVERY_AUTHORITY_BINDING_DIFFERS`). 제거 도우미는 코드 파일을 `removal-evidence\<id>`로 옮기기 직전마다
+`removal-move-journal.jsonl`(경로·해시·시각·디렉터리 ACL, run ID 결속)에 먼저 적고, 보상과 이 입구는 그 기록대로
+옮긴 파일만 정확히 제자리로(바이트·수정 시각·디렉터리) 되돌린다. 증거 바이트·옛 자리 파일·기록이 서로
+어긋나면 아무것도 옮기지 않고 거절하고 담장을 유지한다(`ROLLBACK_FAILED`). 성공하면 감사는 `FAILED_ROLLED_BACK`과
+`rollback_steps`가 되고 담장이 풀려 공식 `-Uninstall`·재설치 길이 다시 열린다. 제거 실패 감사의 `support_recovery` 는
+이 입구의 정확한 인수 꼴(`-RecoverMachineInstallation -SourceRoot -WorkerAccount -MachineRecoveryAuditPath
+-MachineRecoveryAuditSha256`)을 가리킨다. 삭제된 예약 작업은 증거의 XML 로 최선 복원하고 결과만 `task_restore` 에
+적는다(증명 조건 아님). 자식 상태
 `NOT_STARTED`·`EXITED`·`EXIT_UNPROVEN`만 받는다. 준비 중이거나 자식 종료가 미증명이면,
 이미 시작한 모든 자식의 기록된 `process_id`와 UTC `started_at_utc`를 현재 프로세스와
 대조하고, 한 번 읽은 Win32_Process의 명령줄에 같은 `-WriterFenceReplacementTransactionId`
