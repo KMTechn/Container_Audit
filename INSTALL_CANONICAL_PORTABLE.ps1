@@ -4665,7 +4665,7 @@ function Read-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[stri
     $run=[string]$record.run_id
     if ($run -cnotmatch '^[0-9a-f]{32}$' -or -not (Same $auditFull (Join-Path $state ('install-audit\canonical-portable-'+$run+'.json'))) -or
         [string]$record.schema -cne 'container-audit-canonical-portable-install-v2' -or [string]$record.operation -cnotin @('INSTALL','UNINSTALL') -or
-        [string]$record.status -cnotin $(if([string]$record.operation -ceq 'UNINSTALL'){@('PREIMAGE_SAVED','MACHINE_INSTALL_FAILED','ROLLBACK_FAILED')}else{@('MACHINE_PREPARING','MACHINE_INSTALL_FAILED','PASS_MACHINE_WORKER_PENDING')}) -or
+        [string]$record.status -cnotin $(if([string]$record.operation -ceq 'UNINSTALL'){@('PREIMAGE_SAVED','MACHINE_INSTALL_FAILED','ROLLBACK_FAILED','FAILED_ROLLED_BACK')}else{@('MACHINE_PREPARING','MACHINE_INSTALL_FAILED','PASS_MACHINE_WORKER_PENDING','FAILED_ROLLED_BACK')}) -or
         -not (Same ([string]$record.install_root) $Root) -or
         [string]$record.worker_sid -cne [string]$Worker.sid -or [string]$record.placement_child.status -cnotin @('NOT_STARTED','EXITED','EXIT_UNPROVEN') -or
         [string]$record.compensation_child.status -cnotin @('NOT_STARTED','EXITED','EXIT_UNPROVEN') -or
@@ -4699,7 +4699,7 @@ function Read-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[stri
     return [pscustomobject]@{state=$state;control=$control;run_id=$run;prepared=$prepared;prestate=$prestate;fence=$fence;audit=$record;audit_path=$auditFull;audit_sha256=$AuditSha256}
 }
 function Confirm-CanonicalMachineRecoveryChildExit($Audit) {
-    if ([string]$Audit.status -cnotin @('MACHINE_PREPARING','PASS_MACHINE_WORKER_PENDING') -and
+    if ([string]$Audit.status -cnotin @('MACHINE_PREPARING','PASS_MACHINE_WORKER_PENDING','FAILED_ROLLED_BACK') -and
         [string]$Audit.placement_child.status -cne 'EXIT_UNPROVEN' -and [string]$Audit.compensation_child.status -cne 'EXIT_UNPROVEN') { return }
     try { $processSnapshot=@(Get-CimInstance -ClassName Win32_Process -Property ProcessId,CommandLine -OperationTimeoutSec 5 -ErrorAction Stop) }
     catch { throw 'MACHINE_RECOVERY_CHILD_EXIT_UNPROVEN' }
@@ -4743,18 +4743,32 @@ function Invoke-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[st
     try {
         [void](Assert-ContainerWriterFenceOwner -ControlRoot $control -SessionId $fence.session_id -AttemptId $fence.attempt_id -ReplacementTransactionId $run -AuthorityLease $authority)
         Confirm-CanonicalMachineRecoveryChildExit $record
-        if ([string]$record.status -ceq 'PASS_MACHINE_WORKER_PENDING') {
-            # Placement already completed. Prove its current bytes and reread the
-            # original audit under the recovered authority; never compensate it.
-            $installed=InstalledManifest $Root $SkipSignatureValidationForTest
-            [void](Assert-BootstrapIntegrityRecord $Root)
+        if ([string]$record.status -cin @('PASS_MACHINE_WORKER_PENDING','FAILED_ROLLED_BACK')) {
+            # A terminal checkpoint only releases its fence. Verify either the
+            # placed release or the compensated preimage; never run it again.
+            $rolledBack=([string]$record.status -ceq 'FAILED_ROLLED_BACK')
+            if ($rolledBack) {
+                $proof=$record.compensation
+                if ([string]$proof.child_exit -cne 'PASS' -or [string]$proof.code_restore -cne 'PASS' -or
+                    [string]$proof.artifact_restore -cne 'PASS' -or [string]$proof.worker_run_restore -cnotin @('PASS','NOT_CHANGED') -or
+                    [string]$proof.worker_directory_restore -cnotin @('PASS','NOT_CHANGED') -or
+                    -not (Test-CanonicalMachineCodePrestate $Root ([string]$prestate.before_manifest_sha256) @())) {
+                    throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS'
+                }
+            } else {
+                $installed=InstalledManifest $Root $SkipSignatureValidationForTest
+                [void](Assert-BootstrapIntegrityRecord $Root)
+                if ([string]$installed.source_commit -cne [string]$Manifest.source_commit -or
+                    (Sha (Join-Path $Root 'portable-manifest.json')) -cne [string]$record.source_manifest_sha256) {
+                    throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS'
+                }
+            }
             $completed=Read-CanonicalMachineInstallationRecovery $Worker $Source $Root $Manifest $auditFull ([string]$Context.audit_sha256)
-            if ([string]$installed.source_commit -cne [string]$Manifest.source_commit -or
-                [string]$completed.audit.source_commit -cne [string]$Manifest.source_commit -or
-                (Sha (Join-Path $Root 'portable-manifest.json')) -cne [string]$completed.audit.source_manifest_sha256) {
+            if ([string]$completed.audit.source_commit -cne [string]$Manifest.source_commit) {
                 throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS'
             }
-            $authorization=New-CanonicalWriterFenceReleaseAuthorization (Join-Path $state ('install-audit\recovered-release-'+$run+'-'+[Guid]::NewGuid().ToString('N')+'.json')) 'PRODUCT_COMPLETE' $auditFull
+            $phase=if($rolledBack){'ROLLBACK_COMPLETE'}else{'PRODUCT_COMPLETE'}
+            $authorization=New-CanonicalWriterFenceReleaseAuthorization (Join-Path $state ('install-audit\recovered-release-'+$run+'-'+[Guid]::NewGuid().ToString('N')+'.json')) $phase $auditFull
             [void](Set-ContainerWriterFencePrepared -ControlRoot $control -SessionId $fence.session_id -AttemptId $fence.attempt_id -ReplacementTransactionId $run `
                 -PreparedReceiptPath $authorization.path -PreparedReceiptSha256 $authorization.sha256 -Status 'PREPARED' -AuthorityLease $authority)
             # Stop removes the entire active fence, including its old delegation.
