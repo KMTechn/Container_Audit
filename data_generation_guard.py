@@ -260,7 +260,8 @@ def _portable_runtime_release(*, app_root=None, rehash_paths=None, deadline=None
     from current_user_onboarding import verify_bootstrap_integrity
     from types import SimpleNamespace
 
-    verification = {} if rehash_paths is None else {'rehash_paths': rehash_paths, 'deadline': deadline}
+    verification = ({'reuse_in_process': True} if rehash_paths is None
+                    else {'rehash_paths': rehash_paths, 'deadline': deadline})
     detail = verify_bootstrap_integrity(SimpleNamespace(
         app_root=packet_root, bootstrap_integrity_path=packet_root / "bootstrap-integrity.json"), required=True,
         expected_entrypoint=expected_entrypoint, **verification)

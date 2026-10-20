@@ -3930,7 +3930,11 @@ function Resolve-CanonicalMachineRemovalWorker([string]$Account,$Caller,[string]
         } else { $profile=Get-CanonicalWorkerProfileRoot $sid }
         return [pscustomobject]@{sid=$sid;profile_root=$profile;survey_sha256=$(if($null -ne $marker){[string]$marker.survey_sha256}else{''});
             survey_path='';same_caller=($sid -ceq [string]$Caller.sid)}
-    } catch { throw 'MACHINE_REMOVAL_WORKER_PART_PENDING' }
+    } catch {
+        # Keep the original cause code; only an unproven worker part is "part pending".
+        if ([string]$_.Exception.Message -cmatch '^(MACHINE|PENDING)_[A-Z0-9_]+$') { throw [string]$_.Exception.Message }
+        throw 'MACHINE_REMOVAL_WORKER_RESOLVE_FAILED'
+    }
 }
 
 function Assert-CanonicalMachineRemovalWorkerPart($Worker,[string]$Source,[string]$Root,$Manifest) {
@@ -4855,9 +4859,12 @@ elseif ($RestoreReceiptPath -or $RestoreReceiptSha256) {
 }
 # Classify the requested operation before applying the new-install requirement.
 $canonicalOperation=if($CompleteRetiredRemoval){'COMPLETE_RETIRED_REMOVAL'}elseif($Uninstall){'UNINSTALL'}elseif($RestoreVerifiedReplacement){'RESTORE'}elseif($RecoverMachineInstallation){'MACHINE_RECOVERY'}else{'INSTALL'}
+# The removal resolver reads the machine state root from the all-writer fence helper,
+# so it runs after that admitted helper is loaded (see below); install resolves here.
+$removalWorkerDeferred=($Uninstall -and -not $CompleteRetiredRemoval)
 try {
     $caller=Get-CanonicalInstallationCallerSecurity
-    $machineWorker=if($Uninstall -and -not $CompleteRetiredRemoval){Resolve-CanonicalMachineRemovalWorker $WorkerAccount $caller (Full $InstallRoot 'InstallRoot')}
+    $machineWorker=if($removalWorkerDeferred){$null}
         else{Resolve-CanonicalMachineWorker $WorkerAccount $WorkerSurveyInventory $caller}
 }
 catch {
@@ -4907,6 +4914,15 @@ if (-not (Test-Path -LiteralPath $writerFenceHelperPath -PathType Leaf)) {
     throw 'Portable tree is missing the all-writer fence helper.'
 }
 . $writerFenceHelperPath
+if ($removalWorkerDeferred) {
+    try { $machineWorker=Resolve-CanonicalMachineRemovalWorker $WorkerAccount $caller (Full $InstallRoot 'InstallRoot') }
+    catch {
+        $code=if($_.Exception.Message -cmatch '^(MACHINE|PENDING)_[A-Z0-9_]+$'){$_.Exception.Message}else{'PENDING_TARGET_AMBIGUOUS'}
+        Write-CanonicalMachinePublicRecord $code
+        exit 4
+    }
+    if ($null -ne $machineWorker) { Assert-CanonicalOperatingWorkerAccount $canonicalOperation }
+}
 if ($RecoverMachineInstallation) {
     if ($null -eq $machineWorker -or $PlanOnly -or $Uninstall -or $RestoreVerifiedReplacement -or $CompleteRetiredRemoval -or $ServerBaseUrl -or
         -not $MachineRecoveryAuditPath -or $MachineRecoveryAuditSha256 -cnotmatch '^[0-9a-f]{64}$') { throw 'MACHINE_RECOVERY_ARGUMENTS_INVALID' }

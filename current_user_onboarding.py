@@ -78,6 +78,11 @@ LOGISTICS_PROFILE_PATH_ENV = PROFILE_PATH_ENV
 ENROLLMENT_TLS_CA_BUNDLE_PATH_ENV = "CONTAINER_AUDIT_ENROLLMENT_TLS_CA_BUNDLE_PATH"
 ONBOARDING_EXIT_CODE = 4
 INSTALL_SERVER_ORIGIN_CHANGED = "INSTALL_SERVER_ORIGIN_CHANGED"
+BOOTSTRAP_INTEGRITY_RECORD_ABSENT = "BOOTSTRAP_INTEGRITY_RECORD_ABSENT"
+BOOTSTRAP_INTEGRITY_RECORD_ABSENT_MESSAGE = (
+    "설치 무결성 기록(bootstrap-integrity.json)을 찾지 못해 처음 설정을 멈췄습니다.\n"
+    "현장 관리자에게 알리고 설치 키트로 다시 설치하세요."
+)
 INSTALL_SERVER_ORIGIN_MESSAGE = "회사 서버 주소가 설치 때와 다릅니다.\n현장 관리자에게 알리세요."
 WRITER_FENCE_EXIT_CODE = 23
 INSTALLER_FAILURE_PREFIX = "CONTAINER_AUDIT_INSTALLER_FAILURE="
@@ -193,6 +198,12 @@ def _resolved(path: str | os.PathLike[str]) -> Path:
     return Path(path).expanduser().resolve(strict=False)
 
 
+def _installed_packet_root(app_root: Path) -> Path:
+    """Installed layout keeps the record beside portable-manifest.json (current/), not in app/."""
+    parent = app_root.parent
+    return parent if (parent / "portable-manifest.json").is_file() else app_root
+
+
 def resolve_current_user_onboarding_paths(
     app_root: str | os.PathLike[str],
     *,
@@ -297,7 +308,7 @@ def resolve_current_user_onboarding_paths(
         ),
         bootstrap_tls_ca_bundle_path=bootstrap_tls_ca_bundle,
         ledger_path=data_root / "transfer_seal" / "transfer_seal.db",
-        bootstrap_integrity_path=selected_app_root / "bootstrap-integrity.json",
+        bootstrap_integrity_path=_installed_packet_root(selected_app_root) / "bootstrap-integrity.json",
     )
 
 
@@ -523,6 +534,9 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+_BOOTSTRAP_INTEGRITY_PASS_CACHE: dict[tuple[str, str], tuple[tuple[int, int], dict[str, Any]]] = {}
+
+
 class BootstrapIntegrityMismatch(ValueError):
     """The installed inventory comparison completed and proved a mismatch."""
 
@@ -534,12 +548,29 @@ def verify_bootstrap_integrity(
     expected_entrypoint: str = "Container_Audit.exe",
     rehash_paths: frozenset[str] | None = None,
     deadline: float | None = None,
+    reuse_in_process: bool = False,
+    absent_blocks: bool = False,
 ) -> dict[str, Any]:
+    """Check the installed code tree against its record.
+
+    ``reuse_in_process`` answers repeat calls in one process from the first
+    PASS (tree read once); a changed record file, a different root/entry point
+    or a ``rehash_paths`` check always reads again.  ``absent_blocks`` turns a
+    missing record of an official install into a stop with a fixed public code.
+    """
     if not required:
         return {"status": "NOT_TESTED", "reason": "source-mode onboarding"}
+    code_root = _resolved(paths.bootstrap_integrity_path.parent)
+    cache_key = (str(code_root / paths.bootstrap_integrity_path.name), expected_entrypoint)
     try:
         record_stat = paths.bootstrap_integrity_path.lstat()
     except FileNotFoundError:
+        if absent_blocks:
+            raise CurrentUserOnboardingError(
+                BOOTSTRAP_INTEGRITY_RECORD_ABSENT_MESSAGE,
+                report_path=getattr(paths, "onboarding_report_path", paths.bootstrap_integrity_path),
+                status="BLOCKED", reason_code=BOOTSTRAP_INTEGRITY_RECORD_ABSENT,
+            ) from None
         return {
             "status": "ABSENT",
             "reason": "bootstrap integrity record is absent; continuing with a warning",
@@ -551,18 +582,19 @@ def verify_bootstrap_integrity(
         raise ValueError(
             "bootstrap integrity record is redirected or not a regular file"
         )
+    signature = (record_stat.st_size, record_stat.st_mtime_ns)
+    if reuse_in_process and rehash_paths is None:
+        cached = _BOOTSTRAP_INTEGRITY_PASS_CACHE.get(cache_key)
+        if cached is not None and cached[0] == signature:
+            return dict(cached[1])
     record = _read_json(paths.bootstrap_integrity_path, "bootstrap integrity record")
     if record.get("schema_version") != BOOTSTRAP_INTEGRITY_VERSION:
         raise ValueError("bootstrap integrity record schema is invalid")
     if record.get("status") != "PASS":
         raise ValueError("bootstrap integrity record is not PASS")
     declared_code_root = str(record.get("code_root") or "")
-    resolved_code_root = (
-        paths.bootstrap_integrity_path.parent.resolve()
-        if declared_code_root == "."
-        else _resolved(declared_code_root)
-    )
-    if resolved_code_root != paths.app_root:
+    resolved_code_root = code_root if declared_code_root == "." else _resolved(declared_code_root)
+    if resolved_code_root != code_root:
         raise ValueError("bootstrap integrity record code root is invalid")
     files = record.get("files")
     if not isinstance(files, list) or not files:
@@ -596,7 +628,7 @@ def verify_bootstrap_integrity(
         expected_hash = str(item.get("sha256") or "").strip().lower()
         if expected_size < 0 or len(expected_hash) != 64:
             raise ValueError("bootstrap integrity inventory metadata is invalid")
-        target = paths.app_root.joinpath(*parts)
+        target = code_root.joinpath(*parts)
         if target.is_symlink() or not target.is_file():
             raise BootstrapIntegrityMismatch(
                 f"bootstrap code file is absent or redirected: {relative_text}"
@@ -609,12 +641,12 @@ def verify_bootstrap_integrity(
             raise BootstrapIntegrityMismatch(f"bootstrap code file integrity failed: {relative_text}")
         normalized.append((expected_hash, expected_size, relative_text))
     actual_paths = set()
-    for candidate in paths.app_root.rglob("*"):
+    for candidate in code_root.rglob("*"):
         if deadline is not None and time.monotonic() >= deadline:
             raise TimeoutError("bootstrap inventory budget exhausted")
         if not candidate.is_file():
             continue
-        relative = candidate.relative_to(paths.app_root).as_posix().casefold()
+        relative = candidate.relative_to(code_root).as_posix().casefold()
         if relative == paths.bootstrap_integrity_path.name.casefold():
             continue
         actual_paths.add(relative)
@@ -640,16 +672,19 @@ def verify_bootstrap_integrity(
         raise ValueError(
             f"bootstrap integrity record does not identify {expected_entrypoint}"
         )
-    executable = paths.app_root / expected_entrypoint
+    executable = code_root / expected_entrypoint
     if not executable.is_file():
         raise ValueError("verified Container_Audit code entrypoint is absent")
-    return {
+    result = {
         "status": "PASS",
         "record_path": str(paths.bootstrap_integrity_path),
-        "code_root": str(paths.app_root),
+        "code_root": str(code_root),
         "file_count": len(files),
         "aggregate_sha256": aggregate,
     }
+    if reuse_in_process and rehash_paths is None:
+        _BOOTSTRAP_INTEGRITY_PASS_CACHE[cache_key] = (signature, dict(result))
+    return dict(result)
 
 
 def _is_reparse_or_link(path_stat: os.stat_result) -> bool:
@@ -2188,9 +2223,13 @@ def onboard_current_user(
     from data_generation_guard import DataGenerationBlocked
     try:
         with writer_admission("current_user_onboarding"):
+            installed_layout = paths.bootstrap_integrity_path.parent != paths.app_root
             bootstrap_integrity_detail = verify_bootstrap_integrity(
                 paths,
-                required=require_integrity,
+                required=require_integrity or installed_layout,
+                expected_entrypoint=("app/Container_Audit.py" if installed_layout else "Container_Audit.exe"),
+                reuse_in_process=True,
+                absent_blocks=installed_layout,
             )
             report["bootstrap_integrity"] = str(
                 bootstrap_integrity_detail.get("status") or "UNKNOWN"

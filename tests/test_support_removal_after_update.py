@@ -190,6 +190,7 @@ def test_updated_inventory_proof_stays_outside_writer_admission(updated_packets,
 
     monkeypatch.setattr(onboarding, "_file_sha256", observe)
     monkeypatch.setattr(guard, "_PORTABLE_RELEASE_CACHE", {})
+    monkeypatch.setattr(onboarding, "_BOOTSTRAP_INTEGRITY_PASS_CACHE", {})
     packets = updated_packets
     assert packets.remove(packets.active if installed_host else packets.support)["status"] == "PASS_DATA_PRESERVED"
     assert depths and set(depths) == {0}
