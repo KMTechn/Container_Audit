@@ -65,7 +65,7 @@ $currentAbsentBeforePlacement=$true
 if($env:CA_GENERAL_STAGE -ceq 'setup'){
     [void][IO.Directory]::CreateDirectory((Join-Path $source 'tools'))
     foreach($relative in @('INSTALL_CANONICAL_PORTABLE.ps1','INSTALL_THIS_PC.ps1','tools/bootstrap_integrity.ps1',
-        'tools/container_writer_sink_inventory.json','tools/container_writer_session_contract.json')){
+        'tools/container_writer_sink_inventory.json','tools/container_writer_session_contract.json','tools/container_writer_fence.ps1')){
         [IO.File]::Copy((Join-Path $repo $relative),(Join-Path $source $relative))
     }
     $inventory=Get-Content -LiteralPath (Join-Path $repo 'tools/container_writer_sink_inventory.json') -Raw|ConvertFrom-Json
@@ -209,6 +209,36 @@ $sourceWriterInventory=Get-Content -LiteralPath (Join-Path $repo 'tools/containe
 if($kind -like 'A_*'){
     $inputReceipt=Read-BootstrapReplacementReceipt $restoreReceiptFull $RestoreReceiptSha256
     $sourceManifestSha256=[string]$inputReceipt.new.manifest_sha256
+}
+if($env:CA_GENERAL_STAGE -ceq 'public'){
+    foreach($name in @('RecoverMachineInstallation','Uninstall','RestoreVerifiedReplacement','CompleteRetiredRemoval','PlanOnly')){Set-Variable $name $false}
+    foreach($name in @('MachineRecoveryAuditPath','MachineRecoveryAuditSha256','RestoreReceiptPath','RestoreReceiptSha256','OldSourceRoot',
+        'RetiredRemovalReceiptSha256','RetiredStopMarkerSha256','ResumeRetirementReceiptPath','ResumeRetirementReceiptSha256',
+        'WorkerAccount','WorkerSurveyInventory','ServerBaseUrl','EvidencePath')){Set-Variable $name ''}
+    $RecoverCompletedWriterFence=$true;$SourceRoot=$source;$InstallRoot=$install
+    $CompletedFenceAuditPath=if($env:CA_CROSS_AUDIT_PATH){$env:CA_CROSS_AUDIT_PATH}else{$auditPath}
+    $CompletedFenceAuditSha256=Sha $CompletedFenceAuditPath
+    switch($env:CA_PUBLIC_CASE){
+        'mixed_machine'{$RecoverMachineInstallation=$true}
+        'mixed_uninstall'{$Uninstall=$true}
+        'mixed_restore'{$RestoreVerifiedReplacement=$true}
+        'no_switch'{$RecoverCompletedWriterFence=$false}
+        'bad_hash'{$CompletedFenceAuditSha256='a'*64}
+        'missing_hash'{$CompletedFenceAuditSha256=''}
+        'wrong_source'{$SourceRoot=Join-Path $base 'other-source'}
+        'wrong_root'{$InstallRoot=Join-Path $base 'other-root'}
+        'plan'{$PlanOnly=$true}
+        'worker'{$WorkerAccount='not-a-general-mode-argument'}
+    }
+    function Manifest($Path,$Unsigned){Get-Content -LiteralPath (Join-Path $Path 'portable-manifest.json') -Raw|ConvertFrom-Json}
+    $publicAst=[Management.Automation.Language.Parser]::ParseFile($env:CA_CONTRACT_SOURCE,[ref]$null,[ref]$null)
+    $entry=@($publicAst.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.IfStatementAst] -and
+        $_.Clauses[0].Item1.Extent.Text -ceq '$RecoverCompletedWriterFence -or $CompletedFenceAuditPath -or $CompletedFenceAuditSha256'})
+    if($entry.Count -ne 1){throw 'ACTUAL_PUBLIC_COMPLETION_ENTRY_MISSING'}
+    $fixturePublicScriptPath=Join-Path $source 'INSTALL_CANONICAL_PORTABLE.ps1'
+    # Extracted entry retains the original admitted script's PSCommandPath.
+    . ([scriptblock]::Create($entry[0].Extent.Text.Replace('$PSCommandPath','$fixturePublicScriptPath')))
+    throw 'PUBLIC_ENTRY_DID_NOT_RETURN'
 }
 if($env:CA_GENERAL_STAGE -ceq 'recover'){
     $activePath=Get-ContainerWriterFenceActivePath
