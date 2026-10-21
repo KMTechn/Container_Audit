@@ -64,7 +64,7 @@ def test_actual_audit_public_recovery_releases_ledger_admission(tmp_path, engine
     observed = json.loads((tmp_path / "general-observed.json").read_text(encoding="utf-8-sig"))
     assert all(observed["refusals"].values())
     control = Path(observed["control_root"])
-    environment = {"CONTAINER_AUDIT_DATA_ROOT": observed["data_root"]}
+    environment = {"LOCALAPPDATA": observed["local_appdata"]}
     with pytest.raises(fence.WriterFencedError) as blocked:
         with fence._writer_admission("ledger_storage", control_root=control, environ=environment):
             pytest.fail("ledger admission crossed the waiting fence")
