@@ -40,8 +40,17 @@ function Assert-ContainerDataGenerationTarget{param($Root,$Sid,$Local,$Data,$Hel
 function Start-CanonicalRelayAfterFenceRelease{throw 'UNEXPECTED_RELAY'}
 function Get-BootstrapWorkerShortcutCommonRecordPath{param($Root);Join-Path $base 'shortcut-preimage.json'}
 function Restore-BootstrapWorkerShortcuts{param($Root,$Record,$Scope);@{status='FIXTURE_PREIMAGE_RESTORED'}}
+function InstalledManifest($Root,$Unsigned){Get-Content -LiteralPath (Join-Path $Root 'portable-manifest.json') -Raw|ConvertFrom-Json}
+# Packet/signature checking is a fixture seam; the receipt, path/tree identity,
+# manifest hashes, ACL identities, restore-state and canonical readers are real.
+function Assert-BootstrapRelocatedIntegrityRecord{
+    param($Root,$ExpectedCodeRoot)
+    $manifest=Join-Path $Root 'portable-manifest.json'
+    @{file_count=1;aggregate_sha256=Sha $manifest;integrity_sha256=Sha (Join-Path $Root 'bootstrap-integrity.json')}
+}
 function Test-InstallationTransactionParent{param($Configuration);$true}
 $testMode=$true
+$SkipSignatureValidationForTest=$true
 $install=Join-Path $base 'current'
 $source=$repo
 $operatorSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -66,6 +75,32 @@ $canonicalWriterFenceOrchestratorSha256=Sha $env:CA_CONTRACT_SOURCE
 $canonicalWriterFenceContractSha256=Sha (Join-Path $repo 'tools/container_writer_session_contract.json')
 $canonicalWriterFenceDelegatedSources=@((Get-Content -LiteralPath (Join-Path $repo 'tools/container_writer_sink_inventory.json') -Raw|ConvertFrom-Json).writer_sink_sources)
 $preparedPath=Join-Path $auditRoot ('canonical-portable-'+$runId+'-writer-prepared.json')
+if($kind -like 'A_*'){
+    $transaction=$Script:CanonicalWriterFenceTransactionId
+    $failed=Join-Path $base ('.current.failed.'+$transaction)
+    foreach($directory in @($install,$failed)){[void][IO.Directory]::CreateDirectory($directory)}
+    $inventoryPath=Join-Path $repo 'tools/container_writer_sink_inventory.json'
+    $inventory=Get-Content -LiteralPath $inventoryPath -Raw|ConvertFrom-Json
+    $oldManifest=@{schema='container-audit-portable-tree-v1';source_commit=('b'*40);source_tree=('e'*40);
+        writer_sink_inventory_sha256=Sha $inventoryPath;writer_sink_inventory_contract_sha256=$inventory.inventory_sha256}
+    Save (Join-Path $install 'portable-manifest.json') $oldManifest
+    $sourceManifest=@{schema='container-audit-portable-tree-v1';source_commit=('c'*40);source_tree=('d'*40)}
+    Save (Join-Path $failed 'portable-manifest.json') $sourceManifest
+    foreach($directory in @($install,$failed)){Save (Join-Path $directory 'bootstrap-integrity.json') @{fixture='unsigned packet seam'}}
+    [void][IO.Directory]::CreateDirectory((Join-Path $install 'tools'))
+    [IO.File]::Copy($inventoryPath,(Join-Path $install 'tools/container_writer_sink_inventory.json'))
+    $sourceManifestSha256=Sha (Join-Path $failed 'portable-manifest.json')
+    $sourceHelperSha256='e'*64;$sourceIntegrityHelperSha256='f'*64
+    $restoreReceiptFull=Join-Path $base 'replacement-receipt.json'
+    $parentAcl=Get-BootstrapAclIdentity $base
+    Save $restoreReceiptFull @{
+        schema_version='container-audit-verified-replacement-v1';status='OLD_PRESERVED_NEW_VERIFIED';app_id='container_audit';
+        transaction_id=$transaction;created_at=[DateTime]::UtcNow.ToString('o');helper_sha256=$sourceHelperSha256;
+        integrity_helper_sha256=$sourceIntegrityHelperSha256;receipt_path=$restoreReceiptFull;install_root=$install;install_parent=$base;
+        rollback_root=(Join-Path $base ('.current.rollback.'+$transaction));failed_root=$failed;parent_acl=$parentAcl;
+        old=(Get-BootstrapReplacementTreeIdentity $install $install);new=(Get-BootstrapReplacementTreeIdentity $failed $install);
+        identity_or_credential_copied=$false}
+}
 $prepared=[ordered]@{schema='container-audit-canonical-writer-prepared-v1';status='PREPARED';app_id='container_audit';
     session_id=$Script:CanonicalWriterFenceSessionId;attempt_id=$Script:CanonicalWriterFenceAttemptId;
     replacement_transaction_id=$Script:CanonicalWriterFenceTransactionId;session_started_at_utc=$canonicalWriterFenceStartedAtUtc;
@@ -124,6 +159,16 @@ throw 'PRODUCER_DID_NOT_REACH_BOUNDARY'
 $context=Get-Content -LiteralPath (Join-Path $base 'boundary-context.json') -Raw|ConvertFrom-Json
 $auditPath=[string]$context.audit_path
 $preparedPath=[string]$context.prepared_path
+$rollbackContinuation=$null
+$restoreReceiptFull=Join-Path $base 'replacement-receipt.json'
+$RestoreReceiptSha256=if(Test-Path -LiteralPath $restoreReceiptFull){Sha $restoreReceiptFull}else{'a'*64}
+$sourceHelperSha256='e'*64;$sourceIntegrityHelperSha256='f'*64
+$sourceWriterInventory=Get-Content -LiteralPath (Join-Path $repo 'tools/container_writer_sink_inventory.json') -Raw|ConvertFrom-Json
+if($kind -like 'A_*'){
+    $inputReceipt=Read-BootstrapReplacementReceipt $restoreReceiptFull $RestoreReceiptSha256
+    $sourceManifest=@{source_commit=$inputReceipt.new.source_commit;source_tree=$inputReceipt.new.source_tree}
+    $sourceManifestSha256=[string]$inputReceipt.new.manifest_sha256
+}
 $activePath=Get-ContainerWriterFenceActivePath
 $active=Read-ContainerWriterFence
 $fenceBefore=Sha $activePath
@@ -134,17 +179,26 @@ $expected=if($kind -like 'A_*'){'RESTORE_AWAITING_FENCE_RELEASE'}else{'ROLLBACK_
 if([string]$saved.status -cne $expected){throw 'ACTUAL_WAITING_AUDIT_MISSING'}
 if($kind -like 'B_*' -and @($saved.rollback.steps|Where-Object {$_.status -cne 'PROVEN'}).Count){throw 'COMPENSATION_NOT_PROVEN'}
 $refusals=[ordered]@{}
+$refusalSites=[ordered]@{}
+$restoreState='NOT_ACCEPTED'
 foreach($entry in @('reinstall','explicit_restore','uninstall','machine_recovery')){
     try{
         switch($entry){
             'reinstall'{Read-InstallationAbandonedRollback $install $lad $operatorSid|Out-Null}
-            # Both installer modes consume this same actual gate after receipt preflight.
-            'explicit_restore'{Read-InstallationAbandonedRollback $install $lad $operatorSid|Out-Null}
+            'explicit_restore'{
+                $restored=Read-CanonicalReplacementRestore
+                $restoreState=[string]$restored.state
+                Read-InstallationAbandonedRollback $install $lad $operatorSid|Out-Null
+            }
             'uninstall'{Read-CanonicalSupportedRemovalResume|Out-Null}
             'machine_recovery'{Read-CanonicalMachineInstallationRecovery ([pscustomobject]@{sid=$operatorSid}) $source $install $sourceManifest $auditPath (Sha $auditPath)|Out-Null}
         }
         $refusals[$entry]=$false
-    }catch{$refusals[$entry]=$true}
+    }catch{
+        $refusals[$entry]=$true
+        $refusalSites[$entry]=@{script_file=[IO.Path]::GetFileName($_.InvocationInfo.ScriptName);
+            script_line=$_.InvocationInfo.ScriptLineNumber;exception_type=$_.Exception.GetType().FullName}
+    }
 }
 # Execute the actual coordinator authority gate with a continuation's link.
 $text=[IO.File]::ReadAllText((Join-Path $repo 'tools/bootstrap_integrity.ps1'))
@@ -160,7 +214,7 @@ $active=$continuationActive
 $continuationRefused=$false
 try{. ([scriptblock]::Create($text.Substring($start,$end-$start)))}catch{$continuationRefused=$_.Exception.Message -ceq 'Installation transaction active/prepared/parent binding differs.'}
 Save (Join-Path $base 'general-observed.json') @{
-    boundary=$kind;status=$saved.status;fence_status=(Read-ContainerWriterFence).status;refusals=$refusals;
+    boundary=$kind;status=$saved.status;restore_state=$restoreState;fence_status=(Read-ContainerWriterFence).status;refusals=$refusals;refusal_sites=$refusalSites;
     indented_audit=($auditRaw -match '"status"\s*:\s+"');continuation_refused=$continuationRefused;
     fence_preserved=((Sha $activePath) -ceq $fenceBefore);audit_preserved=((Sha $auditPath) -ceq $auditBefore);
     control_root=(Get-ContainerWriterFenceControlRoot);local_appdata=$lad;operator_sid=$operatorSid;fence_present=(Test-Path -LiteralPath $activePath)}

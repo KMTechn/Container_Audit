@@ -29,6 +29,8 @@ def test_completed_general_boundary_has_an_official_fence_only_exit(tmp_path, mo
     assert observed["indented_audit"] and observed["continuation_refused"]
     assert observed["fence_preserved"] and observed["audit_preserved"]
     assert all(observed["refusals"].values())
+    if boundary.startswith("A_"):
+        assert observed["restore_state"] == "RESTORED"
     control = Path(observed["control_root"])
     environment = {"LOCALAPPDATA": observed["local_appdata"]}
     with pytest.raises(fence.WriterFencedError) as error:
