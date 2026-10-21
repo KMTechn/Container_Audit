@@ -1284,10 +1284,15 @@ function ConvertTo-CanonicalSafeDiagnostic([string]$Text) {
     return (ConvertTo-KmtechRedactedSinkText -Text $Text)
 }
 function ConvertTo-CanonicalAuditJson($Value,[switch]$PrivateDiagnostics) {
+    # Match the writer JSON reader: timestamp strings are authenticated wire data.
+    $jsonReadParameters=@{}
+    if((Get-Command Microsoft.PowerShell.Utility\ConvertFrom-Json).Parameters.ContainsKey('DateKind')){
+        $jsonReadParameters.DateKind='String'
+    }
     if(-not $PrivateDiagnostics){
         # Caller-selected audit files have no reader-ACL proof. Preserve the
         # machine schema and replace only free diagnostic leaves before Save.
-        $copy=($Value|ConvertTo-Json -Depth 40)|ConvertFrom-Json
+        $copy=($Value|ConvertTo-Json -Depth 40)|ConvertFrom-Json @jsonReadParameters
         $diagnostics=[Collections.Generic.List[object]]::new()
         function Limit-CanonicalPublicDiagnostics($Node,[bool]$InsideDiagnostic=$false){
             if($Node -is [Management.Automation.PSCustomObject]){
@@ -1329,7 +1334,7 @@ function ConvertTo-CanonicalAuditJson($Value,[switch]$PrivateDiagnostics) {
     # Redact a valid in-memory envelope first. Budget diagnostic strings before
     # serializing, so authenticated tuple/path fields and JSON syntax survive.
     $safe=Protect-InstallationText ($Value|ConvertTo-Json -Depth 40) -1 -NoTruncate
-    $copy=$safe|ConvertFrom-Json
+    $copy=$safe|ConvertFrom-Json @jsonReadParameters
     $diagnostics=[Collections.Generic.List[object]]::new()
     function Find-CanonicalAuditDiagnosticStrings($Node,[bool]$InsideDiagnostic=$false) {
         if($Node -is [Management.Automation.PSCustomObject]){
