@@ -8,6 +8,8 @@ import subprocess
 
 import pytest
 
+from tests.powershell_contracts import canonical_leaf_prelude
+
 REPO = Path(__file__).resolve().parents[1]
 SECRET_NAMES = (
     "CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN", "KM_LOGISTICS_INSTALL_BEARER_TOKEN",
@@ -34,8 +36,9 @@ def test_canonical_failure_console_and_audit_remove_known_secret_bytes(tmp_path,
     environment = os.environ.copy()
     environment.update(dict(zip(SECRET_NAMES, values)))
     script = tmp_path / "private-boundary.ps1"
-    script.write_text(r"""param($Source,$Audit)
-$ErrorActionPreference='Stop'
+    script.write_text('param($Source,$Audit)\n'
+        + canonical_leaf_prelude(REPO / "INSTALL_CANONICAL_PORTABLE.ps1")
+        + r"""$ErrorActionPreference='Stop'
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile($Source,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'canonical parse failed'}
@@ -78,6 +81,10 @@ foreach($code in $codes) {
 
 def test_relay_install_command_and_audit_remove_known_secret_bytes(tmp_path, monkeypatch):
     from tools import direct_sync_relay_install_pack as pack
+    from auto_update import _sink_policy
+
+    marker_template = _sink_policy()["env_marker"]
+    expected_marker = marker_template.format(name=SECRET_NAMES[0])
     values = [secrets.token_hex(32) for _ in SECRET_NAMES]
     for name, value in zip(SECRET_NAMES, values):
         monkeypatch.setenv(name, value)
@@ -93,15 +100,15 @@ def test_relay_install_command_and_audit_remove_known_secret_bytes(tmp_path, mon
     _check_and_scrub_artifacts([json.dumps(result).encode(), payload], values, audit)
     assert json.loads(payload)["failure_code"] == "CHILD_FAILED"
     assert result["returncode"] == 1
-    assert result["stdout"] == "[REDACTED]"
-    assert result["stderr"] == "[REDACTED]"
+    assert result["stdout"] == expected_marker
+    assert result["stderr"] == expected_marker
 
     escaped_values = [value + chr(34) + chr(92) + chr(0xAC00) for value in values]
     for name, value in zip(SECRET_NAMES, escaped_values):
         monkeypatch.setenv(name, value)
     encoded = json.dumps(escaped_values, ensure_ascii=True)
     redacted = pack._redact_install_diagnostic(encoded)
-    assert json.loads(redacted) == ['[REDACTED]', '[REDACTED]']
+    assert json.loads(redacted) == [marker_template.format(name=name) for name in SECRET_NAMES]
     pack._write_json(audit, {'failure_code': 'CHILD_FAILED', escaped_values[0]: encoded})
     payload = audit.read_bytes()
     representations = escaped_values + [json.dumps(value, ensure_ascii=True)[1:-1] for value in escaped_values]
