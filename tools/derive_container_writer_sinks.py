@@ -2344,6 +2344,140 @@ def _powershell_mode_ranges(
     return ranges
 
 
+def _powershell_local_authority_region(
+    function: dict[str, Any], entry_guard: dict[str, Any],
+) -> dict[str, int] | None:
+    """Recognize an unconditional acquisition followed immediately by try/finally.
+
+    This is a deliberately restricted syntax proof, not a function-name exemption.
+    Ambiguous control flow, rebinding, early release, and incomplete cleanup earn
+    no local protection. Admission, when present, must have its own nested lifetime.
+    """
+    if not entry_guard.get("valid") or entry_guard.get("guard_kind") != "session_authority":
+        return None
+    raw = list(function["lines"])
+    if any(re.search(r"@['\"]|['\"]@|<#|#>", line) for line in raw):
+        return None  # Multi-line literal contents are not executable statements.
+    for line in raw:
+        quote = ""
+        escaped = False
+        for character in line:
+            if escaped:
+                escaped = False
+            elif character == "`":
+                escaped = True
+            elif quote:
+                if character == quote:
+                    quote = ""
+            elif character in {"'", '"'}:
+                quote = character
+            elif character == "#":
+                break
+        if quote:
+            return None  # Ordinary quoted literals can also span physical lines.
+    lines = [_powershell_code_only(line) for line in raw]
+    code = "\n".join(lines)
+    offsets = []
+    position = 0
+    for line in lines:
+        offsets.append(position)
+        position += len(line) + 1
+    stack: list[int] = []
+    blocks: dict[int, int] = {}
+    kinds: dict[int, str] = {}
+    for index, character in enumerate(code):
+        if character == "{":
+            kinds[index] = "function" if not stack and not blocks else (
+                "try" if re.search(r"(?:^|[;{}\n])\s*try\s*$", code[:index]) else "other"
+            )
+            stack.append(index)
+        elif character == "}":
+            if not stack:
+                return None
+            blocks[stack.pop()] = index
+    if stack:
+        return None
+
+    def statements(command):
+        result = []
+        for number, line in enumerate(lines):
+            if not _powershell_command_present(line, command):
+                continue
+            end = number
+            while raw[end].rstrip().endswith("`") and end + 1 < len(lines):
+                end += 1
+            text = " ".join(lines[number:end + 1])
+            match = re.fullmatch(r"\s*\$([A-Za-z_]\w*)\s*=\s*" + re.escape(command) + r"\b[^;{}|()]*", text, re.I)
+            if match is None:
+                return []
+            result.append((offsets[number], offsets[end] + len(lines[end]), match.group(1)))
+        return result
+
+    def lifetime(acquisition, release):
+        begin, end, variable = acquisition
+        active_blocks = [opening for opening, closing in blocks.items() if opening < begin < closing]
+        if not active_blocks or any(kinds[opening] not in {"function", "try"} for opening in active_blocks):
+            return None
+        if re.search(r"\b(?:return|exit|break|continue)\b", code[:begin], re.I):
+            return None
+        following = re.match(r"\s*try\s*\{", code[end:])
+        if following is None:
+            return None
+        opening = end + following.end() - 1
+        closing = blocks.get(opening)
+        if closing is None:
+            return None
+        final = re.match(r"\s*finally\s*\{", code[closing + 1:])
+        if final is None:
+            return None
+        final_open = closing + final.end()
+        final_close = blocks.get(final_open)
+        if final_close is None or not re.fullmatch(
+            r"\s*" + re.escape(release) + r"\s+\$" + re.escape(variable) + r"\s*;?\s*",
+            code[final_open + 1:final_close], re.I,
+        ):
+            return None
+        if len(re.findall(r"(?<![\w-])" + re.escape(release) + r"(?![\w-])", code, re.I)) != 1:
+            return None
+        held = code[opening + 1:closing]
+        if re.search(r"\$" + re.escape(variable) + r"(?:\.\w+)*\s*=(?!=)", held, re.I):
+            return None
+        if re.search(r"\$" + re.escape(variable) + r"(?:\.\w+)*\.(?:Dispose|ReleaseMutex)\s*\(", held, re.I):
+            return None
+        # Inventory sites have line precision: mixed boundary/code lines cannot
+        # be proven wholly inside the held body.
+        next_line = code.find("\n", opening)
+        previous_line = code.rfind("\n", 0, closing)
+        if next_line < 0 or code[opening + 1:next_line].strip() or code[previous_line + 1:closing].strip():
+            return None
+        return opening, closing, final_close
+
+    authority = statements(str(entry_guard["guard_name"]))
+    if len(authority) != 1:
+        return None
+    region = lifetime(authority[0], str(entry_guard["release_name"]))
+    if region is None:
+        return None
+    opening, closing, _ = region
+    admission = statements("Enter-ContainerWriterAdmission")
+    if _powershell_command_present(code, "Enter-ContainerWriterAdmission"):
+        if len(admission) != 1 or admission[0][2].casefold() == authority[0][2].casefold():
+            return None
+        nested = lifetime(admission[0], "Exit-ContainerWriterAdmission")
+        if nested is None or code[opening + 1:admission[0][0]].strip() or nested[2] >= closing:
+            return None
+        opening, closing, _ = nested
+    start = int(function["start"])
+    return {"start": start + code[:opening].count("\n") + 1,
+            "end": start + code[:closing].count("\n") - 1,
+            "guard_line": start + code[:authority[0][0]].count("\n")}
+
+
+def _powershell_local_guard_at_line(function, entry_guard, line):
+    region = _powershell_local_authority_region(function, entry_guard)
+    return region if region is not None and region["start"] <= line <= region["end"] else None
+
+
 def _powershell_function_guard_proofs(
     relative_path: Path,
     lines: list[str],
@@ -2364,6 +2498,9 @@ def _powershell_function_guard_proofs(
     non_production_modes = POWERSHELL_NON_PRODUCTION_FUNCTION_MODES.get(
         relative_path, {}
     )
+    local_regions = {name: _powershell_local_authority_region(row, entry_guard)
+                     for name, row in functions.items()}
+    local_sites: dict[tuple[str, int], int] = {}
     for line_number, line in enumerate(lines, start=1):
         code = _powershell_code_only(line)
         if not code.strip():
@@ -2376,6 +2513,9 @@ def _powershell_function_guard_proofs(
                 continue
             if not _powershell_command_present(code, name):
                 continue
+            region = local_regions.get(str(caller["name"])) if caller else None
+            if region is not None and region["start"] <= line_number <= region["end"]:
+                local_sites[(name, line_number)] = region["guard_line"]
             expected_mode = str(non_production_modes.get(name, "")).casefold()
             actual_mode = next(
                 (
@@ -2416,6 +2556,7 @@ def _powershell_function_guard_proofs(
     safe_reachable: set[str] = set()
     unsafe_reachable: set[str] = set()
     non_production_reachable: set[str] = set()
+    safe_origins: dict[str, set[int]] = defaultdict(set)
     for name, sites in call_sites.items():
         for site in sites:
             if site["caller"] != "__script__":
@@ -2424,6 +2565,7 @@ def _powershell_function_guard_proofs(
                 non_production_reachable.add(name)
             elif site["guarded_top_level"]:
                 safe_reachable.add(name)
+                safe_origins[name].add(int(entry_guard["guard_line"]))
             else:
                 unsafe_reachable.add(name)
 
@@ -2431,18 +2573,22 @@ def _powershell_function_guard_proofs(
     while changed:
         changed = False
         for name, sites in call_sites.items():
-            callers = {
-                str(site["caller"])
-                for site in sites
-                if site["caller"] != "__script__"
-            }
-            for reachable in (
-                safe_reachable,
-                unsafe_reachable,
-                non_production_reachable,
-            ):
-                if name not in reachable and callers & reachable:
-                    reachable.add(name)
+            for site in sites:
+                caller = str(site["caller"])
+                if caller == "__script__":
+                    continue
+                local = local_sites.get((name, int(site["line"])))
+                if caller in safe_reachable or (local is not None and caller in unsafe_reachable):
+                    origins = {local} if local is not None else safe_origins[caller]
+                    if name not in safe_reachable or not origins <= safe_origins[name]:
+                        safe_reachable.add(name)
+                        safe_origins[name].update(origins)
+                        changed = True
+                if local is None and caller in unsafe_reachable and name not in unsafe_reachable:
+                    unsafe_reachable.add(name)
+                    changed = True
+                if caller in non_production_reachable and name not in non_production_reachable:
+                    non_production_reachable.add(name)
                     changed = True
 
     proofs: dict[str, dict[str, Any]] = {}
@@ -2467,7 +2613,7 @@ def _powershell_function_guard_proofs(
                 else ("non_production_mode" if non_production_only else "")
             ),
             "guard_line": (
-                entry_guard.get("guard_line")
+                min(safe_origins[name])
                 if guarded
                 else (
                     min(
@@ -2532,7 +2678,8 @@ def _powershell_bootstrap_caller_proofs(
                 }
                 safe = admitted_installer and bool(entry["valid"]) and (
                     _powershell_line_in_guard_lifetime(entry, number)
-                    if owner is None else bool(proofs[caller]["guarded"])
+                    if owner is None else bool(proofs[caller]["guarded"] or
+                        _powershell_local_guard_at_line(owner, entry, number))
                 )
                 callers[name].append({"file": path.as_posix(), "caller": caller,
                                       "line": number, "installer_guarded": safe})
@@ -2894,6 +3041,10 @@ def _powershell_site_guard(
         and proof.get("guard_name") == "byte_pinned_installer_caller_closure"):
         return True, str(proof["guard_name"]), int(proof["guard_line"])
     if entry_guard["valid"]:
+        if function is not None:
+            local = _powershell_local_guard_at_line(function, entry_guard, int(site["line"]))
+            if local is not None:
+                return True, str(entry_guard["guard_name"]), local["guard_line"]
         if function is None and _powershell_line_in_guard_lifetime(
             entry_guard, int(site["line"])
         ):

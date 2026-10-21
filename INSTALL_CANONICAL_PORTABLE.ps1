@@ -75,7 +75,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '25af119b7442cbc35fe7495160a9587bbd48209913a608b8eedc1927a86fc882'
+$ExpectedBootstrapIntegritySha256 = 'fd823b28fc7476919a84174c19b6727bbb2252ef20d5b10bcdbd9d78977a6dd7'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -5076,74 +5076,76 @@ function Invoke-CanonicalCompletedWriterFenceRecovery([string]$Source,[string]$R
         $tuple=$proof.fence
         $authority=Enter-ContainerWriterSessionAuthority -SessionId $tuple.session_id -AttemptId $tuple.attempt_id -OrchestratorSha256 $tuple.orchestrator_sha256 `
             -ReplacementTransactionId $tuple.replacement_transaction_id -WriterContractSha256 $tuple.writer_contract_sha256 -RecoverExisting
-        $admission=Enter-ContainerWriterAdmission
-        Confirm-CanonicalCompletedFenceProcessesExit $proof
-        [void](Assert-CanonicalCompletedFenceResult $proof $record $Manifest)
-        $Script:ContainerWriterFenceAcceptedInstalledInventorySha256=[string]$tuple.writer_inventory_sha256
-        $activePath=Get-ContainerWriterFenceActivePath
-        $active=Read-ContainerWriterFence -AllowAbsent
-        $activeSha=if($null -ne $active){Sha $activePath}else{''}
-        $phase=if([string]$proof.operation -ceq 'RESTORE_VERIFIED_REPLACEMENT'){'PRODUCT_COMPLETE'}else{'ROLLBACK_COMPLETE'}
-        $fixed=Join-Path (Split-Path -Parent $auditFull) ('recovered-release-'+[string]$tuple.replacement_transaction_id+'.json')
-        Assert-BootstrapNoReparsePoint $fixed 'completed fence release' -PathOnly
-        if($null -ne $active){
-            Assert-ContainerWriterSessionAuthority $active $authority
-            if([string]$active.owner_kind -cne 'canonical_installer'){throw 'foreign owner'}
-            foreach($name in @('session_id','attempt_id','replacement_transaction_id','session_started_at_utc','orchestrator_sha256',
-                'writer_contract_sha256','writer_inventory_sha256','session_authority_mutex_name')){
-                if([string]$active.$name -cne [string]$tuple.$name){throw 'foreign fence'}
-            }
-            if([string]$active.status -ceq 'PREPARED'){
-                $original=if($phase -ceq 'PRODUCT_COMPLETE'){
-                    Join-Path (Split-Path -Parent $auditFull) ('canonical-portable-'+[string]$record.run_id+'-product-complete-release.json')
-                }else{Join-Path (Split-Path -Parent $auditFull) 'rollback-release.json'}
-                if(-not(Same ([string]$active.prepared_receipt_path) $original) -and -not(Same ([string]$active.prepared_receipt_path) $fixed)){throw 'foreign authorization'}
-                # Original release producers bind the admitted source inventory;
-                # the new fixed release binds the validated residual inventory.
-                $expectedInventory=if(Same ([string]$active.prepared_receipt_path) $fixed){[string]$tuple.writer_inventory_sha256}else{[string]$Manifest.writer_sink_inventory_contract_sha256}
-                $bound=Read-CanonicalCompletedFenceAuthorization ([string]$active.prepared_receipt_path) $proof $auditFull $AuditSha256 $phase $expectedInventory
-                if([string]$active.prepared_receipt_sha256 -cne [string]$bound.sha256){throw 'authorization hash differs'}
-            }elseif([string]$proof.operation -ceq 'TRANSACTION_ROLLBACK' -and [string]$active.status -ceq 'RESTORING'){
-                if(-not(Same ([string]$active.prepared_receipt_path) ([string]$tuple.prepared_receipt_path)) -or
-                    [string]$active.prepared_receipt_sha256 -cne [string]$tuple.prepared_receipt_sha256){throw 'helper fence differs'}
-            }else{throw 'unsupported residual state'}
-        }
-        $authorization=$null
-        if(Test-Path -LiteralPath $fixed){$authorization=Read-CanonicalCompletedFenceAuthorization $fixed $proof $auditFull $AuditSha256 $phase}
-        if($null -ne $authorization){
-            $receiptPath=Join-Path (Get-ContainerWriterFenceControlRoot) ('release-'+[string]$tuple.replacement_transaction_id+'-'+[string]$authorization.sha256+'.json')
-            if(Test-Path -LiteralPath $receiptPath){
-                $priorRelease=Read-ContainerWriterFenceReleaseReceipt $receiptPath
-                [void](Assert-ContainerWriterFenceReleaseReceiptMatches $priorRelease $tuple.session_id $tuple.attempt_id $tuple.replacement_transaction_id $authorization.path $authorization.sha256)
-                if([string]$priorRelease.writer_inventory_sha256 -cne [string]$tuple.writer_inventory_sha256){throw 'release inventory differs'}
-            }
-        }
-        if($null -eq $active){
-            if($null -eq $authorization){throw 'release proof missing'}
-            $release=Read-ContainerWriterFenceReleaseReceipt (Join-Path (Get-ContainerWriterFenceControlRoot) `
-                ('release-'+[string]$tuple.replacement_transaction_id+'-'+[string]$authorization.sha256+'.json'))
-            [void](Assert-ContainerWriterFenceReleaseReceiptMatches $release $tuple.session_id $tuple.attempt_id $tuple.replacement_transaction_id $authorization.path $authorization.sha256)
-            if([string]$release.writer_inventory_sha256 -cne [string]$tuple.writer_inventory_sha256){throw 'release inventory differs'}
-        }
-        # No output/authorization/state mutation precedes this second complete read.
-        [void](Assert-CanonicalCompletedFenceProof (Read-CanonicalCompletedFenceJson $auditFull $AuditSha256) $auditFull $Source $Root $Manifest $OperatorSid $LocalAppDataRoot)
-        Confirm-CanonicalCompletedFenceProcessesExit $proof
-        [void](Assert-CanonicalCompletedFenceResult $proof $record $Manifest)
-        if($activeSha){if((Sha $activePath) -cne $activeSha){throw 'fence changed'}}
-        elseif(Test-Path -LiteralPath $activePath){throw 'new fence appeared'}
-        if($null -ne $active){
-            if($null -eq $authorization){$authorization=New-CanonicalCompletedFenceAuthorization $fixed $proof $auditFull $AuditSha256 $phase}
-            [void](Set-ContainerWriterFencePrepared -SessionId $tuple.session_id -AttemptId $tuple.attempt_id -ReplacementTransactionId $tuple.replacement_transaction_id `
-                -PreparedReceiptPath $authorization.path -PreparedReceiptSha256 $authorization.sha256 -Status 'PREPARED' -AuthorityLease $authority)
-            [void](Stop-ContainerWriterFence -SessionId $tuple.session_id -AttemptId $tuple.attempt_id -ReplacementTransactionId $tuple.replacement_transaction_id `
-                -ReleaseAuthorizationPath $authorization.path -ReleaseAuthorizationSha256 $authorization.sha256 -AuthorityLease $authority)
-        }
-        return [pscustomobject]@{status='FENCE_RELEASED_FOLLOWUP_PENDING';original_audit_status=[string]$record.status;
-            audit_path=$auditFull;audit_sha256=$AuditSha256;completed_steps=@($proof.completed_steps);pending_followups=@($proof.pending_followups)}
+        try{
+            $admission=Enter-ContainerWriterAdmission
+            try{
+                Confirm-CanonicalCompletedFenceProcessesExit $proof
+                [void](Assert-CanonicalCompletedFenceResult $proof $record $Manifest)
+                $Script:ContainerWriterFenceAcceptedInstalledInventorySha256=[string]$tuple.writer_inventory_sha256
+                $activePath=Get-ContainerWriterFenceActivePath
+                $active=Read-ContainerWriterFence -AllowAbsent
+                $activeSha=if($null -ne $active){Sha $activePath}else{''}
+                $phase=if([string]$proof.operation -ceq 'RESTORE_VERIFIED_REPLACEMENT'){'PRODUCT_COMPLETE'}else{'ROLLBACK_COMPLETE'}
+                $fixed=Join-Path (Split-Path -Parent $auditFull) ('recovered-release-'+[string]$tuple.replacement_transaction_id+'.json')
+                Assert-BootstrapNoReparsePoint $fixed 'completed fence release' -PathOnly
+                if($null -ne $active){
+                    Assert-ContainerWriterSessionAuthority $active $authority
+                    if([string]$active.owner_kind -cne 'canonical_installer'){throw 'foreign owner'}
+                    foreach($name in @('session_id','attempt_id','replacement_transaction_id','session_started_at_utc','orchestrator_sha256',
+                        'writer_contract_sha256','writer_inventory_sha256','session_authority_mutex_name')){
+                        if([string]$active.$name -cne [string]$tuple.$name){throw 'foreign fence'}
+                    }
+                    if([string]$active.status -ceq 'PREPARED'){
+                        $original=if($phase -ceq 'PRODUCT_COMPLETE'){
+                            Join-Path (Split-Path -Parent $auditFull) ('canonical-portable-'+[string]$record.run_id+'-product-complete-release.json')
+                        }else{Join-Path (Split-Path -Parent $auditFull) 'rollback-release.json'}
+                        if(-not(Same ([string]$active.prepared_receipt_path) $original) -and -not(Same ([string]$active.prepared_receipt_path) $fixed)){throw 'foreign authorization'}
+                        # Original release producers bind the admitted source inventory;
+                        # the new fixed release binds the validated residual inventory.
+                        $expectedInventory=if(Same ([string]$active.prepared_receipt_path) $fixed){[string]$tuple.writer_inventory_sha256}else{[string]$Manifest.writer_sink_inventory_contract_sha256}
+                        $bound=Read-CanonicalCompletedFenceAuthorization ([string]$active.prepared_receipt_path) $proof $auditFull $AuditSha256 $phase $expectedInventory
+                        if([string]$active.prepared_receipt_sha256 -cne [string]$bound.sha256){throw 'authorization hash differs'}
+                    }elseif([string]$proof.operation -ceq 'TRANSACTION_ROLLBACK' -and [string]$active.status -ceq 'RESTORING'){
+                        if(-not(Same ([string]$active.prepared_receipt_path) ([string]$tuple.prepared_receipt_path)) -or
+                            [string]$active.prepared_receipt_sha256 -cne [string]$tuple.prepared_receipt_sha256){throw 'helper fence differs'}
+                    }else{throw 'unsupported residual state'}
+                }
+                $authorization=$null
+                if(Test-Path -LiteralPath $fixed){$authorization=Read-CanonicalCompletedFenceAuthorization $fixed $proof $auditFull $AuditSha256 $phase}
+                if($null -ne $authorization){
+                    $receiptPath=Join-Path (Get-ContainerWriterFenceControlRoot) ('release-'+[string]$tuple.replacement_transaction_id+'-'+[string]$authorization.sha256+'.json')
+                    if(Test-Path -LiteralPath $receiptPath){
+                        $priorRelease=Read-ContainerWriterFenceReleaseReceipt $receiptPath
+                        [void](Assert-ContainerWriterFenceReleaseReceiptMatches $priorRelease $tuple.session_id $tuple.attempt_id $tuple.replacement_transaction_id $authorization.path $authorization.sha256)
+                        if([string]$priorRelease.writer_inventory_sha256 -cne [string]$tuple.writer_inventory_sha256){throw 'release inventory differs'}
+                    }
+                }
+                if($null -eq $active){
+                    if($null -eq $authorization){throw 'release proof missing'}
+                    $release=Read-ContainerWriterFenceReleaseReceipt (Join-Path (Get-ContainerWriterFenceControlRoot) `
+                        ('release-'+[string]$tuple.replacement_transaction_id+'-'+[string]$authorization.sha256+'.json'))
+                    [void](Assert-ContainerWriterFenceReleaseReceiptMatches $release $tuple.session_id $tuple.attempt_id $tuple.replacement_transaction_id $authorization.path $authorization.sha256)
+                    if([string]$release.writer_inventory_sha256 -cne [string]$tuple.writer_inventory_sha256){throw 'release inventory differs'}
+                }
+                # No output/authorization/state mutation precedes this second complete read.
+                [void](Assert-CanonicalCompletedFenceProof (Read-CanonicalCompletedFenceJson $auditFull $AuditSha256) $auditFull $Source $Root $Manifest $OperatorSid $LocalAppDataRoot)
+                Confirm-CanonicalCompletedFenceProcessesExit $proof
+                [void](Assert-CanonicalCompletedFenceResult $proof $record $Manifest)
+                if($activeSha){if((Sha $activePath) -cne $activeSha){throw 'fence changed'}}
+                elseif(Test-Path -LiteralPath $activePath){throw 'new fence appeared'}
+                if($null -ne $active){
+                    if($null -eq $authorization){$authorization=New-CanonicalCompletedFenceAuthorization $fixed $proof $auditFull $AuditSha256 $phase}
+                    [void](Set-ContainerWriterFencePrepared -SessionId $tuple.session_id -AttemptId $tuple.attempt_id -ReplacementTransactionId $tuple.replacement_transaction_id `
+                        -PreparedReceiptPath $authorization.path -PreparedReceiptSha256 $authorization.sha256 -Status 'PREPARED' -AuthorityLease $authority)
+                    [void](Stop-ContainerWriterFence -SessionId $tuple.session_id -AttemptId $tuple.attempt_id -ReplacementTransactionId $tuple.replacement_transaction_id `
+                        -ReleaseAuthorizationPath $authorization.path -ReleaseAuthorizationSha256 $authorization.sha256 -AuthorityLease $authority)
+                }
+                return [pscustomobject]@{status='FENCE_RELEASED_FOLLOWUP_PENDING';original_audit_status=[string]$record.status;
+                    audit_path=$auditFull;audit_sha256=$AuditSha256;completed_steps=@($proof.completed_steps);pending_followups=@($proof.pending_followups)}
+            }finally{Exit-ContainerWriterAdmission $admission}
+        }finally{Exit-ContainerWriterSessionAuthority $authority}
     }catch{throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
     finally{
-        if($null -ne $admission){Exit-ContainerWriterAdmission $admission}
-        if($null -ne $authority){Exit-ContainerWriterSessionAuthority $authority}
         $Script:ContainerWriterFenceAcceptedInstalledInventorySha256=$previousInventory
     }
 }
@@ -5688,7 +5690,8 @@ if($RecoverCompletedWriterFence -or $CompletedFenceAuditPath -or $CompletedFence
         $sourceManifest=Manifest $source $SkipSignatureValidationForTest
         [void](Assert-WriterSinkInventory (Join-Path $source 'tools\container_writer_sink_inventory.json') `
             ([string]$sourceManifest.writer_sink_inventory_sha256) ([string]$sourceManifest.writer_sink_inventory_contract_sha256))
-        . (Join-Path $source 'tools\container_writer_fence.ps1')
+        $writerFenceHelperPath=Join-Path $source 'tools\container_writer_fence.ps1'
+        . $writerFenceHelperPath
         $completed=Invoke-CanonicalCompletedWriterFenceRecovery $source $install $sourceManifest $CompletedFenceAuditPath $CompletedFenceAuditSha256 `
             ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value) (Full $env:LOCALAPPDATA 'LOCALAPPDATA')
         'completed_fence_recovery_status='+[string]$completed.status
