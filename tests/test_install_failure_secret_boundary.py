@@ -75,8 +75,8 @@ foreach($code in $codes) {
         raise AssertionError("isolated diagnostic boundary fixture failed")
     document = json.loads(payloads[2])
     assert document["failure_code"] == "PRODUCT_FAILED"
-    assert document["stdout"] == "[REDACTED]"
-    assert document["nested"]["stderr"] == "[REDACTED]"
+    assert document["stdout"] == 'SUPPORT_FAILURE'
+    assert document["nested"]["stderr"] == 'SUPPORT_FAILURE'
 
 
 def test_relay_install_command_and_audit_remove_known_secret_bytes(tmp_path, monkeypatch):
