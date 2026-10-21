@@ -4646,6 +4646,64 @@ function Restore-CanonicalMachineInstallationPrestate($Worker,[string]$Source,[s
         return $false
     }
 }
+function Read-CanonicalMachineRemovalResult([string]$Root,[string]$Run) {
+    try {
+        $application=Split-Path -Parent $Root
+        if (Test-Path -LiteralPath $Root) { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
+        $markerPath=Join-Path $application 'removed.json'
+        Assert-BootstrapNoReparsePoint $markerPath 'machine removal marker' -PathOnly
+        if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf) -or
+            (Get-Item -LiteralPath $markerPath).Length -le 0 -or
+            (Get-Item -LiteralPath $markerPath).Length -gt 131072) { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
+        $markerSha256=Sha $markerPath
+        $marker=Get-Content -LiteralPath $markerPath -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson
+        if ([string]$marker.schema -cne 'container-audit-supported-removal-v1' -or
+            [string]$marker.lifecycle_state -cne 'REMOVED' -or
+            $marker.business_data_and_registration_preserved -isnot [bool] -or -not $marker.business_data_and_registration_preserved -or
+            $null -eq $marker.PSObject.Properties['retained_paths'] -or $marker.retained_paths -isnot [Array]) {
+            throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS'
+        }
+        $evidence=Full ([string]$marker.evidence_root) 'machine removal evidence'
+        if (-not (Same (Split-Path -Parent $evidence) (Join-Path $application 'removal-evidence'))) { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
+        Assert-BootstrapNoReparsePoint $evidence 'machine removal evidence' -PathOnly
+        $journal=Find-CanonicalRemovalMoveJournal $application $Run
+        if (-not $journal -or -not (Same (Split-Path -Parent $journal) $evidence)) { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
+        Assert-BootstrapNoReparsePoint $journal 'machine removal move journal' -PathOnly
+        $reader=[IO.File]::OpenText($journal)
+        try { $first=$reader.ReadLine() } finally { $reader.Dispose() }
+        $header=$first | ConvertFrom-ContainerWriterFenceJson
+        if ([string]$header.record -cne 'HEADER' -or [string]$header.schema -cne 'container-audit-removal-move-journal-v1' -or
+            [string]$header.run_id -cne $Run -or -not (Same ([string]$header.application) $application) -or
+            -not (Same ([string]$header.evidence) $evidence)) { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
+        foreach ($retained in @($marker.retained_paths)) {
+            if ($retained -isnot [string] -or [string]::IsNullOrWhiteSpace($retained) -or
+                -not (Test-Path -LiteralPath $retained)) { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
+        }
+        if ((Sha $markerPath) -cne $markerSha256 -or (Test-Path -LiteralPath $Root)) { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
+        return [pscustomobject]@{marker_path=$markerPath;marker_sha256=$markerSha256;evidence_root=$evidence;retained_paths=@($marker.retained_paths)}
+    } catch { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
+}
+function Read-CanonicalMachineRestoreResult([string]$Root,[string]$ReceiptPath,[string]$ReceiptSha256,[string]$EvidencePath,[string]$EvidenceSha256) {
+    try {
+        $receiptFull=Full $ReceiptPath 'machine restore original receipt'
+        $evidenceFull=Full $EvidencePath 'machine restore evidence'
+        Assert-BootstrapNoReparsePoint $evidenceFull 'machine restore evidence' -PathOnly
+        if ($ReceiptSha256 -cnotmatch '^[0-9a-f]{64}$' -or $EvidenceSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+            -not (Test-Path -LiteralPath $evidenceFull -PathType Leaf) -or
+            (Get-Item -LiteralPath $evidenceFull).Length -le 0 -or
+            (Get-Item -LiteralPath $evidenceFull).Length -gt 131072 -or
+            (Sha $evidenceFull) -cne $EvidenceSha256) { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
+        $receipt=Read-BootstrapReplacementReceipt $receiptFull $ReceiptSha256
+        if ([string]$receipt.transaction_id -cnotmatch '^[0-9a-f]{32}$' -or
+            -not (Same ([string]$receipt.install_root) $Root) -or
+            [string]$receipt.old.manifest_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+            (Sha (Join-Path $Root 'portable-manifest.json')) -cne [string]$receipt.old.manifest_sha256) { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
+        [void](Assert-BootstrapIntegrityRecord $Root)
+        [void](ReadReplacementRestoreEvidence $evidenceFull ([string]$receipt.transaction_id) $receiptFull $ReceiptSha256 $Root)
+        if ((Sha $receiptFull) -cne $ReceiptSha256 -or (Sha $evidenceFull) -cne $EvidenceSha256) { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
+        return [pscustomobject]@{receipt_path=$receiptFull;receipt_sha256=$ReceiptSha256;evidence_path=$evidenceFull;evidence_sha256=$EvidenceSha256}
+    } catch { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
+}
 function Read-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[string]$Root,$Manifest,[string]$AuditPath,[string]$AuditSha256) {
     if (-not $testMode -and -not (Test-InstallationEvidencePrivileged)) { throw 'MACHINE_RECOVERY_ADMINISTRATOR_REQUIRED' }
     $state=Get-ContainerMachineInstallStateRoot
@@ -4664,8 +4722,8 @@ function Read-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[stri
     $record.code_replacement=$replacement
     $run=[string]$record.run_id
     if ($run -cnotmatch '^[0-9a-f]{32}$' -or -not (Same $auditFull (Join-Path $state ('install-audit\canonical-portable-'+$run+'.json'))) -or
-        [string]$record.schema -cne 'container-audit-canonical-portable-install-v2' -or [string]$record.operation -cnotin @('INSTALL','UNINSTALL') -or
-        [string]$record.status -cnotin $(if([string]$record.operation -ceq 'UNINSTALL'){@('PREIMAGE_SAVED','MACHINE_INSTALL_FAILED','ROLLBACK_FAILED','FAILED_ROLLED_BACK')}else{@('MACHINE_PREPARING','MACHINE_INSTALL_FAILED','PASS_MACHINE_WORKER_PENDING','FAILED_ROLLED_BACK')}) -or
+        [string]$record.schema -cne 'container-audit-canonical-portable-install-v2' -or [string]$record.operation -cnotin @('INSTALL','UNINSTALL','RESTORE_VERIFIED_REPLACEMENT') -or
+        [string]$record.status -cnotin $(if([string]$record.operation -ceq 'UNINSTALL'){@('PREIMAGE_SAVED','MACHINE_INSTALL_FAILED','ROLLBACK_FAILED','FAILED_ROLLED_BACK','PASS_UNINSTALLED_DATA_PRESERVED')}elseif([string]$record.operation -ceq 'RESTORE_VERIFIED_REPLACEMENT'){@('PASS_RESTORED_VERIFIED')}else{@('MACHINE_PREPARING','MACHINE_INSTALL_FAILED','PASS_MACHINE_WORKER_PENDING','FAILED_ROLLED_BACK')}) -or
         -not (Same ([string]$record.install_root) $Root) -or
         [string]$record.worker_sid -cne [string]$Worker.sid -or [string]$record.placement_child.status -cnotin @('NOT_STARTED','EXITED','EXIT_UNPROVEN') -or
         [string]$record.compensation_child.status -cnotin @('NOT_STARTED','EXITED','EXIT_UNPROVEN') -or
@@ -4699,7 +4757,7 @@ function Read-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[stri
     return [pscustomobject]@{state=$state;control=$control;run_id=$run;prepared=$prepared;prestate=$prestate;fence=$fence;audit=$record;audit_path=$auditFull;audit_sha256=$AuditSha256}
 }
 function Confirm-CanonicalMachineRecoveryChildExit($Audit) {
-    if ([string]$Audit.status -cnotin @('MACHINE_PREPARING','PASS_MACHINE_WORKER_PENDING','FAILED_ROLLED_BACK') -and
+    if ([string]$Audit.status -cnotin @('MACHINE_PREPARING','PASS_MACHINE_WORKER_PENDING','FAILED_ROLLED_BACK','PASS_UNINSTALLED_DATA_PRESERVED','PASS_RESTORED_VERIFIED') -and
         [string]$Audit.placement_child.status -cne 'EXIT_UNPROVEN' -and [string]$Audit.compensation_child.status -cne 'EXIT_UNPROVEN') { return }
     try { $processSnapshot=@(Get-CimInstance -ClassName Win32_Process -Property ProcessId,CommandLine -OperationTimeoutSec 5 -ErrorAction Stop) }
     catch { throw 'MACHINE_RECOVERY_CHILD_EXIT_UNPROVEN' }
@@ -4743,7 +4801,7 @@ function Invoke-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[st
     try {
         [void](Assert-ContainerWriterFenceOwner -ControlRoot $control -SessionId $fence.session_id -AttemptId $fence.attempt_id -ReplacementTransactionId $run -AuthorityLease $authority)
         Confirm-CanonicalMachineRecoveryChildExit $record
-        if ([string]$record.status -cin @('PASS_MACHINE_WORKER_PENDING','FAILED_ROLLED_BACK')) {
+        if ([string]$record.status -cin @('PASS_MACHINE_WORKER_PENDING','FAILED_ROLLED_BACK','PASS_UNINSTALLED_DATA_PRESERVED','PASS_RESTORED_VERIFIED')) {
             # A terminal checkpoint only releases its fence. Verify either the
             # placed release or the compensated preimage; never run it again.
             $rolledBack=([string]$record.status -ceq 'FAILED_ROLLED_BACK')
@@ -4755,6 +4813,21 @@ function Invoke-CanonicalMachineInstallationRecovery($Worker,[string]$Source,[st
                     -not (Test-CanonicalMachineCodePrestate $Root ([string]$prestate.before_manifest_sha256) @())) {
                     throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS'
                 }
+            } elseif ([string]$record.status -ceq 'PASS_UNINSTALLED_DATA_PRESERVED') {
+                try {
+                    $removed=Read-CanonicalMachineRemovalResult $Root $run
+                    if (-not (Same ([string]$record.removal_marker_path) ([string]$removed.marker_path)) -or
+                        [string]$record.removal_marker_sha256 -cne [string]$removed.marker_sha256 -or
+                        -not (Same ([string]$record.removal_evidence_root) ([string]$removed.evidence_root)) -or
+                        @($record.retained_paths).Count -ne @($removed.retained_paths).Count) { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
+                    for ($index=0;$index -lt @($removed.retained_paths).Count;$index++) {
+                        if (-not (Same ([string]$record.retained_paths[$index]) ([string]$removed.retained_paths[$index]))) { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
+                    }
+                } catch { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
+            } elseif ([string]$record.status -ceq 'PASS_RESTORED_VERIFIED') {
+                try {
+                    [void](Read-CanonicalMachineRestoreResult $Root ([string]$record.code_replacement.receipt_path) ([string]$record.code_replacement.receipt_sha256) ([string]$record.code_replacement.restore_evidence_path) ([string]$record.code_replacement.restore_evidence_sha256))
+                } catch { throw 'MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS' }
             } else {
                 $installed=InstalledManifest $Root $SkipSignatureValidationForTest
                 [void](Assert-BootstrapIntegrityRecord $Root)
@@ -4911,6 +4984,8 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
             $prestate.operation='UNINSTALL'
             $prestate.removal_recovery=[ordered]@{schema='container-audit-machine-removal-recovery-v1';application=(Split-Path -Parent $Root);
                 evidence_parent=(Join-Path (Split-Path -Parent $Root) 'removal-evidence');journal_name='removal-move-journal.jsonl';run_id=$run}
+        } elseif ($RestoreVerifiedReplacement) {
+            $prestate.operation='RESTORE_VERIFIED_REPLACEMENT'
         }
         $privatePrestate=Join-Path $state ('install-audit\machine-prestate-'+$run)
         New-InstallationProtectedDirectory $privatePrestate 'S-1-5-32-544'
@@ -4935,6 +5010,8 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         $placementBaseArguments=@($arguments)
         if ($RestoreVerifiedReplacement) {
             $original=Read-BootstrapReplacementReceipt $RestoreReceiptPath $RestoreReceiptSha256
+            $audit.code_replacement.receipt_path=Full $RestoreReceiptPath 'machine restore original receipt'
+            $audit.code_replacement.receipt_sha256=$RestoreReceiptSha256
             $arguments+=@('-RestoreVerifiedReplacement','-ReplacementTransactionId',([string]$original.transaction_id),
                 '-ReplacementReceiptPath',$RestoreReceiptPath,'-ReplacementReceiptSha256',$RestoreReceiptSha256,
                 '-RestoreEvidencePath',(Join-Path $state ('install-audit\restore-'+$run+'.json')))
@@ -4999,12 +5076,20 @@ function Invoke-CanonicalMachineInstallation($Worker,[string]$Source,[string]$Ro
         }
         if ($child.ExitCode -ne 0) { throw 'MACHINE_INSTALL_FAILED' }
         if ($Uninstall) {
-            $removed=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Split-Path -Parent $Root) 'removed.json') | ConvertFrom-Json
-            if ([string]$removed.lifecycle_state -cne 'REMOVED') { throw 'Machine removal readback failed.' }
+            [void](Read-CanonicalMachineRemovalResult $Root $run)
             Remove-CanonicalMachineArtifacts $Root $Worker $artifactPaths
+            # Shortcut cleanup can update removed.json; bind its final readback.
+            $removed=Read-CanonicalMachineRemovalResult $Root $run
+            $audit.retained_paths=@($removed.retained_paths)
+            $audit.removal_evidence_root=[string]$removed.evidence_root
+            $audit.removal_marker_path=[string]$removed.marker_path
+            $audit.removal_marker_sha256=[string]$removed.marker_sha256
             $audit.status='PASS_UNINSTALLED_DATA_PRESERVED'
         } elseif ($RestoreVerifiedReplacement) {
-            [void](Assert-BootstrapIntegrityRecord $Root)
+            $restoreProofPath=if($testMode){Join-Path $state ('install-audit\restore-'+$run+'.json')}else{Read-CanonicalHelperArtifact $binding 'restore-evidence.json' 'RESTORE_EVIDENCE_READY'}
+            $restored=Read-CanonicalMachineRestoreResult $Root ([string]$audit.code_replacement.receipt_path) ([string]$audit.code_replacement.receipt_sha256) $restoreProofPath (Sha $restoreProofPath)
+            $audit.code_replacement.restore_evidence_path=[string]$restored.evidence_path
+            $audit.code_replacement.restore_evidence_sha256=[string]$restored.evidence_sha256
             Remove-CanonicalMachineArtifacts $Root $Worker $artifactPaths
             $audit.status='PASS_RESTORED_VERIFIED'
         } else {
