@@ -25,6 +25,9 @@ switch($variant){
  'tuple'{$proof.fence.attempt_id=[Guid]::NewGuid().ToString('N')}
  'root'{$proof.install_root=Join-Path $base 'foreign'}
  'owner_missing'{$proof.PSObject.Properties.Remove('owner_process_id')}
+ 'owner_start_invalid'{$proof.owner_started_at_utc='INVALID'}
+ 'owner_boolean'{$proof.owner_process_id=$true}
+ 'inventory'{$proof.fence.writer_inventory_sha256='f'*64}
  'run_changed'{function Snapshot{[pscustomobject]@{exists=$true;kind='String';data='foreign command'}}}
  'writer_changed'{function Get-CanonicalWriterSnapshot($Root){[pscustomobject]@{present=$true;enabled=$true;binding_sha256=('a'*64)}}}
  'stop_present'{[void][IO.Directory]::CreateDirectory((Split-Path -Parent $stop));[IO.File]::WriteAllText($stop,'preserve this stop')}
@@ -40,6 +43,9 @@ switch($variant){
  'handover_changed'{[IO.File]::AppendAllText([string]$proof.protected_handover_path,' ')}
  'child_alive'{function Get-CimInstance{param($ClassName,$Property,$ErrorAction);[pscustomobject]@{ProcessId=1;CommandLine=$proof.fence.replacement_transaction_id}}}
  'child_unknown'{function Get-CimInstance{param($ClassName,$Property,$ErrorAction);throw 'PROCESS_OBSERVATION_UNKNOWN'}}
+ 'acl_unprotected'{$acl=Get-Acl -LiteralPath $payload.stage_evidence_root;$acl.SetAccessRuleProtection($false,$true);Set-Acl -LiteralPath $payload.stage_evidence_root -AclObject $acl}
+ 'acl_foreign_allow'{$acl=Get-Acl -LiteralPath $payload.stage_evidence_root;$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+    [Security.Principal.SecurityIdentifier]::new('S-1-1-0'),'ReadAndExecute','ContainerInherit,ObjectInherit','None','Allow'));Set-Acl -LiteralPath $payload.stage_evidence_root -AclObject $acl}
 }
 if($variant -in @('owner_alive','owner_unknown','owner_reused','helper_alive','helper_unknown')){
     if($variant -like 'helper_*'){
@@ -117,7 +123,7 @@ if($variant -ceq 'interrupt_release_receipt'){
     if(-not $originalStop.Contains($stopLine)){throw 'ACTUAL_STOP_DELETE_MISSING'}
     Set-Item Function:Stop-ContainerWriterFence ([scriptblock]::Create($originalStop.Replace($stopLine,'exit 74')))
 }
-if($variant -in @('old_audit','schema','status','source','worker','tuple','root','owner_missing','result_proof','pending_followups','not_proven','helper_alive','helper_unknown')){
+if($variant -in @('old_audit','schema','status','source','worker','tuple','root','owner_missing','owner_start_invalid','owner_boolean','inventory','result_proof','pending_followups','not_proven','helper_alive','helper_unknown')){
     Save $auditPath $payload
 }
 $auditBefore=Sha $auditPath
@@ -141,11 +147,12 @@ def setup(tmp_path, engine, boundary):
 
 
 COMMON = ('old_audit', 'schema', 'status', 'source', 'worker', 'tuple', 'root', 'owner_missing',
+          'owner_start_invalid', 'owner_boolean', 'inventory',
           'owner_alive', 'owner_unknown', 'run_changed', 'writer_changed', 'stop_present',
           'prepared_changed', 'foreign_fence', 'result_proof', 'pending_followups',
           'child_alive', 'child_unknown', 'audit_during_read', 'fence_during_read')
 CASES = [('A_AFTER_SET', case) for case in COMMON + ('manifest_changed', 'bootstrap_changed',
-         'authorization_corrupt', 'authorization_missing', 'current_during_read')]
+         'authorization_corrupt', 'authorization_missing', 'current_during_read', 'acl_unprotected', 'acl_foreign_allow')]
 CASES += [('B_RESTORING_BEFORE_SET', case) for case in COMMON + ('helper_alive', 'helper_unknown',
           'not_proven', 'handover_changed')]
 
