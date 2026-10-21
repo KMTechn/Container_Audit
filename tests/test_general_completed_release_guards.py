@@ -71,7 +71,7 @@ public static class KMTechInstallationChildCapture {
     [KMTechInstallationChildCapture]::ObservedId=if($variant -like 'helper_*'){43210}else{[int]$proof.owner_process_id}
     [KMTechInstallationChildCapture]::Unknown=$variant -like '*unknown'
     [KMTechInstallationChildCapture]::Started=if($variant -like 'helper_*'){[string]$proof.helper_started_at_utc}else{[string]$proof.owner_started_at_utc}
-    if($variant -ceq 'owner_reused'){[KMTechInstallationChildCapture]::Started=([DateTime]$proof.owner_started_at_utc).AddDays(1).ToString('o')}
+    if($variant -ceq 'owner_reused'){[KMTechInstallationChildCapture]::Started=([DateTime]$proof.owner_started_at_utc).ToUniversalTime().AddDays(1).ToString('o')}
 }
 if($variant -in @('audit_during_read','fence_during_read','current_during_read','writer_contends')){
     $originalResult=(Get-Command Assert-CanonicalCompletedFenceResult).Definition
