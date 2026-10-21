@@ -1,6 +1,10 @@
 """Independent startup notices use bounded fake Tk, never a real window."""
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
+import subprocess
+import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -186,3 +190,138 @@ def test_tk_creation_failure_uses_existing_five_second_native_bound(
     assert not notice.native
     assert not notice.traces
     assert result == (1 if mode in ('generation', 'data-root') else None)
+
+
+def show_common(notice, record_stop=None):
+    return ca._show_stop_aware_startup_notice(
+        '프로그램 시작 확인', '시작 확인 안내', 'error', direct_sync_root=notice.root,
+        record_stop=record_stop or (lambda **fields: notice.traces.append(fields)))
+
+
+def test_common_watcher_closes_even_when_trace_write_fails(notice):
+    def denied(**_fields):
+        raise OSError('diagnostic unavailable')
+
+    assert show_common(notice, denied) is True
+    assert notice.tk.roots[0].destroyed
+    assert user_relay.read_app_stop_request(notice.root) is None
+    assert not notice.native
+
+
+def test_common_watcher_retries_a_transient_request_read_error(notice, monkeypatch):
+    consume = ca._consume_startup_app_stop_request
+    calls = []
+
+    def once(root):
+        calls.append(root)
+        if len(calls) == 1:
+            raise OSError('request temporarily unavailable')
+        return consume(root)
+
+    monkeypatch.setattr(ca, '_consume_startup_app_stop_request', once)
+    assert show_common(notice) is True
+    assert notice.tk.roots[0].now == 1000
+    assert notice.traces == [STOP_TRACE]
+
+
+def test_common_watcher_preserves_stop_acceptance_when_consume_is_fenced(notice, monkeypatch):
+    def denied(*_args):
+        raise OSError('request cleanup denied')
+
+    monkeypatch.setattr(user_relay, 'consume_app_stop_request', denied)
+    assert show_common(notice) is True
+    assert notice.traces == [STOP_TRACE]
+    assert user_relay.read_app_stop_request(notice.root) is not None
+
+
+@pytest.mark.parametrize('request_kind', ('old', 'malformed'))
+def test_common_watcher_keeps_existing_request_validation(notice, request_kind):
+    def publish():
+        user_relay.request_app_stop(notice.root, timeout_seconds=0)
+        path = user_relay.app_stop_path(notice.root)
+        payload = json.loads(path.read_text(encoding='utf-8'))
+        if request_kind == 'old':
+            payload['requested_at'] = (ca._APP_PROCESS_STARTED_AT - timedelta(seconds=1)).isoformat()
+        else:
+            payload['request_id'] = 'invalid'
+        path.write_text(json.dumps(payload), encoding='utf-8')
+
+    notice.tk.publish = publish
+    assert show_common(notice) is False
+    assert not notice.traces
+    assert notice.tk.roots[0].now == 4000
+    assert user_relay.app_stop_path(notice.root).exists() == (request_kind == 'malformed')
+
+
+def test_common_manual_close_cancels_the_scheduled_poll(notice):
+    notice.tk.publish = None
+    notice.tk.manual = True
+    assert show_common(notice) is False
+    assert not notice.tk.roots[0].jobs
+    assert not notice.traces
+
+
+@pytest.mark.parametrize('kind,flag', [('error', 0x10), ('warning', 0x30), ('info', 0x40)])
+def test_common_tk_failure_preserves_native_kind_and_five_second_bound(
+        notice, monkeypatch, kind, flag):
+    calls = []
+
+    def no_tk():
+        raise RuntimeError('Tk unavailable')
+
+    monkeypatch.setattr(notice.tk, 'Tk', no_tk)
+    monkeypatch.setattr(native, 'timed_notice', lambda *args: calls.append(args))
+    assert ca._show_stop_aware_startup_notice(
+        '고정 제목', '고정 안내', kind, direct_sync_root=notice.root,
+        record_stop=lambda **_fields: None) is False
+    assert calls == [('고정 안내', '고정 제목', flag)]
+    assert native.NOTICE_TIMEOUT_MS == 5000
+
+
+def _common_notice_child(root, ready):
+    """A guarded Python child with fake Tk and an actual official request file."""
+    class WaitingRoot(FakeRoot):
+        def mainloop(self):
+            Path(ready).write_text('ready', encoding='ascii')
+            for _ in range(20):
+                if self.destroyed or not self.jobs:
+                    return
+                time.sleep(0.1)
+                job = min(self.jobs, key=lambda key: self.jobs[key][0])
+                when, callback = self.jobs.pop(job)
+                self.now = when
+                callback()
+
+    fake = FakeTk()
+    fake.Tk = lambda: WaitingRoot(fake)
+    ca.tk = fake
+    traces = []
+    stopped = ca._show_stop_aware_startup_notice(
+        '프로그램 시작 확인', '시작 확인 안내', 'error', direct_sync_root=Path(root),
+        record_stop=lambda **fields: traces.append(fields))
+    assert stopped and traces == [STOP_TRACE]
+    raise SystemExit(0)
+
+
+def test_official_request_stops_an_isolated_fake_tk_child(notice, tmp_path):
+    ready = tmp_path / 'child-ready'
+    code = ('from tests.test_startup_notice_stop import _common_notice_child; '
+            'import sys; _common_notice_child(sys.argv[1], sys.argv[2])')
+    child = subprocess.Popen(
+        [sys.executable, '-B', '-c', code, str(notice.root), str(ready)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    try:
+        deadline = time.monotonic() + 10
+        while not ready.exists() and child.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert ready.exists(), 'isolated child did not reach its fake Tk loop'
+        user_relay.request_app_stop(notice.root, timeout_seconds=0)
+        child.communicate(timeout=10)
+        assert child.returncode == 0
+        assert child.poll() == 0
+        assert user_relay.read_app_stop_request(notice.root) is None
+    finally:
+        if child.poll() is None:
+            child.terminate()
+            child.communicate(timeout=5)
