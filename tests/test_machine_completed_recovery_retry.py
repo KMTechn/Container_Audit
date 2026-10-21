@@ -5,6 +5,7 @@ import pytest
 from tests.powershell_contracts import run_functions
 from tests.test_machine_install_completed_recovery import DRIVER, FUNCTIONS, INSTALLER
 from tests.test_machine_compensation_completed_recovery import COMPENSATED_DRIVER, COMPENSATED_FUNCTIONS
+from tests.test_machine_actual_compensation_completed_recovery import ACTUAL_COMPENSATED_DRIVER
 from tests.test_machine_operation_completed_recovery import (
     RESULT_DRIVER, SETUP_STAGE, RUN_STAGE, SUMMARY_FILE,
 )
@@ -19,7 +20,7 @@ def test_completed_recovery_retry_keeps_the_same_result(tmp_path, engine, kind):
     values = {"CA_COMPLETED_STAGE": SETUP_STAGE, "CA_COMPLETED_CASE": "completed"}
     functions = FUNCTIONS
     if kind.endswith("_COMPENSATED"):
-        driver = COMPENSATED_DRIVER
+        driver = ACTUAL_COMPENSATED_DRIVER if kind == "INSTALL_COMPENSATED" else COMPENSATED_DRIVER
         functions = COMPENSATED_FUNCTIONS
         values["CA_COMPLETED_OPERATION"] = kind.removesuffix("_COMPENSATED")
     elif kind == "INSTALL":
