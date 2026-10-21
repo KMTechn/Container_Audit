@@ -5074,7 +5074,7 @@ function Invoke-CanonicalCompletedWriterFenceRecovery([string]$Source,[string]$R
             -ReplacementTransactionId $tuple.replacement_transaction_id -WriterContractSha256 $tuple.writer_contract_sha256 -RecoverExisting
         $admission=Enter-ContainerWriterAdmission
         Confirm-CanonicalCompletedFenceProcessesExit $proof
-        Assert-CanonicalCompletedFenceResult $proof $record $Manifest
+        [void](Assert-CanonicalCompletedFenceResult $proof $record $Manifest)
         $Script:ContainerWriterFenceAcceptedInstalledInventorySha256=[string]$tuple.writer_inventory_sha256
         $activePath=Get-ContainerWriterFenceActivePath
         $active=Read-ContainerWriterFence -AllowAbsent
@@ -5124,7 +5124,7 @@ function Invoke-CanonicalCompletedWriterFenceRecovery([string]$Source,[string]$R
         # No output/authorization/state mutation precedes this second complete read.
         [void](Assert-CanonicalCompletedFenceProof (Read-CanonicalCompletedFenceJson $auditFull $AuditSha256) $auditFull $Source $Root $Manifest $OperatorSid $LocalAppDataRoot)
         Confirm-CanonicalCompletedFenceProcessesExit $proof
-        Assert-CanonicalCompletedFenceResult $proof $record $Manifest
+        [void](Assert-CanonicalCompletedFenceResult $proof $record $Manifest)
         if($activeSha){if((Sha $activePath) -cne $activeSha){throw 'fence changed'}}
         elseif(Test-Path -LiteralPath $activePath){throw 'new fence appeared'}
         if($null -ne $active){
