@@ -94,7 +94,7 @@ manifest와 bootstrap 무결성을 검증하고 원 감사 결속을 authority �
 `PASS_MACHINE_RECOVERED`는 이 울타리 정리 성공이고 작업자 첫 onboarding은 여전히 필요하다.
 결속·current 무결성이 다르거나 주인/자식이 살아 있거나 관측이 미확인이면 기존 실패 길로
 거절하고 울타리와 설치 상태를 보존한다. 아래 명시된 완료 조합만 받으며,
-남은 울타리의 증명이 없는 완료 감사는 거절한다.
+남은 울타리 또는 아래의 같은 해제 증명이 없는 완료 감사는 거절한다.
 
 보상 완료 감사 `FAILED_ROLLED_BACK`도 같은 결속·남은 fence·주인/자식 종료 증명 뒤
 울타리만 정리한다. 감사의 보상 증명과 현재 코드가 prestate의 manifest 및 bootstrap
@@ -118,10 +118,26 @@ ReadReplacementRestoreEvidence로 원 transaction·receipt·install root·복원
 원 Source의 판과 같아야 한다는 조건은 없다. 증거 필드 또는 명시 operation 없는 옛 완료
 감사는 거절·울타리 보존·자동 보상 0이다.
 
-CHECKS-0839는 실제 주인 PID/생성 시각 종료 확인, 두 번째 공식 복구의 멱등,
-실제 설치 보상 완료(MACHINE_INSTALL_FAILED + compensation PASS)의 상태 보존·재실행 0도 요구한다.
-현재 mutex 독점·자식 종료 검사는 구현되어 있으나, 이 세 입구의 영속 신원/재시작 선택은
-레인 설계 답 대기다. 전체 확인 목록의 완료 수용으로 세지 않는다.
+새 기계 prestate v1은 owner_process_id와 owner_started_at_utc를 원 프로세스의 PID와
+정확한 OS 생성 시각(UTC)으로 저장한다. 완료 복구는 원 tuple의 mutex 독점에 더해 이 신원을
+확인한다. 같은 PID·생성 시각의 생존과 관측 불가는 거절하며, PID가 재사용되어 생성 시각이
+다르면 원 주인은 종료로 본다. 필드 없는 옛 완료 감사는 울타리를 보존하고 보상하지 않는다.
+기록된 자식 PID·생성 시각과 같은 run ID 프로세스 종료 검사도 함께 유지한다.
+
+INSTALL / MACHINE_INSTALL_FAILED도 compensation의 child_exit/code_restore/artifact_restore가
+PASS이고 worker_run_restore/worker_directory_restore가 각각 PASS 또는 NOT_CHANGED면 보상
+완료로 받는다. 원 감사·상태와 preimage를 대조해 ROLLBACK_COMPLETE로 울타리만 정리하며
+MACHINE_INSTALL_FAILED 바이트를 보존한다. 완료 증명 없는 미완료 감사는 기존 보상 재개 길을
+유지하고, 옛 미완료 감사에는 새 주인 필드를 요구하지 않는다.
+
+완료 복구 허가는 install-audit/recovered-release-<run>.json에 한 번 저장한다. 파일이 있으면
+원 audit path/SHA·tuple·phase·inventory를 확인해 재사용하며 다시 쓰지 않는다. 허가만 만들었거나
+prepared 연결 뒤 해제 전에 끊긴 경우도 같은 파일로 재개한다. active가 없을 때는 이 고정 허가와
+control/writer-session/release-<run>-<허가SHA>.json의 같은 tuple·원 감사 결속이 있어야 한다.
+기존 prestate tuple로 authority를 다시 얻고 주인·자식 종료·상태별 결과와 원 감사를 되읽은 뒤
+같은 PASS_MACHINE_RECOVERED를 반환한다. 이 재시도는 감사·증거 출력·허가·영수증을 다시 쓰거나
+보상·새 fence를 만들지 않는다. 증명 없는 부재·다른/새 active·손상 증거는 거절한다.
+고정 허가 없이 옛 GUID 허가만 있는 해제 상태도 거절한다.
 
 키트 설치/되돌림은 남은 fence를 직접 지우지 않는다. 원래 관리 패킷의 설치기를 이미
 승격된 지원 셸에서 `-RecoverMachineInstallation -MachineRecoveryAuditPath <기계 audit>

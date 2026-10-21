@@ -137,9 +137,26 @@ code_replacement의 receipt_path/receipt_sha256를 원 receipt에, restore_evide
 대조하고 ReadReplacementRestoreEvidence를 되읽는다. 원 Source 판 조건은 없다.
 필드·명시 operation 없는 옛 완료 감사는 fence 보존/거절·보상 0이다.
 
-CHECKS-0839의 실제 주인 PID/생성 시각 종료 증명·복구 멱등·실제 INSTALL 보상 완료 상태의
-재실행 없는 정리는 필수 요구다. mutex 독점·자식 종료 검사에 더할 영속 신원/재시작 입구는
-레인 설계 답 대기이며 전체 수용 미완료다.
+새 기계 prestate v1은 owner_process_id와 owner_started_at_utc를 원 프로세스의 PID와
+정확한 OS 생성 시각(UTC)으로 저장한다. 완료 복구는 원 tuple의 mutex 독점에 더해 이 신원을
+확인한다. 같은 PID·생성 시각의 생존과 관측 불가는 거절하며, PID가 재사용되어 생성 시각이
+다르면 원 주인은 종료로 본다. 필드 없는 옛 완료 감사는 울타리를 보존하고 보상하지 않는다.
+기록된 자식 PID·생성 시각과 같은 run ID 프로세스 종료 검사도 함께 유지한다.
+
+INSTALL / MACHINE_INSTALL_FAILED도 compensation의 child_exit/code_restore/artifact_restore가
+PASS이고 worker_run_restore/worker_directory_restore가 각각 PASS 또는 NOT_CHANGED면 보상
+완료로 받는다. 원 감사·상태와 preimage를 대조해 ROLLBACK_COMPLETE로 울타리만 정리하며
+MACHINE_INSTALL_FAILED 바이트를 보존한다. 완료 증명 없는 미완료 감사는 기존 보상 재개 길을
+유지하고, 옛 미완료 감사에는 새 주인 필드를 요구하지 않는다.
+
+완료 복구 허가는 install-audit/recovered-release-<run>.json에 한 번 저장한다. 파일이 있으면
+원 audit path/SHA·tuple·phase·inventory를 확인해 재사용하며 다시 쓰지 않는다. 허가만 만들었거나
+prepared 연결 뒤 해제 전에 끊긴 경우도 같은 파일로 재개한다. active가 없을 때는 이 고정 허가와
+control/writer-session/release-<run>-<허가SHA>.json의 같은 tuple·원 감사 결속이 있어야 한다.
+기존 prestate tuple로 authority를 다시 얻고 주인·자식 종료·상태별 결과와 원 감사를 되읽은 뒤
+같은 PASS_MACHINE_RECOVERED를 반환한다. 이 재시도는 감사·증거 출력·허가·영수증을 다시 쓰거나
+보상·새 fence를 만들지 않는다. 증명 없는 부재·다른/새 active·손상 증거는 거절한다.
+고정 허가 없이 옛 GUID 허가만 있는 해제 상태도 거절한다.
 
 
 작업자 선택은 ACTIVE 공용 명단과 이 PC에 내구 저장한 B 이름을 사용한다. 이름 등록·번호·재시도는 [이름 등록 B](worker-roster-b.md)가 정본이며 stage_a=false이다. v1 호환 조회는 그대로 유지한다. 기존 생산자 HMAC으로 `POST /api/worker-roster/v1/query`에 현장 ID와 `known_version`을 보내고 명단 응답만 262,144B까지 받는다. 시작·변경·60초 배경 조회는 writer admission 밖에서 수행하며 현재 조회 시도·로그인 epoch가 같은 응답만 적용한다. 조회 지연·실패는 스캔 내구 저장을 기다리게 하지 않는다.
