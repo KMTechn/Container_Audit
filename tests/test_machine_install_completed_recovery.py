@@ -24,6 +24,9 @@ _available_functions = set(re.findall(r"(?m)^function ([A-Za-z0-9_-]+)", INSTALL
 FUNCTIONS += [name for name in (
     "Find-CanonicalRemovalMoveJournal", "ReadReplacementRestoreEvidence",
     "Read-CanonicalMachineRemovalResult", "Read-CanonicalMachineRestoreResult",
+    'Test-CanonicalMachineCompensationComplete', 'Test-CanonicalMachineRecoveryCompleted',
+    'Confirm-CanonicalMachineRecoveryOwnerExit', 'Read-CanonicalMachineRecoveryReleaseAuthorization',
+    'Read-CanonicalMachineRecoveryReleaseState',
 ) if name in _available_functions]
 
 DRIVER = r'''
@@ -91,12 +94,16 @@ $receiptFunction=$bootstrapAst.FindAll({param($node) $node -is [Management.Autom
 function Get-StrictFullPath([string]$Path,[string]$Label){Full $Path $Label}
 function Get-FileSha256([string]$Path){Sha $Path}
 function Initialize-InstallationChildCapture {}
-if($case -like 'recorded_child_*') {
+if(-not ('KMTechInstallationChildCapture' -as [type])) {
     Add-Type -TypeDefinition @'
 public static class KMTechInstallationChildCapture {
  public static string ObservedStart;
  public static bool Unreadable;
+ public static string OwnerObservedStart;
+ public static bool OwnerUnreadable;
+ public static int OwnerReads;
  public static string ReadProcessStartTimeUtc(int processId) {
+  if (processId == 43210) { OwnerReads++; if (OwnerUnreadable) throw new System.IO.IOException("owner unreadable"); return OwnerObservedStart; }
   if (Unreadable) throw new System.IO.IOException("process observation denied");
   return ObservedStart;
  }
@@ -105,6 +112,10 @@ public static class KMTechInstallationChildCapture {
     if($case -eq 'recorded_child_alive'){[KMTechInstallationChildCapture]::ObservedStart='2026-10-21T00:00:00.0000000Z'}
     if($case -eq 'recorded_child_unknown'){[KMTechInstallationChildCapture]::Unreadable=$true}
 }
+
+if($case -eq 'owner_identity_alive') {[KMTechInstallationChildCapture]::OwnerObservedStart='2026-01-01T00:00:00.0000000Z'}
+if($case -eq 'owner_identity_reused') {[KMTechInstallationChildCapture]::OwnerObservedStart='2026-01-02T00:00:00.0000000Z'}
+if($case -eq 'owner_identity_unknown') {[KMTechInstallationChildCapture]::OwnerUnreadable=$true}
 
 $idsPath=Join-Path $base 'ids.json'
 if($env:CA_COMPLETED_STAGE -ceq 'setup'){
@@ -123,8 +134,11 @@ if($env:CA_COMPLETED_STAGE -ceq 'setup'){
     $prestate=[ordered]@{schema='container-audit-machine-install-prestate-v1';operation='INSTALL';run_id=$run;
         install_root=$root;worker_sid=$worker.sid;profile_root=$worker.profile_root;session_id=$session;attempt_id=$attempt;
         source_manifest_sha256=Sha (Join-Path $source 'portable-manifest.json');orchestrator_sha256=Sha $originalSource;
-        worker_preparation=$null;prepared_receipt=$prepared}
+        worker_preparation=$null;prepared_receipt=$prepared;
+        owner_process_id=43210;owner_started_at_utc='2026-01-01T00:00:00.0000000Z'}
     if($case -ceq 'tuple_differs'){$prestate.attempt_id=[Guid]::NewGuid().ToString('N')}
+    if($case -eq 'owner_identity_absent'){$prestate.Remove('owner_process_id');$prestate.Remove('owner_started_at_utc')}
+    if($case -eq 'owner_identity_invalid'){$prestate.owner_started_at_utc='invalid'}
     $journal=Join-Path $state ('install-audit\machine-prestate-'+$run+'\prestate.json');Save $journal $prestate
     $audit=[ordered]@{schema='container-audit-canonical-portable-install-v2';operation='INSTALL';status='PASS_MACHINE_WORKER_PENDING';
         run_id=$run;install_root=$root;worker_sid=$worker.sid;source_commit=$manifest.source_commit;
@@ -184,7 +198,7 @@ Save (Join-Path $base 'completed-result.json') @{
     code_preserved=((Sha (Join-Path $root 'keep.bin')) -ceq $codeBefore);
     audit_spaced=([Text.Encoding]::UTF8.GetString($originalAudit) -match '\r?\n\s+"schema"\s*:\s+');audit_preserved=([Convert]::ToBase64String([IO.File]::ReadAllBytes($auditPath)) -ceq [Convert]::ToBase64String($originalAudit));
     installed_checks=$script:InstalledChecks;integrity_checks=$script:IntegrityChecks;process_checks=$script:ProcessChecks;
-    public_code=$script:PublicCode;release_receipts=@(Get-ChildItem -LiteralPath $control -Filter 'release-*.json' -File).Count
+    owner_checks=[KMTechInstallationChildCapture]::OwnerReads;public_code=$script:PublicCode;release_receipts=@(Get-ChildItem -LiteralPath $control -Filter 'release-*.json' -File).Count
 }
 '''
 

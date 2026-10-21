@@ -40,6 +40,7 @@ def test_completed_recovery_retry_keeps_the_same_result(tmp_path, engine, kind):
         assert not summary["fence_present"]
         assert summary["audit_preserved"] and summary["code_preserved"] and summary["audit_spaced"]
         assert summary["restored"] == summary["audit_writes"] == 0
+        assert summary["owner_checks"] > 0, "every recovery must recheck the original process identity"
         assert summary["release_receipts"] == 1
         summaries.append(summary)
     assert summaries[0]["public_code"] == summaries[1]["public_code"] == "PASS_MACHINE_RECOVERED"
