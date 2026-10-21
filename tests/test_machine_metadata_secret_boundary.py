@@ -101,7 +101,8 @@ def test_audit_budget_keeps_valid_json_tuple_and_masks_diagnostics(tmp_path, eng
     synthetic = 'audit-secret-' + uuid.uuid4().hex
     identity = uuid.uuid4().hex
     result = run_functions(tmp_path, ROOT/'INSTALL_CANONICAL_PORTABLE.ps1',
-        ['ConvertTo-CanonicalAuditJson','Save'], r'''
+        ['ConvertTo-CanonicalAuditJson','Save'], r'''$script:InstallationEvidenceRoot = $env:CA_CONTRACT_ROOT
+
 $id=$env:CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID
 $path=Join-Path $env:CA_CONTRACT_ROOT 'audit.json'
 $body=('head-'+$env:CUSTOM_AUDIT_SECRET+' '+('가나다'*40000)+' tail '+$env:CUSTOM_AUDIT_SECRET)
@@ -117,3 +118,51 @@ if((Get-Item $path).Length -gt 65536 -or -not $copy.failure.message.Contains('[T
     assert result.stdout.strip() == 'PASS_VALID_BOUNDED_AUDIT'
     assert synthetic.encode() not in (tmp_path/'audit.json').read_bytes()
     assert json.loads((tmp_path/'audit.json').read_bytes())['code_replacement']['transaction_id'] == identity
+
+
+def test_public_audit_save_masks_sensitive_bytes_and_keeps_valid_json(tmp_path):
+    """Public Save must retain valid JSON without synthetic sensitive bytes."""
+    import os
+
+    synthetic = 'audit-secret-' + uuid.uuid4().hex
+    identity = uuid.uuid4().hex
+    result = run_functions(
+        tmp_path,
+        ROOT / 'INSTALL_CANONICAL_PORTABLE.ps1',
+        ['ConvertTo-CanonicalAuditJson', 'Save'],
+        r"""
+$id=$env:CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID
+$path=Join-Path $env:CA_CONTRACT_ROOT 'audit.json'
+$body=('head-'+$env:CUSTOM_AUDIT_SECRET+' '+('가나다'*40000)+' tail '+$env:CUSTOM_AUDIT_SECRET)
+Save $path @{schema='audit-fixture';code_replacement=@{transaction_id=$id};failure=@{message=$body};
+'OK'
+""",
+        values={'CUSTOM_AUDIT_SECRET': synthetic, 'CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID': identity},
+    )
+    audit = tmp_path / 'audit.json'
+    raw = audit.read_bytes() if audit.exists() else b""
+    sensitive = synthetic.encode()
+    counts = {
+        "audit_occurrences": raw.count(sensitive),
+        "stdout_occurrences": result.stdout.encode().count(sensitive),
+        "stderr_occurrences": result.stderr.encode().count(sensitive),
+    }
+    valid_json = False
+    try:
+        json.loads(raw)
+        valid_json = True
+    except (ValueError, UnicodeDecodeError):
+        pass
+    if counts["audit_occurrences"]:
+        audit.write_bytes(raw.replace(sensitive, b"[REMOVED]"))
+    destination = Path(os.environ.get("KMTECH_TEST_CA_EVIDENCE_ROOT", str(tmp_path)))
+    (destination / "p1-01-public-save-boundary.json").write_text(
+        json.dumps({"returncode": result.returncode, "valid_json": valid_json,
+                    **counts, "payloads_recorded": False}), encoding="utf-8"
+    )
+    if result.returncode:
+        raise AssertionError("public Save fixture did not complete")
+    if not valid_json:
+        raise AssertionError("public Save did not preserve valid JSON")
+    if any(counts.values()):
+        raise AssertionError("public Save exposed synthetic sensitive bytes")
