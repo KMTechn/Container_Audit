@@ -16,7 +16,7 @@ import user_relay
 
 
 MODES = ('unavailable', 'onboarding', 'integrity', 'catalog',
-         'generation', 'data-root', 'legacy-update')
+         'generation', 'data-root', 'legacy-update', 'instance-lock')
 STOP_TRACE = {'stage': 'APP_STOP_REQUESTED_CLOSE', 'message': '멈춤 요청으로 닫힘'}
 
 
@@ -98,7 +98,7 @@ def notice(monkeypatch, tmp_path):
     traces, native_calls = [], []
     monkeypatch.setattr(ca, '_STARTUP_NOTICE_DIRECT_SYNC_ROOT', root, raising=False)
     monkeypatch.setattr(ca, 'build_container_audit_storage_paths',
-                        lambda **_kwargs: SimpleNamespace(direct_sync_root=root))
+                        lambda **_kwargs: SimpleNamespace(direct_sync_root=root, data_root=tmp_path / 'data'))
     monkeypatch.setattr(ca, '_startup_check_observe', lambda *_args, **_kwargs: False)
     monkeypatch.setattr(ca, '_record_startup_notice_stop',
                         lambda **fields: traces.append(fields), raising=False)
@@ -108,6 +108,8 @@ def notice(monkeypatch, tmp_path):
     for name in ('showerror', 'showwarning', 'showinfo'):
         monkeypatch.setattr(ca.messagebox, name,
                             lambda *args, **kwargs: native_calls.append((args, kwargs)))
+    monkeypatch.setattr(native, 'timed_notice',
+                        lambda *args, **kwargs: native_calls.append((args, kwargs)))
     fake = FakeTk(publish=lambda: user_relay.request_app_stop(root, timeout_seconds=0))
     monkeypatch.setattr(ca, 'tk', fake)
     return SimpleNamespace(root=root, traces=traces, native=native_calls, tk=fake)
@@ -124,14 +126,22 @@ def invoke(mode, monkeypatch, tmp_path):
     if mode == 'catalog':
         return ca._show_item_catalog_startup_error('HTTP_ERROR', http_status_code=503)
     if mode in ('generation', 'data-root'):
+        relay_root = ca._STARTUP_NOTICE_DIRECT_SYNC_ROOT
         error = (ca.DataGenerationBlocked({'status': 'REFUSE'}) if mode == 'generation'
                  else ca.DataRootUnavailableError('unavailable'))
 
         def refuse(**_kwargs):
+            ca._STARTUP_NOTICE_DIRECT_SYNC_ROOT = relay_root
             raise error
 
         monkeypatch.setattr(ca, '_prepare_gui_startup', refuse)
         return ca._run_gui_application([])
+    if mode == 'instance-lock':
+        def no_lock(_root):
+            raise OSError('instance lock unavailable')
+
+        monkeypatch.setattr(ca, 'acquire_runtime_instance', no_lock)
+        return ca._prepare_gui_startup(data_root=tmp_path / 'data')
     return ca._prompt_and_apply_update({'version': 'test-version'})
 
 
@@ -164,6 +174,8 @@ def test_manual_close_keeps_message_bytes_and_does_not_report_stop(
         'data-root': storage_policy.DATA_ROOT_ERROR_MESSAGE,
         'legacy-update': f'새로운 버전(test-version)이 확인되었습니다. (현재: {ca.CURRENT_VERSION})\n\n'
                          + ca.RUNTIME_UPDATE_BOOTSTRAP_MESSAGE,
+        'instance-lock': '데이터 충돌 방지를 위한 실행 잠금을 확인하지 못했습니다. '
+                         '프로그램을 시작하지 않고 관리자에게 문의합니다.',
     }
     assert notice.tk.labels == [expected[mode].encode('utf-8')]
     assert notice.tk.buttons[0]['text'] == '닫기'
@@ -172,7 +184,7 @@ def test_manual_close_keeps_message_bytes_and_does_not_report_stop(
 
 
 @pytest.mark.parametrize('mode', MODES)
-def test_tk_creation_failure_uses_existing_five_second_native_bound(
+def test_tk_creation_failure_uses_thirty_second_native_bound(
         notice, monkeypatch, tmp_path, mode):
     calls = []
 
@@ -180,13 +192,14 @@ def test_tk_creation_failure_uses_existing_five_second_native_bound(
         raise RuntimeError('Tk unavailable')
 
     monkeypatch.setattr(notice.tk, 'Tk', no_tk)
-    monkeypatch.setattr(native, 'timed_notice',
-                        lambda *args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(ca, '_show_startup_notice_native',
+                        lambda *args, **kwargs: calls.append((args, kwargs)), raising=False)
     result = invoke(mode, monkeypatch, tmp_path)
     assert len(calls) == 1
     args, kwargs = calls[0]
-    timeout = kwargs.get('timeout_ms', args[3] if len(args) > 3 else native.NOTICE_TIMEOUT_MS)
-    assert timeout == 5000
+    assert args[0] and args[1]
+    assert args[2] == ('warning' if mode == 'integrity' else
+                       'info' if mode in ('legacy-update', 'unavailable') else 'error')
     assert not notice.native
     assert not notice.traces
     assert result == (1 if mode in ('generation', 'data-root') else None)
@@ -262,7 +275,7 @@ def test_common_manual_close_cancels_the_scheduled_poll(notice):
 
 
 @pytest.mark.parametrize('kind,flag', [('error', 0x10), ('warning', 0x30), ('info', 0x40)])
-def test_common_tk_failure_preserves_native_kind_and_five_second_bound(
+def test_common_tk_failure_preserves_native_kind_and_thirty_second_bound(
         notice, monkeypatch, kind, flag):
     calls = []
 
@@ -270,12 +283,72 @@ def test_common_tk_failure_preserves_native_kind_and_five_second_bound(
         raise RuntimeError('Tk unavailable')
 
     monkeypatch.setattr(notice.tk, 'Tk', no_tk)
-    monkeypatch.setattr(native, 'timed_notice', lambda *args: calls.append(args))
+    monkeypatch.setattr(ca, '_show_startup_notice_native',
+                        lambda *args: calls.append(args), raising=False)
     assert ca._show_stop_aware_startup_notice(
         '고정 제목', '고정 안내', kind, direct_sync_root=notice.root,
         record_stop=lambda **_fields: None) is False
-    assert calls == [('고정 안내', '고정 제목', flag)]
-    assert native.NOTICE_TIMEOUT_MS == 5000
+    assert calls == [('고정 제목', '고정 안내', kind)]
+
+
+@pytest.mark.parametrize('kind,flag', [('error', 0x10), ('warning', 0x30), ('info', 0x40)])
+def test_native_fallback_passes_the_thirty_second_timeout(monkeypatch, kind, flag):
+    import ctypes
+
+    class Notice:
+        def __call__(self, *args):
+            self.args = args
+            return 1
+
+    notice = Notice()
+    monkeypatch.setattr(ctypes, 'WinDLL', lambda *_args, **_kwargs:
+                        SimpleNamespace(MessageBoxTimeoutW=notice))
+    ca._show_startup_notice_native('고정 제목', '고정 안내', kind)
+    assert notice.args == (None, '고정 안내', '고정 제목', flag, 0, 30000)
+
+
+@pytest.mark.parametrize('mode', MODES)
+def test_native_fallback_failure_keeps_safe_return(notice, monkeypatch, tmp_path, mode):
+    def unavailable(*_args, **_kwargs):
+        raise OSError('notice unavailable')
+
+    monkeypatch.setattr(notice.tk, 'Tk', unavailable)
+    monkeypatch.setattr(ca, '_show_startup_notice_native', unavailable, raising=False)
+    assert invoke(mode, monkeypatch, tmp_path) == (1 if mode in ('generation', 'data-root') else None)
+    assert not notice.native
+
+
+def test_unknown_relay_root_uses_bounded_native_without_guessing_or_consuming(
+        notice, monkeypatch, tmp_path):
+    calls = []
+    user_relay.request_app_stop(notice.root, timeout_seconds=0)
+    request = user_relay.app_stop_path(notice.root).read_bytes()
+
+    def invalid_paths(**_kwargs):
+        raise ca.DataRootUnavailableError('selected root unavailable')
+
+    monkeypatch.setattr(ca, 'build_container_audit_storage_paths', invalid_paths)
+    monkeypatch.setattr(ca, '_show_startup_notice_native',
+                        lambda *args: calls.append(args), raising=False)
+    assert ca._run_gui_application(['--data-root', str(tmp_path / 'unavailable')]) == 1
+    assert not notice.tk.roots
+    assert user_relay.app_stop_path(notice.root).read_bytes() == request
+    assert calls == [('이적 검사 데이터 폴더 오류', storage_policy.DATA_ROOT_ERROR_MESSAGE, 'error')]
+    assert not notice.traces
+    assert not notice.native
+
+
+def test_stop_trace_uses_only_the_fixed_stdout_line(capsys):
+    ca._record_startup_notice_stop(**STOP_TRACE)
+    assert capsys.readouterr().out == 'stage="APP_STOP_REQUESTED_CLOSE" message="멈춤 요청으로 닫힘"\n'
+
+
+def test_stop_trace_output_failure_still_returns_safely(monkeypatch):
+    def denied(*_args, **_kwargs):
+        raise OSError('stdout unavailable')
+
+    monkeypatch.setattr('builtins.print', denied)
+    ca._record_startup_notice_stop(**STOP_TRACE)
 
 
 def _common_notice_child(root, ready):
