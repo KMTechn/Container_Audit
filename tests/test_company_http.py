@@ -137,7 +137,7 @@ def test_catalog_startup_displays_http_reason(monkeypatch, tmp_path, status):
             get=lambda *_args, **_kwargs: response(status, b'<html>error code: 1010</html>'))
     assert caught.value.cause_code == catalog.REQUEST_FAILED_NO_CACHE
     seen = []
-    monkeypatch.setattr(app.messagebox, "showerror", lambda title, message: seen.append(message))
+    monkeypatch.setattr(app, "_show_startup_notice", lambda title, message: seen.append(message))
     app._show_item_catalog_startup_error(caught.value.cause_code,
         http_status_code=caught.value.diagnostic_context["http_status_code"])
     assert "회사 서버" in seen[0] and f"코드 {status}" in seen[0]

@@ -15,7 +15,7 @@ from tests.test_startup_check_report import flow, folder, read_result, report_sc
 def test_unconfirmed_report_preserves_original_message_and_exit(
         folder, flow, monkeypatch, failure, refusal):
     errors = []
-    monkeypatch.setattr(app.messagebox, "showerror", lambda *args: errors.append(args))
+    monkeypatch.setattr(app, "_show_startup_notice", lambda *args: errors.append(args))
     original_open = Path.open
 
     def denied(*_args, **_kwargs):
