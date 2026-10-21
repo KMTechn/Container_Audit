@@ -4854,6 +4854,7 @@ function Assert-CanonicalCompletedFenceEvidencePath([string]$Path,$Audit,$Proof)
             -not(Same ([string]$Proof.protected_handover_path) (Join-Path $parent 'handover.json'))){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
         Assert-InstallationEvidenceProtectedPath $parent
         Assert-InstallationEvidenceProtectedPath $Path
+        Assert-InstallationEvidenceProtectedPath ([string]$Proof.protected_handover_path)
     }
 }
 function Assert-CanonicalCompletedFenceProof($Audit,[string]$Path,[string]$Source,[string]$Root,$Manifest,[string]$Sid,[string]$Local) {
@@ -5017,6 +5018,7 @@ function Assert-CanonicalCompletedFenceResult($Proof,$Audit,$Manifest) {
     }
 }
 function Read-CanonicalCompletedFenceAuthorization([string]$Path,$Proof,[string]$AuditPath,[string]$AuditSha256,[string]$Phase,[string]$ExpectedInventorySha256='') {
+    if([string]$Proof.operation -ceq 'TRANSACTION_ROLLBACK'){Assert-InstallationEvidenceProtectedPath $Path}
     $sha=Sha $Path
     $record=Read-CanonicalCompletedFenceJson $Path $sha
     $fields=@('schema','status','phase','app_id','session_id','attempt_id','replacement_transaction_id','writer_inventory_sha256',
