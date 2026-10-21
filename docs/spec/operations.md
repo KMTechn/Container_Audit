@@ -1724,9 +1724,13 @@ original_audit_status, audit_path, audit_sha256, completed_steps, pending_follow
 
 후속 relay는 원 작업자의 보존된 Run이 수행하는 정상 로그온 또는 기존
 `--onboard-current-user` 흐름에서 다룬다. 새 지원 입구는 이를 실행하지 않는다.
-A User_shortcuts와 B execution_state의 구체적인 다음 공식 절차 문구는 레인 질문 12–13의
-선택 대기이며, User onboarding에 존재하지 않는 shortcut 기능이나 private running 함수를
-새 CLI인 것처럼 안내하지 않는다. 이 둘을 완료로 표시하지 않고 원 감사·preimage와 함께 인계한다.
+A User_shortcuts 후속은 지원 담당자가 원 admitted source와 원 receipt path/SHA를 보존해
+기존 `-RestoreVerifiedReplacement` 정상 흐름을 따로 실행한다. 새 fence-only 입구가 이를 실행하지 않는다.
+FENCE_RELEASED_FOLLOWUP_PENDING은 User 복원·전체 PASS가 아니며, 그 사이 앱은 User 바로 가기 없이 남을 수 있다.
+B execution_state 후속은 위의 기존 지원 복구 절에 따라 코디 지원 확인·실제 readback 단계에
+원 감사와 preimage를 인계한다. 기존 정상 흐름의 확인 함수는
+`Assert-CanonicalTransactionRelayPreimage`와 `Confirm-CanonicalWriterRunning`이며, private 함수를 CLI로 안내하지 않는다.
+원 부재는 부재로 확인하고 새 설치·작업 생성이나 후속 완료 표시를 하지 않는다.
 최종 통합 머리 독립 검토/실제 VM 중단·재개·멱등 수용은 headless 계약 시험으로 대신하지 않는다.
 
 ### 실행 후 관리자 인증 또는 TLS 자료 판 거절
