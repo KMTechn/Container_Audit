@@ -666,7 +666,11 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
             $jsonProcessed=$false
             $candidate=$Text.Trim()
             if($candidate.StartsWith('{') -or $candidate.StartsWith('[')){
-                $value=ConvertFrom-Json -InputObject $candidate -ErrorAction Stop
+                $jsonReadParameters=@{}
+                if((Get-Command Microsoft.PowerShell.Utility\ConvertFrom-Json).Parameters.ContainsKey('DateKind')){
+                    $jsonReadParameters.DateKind='String'
+                }
+                $value=ConvertFrom-Json -InputObject $candidate @jsonReadParameters -ErrorAction Stop
                 $redactionState=@{changed=$false}
                 $converted=Convert-RedactedValue $value
                 if($redactionState.changed){$Text=$converted|ConvertTo-Json -Depth 100 -Compress};$jsonProcessed=$true

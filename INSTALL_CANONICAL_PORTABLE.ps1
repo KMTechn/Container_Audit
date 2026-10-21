@@ -8039,7 +8039,11 @@ finally {
     if(Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue){
     $finalAudit=$null
     if($null -ne $audit){
-        $finalAudit=(ConvertTo-CanonicalAuditJson $audit)|ConvertFrom-Json
+        $finalJsonReadParameters=@{}
+        if((Get-Command Microsoft.PowerShell.Utility\ConvertFrom-Json).Parameters.ContainsKey('DateKind')){
+            $finalJsonReadParameters.DateKind='String'
+        }
+        $finalAudit=(ConvertTo-CanonicalAuditJson $audit)|ConvertFrom-Json @finalJsonReadParameters
     }
     Complete-InstallationEvidenceStage 'forward'
     $evidenceRollbackFailure=$null
