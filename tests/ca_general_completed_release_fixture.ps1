@@ -52,7 +52,7 @@ function Test-InstallationTransactionParent{param($Configuration);$true}
 $testMode=$true
 $SkipSignatureValidationForTest=$true
 $install=Join-Path $base 'current'
-$source=$repo
+$source=Join-Path $base 'packet'
 $operatorSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $activeDataRoot=Join-Path $base 'data'
 $stop=Join-Path $base 'stop.json'
@@ -60,8 +60,23 @@ $before=[pscustomobject]@{exists=$false;kind='';data=''}
 $old=@();$legacyRelayPreimage=$null
 $writerBefore=[pscustomobject]@{restore_required=$false}
 $currentAbsentBeforePlacement=$true
-$sourceManifest=@{source_commit=('c'*40)}
-$sourceManifestSha256='a'*64
+if($env:CA_GENERAL_STAGE -ceq 'setup'){
+    [void][IO.Directory]::CreateDirectory((Join-Path $source 'tools'))
+    foreach($relative in @('INSTALL_CANONICAL_PORTABLE.ps1','INSTALL_THIS_PC.ps1','tools/bootstrap_integrity.ps1',
+        'tools/container_writer_sink_inventory.json','tools/container_writer_session_contract.json')){
+        [IO.File]::Copy((Join-Path $repo $relative),(Join-Path $source $relative))
+    }
+    $inventory=Get-Content -LiteralPath (Join-Path $repo 'tools/container_writer_sink_inventory.json') -Raw|ConvertFrom-Json
+    $sourceManifest=@{schema='container-audit-portable-tree-v1';source_commit=('c'*40);source_tree=('d'*40);
+        installer_sha256=Sha $env:CA_CONTRACT_SOURCE;writer_session_contract_sha256=Sha (Join-Path $repo 'tools/container_writer_session_contract.json');
+        writer_sink_inventory_sha256=Sha (Join-Path $repo 'tools/container_writer_sink_inventory.json');writer_sink_inventory_contract_sha256=$inventory.inventory_sha256}
+    Save (Join-Path $source 'portable-manifest.json') $sourceManifest
+}
+$sourceManifest=Get-Content -LiteralPath (Join-Path $source 'portable-manifest.json') -Raw|ConvertFrom-Json
+$sourceManifestSha256=Sha (Join-Path $source 'portable-manifest.json')
+$sourceHelperSha256=Sha (Join-Path $source 'INSTALL_THIS_PC.ps1')
+$sourceIntegrityHelperSha256=Sha (Join-Path $source 'tools/bootstrap_integrity.ps1')
+$RunName='KMTech.ContainerAudit.Relay'
 $auditRoot=Join-Path $lad 'KMTech/ContainerAudit/install-audit'
 $kind=$env:CA_GENERAL_BOUNDARY
 if($env:CA_GENERAL_STAGE -ceq 'setup'){
@@ -84,13 +99,11 @@ if($kind -like 'A_*'){
     $oldManifest=@{schema='container-audit-portable-tree-v1';source_commit=('b'*40);source_tree=('e'*40);
         writer_sink_inventory_sha256=Sha $inventoryPath;writer_sink_inventory_contract_sha256=$inventory.inventory_sha256}
     Save (Join-Path $install 'portable-manifest.json') $oldManifest
-    $sourceManifest=@{schema='container-audit-portable-tree-v1';source_commit=('c'*40);source_tree=('d'*40)}
     Save (Join-Path $failed 'portable-manifest.json') $sourceManifest
     foreach($directory in @($install,$failed)){Save (Join-Path $directory 'bootstrap-integrity.json') @{fixture='unsigned packet seam'}}
     [void][IO.Directory]::CreateDirectory((Join-Path $install 'tools'))
     [IO.File]::Copy($inventoryPath,(Join-Path $install 'tools/container_writer_sink_inventory.json'))
     $sourceManifestSha256=Sha (Join-Path $failed 'portable-manifest.json')
-    $sourceHelperSha256='e'*64;$sourceIntegrityHelperSha256='f'*64
     $restoreReceiptFull=Join-Path $base 'replacement-receipt.json'
     $parentAcl=Get-BootstrapAclIdentity $base
     Save $restoreReceiptFull @{
@@ -123,7 +136,8 @@ try{
         -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 -WriterContractSha256 $canonicalWriterFenceContractSha256 `
         -PreparedReceiptPath $preparedPath -PreparedReceiptSha256 (Sha $preparedPath) -AuthorityLease $lease)
     }
-    $auditPath=if($kind -like 'A_*'){Join-Path $auditRoot ('canonical-portable-'+$runId+'.json')}else{Join-Path $base 'protected/run-owned/transaction-rollback-audit.json'}
+    $protectedRoot=Join-Path (Join-Path (Get-InstallationEvidenceControlRoot) 'installation-evidence') ('run-'+[Guid]::NewGuid().ToString('N'))
+    $auditPath=if($kind -like 'A_*'){Join-Path $auditRoot ('canonical-portable-'+$runId+'.json')}else{Join-Path $protectedRoot 'transaction-rollback-audit.json'}
     Save (Join-Path $base 'boundary-context.json') @{audit_path=$auditPath;prepared_path=$preparedPath;
         owner_process_id=$PID;owner_started_at_utc=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')}
     $originalSet=(Get-Command Set-CanonicalWriterFenceReleaseAuthorization).Definition
@@ -146,9 +160,17 @@ try{
         $end=$text.IndexOf('        Clear-CanonicalWriterFenceReleaseDelegation',$start)
         try{. ([scriptblock]::Create($text.Substring($start,$end-$start)))}catch{if($_.Exception.Message -cne 'BOUNDARY_STOP'){throw}}
     }else{
-        $protectedRoot=Join-Path $base 'protected/run-owned'
         [void][IO.Directory]::CreateDirectory($protectedRoot)
-        $configuration=[pscustomobject]@{context=[pscustomobject]@{};protected_root=$protectedRoot;transaction_id=$Script:CanonicalWriterFenceTransactionId}
+        $configuration=[pscustomobject]@{context=[pscustomobject]@{source=$source;install=$install;operatorSid=$operatorSid;lad=$lad;activeDataRoot=$activeDataRoot;
+            stop=$stop;before=$before;writerBefore=$writerBefore;legacyRelayPreimage=$null;old=@();currentAbsentBeforePlacement=$true;
+            sourceManifestSha256=$sourceManifestSha256;sourceManifest=$sourceManifest;candidate=$null;installedCodeRoot=$install;supportedPlacement=$false};
+            protected_root=$protectedRoot;transaction_id=$Script:CanonicalWriterFenceTransactionId;source_root=$source;install_root=$install;
+            operator_sid=$operatorSid;local_appdata_root=$lad;data_root=$activeDataRoot;session_id=$Script:CanonicalWriterFenceSessionId;
+            attempt_id=$Script:CanonicalWriterFenceAttemptId;orchestrator_sha256=$canonicalWriterFenceOrchestratorSha256;
+            writer_contract_sha256=$canonicalWriterFenceContractSha256;prepared_path=$preparedPath;prepared_sha256=Sha $preparedPath;
+            source_manifest=$sourceManifest;parent_process_id=$PID;parent_started_at_utc=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o');
+            helper_process_id=$PID;helper_started_at_utc=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')}
+        Save (Join-Path $protectedRoot 'handover.json') $configuration
         # Real compensator verifies every step before saving its waiting audit.
         Invoke-CanonicalTransactionCompensation $configuration $null $lease | Out-Null
         $auditPath=Join-Path $protectedRoot 'transaction-rollback-audit.json'
@@ -162,13 +184,22 @@ $preparedPath=[string]$context.prepared_path
 $rollbackContinuation=$null
 $restoreReceiptFull=Join-Path $base 'replacement-receipt.json'
 $RestoreReceiptSha256=if(Test-Path -LiteralPath $restoreReceiptFull){Sha $restoreReceiptFull}else{'a'*64}
-$sourceHelperSha256='e'*64;$sourceIntegrityHelperSha256='f'*64
 $sourceWriterInventory=Get-Content -LiteralPath (Join-Path $repo 'tools/container_writer_sink_inventory.json') -Raw|ConvertFrom-Json
 if($kind -like 'A_*'){
     $inputReceipt=Read-BootstrapReplacementReceipt $restoreReceiptFull $RestoreReceiptSha256
-    $sourceManifest=@{source_commit=$inputReceipt.new.source_commit;source_tree=$inputReceipt.new.source_tree}
     $sourceManifestSha256=[string]$inputReceipt.new.manifest_sha256
 }
+if($env:CA_GENERAL_STAGE -ceq 'recover'){
+    $activePath=Get-ContainerWriterFenceActivePath
+    $auditBefore=Sha $auditPath
+    $recoveryCode='';$recovered=$null
+    try{$recovered=Invoke-CanonicalCompletedWriterFenceRecovery $source $install $sourceManifest $auditPath (Sha $auditPath) $operatorSid $lad}
+    catch{$recoveryCode=if($_.Exception.Message -cmatch '^[A-Z_]+$'){$_.Exception.Message}else{'RECOVERY_UNAVAILABLE'}}
+    Save (Join-Path $base 'general-recovery-result.json') @{code=$recoveryCode;result=$recovered;
+        fence_present=(Test-Path -LiteralPath $activePath);audit_preserved=((Sha $auditPath) -ceq $auditBefore)}
+    return
+}
+
 $activePath=Get-ContainerWriterFenceActivePath
 $active=Read-ContainerWriterFence
 $fenceBefore=Sha $activePath
@@ -218,3 +249,4 @@ Save (Join-Path $base 'general-observed.json') @{
     indented_audit=($auditRaw -match '"status"\s*:\s+"');continuation_refused=$continuationRefused;
     fence_preserved=((Sha $activePath) -ceq $fenceBefore);audit_preserved=((Sha $auditPath) -ceq $auditBefore);
     control_root=(Get-ContainerWriterFenceControlRoot);local_appdata=$lad;operator_sid=$operatorSid;fence_present=(Test-Path -LiteralPath $activePath)}
+

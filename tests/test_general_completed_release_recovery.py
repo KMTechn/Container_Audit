@@ -46,7 +46,16 @@ def test_completed_general_boundary_has_an_official_fence_only_exit(tmp_path, mo
     observed["refusals"]["scan_save"] = error.value.code
     observed["refusals"]["worker_setup_removal"] = True
     path.write_text(json.dumps(observed, indent=2), encoding="utf-8")
-    # RED: every existing official entry refuses the completed waiting fence.
+    # The approved dedicated entry is the only new exit. Other modes keep their meanings.
+    values["CA_GENERAL_STAGE"] = "recover"
+    for attempt in range(2):
+        result = run_functions(tmp_path, INSTALLER, FUNCTIONS, DRIVER, values=values, engine=engine)
+        assert result.returncode == 0, "dedicated recovery probe failed; raw diagnostics suppressed"
+        recovery = json.loads((tmp_path / "general-recovery-result.json").read_text(encoding="utf-8-sig"))
+        assert recovery["code"] == ""
+        assert recovery["result"]["status"] == "FENCE_RELEASED_FOLLOWUP_PENDING"
+        assert recovery["result"]["original_audit_status"] == observed["status"]
+        assert recovery["audit_preserved"] and not recovery["fence_present"]
     assert not (control / "active.json").exists(), "GENERAL_COMPLETED_RELEASE_HAS_NO_OFFICIAL_EXIT"
 
 
