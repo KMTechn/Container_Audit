@@ -13,6 +13,7 @@ import Container_Audit as ca
 import runtime_instance_win32 as native
 import storage_policy
 import user_relay
+from tests.test_startup_catalog_notice import startup, flow, fixed_operation_lease_clock
 
 
 MODES = ('unavailable', 'onboarding', 'integrity', 'catalog',
@@ -379,6 +380,34 @@ def test_stop_trace_output_failure_still_returns_safely(monkeypatch):
 
     monkeypatch.setattr('builtins.print', denied)
     ca._record_startup_notice_stop(**STOP_TRACE)
+
+
+def test_owned_update_notice_preserves_parent_and_acknowledgement(monkeypatch):
+    calls = []
+    parent = object()
+    monkeypatch.setattr(ca.messagebox, 'showinfo', lambda *args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(ca, '_show_startup_notice',
+                        lambda *_args, **_kwargs: pytest.fail('owned notice became independent'))
+    assert ca._prompt_and_apply_update({'version': 'test-version'}, parent=parent) is None
+    assert calls == [(('관리자 업데이트 필요',
+                       f'새로운 버전(test-version)이 확인되었습니다. (현재: {ca.CURRENT_VERSION})\n\n'
+                       + ca.RUNTIME_UPDATE_BOOTSTRAP_MESSAGE), {'parent': parent})]
+
+
+def test_integrity_stop_never_enters_the_next_startup_unit(startup, monkeypatch, tmp_path):
+    _app, released = startup
+    monkeypatch.setattr(ca, 'consume_pending_machine_onboarding', lambda *_args: None)
+    monkeypatch.setattr(ca, '_first_run_onboarding_enabled', lambda: True)
+    monkeypatch.setattr(ca, 'onboard_current_user', lambda *_args, **_kwargs: {'bootstrap_integrity': 'absent'})
+    monkeypatch.setattr(ca, 'resolve_current_user_onboarding_paths',
+                        lambda *_args: SimpleNamespace(onboarding_report_path=tmp_path / 'report.json'))
+    monkeypatch.setattr(ca, '_show_bootstrap_integrity_warning', lambda *_args: True)
+    monkeypatch.setattr(ca, 'record_before_owner_paths',
+                        lambda *_args, **_kwargs: pytest.fail('next startup unit entered after stop'))
+    monkeypatch.setattr(ca, 'prepare_startup_item_catalog',
+                        lambda: pytest.fail('catalog started after stop'))
+    assert ca._prepare_gui_startup() == 0
+    assert len(released) == 1
 
 
 def _common_notice_child(root, ready):

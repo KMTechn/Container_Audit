@@ -223,10 +223,10 @@ from style_tokens import StyleProfile, build_style_tokens
 from tk_callback_result import bind_button_callback, wrap_button_callback
 from storage_policy import (
     DATA_ROOT_ENV,
+    DATA_ROOT_ERROR_MESSAGE,
     DataRootUnavailableError,
     build_container_audit_storage_paths,
     ensure_container_audit_storage_dirs,
-    notify_data_root_error,
     validate_existing_data_root,
 )
 from storage_utils import StorageFailureQuarantine, atomic_write_json
@@ -913,22 +913,13 @@ def check_and_apply_updates():
 
 def _prompt_and_apply_update(candidate, parent=None):
     new_version = candidate["version"]
-    root_alert = parent
-    created_alert_root = None
-    if root_alert is None:
-        created_alert_root = tk.Tk()
-        created_alert_root.withdraw()
-        root_alert = created_alert_root
-    try:
-        messagebox.showinfo(
-            "관리자 업데이트 필요",
-            f"새로운 버전({new_version})이 확인되었습니다. (현재: {CURRENT_VERSION})\n\n"
-            + RUNTIME_UPDATE_BOOTSTRAP_MESSAGE,
-            parent=root_alert,
-        )
-    finally:
-        if created_alert_root is not None:
-            created_alert_root.destroy()
+    title = "관리자 업데이트 필요"
+    message = (f"새로운 버전({new_version})이 확인되었습니다. (현재: {CURRENT_VERSION})\n\n"
+               + RUNTIME_UPDATE_BOOTSTRAP_MESSAGE)
+    if parent is None:
+        _show_startup_notice(title, message, "info")
+        return
+    messagebox.showinfo(title, message, parent=parent)
 
 
 def schedule_update_check(parent):
@@ -23577,6 +23568,32 @@ def _startup_check_observe(action, *args, **kwargs):
         return False
 
 
+_STARTUP_NOTICE_DIRECT_SYNC_ROOT = None
+
+
+def _record_startup_notice_stop(**_fields):
+    try:
+        print('stage="APP_STOP_REQUESTED_CLOSE" message="멈춤 요청으로 닫힘"')
+    except Exception:
+        pass
+
+
+def _show_startup_notice_native(title, message, kind):
+    """Keep startup recovery readable, with the approved 30-second native bound."""
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    notice = ctypes.WinDLL("user32", use_last_error=True).MessageBoxTimeoutW
+    notice.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR,
+                       wintypes.UINT, wintypes.WORD, wintypes.DWORD]
+    notice.restype = ctypes.c_int
+    flags = {"error": 0x10, "warning": 0x30, "info": 0x40}[kind]
+    if not notice(None, message, title, flags, 0, 30000):
+        raise OSError("STARTUP_NOTICE_UNAVAILABLE")
+
+
 def _watch_startup_notice_stop(root, direct_sync_root, record_stop):
     """Share the official startup request consumer; leave all writes to it."""
     state = {"stopped": False, "cancelled": False, "job": None}
@@ -23614,6 +23631,12 @@ def _watch_startup_notice_stop(root, direct_sync_root, record_stop):
 
 def _show_stop_aware_startup_notice(title, message, kind, *, direct_sync_root, record_stop):
     """Acknowledge a startup notice, or return True only for an official stop."""
+    if direct_sync_root is None:
+        try:
+            _show_startup_notice_native(title, message, kind)
+        except Exception:
+            pass  # Keep the existing dialog-unavailable safe return.
+        return False
     root = None
     state = {"stopped": False}
     cancel = lambda: None
@@ -23627,10 +23650,15 @@ def _show_stop_aware_startup_notice(title, message, kind, *, direct_sync_root, r
         state, cancel = _watch_startup_notice_stop(root, direct_sync_root, record_stop)
         root.mainloop()
     except Exception:
+        cancel()
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
         if not state["stopped"]:
             try:
-                from runtime_instance_win32 import timed_notice
-                timed_notice(message, title, {"error": 0x10, "warning": 0x30, "info": 0x40}[kind])
+                _show_startup_notice_native(title, message, kind)
             except Exception:
                 pass
     finally:
@@ -23640,28 +23668,37 @@ def _show_stop_aware_startup_notice(title, message, kind, *, direct_sync_root, r
                 root.destroy()
             except Exception:
                 pass
+    if not state["stopped"]:
+        # Acknowledgement or a native timeout must not continue past a fresh stop.
+        try:
+            requested = _consume_startup_app_stop_request(direct_sync_root)
+        except Exception:
+            requested = False
+        if requested:
+            state["stopped"] = True
+            try:
+                record_stop(stage="APP_STOP_REQUESTED_CLOSE", message="멈춤 요청으로 닫힘")
+            except Exception:
+                pass
     return state["stopped"]
 
 
+def _show_startup_notice(title, message, kind="error"):
+    return _show_stop_aware_startup_notice(
+        title, message, kind, direct_sync_root=_STARTUP_NOTICE_DIRECT_SYNC_ROOT,
+        record_stop=_record_startup_notice_stop)
+
+
 def _show_startup_unavailable(notice=None):
-    root = None
-    try:
-        from startup_check_report import NOTICE
-        root = tk.Tk()
-        root.title("프로그램 시작 확인")
-        root.resizable(False, False)
-        tk.Label(root, text=NOTICE if notice is None else notice, padx=20, pady=20).pack()
-        tk.Button(root, text="닫기", command=root.destroy).pack(pady=(0, 12))
-        root.protocol("WM_DELETE_WINDOW", root.destroy)
-        root.mainloop()
-    except Exception:
-        pass
-    finally:
-        if root is not None:
-            try:
-                root.destroy()
-            except Exception:
-                pass
+    from startup_check_report import NOTICE
+    _show_startup_notice("프로그램 시작 확인", NOTICE if notice is None else notice, "info")
+
+
+def notify_data_root_error() -> None:
+    if sys.stderr is not None:
+        print("CONTAINER_AUDIT_DATA_ROOT_UNAVAILABLE: " + DATA_ROOT_ERROR_MESSAGE, file=sys.stderr)
+    if os.name == "nt":
+        _show_startup_notice("이적 검사 데이터 폴더 오류", DATA_ROOT_ERROR_MESSAGE)
 
 
 def _startup_refusal(reason, *, failed=False, notice=None):
@@ -23702,7 +23739,7 @@ def _show_first_run_onboarding_error(failure: CurrentUserOnboardingError) -> Non
     elif failure.status in MACHINE_ONBOARDING_ERROR_MESSAGES:
         operator_message = MACHINE_ONBOARDING_ERROR_MESSAGES[failure.status]
     try:
-        messagebox.showerror(
+        _show_startup_notice(
             FIRST_RUN_ONBOARDING_ERROR_TITLE,
             operator_message,
         )
@@ -23710,15 +23747,17 @@ def _show_first_run_onboarding_error(failure: CurrentUserOnboardingError) -> Non
         pass
 
 
-def _show_bootstrap_integrity_warning(report_path: object) -> None:
+def _show_bootstrap_integrity_warning(report_path: object) -> bool | None:
     operator_message = (
         f"{BOOTSTRAP_INTEGRITY_WARNING_MESSAGE}\n보고서: {str(report_path or 'UNKNOWN')}"
     )
     try:
-        messagebox.showwarning(
+        if _show_startup_notice(
             BOOTSTRAP_INTEGRITY_WARNING_TITLE,
             operator_message,
-        )
+            "warning",
+        ):
+            return True
     except Exception:
         pass
 
@@ -23740,7 +23779,7 @@ def _show_item_catalog_startup_error(cause_code: str, *, http_status_code: int |
     elif type(http_status_code) is int and 500 <= http_status_code <= 599:
         reason = f"\n회사 서버 오류(코드 {http_status_code})."
     try:
-        messagebox.showerror(
+        _show_startup_notice(
             ITEM_CATALOG_STARTUP_ERROR_TITLE,
             f"{ITEM_CATALOG_STARTUP_ERROR_MESSAGE}{reason}\n오류 코드: {cause_code}",
         )
@@ -23762,6 +23801,8 @@ def _item_catalog_cache_time_for_display(value: object) -> str:
 
 
 def main(argv: list[str] | None = None):
+    global _STARTUP_NOTICE_DIRECT_SYNC_ROOT
+    _STARTUP_NOTICE_DIRECT_SYNC_ROOT = None
     arguments = list(sys.argv[1:] if argv is None else argv)
     if not begin_gui_entry(arguments, application_path=str(Path(__file__).resolve().parent)):
         return 0
@@ -23848,6 +23889,8 @@ def _cleanup_startup_app(app):
 
 
 def _run_gui_application(arguments):
+    global _STARTUP_NOTICE_DIRECT_SYNC_ROOT
+    _STARTUP_NOTICE_DIRECT_SYNC_ROOT = None
     from auto_update import trial_context, publish_gui_ready, trial_stop_requested
 
     application_code_root = Path(__file__).resolve().parent
@@ -23858,7 +23901,7 @@ def _run_gui_application(arguments):
         startup = _prepare_gui_startup(data_root=options.data_root)
     except DataGenerationBlocked as blocked:
         if not _startup_refusal(_startup_data_reason(blocked)):
-            messagebox.showerror("자료 판 확인", blocked.user_message)
+            _show_startup_notice("자료 판 확인", blocked.user_message)
         return 1
     except DataRootUnavailableError:
         # Display the recovery action after releasing writer admission.
@@ -23936,6 +23979,8 @@ def _consume_startup_app_stop_request(direct_sync_root) -> bool:
 @writer_sink("gui_startup", probe_only=True)
 def _prepare_gui_startup(*, data_root=None):
     """Check the kernel instance lease before admitting startup mutations."""
+    global _STARTUP_NOTICE_DIRECT_SYNC_ROOT
+    _STARTUP_NOTICE_DIRECT_SYNC_ROOT = None
 
     if getattr(sys, 'frozen', False):
         application_path = os.path.dirname(sys.executable)
@@ -23947,13 +23992,14 @@ def _prepare_gui_startup(*, data_root=None):
         )
     except (OSError, ValueError) as exc:
         raise DataRootUnavailableError("GUI data root is unavailable") from exc
+    _STARTUP_NOTICE_DIRECT_SYNC_ROOT = storage_paths.direct_sync_root
     startup_notice = None
     try:
         instance_lease = acquire_runtime_instance(storage_paths.data_root)
     except OSError:
         _startup_check_observe("note", "UNKNOWN_PROCESS_LIST")
         startup_notice = (
-            messagebox.showerror,
+            _show_startup_notice,
             "프로그램 실행 잠금 실패",
             "데이터 충돌 방지를 위한 실행 잠금을 확인하지 못했습니다. "
             "프로그램을 시작하지 않고 관리자에게 문의합니다.",
@@ -24044,11 +24090,12 @@ def _prepare_gui_startup(*, data_root=None):
             if _consume_startup_app_stop_request(storage_paths.direct_sync_root):
                 return 0
             if onboarding_report.get("bootstrap_integrity") == "absent":
-                _show_bootstrap_integrity_warning(
+                if _show_bootstrap_integrity_warning(
                     resolve_current_user_onboarding_paths(
                         application_path
                     ).onboarding_report_path
-                )
+                ):
+                    return 0
         record_before_owner_paths(storage_paths.data_root, file_paths=profile_candidates)
         try:
             catalog_unconfirmed = False

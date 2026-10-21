@@ -14,7 +14,7 @@ def test_install_server_change_uses_existing_refusal_guidance():
     namespace = {
         "CurrentUserOnboardingError": Exception, "DataGenerationBlocked": RuntimeError,
         "FIRST_RUN_ONBOARDING_ERROR_MESSAGE": "default", "FIRST_RUN_ONBOARDING_ERROR_TITLE": "title",
-        "messagebox": SimpleNamespace(showerror=lambda title, message: messages.append(message)),
+        "_show_startup_notice": lambda title, message: messages.append(message),
         "_startup_refusal": lambda *_args, **_kwargs: False,
         "_startup_check_observe": lambda *args, **kwargs: observations.append((args, kwargs)),
     }
@@ -37,11 +37,16 @@ def test_pending_reason_reaches_field_guidance(status, expected):
     messages = []
     namespace = {"CurrentUserOnboardingError": Exception, "DataGenerationBlocked": RuntimeError,
         "FIRST_RUN_ONBOARDING_ERROR_MESSAGE": "default", "FIRST_RUN_ONBOARDING_ERROR_TITLE": "title",
-        "messagebox": SimpleNamespace(showerror=lambda title, message: messages.append(message)),
+        "_show_startup_notice": lambda title, message: messages.append(message),
         # Startup refusal not recorded/acknowledged: the field guidance dialog is the operator path.
         "_startup_refusal": lambda reason, **kwargs: False}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "owned-guidance", "exec"), namespace)
     failure = SimpleNamespace(status=status, report_path=Path("owned-report.json"), __cause__=None)
     namespace["_show_first_run_onboarding_error"](failure)
-    assert len(messages) == 1 and expected in messages[0]
+    # Retain historical parameter IDs and freeze the complete baseline guidance bytes.
+    baseline_messages = {
+        '지정된 작업자 계정': '이 프로그램은 다른 작업자 계정에 설치되었습니다.\n지정된 작업자 계정으로 로그인하거나 현장 관리자에게 알리세요.',
+        '설치 복구': '작업자 계정의 설치 마무리를 확인하지 못했습니다\n현장 관리자에게 알리세요',
+    }
+    assert [message.encode("utf-8") for message in messages] == [baseline_messages[expected].encode("utf-8")]
     assert "default" not in messages[0]
