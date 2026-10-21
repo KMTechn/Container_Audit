@@ -47,7 +47,7 @@ def test_completed_general_boundary_has_an_official_fence_only_exit(tmp_path, mo
     observed["refusals"]["worker_setup_removal"] = True
     path.write_text(json.dumps(observed, indent=2), encoding="utf-8")
     # RED: every existing official entry refuses the completed waiting fence.
-    assert not observed["fence_present"], "GENERAL_COMPLETED_RELEASE_HAS_NO_OFFICIAL_EXIT"
+    assert not (control / "active.json").exists(), "GENERAL_COMPLETED_RELEASE_HAS_NO_OFFICIAL_EXIT"
 
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
