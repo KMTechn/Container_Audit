@@ -84,7 +84,7 @@ def test_relay_install_command_and_audit_remove_known_secret_bytes(tmp_path, mon
     from auto_update import _sink_policy
 
     marker_template = _sink_policy()["env_marker"]
-    expected_marker = marker_template.format(name=SECRET_NAMES[0])
+    expected_markers = [marker_template.format(name=name) for name in SECRET_NAMES]
     values = [secrets.token_hex(32) for _ in SECRET_NAMES]
     for name, value in zip(SECRET_NAMES, values):
         monkeypatch.setenv(name, value)
@@ -100,8 +100,8 @@ def test_relay_install_command_and_audit_remove_known_secret_bytes(tmp_path, mon
     _check_and_scrub_artifacts([json.dumps(result).encode(), payload], values, audit)
     assert json.loads(payload)["failure_code"] == "CHILD_FAILED"
     assert result["returncode"] == 1
-    assert result["stdout"] == expected_marker
-    assert result["stderr"] == expected_marker
+    assert result["stdout"] == expected_markers[0]
+    assert result["stderr"] == expected_markers[1]
 
     escaped_values = [value + chr(34) + chr(92) + chr(0xAC00) for value in values]
     for name, value in zip(SECRET_NAMES, escaped_values):
