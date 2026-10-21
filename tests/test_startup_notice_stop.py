@@ -178,6 +178,17 @@ def test_manual_close_keeps_message_bytes_and_does_not_report_stop(
                          '프로그램을 시작하지 않고 관리자에게 문의합니다.',
     }
     assert notice.tk.labels == [expected[mode].encode('utf-8')]
+    titles = {
+        'unavailable': '프로그램 시작 확인',
+        'onboarding': ca.FIRST_RUN_ONBOARDING_ERROR_TITLE,
+        'integrity': ca.BOOTSTRAP_INTEGRITY_WARNING_TITLE,
+        'catalog': ca.ITEM_CATALOG_STARTUP_ERROR_TITLE,
+        'generation': '자료 판 확인',
+        'data-root': '이적 검사 데이터 폴더 오류',
+        'legacy-update': '관리자 업데이트 필요',
+        'instance-lock': '프로그램 실행 잠금 실패',
+    }
+    assert notice.tk.roots[0].caption.encode('utf-8') == titles[mode].encode('utf-8')
     assert notice.tk.buttons[0]['text'] == '닫기'
     assert not notice.traces
     assert not notice.native
@@ -272,6 +283,25 @@ def test_common_manual_close_cancels_the_scheduled_poll(notice):
     assert show_common(notice) is False
     assert not notice.tk.roots[0].jobs
     assert not notice.traces
+
+
+def test_stop_racing_with_manual_close_is_not_treated_as_continue(notice):
+    notice.tk.manual = True
+    assert show_common(notice) is True
+    assert notice.traces == [STOP_TRACE]
+    assert user_relay.read_app_stop_request(notice.root) is None
+
+
+def test_stop_arriving_during_native_fallback_is_not_treated_as_continue(notice, monkeypatch):
+    def no_tk():
+        raise RuntimeError('Tk unavailable')
+
+    monkeypatch.setattr(notice.tk, 'Tk', no_tk)
+    monkeypatch.setattr(ca, '_show_startup_notice_native',
+                        lambda *_args: user_relay.request_app_stop(notice.root, timeout_seconds=0))
+    assert show_common(notice) is True
+    assert notice.traces == [STOP_TRACE]
+    assert user_relay.read_app_stop_request(notice.root) is None
 
 
 @pytest.mark.parametrize('kind,flag', [('error', 0x10), ('warning', 0x30), ('info', 0x40)])
