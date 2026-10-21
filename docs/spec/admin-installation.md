@@ -206,3 +206,31 @@ TLS CA와 staging 파일, 바로 가기 원본 복원은 준비 사본을 검증
 출하 빌더의 CLI와 API는 설정 생략·빈 object·빈 feed·정본 SHA 불일치를 출력 생성 전에 거절하며, 승인 파일을 원본 바이트로 게시하고 되읽는다. 되돌림의 작업자 설정 제거도 현재 회차에서 확인한 같은 세션의 relay 후보에만 정지를 요청한다. 후보의 PID·생성 시각·실행 파일·명령·SID·세션이 달라지면 정지와 후속 stop 표지 정리를 거절하고 복구 미증명 상태를 유지한다.
 
 정지 관문은 실제 native 보안 객체의 `integrity_level`과 정확한 Medium·SID·세션·비상승을 확인한다. 배치 전 정지는 표지의 원래 부재, 이번 transaction과 미리 고른 request ID, 게시 뒤 SHA를 결속한다. 조기 실패에서는 이 소유 증명과 Run preimage를 다시 확인한 뒤 이번 표지만 되돌리고 이전 코드 relay의 새 PID·생성 시각·상태 READY를 되읽는다. 표지가 달라졌거나 READY가 미증명이면 보호 감사와 공개 reason에 `RECOVERY_REQUIRED`를 남긴다. 관리자 machine-worker의 다른 세션 relay 실행 금지와 첫 일반 실행 안내는 그대로 적용한다.
+
+
+## 일반 완료 대기 울타리의 지원 마감
+
+일반 명시 복원의 `RESTORE_AWAITING_FENCE_RELEASE`와 지속 helper의
+`ROLLBACK_AWAITING_FENCE_RELEASE`는 기계 감사와 별개인 지원 입구를 사용한다.
+원 패킷의 `INSTALL_CANONICAL_PORTABLE.ps1 -RecoverCompletedWriterFence
+-SourceRoot <원 admitted packet> -CompletedFenceAuditPath <원 audit>
+-CompletedFenceAuditSha256 <원 audit SHA256>`를 원 작업자 SID/프로필에서 실행한다.
+B의 보호된 증거는 기존 관리자 권한을 필요로 한다. 이 입구가 승격이나 helper를 시작하지 않는다.
+`InstallRoot`는 원 루트이며 일반 설치/제거/명시 복원 및 기계 복구 인수와 함께 쓰지 않는다.
+기존 일반 명령의 의미는 바꾸지 않으며 기계 audit와 일반 audit를 서로 받지 않는다.
+
+기다림 감사의 `completed_fence_release`가 원 source·worker·tuple·owner/helper의 PID/UTC 생성
+시각·현재 결과/preimage와 맞아야 한다. 원 mutex 독점과 admission 안에서 종료/결속/결과를
+다시 검사하고 자기 fence만 정리한다. A는 Set 뒤 PREPARED+PRODUCT_COMPLETE 허가,
+B는 그 helper의 RESTORING+원 prepared 또는 Set 뒤 PREPARED+ROLLBACK_COMPLETE 허가만 받는다.
+INSTALLING/Set 전의 기존 G59 출구는 유지하며 모든 RESTORING으로 넓히지 않는다.
+살아 있음·관측 불가·손상·불일치·필드 없는 옛 기록은 거절하고 원 감사/상태/fence를 보존한다.
+
+성공은 exit 0과 `completed_fence_recovery_status=FENCE_RELEASED_FOLLOWUP_PENDING`이며
+원 AWAITING 상태·감사 경로/SHA·완료 부분/미실행 후속 목록을 낸다. AWAITING을 PASS로 바꾸거나
+코드 복원·보상·Run/작업 변경·relay·User 바로 가기를 재실행하지 않는다.
+거절은 exit 1과 `CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS`다.
+원 audit 옆의 고정 `recovered-release-<controller transaction>.json`은 원자적으로 한 번 게시한다.
+같은 파일/Stop 영수증을 재사용하며 active 부재 재호출도 모든 결과와 원 최종 증명을 다시 확인한다.
+증거 없이 부재만 보고 성공하거나 허가/영수증을 재기록하거나 새 fence를 만들지 않는다.
+형식과 후속 처리 상태는 [operations의 감사 형식](operations.md#일반-완료-대기-감사와-fence-only-지원-마감)을 따른다.

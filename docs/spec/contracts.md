@@ -114,6 +114,19 @@ target-generation preflight 전용 호출에서만 사용할 수 있다.
 PID 미기록도 같은 run ID 프로세스가 0이면 인정한다. 같은 자식/run 프로세스가 살아 있거나 관측이 미확인이면 원 audit·fence·자료를 보존하고
 고정 원인 코드로 거절한다. audit·prestate·packet·작업자·fence tuple 결속은 유지한다.
 
+일반 완료 대기 상태의 마감은 `-RecoverCompletedWriterFence` 전용이다.
+A RESTORE_AWAITING_FENCE_RELEASE의 Set 뒤 PREPARED+허가, B helper의
+ROLLBACK_AWAITING_FENCE_RELEASE에서 자기 RESTORING(허가 Set 전/뒤) 또는 INSTALLING의
+Set 뒤 PREPARED+허가만 대상으로 한다. 완료 감사에 같이 저장한
+`container-audit-completed-fence-release-v1` 증거·원 source/worker/tuple·원 owner/helper
+PID+UTC 생성 시각의 종료·현재 코드/Run/stop/예약·legacy writer preimage를 원 authority와
+admission 아래 두 번 확인한 뒤 fence만 정리한다. 원 감사/상태를 보존하고 후속을 완료로 꾸미지 않는다.
+기계 입구와 감사는 섞지 않으며 기존 일반 INSTALL/UNINSTALL/RESTORE의 의미는 같다.
+거절은 exit 1/CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS, 성공은
+exit 0/FENCE_RELEASED_FOLLOWUP_PENDING이다. 미실행 후속은 남는다.
+고정 허가/일치 Stop 영수증 없는 active 부재는 거절하고 원 증거를 재기록하지 않는다.
+[지원 명세와 감사 형식](operations.md#일반-완료-대기-감사와-fence-only-지원-마감).
+
 완료 설치의 울타리 정리는 INSTALL / PASS_MACHINE_WORKER_PENDING + 같은 결속 + 남은 fence +
 주인 종료 증명 조건이다. 같은 자식 종료 검사 뒤 설치된 current의 manifest·bootstrap
 무결성을 확인하고 원 audit 해시와 결속을 authority 안에서 되읽어, 기존 PRODUCT_COMPLETE

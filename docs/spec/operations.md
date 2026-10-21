@@ -1668,6 +1668,67 @@ Registration retains string profile-path arguments after shared resolution. Inva
 
 실패 안내와 감사는 공통 가림 계약을 따른다. canonical sink wrapper는 `ConvertTo-KmtechRedactedSinkText`, relay 설치기 wrapper는 `redact_for_sink`와 공통 JSON 가림 함수를 호출한다. 이름으로 판정한 비밀 환경 값·민감 JSON 필드를 쓰기 전에 가리고, UTF-8 출력 전체는 표식 포함 65,536바이트 이내로 보존한다. relay 설치기 JSON은 전체 envelope를 제한하고 유효한 JSON으로 저장한다. true·false·null·경로·일반 digest 메타데이터와 원 실패 코드·단계 결과를 유지한다. 실제 값이나 child 출력 전문을 운영 문서에 복사하지 않는다.
 
+### 일반 완료 대기 감사와 fence-only 지원 마감
+
+G104의 일반 두 경계는 기계 완료 감사와 다른 계약이다. 원 작업자 SID/프로필에서 원 패킷의
+`INSTALL_CANONICAL_PORTABLE.ps1 -RecoverCompletedWriterFence -SourceRoot <원 packet>
+-CompletedFenceAuditPath <원 audit> -CompletedFenceAuditSha256 <원 SHA256>`를 쓴다.
+B의 보호 evidence는 기존 권한이 있는 지원 셸에서 읽고 마감하며 자동 승격/UAC/helper는 없다.
+다른 작업자·다른 source·기계 audit는 받지 않는다. 일반 INSTALL/UNINSTALL/RESTORE 인수와
+섞지 않으며, 이 기존 명령들이 자동으로 완료 마감을 수행하게 바꾸지 않는다.
+
+A는 RESTORE_AWAITING_FENCE_RELEASE 저장 뒤 release Set을 마친 자기 PREPARED와
+PRODUCT_COMPLETE 허가만 받는다. B는 ROLLBACK_AWAITING_FENCE_RELEASE를 남긴 helper의
+RESTORING+원 prepared 또는 PREPARED+ROLLBACK_COMPLETE 허가만 받는다.
+B INSTALLING은 Set 뒤만 대상이다. Set 전 INSTALLING의 기존 G59 작업자 설정 제거 출구와
+continuation이 해당 helper 경계에 이르지 못하는 authority 검사는 유지한다.
+
+`completed_fence_release`를 기존 기다림 감사의 **그 Save 전**에 넣는다. 바깥 schema·원
+AWAITING status·원 Run preimage·restore receipt는 그대로다. schema는
+`container-audit-completed-fence-release-v1`이며 필드는 다음과 같다.
+
+| 필드 | 결속/검사 |
+|---|---|
+| operation | RESTORE_VERIFIED_REPLACEMENT 또는 TRANSACTION_ROLLBACK |
+| install_root/source_root/source_manifest_sha256 | 원 루트·원 admitted source 바이트 |
+| operator_sid/operator_local_appdata_root/data_root | 원 작업자와 실제 프로필·자료 루트 |
+| fence | 원 session_id/attempt_id/replacement_transaction_id/session_started_at_utc/orchestrator_sha256/writer_contract_sha256/writer_inventory_sha256, 원 prepared_receipt_path/SHA, session_authority_mutex_name |
+| owner_process_id/owner_started_at_utc | 원 주인 PID와 OS 생성 UTC, 부재 또는 다른 생성 시각이면 원 프로세스 종료 |
+| helper_process_id/helper_started_at_utc | B의 helper PID/OS 생성 UTC, A는 0/빈 문자열 |
+| protected_handover_path/protected_handover_sha256 | B의 보호된 원 handover·parent/helper/source/worker/preimage 결속, A는 빈 문자열 |
+| result | current_exists/current_manifest_sha256/current_bootstrap_sha256, stop_path/stop_absent, run_preimage, scheduled_writer_preimage, legacy_writer_preimage, restore_receipt_path/SHA와 restore_evidence_path/SHA |
+| completed_steps | A: code/Run/stop. B: 실제 PROVEN인 runtime_quiescence/code_preimage/worker_shortcuts/run_preimage/legacy_writer_preimage/scheduled_writer_preimage/generation_readback |
+| pending_followups | A: relay/User_shortcuts. B: relay/execution_state. 이 복구가 실행/완료하지 않은 부분 |
+
+감사/허가는 최대 131072바이트로 읽으며 handover의 기존 65536바이트 상한과 기존
+no-reparse/ordinary stage 소유·허용 trustee/protected evidence ACL을 유지한다.
+owner/helper 생존·관측 불가·잘못된 PID/UTC·원 자식/run 프로세스 잔류는 거절한다.
+동일 PID의 다른 OS 생성 시각은 재사용으로 구분한다. 기록 없는 옛 완료 상태를 추측 수용하지 않는다.
+현재 결과는 A의 원 receipt/restore_evidence와 실제 RESTORED reader, B의 보호 handover와
+7단계 PROVEN/기존 commit point 의미를 따라 대조한다. 업무 자료 본문·자격·위임 값은 기록하지 않는다.
+새 자료 내용 해시나 자료/수량/소속 변경은 없다.
+
+원 authority 독점과 admission 아래 증거·종료·현재 결과를 재확인하고 자기 fence만 정리한다.
+원 release 허가는 기존 producer의 admitted source inventory를, 새 고정 허가는 검증한 잔류
+inventory를 각각 결속한다. 원 허가/고정 허가의 정확한 경로·tuple·phase·원 audit SHA가 모두 맞아야 한다.
+고정 `recovered-release-<원 controller transaction>.json`은 원 audit 옆에 임시 파일 flush 후
+CreateNew로 원자 게시한다. 게시 전 중단의 임시 조각은 허가로 읽지 않으며 원 기록으로 덮어쓰지 않는다.
+허가만 생성/Set 뒤/Stop 영수증 뒤-active 삭제 전 중단은 같은 고정 허가를 재사용한다.
+active 없는 반복 호출은 고정 허가+정확한 Stop 영수증+종료·현재 결과를 모두 다시 확인할 때만 원 결과다.
+감사·상태·기존 허가/영수증 재기록·보상·새 fence·후속 자동 실행은 0이다.
+
+성공 exit 0의 공개 줄은 completed_fence_recovery_status=FENCE_RELEASED_FOLLOWUP_PENDING,
+original_audit_status, audit_path, audit_sha256, completed_steps, pending_followups다.
+거절 exit 1은 CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS이며 원 감사/상태/fence를 보존한다.
+이 결과를 전체 복원/설치 PASS나 relay/바로 가기/실행 상태의 완료로 읽지 않는다.
+
+후속 relay는 원 작업자의 보존된 Run이 수행하는 정상 로그온 또는 기존
+`--onboard-current-user` 흐름에서 다룬다. 새 지원 입구는 이를 실행하지 않는다.
+A User_shortcuts와 B execution_state의 구체적인 다음 공식 절차 문구는 레인 질문 12–13의
+선택 대기이며, User onboarding에 존재하지 않는 shortcut 기능이나 private running 함수를
+새 CLI인 것처럼 안내하지 않는다. 이 둘을 완료로 표시하지 않고 원 감사·preimage와 함께 인계한다.
+최종 통합 머리 독립 검토/실제 VM 중단·재개·멱등 수용은 headless 계약 시험으로 대신하지 않는다.
+
 ### 실행 후 관리자 인증 또는 TLS 자료 판 거절
 
 실행 후에도 관리자 PIN, 품목 새로 고침, relay 재시작과 업데이트 확인은
