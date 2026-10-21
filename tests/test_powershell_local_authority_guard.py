@@ -30,6 +30,9 @@ NEGATIVE = (
     ("throw_before_exit", HELD.replace(RELEASE, "throw 'fixture'\n" + RELEASE)),
     ("admission_no_finally", BOTH.replace("} finally {\nExit-ContainerWriterAdmission $slot\n}", "}\ncatch { throw }")),
     ("admission_wrong_lease", BOTH.replace("Exit-ContainerWriterAdmission $slot", "Exit-ContainerWriterAdmission $otherSlot")),
+    ("disposed_lease", HELD.replace("CALL", "$lease.mutex.Dispose()\nCALL")),
+    ("commented_enter", HELD.replace(ACQUIRE, "<#\n" + ACQUIRE + "\n#>")),
+    ("quoted_enter", HELD.replace(ACQUIRE, '$text = "fixture\n' + ACQUIRE + '\n"')),
 )
 
 
