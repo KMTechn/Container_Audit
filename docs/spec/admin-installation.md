@@ -93,14 +93,35 @@ manifest와 bootstrap 무결성을 검증하고 원 감사 결속을 authority �
 바로 가기·PENDING·사용자 자료를 되돌리지 않으며 원 성공 감사 바이트와 상태를 보존한다.
 `PASS_MACHINE_RECOVERED`는 이 울타리 정리 성공이고 작업자 첫 onboarding은 여전히 필요하다.
 결속·current 무결성이 다르거나 주인/자식이 살아 있거나 관측이 미확인이면 기존 실패 길로
-거절하고 울타리와 설치 상태를 보존한다. 남은 울타리가 없는 성공 감사나 다른 operation의
-성공 상태는 이 예외로 받지 않는다.
+거절하고 울타리와 설치 상태를 보존한다. 아래 명시된 완료 조합만 받으며,
+남은 울타리의 증명이 없는 완료 감사는 거절한다.
 
 보상 완료 감사 `FAILED_ROLLED_BACK`도 같은 결속·남은 fence·주인/자식 종료 증명 뒤
 울타리만 정리한다. 감사의 보상 증명과 현재 코드가 prestate의 manifest 및 bootstrap
 무결성에 맞아야 하며, 새 설치 전 상태였다면 `current`가 없어야 한다. 기존
 `ROLLBACK_COMPLETE` 허가를 사용하고 보상을 다시 실행하지 않는다. 원 감사 바이트와
 `FAILED_ROLLED_BACK` 상태를 유지하며, 맞지 않으면 울타리를 보존하고 거절한다.
+
+제거 UNINSTALL / PASS_UNINSTALLED_DATA_PRESERVED 완료는 current 부재와 보존 목록의
+각 경로 존재를 성공 저장 전에 확인한다. audit v2의 선택 필드 retained_paths,
+removal_evidence_root, removal_marker_path, removal_marker_sha256에 최종 증거를 묶는다.
+바로 가기 정리가 removed.json을 바꿀 수 있으므로 정리 뒤 표식 해시를 다시 잡는다.
+복구는 같은 marker SHA·지원 schema·REMOVED·보존 bool·같은 retained 목록의 존재와
+evidence root·원 run의 move journal HEADER를 되읽는다. marker 상한은 131072바이트다.
+새 내용 해시는 수집하지 않는다. 증거 필드 없는 옛 완료 감사는 거절하고 보상하지 않는다.
+
+복원 RESTORE_VERIFIED_REPLACEMENT / PASS_RESTORED_VERIFIED 완료는 새 prestate의
+operation을 명시한다. audit.code_replacement의 receipt_path/receipt_sha256를 입력 원
+receipt에 묶고 restore_evidence_path/restore_evidence_sha256를 저장한다. 성공 저장 전과
+복구 때 원 receipt의 old.manifest_sha256와 current manifest SHA·bootstrap 무결성을 확인하며
+ReadReplacementRestoreEvidence로 원 transaction·receipt·install root·복원 증명을 되읽는다.
+원 Source의 판과 같아야 한다는 조건은 없다. 증거 필드 또는 명시 operation 없는 옛 완료
+감사는 거절·울타리 보존·자동 보상 0이다.
+
+CHECKS-0839는 실제 주인 PID/생성 시각 종료 확인, 두 번째 공식 복구의 멱등,
+실제 설치 보상 완료(MACHINE_INSTALL_FAILED + compensation PASS)의 상태 보존·재실행 0도 요구한다.
+현재 mutex 독점·자식 종료 검사는 구현되어 있으나, 이 세 입구의 영속 신원/재시작 선택은
+레인 설계 답 대기다. 전체 확인 목록의 완료 수용으로 세지 않는다.
 
 키트 설치/되돌림은 남은 fence를 직접 지우지 않는다. 원래 관리 패킷의 설치기를 이미
 승격된 지원 셸에서 `-RecoverMachineInstallation -MachineRecoveryAuditPath <기계 audit>

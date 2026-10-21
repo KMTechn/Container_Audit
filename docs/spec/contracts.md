@@ -118,13 +118,29 @@ PID 미기록도 같은 run ID 프로세스가 0이면 인정한다. 같은 자�
 주인 종료 증명 조건이다. 같은 자식 종료 검사 뒤 설치된 current의 manifest·bootstrap
 무결성을 확인하고 원 audit 해시와 결속을 authority 안에서 되읽어, 기존 PRODUCT_COMPLETE
 허가로 울타리만 해제한다. 보상·코드 제거·원 성공 감사 다시 쓰기는 하지 않는다. current나
-결속이 다르거나 종료 증명이 불충분하면 기존 실패 길과 fence 보존을 유지한다. 제거·복원
-성공 상태에는 이 허용을 넓히지 않는다([지원 재개](admin-installation.md#기계-배치-실패의-지원-재개)).
+결속이 다르거나 종료 증명이 불충분하면 기존 실패 길과 fence 보존을 유지한다.
+제거·복원은 아래 완료 조합과 증거만 받는다([지원 재개](admin-installation.md#기계-배치-실패의-지원-재개)).
 
 보상 완료 FAILED_ROLLED_BACK은 같은 결속·남은 fence·주인/자식 종료 증명과 감사의 보상 증명을 확인한 뒤,
 current의 manifest·bootstrap 무결성이 prestate와 같을 때만 ROLLBACK_COMPLETE 허가로 울타리를 정리한다.
 새 설치 전 상태면 current 부재를 확인한다. 원 감사 바이트·FAILED_ROLLED_BACK 상태를 유지하고 보상은 재실행하지 않는다.
 확인이 어긋나면 거절하고 fence를 보존한다.
+
+UNINSTALL / PASS_UNINSTALLED_DATA_PRESERVED는 current 부재와 보존 목록 경로 존재를 확인하고,
+audit v2의 retained_paths/removal_evidence_root/removal_marker_path/removal_marker_sha256에 묶는다.
+복구는 같은 marker SHA/schema/REMOVED/보존 bool/목록과 run-bound move journal을 확인한다.
+marker 상한은 131072바이트이며 새 업무 자료 내용 해시는 만들지 않는다. 증거 없는 옛 완료 감사는 거절한다.
+
+RESTORE_VERIFIED_REPLACEMENT / PASS_RESTORED_VERIFIED는 prestate operation을 명시하고,
+code_replacement의 receipt_path/receipt_sha256를 원 receipt에, restore_evidence_path/restore_evidence_sha256를
+복원 증거에 묶는다. 저장 전·복구 때 current manifest SHA와 bootstrap 무결성을 receipt.old.manifest_sha256에
+대조하고 ReadReplacementRestoreEvidence를 되읽는다. 원 Source 판 조건은 없다.
+필드·명시 operation 없는 옛 완료 감사는 fence 보존/거절·보상 0이다.
+
+CHECKS-0839의 실제 주인 PID/생성 시각 종료 증명·복구 멱등·실제 INSTALL 보상 완료 상태의
+재실행 없는 정리는 필수 요구다. mutex 독점·자식 종료 검사에 더할 영속 신원/재시작 입구는
+레인 설계 답 대기이며 전체 수용 미완료다.
+
 
 작업자 선택은 ACTIVE 공용 명단과 이 PC에 내구 저장한 B 이름을 사용한다. 이름 등록·번호·재시도는 [이름 등록 B](worker-roster-b.md)가 정본이며 stage_a=false이다. v1 호환 조회는 그대로 유지한다. 기존 생산자 HMAC으로 `POST /api/worker-roster/v1/query`에 현장 ID와 `known_version`을 보내고 명단 응답만 262,144B까지 받는다. 시작·변경·60초 배경 조회는 writer admission 밖에서 수행하며 현재 조회 시도·로그인 epoch가 같은 응답만 적용한다. 조회 지연·실패는 스캔 내구 저장을 기다리게 하지 않는다.
 
