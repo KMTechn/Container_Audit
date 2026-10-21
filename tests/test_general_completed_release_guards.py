@@ -86,7 +86,7 @@ public static class GeneralWriterProbe {
     function Assert-CanonicalCompletedFenceResult($Proof,$Audit,$Manifest){
         & ([scriptblock]::Create($originalResult)) $Proof $Audit $Manifest
         $script:ResultCalls++
-        if($script:ResultCalls -eq 1){
+        if(($script:ResultCalls -eq 1 -and $variant -cne 'fence_during_read') -or ($script:ResultCalls -eq 2 -and $variant -ceq 'fence_during_read')){
             switch($variant){
                 'audit_during_read'{[IO.File]::AppendAllText($auditPath,' ')}
                 'current_during_read'{[IO.File]::AppendAllText((Join-Path $install 'portable-manifest.json'),' ')}

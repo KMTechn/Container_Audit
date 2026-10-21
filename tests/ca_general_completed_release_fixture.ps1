@@ -8,7 +8,7 @@ trap{
     exit 71
 }
 $repo=Split-Path -Parent $env:CA_CONTRACT_SOURCE
-$lad=Join-Path $base 'profile'
+$lad=Join-Path $base 'profile/AppData/Local'
 $env:LOCALAPPDATA=$lad
 $env:PROGRAMDATA=Join-Path $base 'program-data'
 . (Join-Path $repo 'tools/container_writer_fence.ps1')
@@ -30,9 +30,10 @@ function Get-InstallationFailureDetails{param($Record);@{code='FIXTURE_INTERRUPT
     script_file=[IO.Path]::GetFileName($Record.InvocationInfo.ScriptName);script_line=$Record.InvocationInfo.ScriptLineNumber}}
 function Set-InstallationEvidenceStage{param($Stage,$Operation)}
 function Write-InstallationEvidenceEvent{param($Record)}
-function Get-CanonicalInstallationCommitPoint{ 'NOT_REACHED' }
-function Snapshot{[pscustomobject]@{exists=$false;kind='';data=''}}
-function Restore{param($Preimage)}
+function Get-CanonicalInstallationCommitPoint{if($env:CA_GENERAL_PREIMAGE -ceq 'commit_reached'){'REACHED'}else{'NOT_REACHED'}}
+function Snapshot{$script:GeneralRunState}
+function Restore{param($Preimage);$script:GeneralRunState=$Preimage}
+function Product{param($Root,$Mode,$AppRoot,[switch]$Rollback);$script:GeneralRunState=[pscustomobject]@{exists=$false;kind='';data=''}}
 function Assert-CanonicalRollbackStopCleanup{}
 function Assert-CanonicalTransactionRelayPreimage{param($Configuration,[switch]$AfterRestore)}
 function Sync-CanonicalWriterFenceInventory{param($Expected)}
@@ -42,7 +43,10 @@ function Get-BootstrapWorkerShortcutCommonRecordPath{param($Root);Join-Path $bas
 function Restore-BootstrapWorkerShortcuts{param($Root,$Record,$Scope);@{status='FIXTURE_PREIMAGE_RESTORED'}}
 function InstalledManifest($Root,$Unsigned){Get-Content -LiteralPath (Join-Path $Root 'portable-manifest.json') -Raw|ConvertFrom-Json}
 function Assert-BootstrapIntegrityRecord($Root){[void](Assert-BootstrapRelocatedIntegrityRecord $Root $Root)}
-function Get-CanonicalWriterSnapshot($Root){[pscustomobject]@{present=$false;enabled=$false}}
+function Get-CanonicalWriterSnapshot($Root){$script:GeneralWriterState}
+function Enable-CanonicalWriter($Root,$Before){$script:GeneralWriterState=$Before;[pscustomobject]@{readback=$Before}}
+function Restore-CanonicalOfficialLegacyRelay{param($Binding);@{status='PROVEN_PREIMAGE_RESTORED'}}
+function Get-CanonicalOfficialLegacyRelayPreimage{[pscustomobject]@{identity=@{sha256=('d'*64)};enabled=$true}}
 # Packet/signature checking is a fixture seam; the receipt, path/tree identity,
 # manifest hashes, ACL identities, restore-state and canonical readers are real.
 function Assert-BootstrapRelocatedIntegrityRecord{
@@ -59,8 +63,15 @@ $operatorSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $activeDataRoot=Join-Path $base 'data'
 $stop=Join-Path $base 'data/direct_sync/control/container_audit_user_relay.stop.json'
 $before=[pscustomobject]@{exists=$false;kind='';data=''}
+if($env:CA_GENERAL_PREIMAGE -ceq 'run_present'){$before=[pscustomobject]@{exists=$true;kind='String';data='original fixture relay command'}}
+$script:GeneralRunState=if($env:CA_GENERAL_STAGE -ceq 'setup' -and $env:CA_GENERAL_BOUNDARY -like 'B_*'){
+    [pscustomobject]@{exists=$false;kind='';data=''}
+}else{$before}
 $old=@();$legacyRelayPreimage=$null
 $writerBefore=[pscustomobject]@{present=$false;classification='TEST_BYPASS';restore_required=$false}
+if($env:CA_GENERAL_PREIMAGE -ceq 'scheduled_writer'){$writerBefore=[pscustomobject]@{present=$true;enabled=$true;
+    classification='CANONICAL_QUIESCE_RESTORE';restore_required=$true;binding_sha256=('a'*64)}}
+$script:GeneralWriterState=$writerBefore
 $currentAbsentBeforePlacement=$true
 if($env:CA_GENERAL_STAGE -ceq 'setup'){
     [void][IO.Directory]::CreateDirectory((Join-Path $source 'tools'))
@@ -80,8 +91,18 @@ $sourceHelperSha256=Sha (Join-Path $source 'INSTALL_THIS_PC.ps1')
 $sourceIntegrityHelperSha256=Sha (Join-Path $source 'tools/bootstrap_integrity.ps1')
 $RunName='KMTech.ContainerAudit.Relay'
 $env:CONTAINER_AUDIT_DATA_ROOT=$activeDataRoot
+if($env:CA_GENERAL_PREIMAGE -ceq 'different_inventory'){$Script:ContainerWriterFenceAcceptedInstalledInventorySha256='b'*64}
+if($env:CA_GENERAL_STAGE -ceq 'setup'){
+    [void][IO.Directory]::CreateDirectory($activeDataRoot)
+    [IO.File]::WriteAllText((Join-Path $activeDataRoot 'preserve.bin'),'original data fixture')
+}
 $auditRoot=Join-Path $lad 'KMTech/ContainerAudit/install-audit'
 $kind=$env:CA_GENERAL_BOUNDARY
+if($env:CA_GENERAL_PREIMAGE -ceq 'legacy_writer'){
+    $legacyPath=Join-Path $base 'legacy-preimage.json'
+    if($env:CA_GENERAL_STAGE -ceq 'setup'){Save $legacyPath @{schema='container-audit-official-legacy-relay-preimage-v1';identity_sha256=('d'*64);enabled=$true}}
+    $legacyRelayPreimage=[pscustomobject]@{path=$legacyPath;sha256=Sha $legacyPath}
+}
 if($env:CA_GENERAL_STAGE -ceq 'setup'){
 $runId=[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')+'-'+[Guid]::NewGuid().ToString('N')
 $Script:CanonicalWriterFenceSessionId=[Guid]::NewGuid().ToString('N')
@@ -106,6 +127,15 @@ if($kind -like 'A_*'){
     foreach($directory in @($install,$failed)){Save (Join-Path $directory 'bootstrap-integrity.json') @{fixture='unsigned packet seam'}}
     [void][IO.Directory]::CreateDirectory((Join-Path $install 'tools'))
     [IO.File]::Copy($inventoryPath,(Join-Path $install 'tools/container_writer_sink_inventory.json'))
+    if($env:CA_GENERAL_PREIMAGE -ceq 'different_inventory'){
+        $oldInventory=Get-Content -LiteralPath $inventoryPath -Raw|ConvertFrom-Json
+        $oldInventory.inventory_sha256='b'*64
+        Save (Join-Path $install 'tools/container_writer_sink_inventory.json') $oldInventory
+        $oldManifest.writer_sink_inventory_sha256=Sha (Join-Path $install 'tools/container_writer_sink_inventory.json')
+        $oldManifest.writer_sink_inventory_contract_sha256='b'*64
+        Save (Join-Path $install 'portable-manifest.json') $oldManifest
+        $Script:ContainerWriterFenceAcceptedInstalledInventorySha256='b'*64
+    }
     $sourceManifestSha256=Sha (Join-Path $failed 'portable-manifest.json')
     $restoreReceiptFull=Join-Path $base 'replacement-receipt.json'
     $parentAcl=Get-BootstrapAclIdentity $base
@@ -138,6 +168,10 @@ try{
         -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId -SessionStartedAtUtc $canonicalWriterFenceStartedAtUtc `
         -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 -WriterContractSha256 $canonicalWriterFenceContractSha256 `
         -PreparedReceiptPath $preparedPath -PreparedReceiptSha256 (Sha $preparedPath) -AuthorityLease $lease)
+    }
+    if($env:CA_GENERAL_PREIMAGE -ceq 'different_inventory'){
+        [void](Set-ContainerWriterFenceInventory -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId -WriterInventorySha256 ('b'*64) -AuthorityLease $lease)
     }
     $protectedRoot=Join-Path (Join-Path (Get-InstallationEvidenceControlRoot) 'installation-evidence') ('run-'+[Guid]::NewGuid().ToString('N'))
     $auditPath=if($kind -like 'A_*'){Join-Path $auditRoot ('canonical-portable-'+$runId+'.json')}else{Join-Path $protectedRoot 'transaction-rollback-audit.json'}
@@ -182,9 +216,19 @@ try{
         try{. ([scriptblock]::Create($text.Substring($start,$end-$start)))}catch{if($_.Exception.Message -cne 'BOUNDARY_STOP'){throw}}
     }else{
         [void][IO.Directory]::CreateDirectory($protectedRoot)
+        $candidate=$null
+        if($env:CA_GENERAL_PREIMAGE -in @('prior_code','commit_reached')){
+            [void][IO.Directory]::CreateDirectory($install)
+            $candidate=if($env:CA_GENERAL_PREIMAGE -ceq 'commit_reached'){$sourceManifest}else{
+                [pscustomobject]@{schema='container-audit-portable-tree-v1';source_commit=('b'*40);source_tree=('e'*40);
+                    writer_sink_inventory_contract_sha256=$sourceManifest.writer_sink_inventory_contract_sha256}}
+            Save (Join-Path $install 'portable-manifest.json') $candidate
+            Save (Join-Path $install 'bootstrap-integrity.json') @{fixture='unsigned packet seam'}
+        }
+        $priorAbsent=$env:CA_GENERAL_PREIMAGE -cne 'prior_code'
         $configuration=[pscustomobject]@{context=[pscustomobject]@{source=$source;install=$install;operatorSid=$operatorSid;lad=$lad;activeDataRoot=$activeDataRoot;
-            stop=$stop;before=$before;writerBefore=$writerBefore;legacyRelayPreimage=$null;old=@();currentAbsentBeforePlacement=$true;
-            sourceManifestSha256=$sourceManifestSha256;sourceManifest=$sourceManifest;candidate=$null;installedCodeRoot=$install;supportedPlacement=$false};
+            stop=$stop;before=$before;writerBefore=$writerBefore;legacyRelayPreimage=$legacyRelayPreimage;old=@();currentAbsentBeforePlacement=$priorAbsent;
+            sourceManifestSha256=$sourceManifestSha256;sourceManifest=$sourceManifest;candidate=$candidate;installedCodeRoot=$install;supportedPlacement=$false;SkipSignatureValidationForTest=$true};
             protected_root=$protectedRoot;transaction_id=$Script:CanonicalWriterFenceTransactionId;source_root=$source;install_root=$install;
             operator_sid=$operatorSid;local_appdata_root=$lad;data_root=$activeDataRoot;session_id=$Script:CanonicalWriterFenceSessionId;
             attempt_id=$Script:CanonicalWriterFenceAttemptId;orchestrator_sha256=$canonicalWriterFenceOrchestratorSha256;
@@ -231,13 +275,26 @@ if($env:CA_GENERAL_STAGE -ceq 'public'){
         'worker'{$WorkerAccount='not-a-general-mode-argument'}
     }
     function Manifest($Path,$Unsigned){Get-Content -LiteralPath (Join-Path $Path 'portable-manifest.json') -Raw|ConvertFrom-Json}
+    function Get-ItemProperty{
+        param($LiteralPath,$Name,$ErrorAction)
+        $expected='Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\'+$operatorSid
+        if($LiteralPath -cne $expected -or $Name -cne 'ProfileImagePath'){throw 'UNEXPECTED_NATIVE_REGISTRY_READ'}
+        [pscustomobject]@{ProfileImagePath=(Join-Path $base 'profile')}
+    }
     $publicAst=[Management.Automation.Language.Parser]::ParseFile($env:CA_CONTRACT_SOURCE,[ref]$null,[ref]$null)
     $entry=@($publicAst.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.IfStatementAst] -and
         $_.Clauses[0].Item1.Extent.Text -ceq '$RecoverCompletedWriterFence -or $CompletedFenceAuditPath -or $CompletedFenceAuditSha256'})
     if($entry.Count -ne 1){throw 'ACTUAL_PUBLIC_COMPLETION_ENTRY_MISSING'}
     $fixturePublicScriptPath=Join-Path $source 'INSTALL_CANONICAL_PORTABLE.ps1'
     # Extracted entry retains the original admitted script's PSCommandPath.
-    . ([scriptblock]::Create($entry[0].Extent.Text.Replace('$PSCommandPath','$fixturePublicScriptPath')))
+    $entryBody=$entry[0].Extent.Text.Replace('$PSCommandPath','$fixturePublicScriptPath')
+    $publicObservation=@'
+Save (Join-Path $base 'public-failure-sites.json') @($Error|Select-Object -First 16|ForEach-Object {@{
+ type=$_.Exception.GetType().FullName;line=$_.InvocationInfo.ScriptLineNumber;
+ file=[IO.Path]::GetFileName($_.InvocationInfo.ScriptName);function=($_.ScriptStackTrace -split '[\r\n]')[0] -replace ', .+',''}})
+'@
+    $entryBody=$entryBody.Replace("Write-Output 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS';exit 1",$publicObservation+";Write-Output 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS';exit 1")
+    . ([scriptblock]::Create($entryBody))
     throw 'PUBLIC_ENTRY_DID_NOT_RETURN'
 }
 if($env:CA_GENERAL_STAGE -ceq 'recover'){
