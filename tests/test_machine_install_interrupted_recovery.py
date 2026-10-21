@@ -119,7 +119,7 @@ switch($env:CA_RECOVERY_CASE){
  'invalid_identity' {$audit.placement_child.started_at_utc='not a creation time'}
  'missing_creation' {$audit.placement_child.Remove('started_at_utc')}
  'compensation_unrecorded' {$audit.compensation_child=@{status='EXIT_UNPROVEN'}}
- 'unaccepted_status' {$audit.status='PASS_MACHINE_WORKER_PENDING'}
+ 'unaccepted_status' {$audit.status='UNSUPPORTED_MACHINE_STATUS'}
 }
 $auditPath=Join-Path $state ('install-audit\canonical-portable-'+$run+'.json')
 Save $auditPath $audit

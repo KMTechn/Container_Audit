@@ -28,6 +28,15 @@ def completed_fixture(kind, case):
     else:
         driver = RESULT_DRIVER
         values["CA_RESULT_OPERATION"] = kind
+    if case == "owner_identity_absent":
+        marker = "$originalAudit=[IO.File]::ReadAllBytes($auditPath)"
+        assert driver.count(marker) == 1
+        driver = driver.replace(marker, marker + "\n$ownerFenceBefore=Sha (Join-Path $control 'active.json')", 1)
+        marker = "code=$code;fence_present="
+        assert driver.count(marker) == 1
+        driver = driver.replace(marker,
+            "owner_fence_preserved=((Test-Path -LiteralPath (Join-Path $control 'active.json')) -and "
+            "((Sha (Join-Path $control 'active.json')) -ceq $ownerFenceBefore));" + marker, 1)
     return functions, driver, values
 
 
@@ -52,6 +61,9 @@ def test_completed_recovery_requires_original_owner_exit(tmp_path, engine, kind,
     else:
         assert summary["code"], "a live, unobservable, or unbound original owner must refuse"
         assert summary["fence_present"] and summary["release_receipts"] == 0
+        if case == "owner_identity_absent":
+            assert summary["code"] == "MACHINE_RECOVERY_AUTHORITY_BINDING_DIFFERS"
+            assert summary["owner_fence_preserved"]
 
 
 @pytest.mark.parametrize("engine", ["powershell", "pwsh"])
