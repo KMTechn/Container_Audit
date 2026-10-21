@@ -111,9 +111,24 @@ def test_real_onboarding_defers_relay_under_valid_installation_delegation(monkey
         ["git", "--no-optional-locks", "-C", str(ROOT), "status", "--porcelain"],
         ["git", "--no-optional-locks", "-C", str(ROOT), "rev-parse", "HEAD^{commit}"],
     )
+    dependencies = {
+        "tests/app_config.py": "3795a2cdc94d065cfc3b98d847e458ecc8824923b6cd225e636d770a3b024f41",
+        "tests/common.py": "341f319e1bb91fe4a48e53e5f6059c58f11aad0b34437b2817cf79c452773769",
+        "tests/field_safety.py": "aacddccccf1d7522dfff200c6759972a806066b4f01ddf3704a819b20b08f5d7",
+    }
+    excludes = tmp_path / "metadata-dependencies.exclude"
+    excludes.write_text("\n".join(dependencies) + "\n", encoding="utf-8")
 
     def launch(command, **kwargs):
         if list(command) in metadata_commands:
+            assert excludes.read_text(encoding="utf-8").splitlines() == list(dependencies)
+            for relative, digest in dependencies.items():
+                assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == digest
+            child_environment = dict(kwargs.get("env") or os.environ)
+            child_environment["GIT_CONFIG_COUNT"] = "1"
+            child_environment["GIT_CONFIG_KEY_0"] = "core.excludesFile"
+            child_environment["GIT_CONFIG_VALUE_0"] = str(excludes)
+            kwargs["env"] = child_environment
             return original_popen(command, **kwargs)
         launches.append(list(command))
         # Exercise the child's real admission rather than claiming Popen PID
