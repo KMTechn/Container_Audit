@@ -21,6 +21,34 @@ SOURCE = ROOT / "INSTALL_CANONICAL_PORTABLE.ps1"
 SHA = "1" * 40
 
 
+def _retain_onboarding_refusal(tmp_path, failure):
+    reason = failure.reason_code
+    if not isinstance(reason, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,95}", reason):
+        reason = "UNRECOGNIZED_REASON_CODE"
+    pending = [failure]
+    seen = set()
+    chain = []
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        sites = []
+        trace = current.__traceback__
+        while trace is not None:
+            sites.append({"file": Path(trace.tb_frame.f_code.co_filename).name,
+                          "function": trace.tb_frame.f_code.co_name, "line": trace.tb_lineno})
+            trace = trace.tb_next
+        chain.append({"type": type(current).__name__, "sites": sites,
+                      "source_dirty_refusal": isinstance(current, ValueError)
+                      and str(current) == "running source is not the release commit"})
+        pending.extend(error for error in (current.__cause__, current.__context__) if error is not None)
+    (tmp_path / "onboarding-refusal-code.json").write_text(json.dumps({
+        "reason_code": reason, "chain": chain,
+        "raw_exception_messages_retained": False,
+    }), encoding="utf-8")
+
+
 @pytest.mark.usefixtures("existing_possession_key_contract")
 def test_real_onboarding_defers_relay_under_valid_installation_delegation(monkeypatch, tmp_path):
     from datetime import datetime, timedelta, timezone
@@ -94,10 +122,14 @@ def test_real_onboarding_defers_relay_under_valid_installation_delegation(monkey
             auto_update.bootstrap(app, [user_relay.USER_RELAY_MODE], role="relay")
         return SimpleNamespace(pid=6789)
     monkeypatch.setattr(user_relay.subprocess, "Popen", launch)
-    report = onboarding.onboard_current_user(app, environ=environment, require_bootstrap_integrity=False,
-        registration_runner=lambda paths: 0, profile_loader=_profile_loader,
-        credential_loader=_credential_loader, ledger_factory=_ledger_factory,
-        autostart_installer=_autostart, relay_launcher=user_relay.start_user_relay_process)
+    try:
+        report = onboarding.onboard_current_user(app, environ=environment, require_bootstrap_integrity=False,
+            registration_runner=lambda paths: 0, profile_loader=_profile_loader,
+            credential_loader=_credential_loader, ledger_factory=_ledger_factory,
+            autostart_installer=_autostart, relay_launcher=user_relay.start_user_relay_process)
+    except onboarding.CurrentUserOnboardingError as failure:
+        _retain_onboarding_refusal(tmp_path, failure)
+        raise
     assert paths.bootstrap_integrity_path == app.parent / "bootstrap-integrity.json"
     assert report["bootstrap_integrity"] == "pass"
     assert report["status"] == "READY"
