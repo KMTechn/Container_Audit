@@ -2044,6 +2044,7 @@ function Invoke-CanonicalTransactionCompensation($Configuration,$Placement,$Leas
         @($steps|Where-Object {$_.status -cne 'PROVEN'}).Count -eq 0)
     $audit.rollback=@{code_exact=$codeExact;runtime_restored=$runtimeExact;scheduled_writer_restored=$writerExact;commit_point_status=$point;steps=$steps.ToArray()}
     $audit.status=if($proven){'ROLLBACK_AWAITING_FENCE_RELEASE'}else{'CODE_ROLLBACK_FAILED'}
+    if($proven){$audit['completed_fence_release']=New-CanonicalCompletedFenceProof 'TRANSACTION_ROLLBACK' $audit $Configuration}
     Save $auditPath $audit
     $released=$false
     if($proven){

@@ -10,6 +10,9 @@ param(
     [switch]$RecoverMachineInstallation,
     [string]$MachineRecoveryAuditPath = "",
     [string]$MachineRecoveryAuditSha256 = "",
+    [switch]$RecoverCompletedWriterFence,
+    [string]$CompletedFenceAuditPath = "",
+    [string]$CompletedFenceAuditSha256 = "",
     [switch]$Uninstall,
     [switch]$CompleteRetiredRemoval,
     [string]$OldSourceRoot = "",
@@ -48,11 +51,12 @@ $Script:CanonicalInstallerSourceInventorySha256 = ''
 $testMode = $AllowNoncanonicalLayoutForTest -and
     [string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -ceq '1'
 if ($SkipSignatureValidationForTest -and -not $testMode) {
+    if($RecoverCompletedWriterFence -or $CompletedFenceAuditPath -or $CompletedFenceAuditSha256){Write-Output 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS';exit 1}
     throw 'Signature bypass is test-only.'
 }
 $onboardingServerBaseUrl = ''
 $onboardingServerBaseUri = $null
-if (-not [string]::IsNullOrEmpty($ServerBaseUrl)) {
+if (-not [string]::IsNullOrEmpty($ServerBaseUrl) -and -not($RecoverCompletedWriterFence -or $CompletedFenceAuditPath -or $CompletedFenceAuditSha256)) {
     if (
         $ServerBaseUrl -match '[\s"\\]' -or
         -not [Uri]::TryCreate($ServerBaseUrl, [UriKind]::Absolute, [ref]$onboardingServerBaseUri) -or
@@ -4733,7 +4737,8 @@ function Confirm-CanonicalMachineRecoveryOwnerExit($Prestate) {
                 [Globalization.DateTimeStyles]::RoundtripKind,[ref]$started) -or $started.Kind -ne [DateTimeKind]::Utc){throw 'invalid owner'}
         [void](Initialize-InstallationChildCapture)
         $currentStart=[KMTechInstallationChildCapture]::ReadProcessStartTimeUtc([int]$Prestate.owner_process_id)
-        if($null -ne $currentStart){
+        # The pinned native reader returns an empty string for an absent PID.
+        if($null -ne $currentStart -and $currentStart -cne ''){
             $current=[DateTime]::MinValue
             if($currentStart -isnot [string] -or
                 -not [DateTime]::TryParseExact($currentStart,[string[]]@('o','yyyy-MM-ddTHH:mm:ss.FFFFFFFK'),[Globalization.CultureInfo]::InvariantCulture,
@@ -4741,6 +4746,400 @@ function Confirm-CanonicalMachineRecoveryOwnerExit($Prestate) {
                 $current.Ticks -eq $started.Ticks){throw 'owner active or unobservable'}
         }
     } catch { throw 'MACHINE_RECOVERY_AUTHORITY_BINDING_DIFFERS' }
+}
+function Get-CanonicalCompletedFenceSteps([string]$Operation) {
+    if($Operation -ceq 'RESTORE_VERIFIED_REPLACEMENT'){
+        return [pscustomobject]@{completed=@('code','Run','stop');pending=@('relay','User_shortcuts')}
+    }
+    if($Operation -ceq 'TRANSACTION_ROLLBACK'){
+        return [pscustomobject]@{completed=@('runtime_quiescence','code_preimage','worker_shortcuts','run_preimage',
+            'legacy_writer_preimage','scheduled_writer_preimage','generation_readback');pending=@('relay','execution_state')}
+    }
+    throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'
+}
+function Get-CanonicalCompletedFenceCodeRoot([string]$Root,$RestoreReceipt=$null) {
+    if($null -ne $RestoreReceipt -and $RestoreReceipt.PSObject.Properties['active_version']){
+        return [string]$RestoreReceipt.active_version.from_root
+    }
+    if(Test-Path -LiteralPath (Join-Path (Split-Path -Parent $Root) 'update-control\policy.json')){
+        $context=Get-BootstrapSupportedLifecycleContext (Split-Path -Parent $Root) 'inspect'
+        if([string]$context.status -cne 'PASS' -or -not $context.active_code_root){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+        return [string]$context.active_code_root
+    }
+    return $Root
+}
+function New-CanonicalCompletedFenceProof([string]$Operation,$Audit,$Configuration=$null) {
+    $steps=Get-CanonicalCompletedFenceSteps $Operation
+    $active=Read-ContainerWriterFence
+    if([string]$active.owner_kind -cne 'canonical_installer' -or [string]$active.status -cnotin @('INSTALLING','RESTORING') -or
+        [string]$active.session_id -cne $Script:CanonicalWriterFenceSessionId -or
+        [string]$active.attempt_id -cne $Script:CanonicalWriterFenceAttemptId -or
+        [string]$active.replacement_transaction_id -cne $Script:CanonicalWriterFenceTransactionId -or
+        -not(Same ([string]$active.prepared_receipt_path) ([string]$canonicalWriterFencePreparedReceipt.path)) -or
+        [string]$active.prepared_receipt_sha256 -cne [string]$canonicalWriterFencePreparedReceipt.sha256){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    $tuple=[ordered]@{}
+    foreach($name in @('session_id','attempt_id','replacement_transaction_id','session_started_at_utc','orchestrator_sha256',
+        'writer_contract_sha256','writer_inventory_sha256','prepared_receipt_path','prepared_receipt_sha256','session_authority_mutex_name')){
+        $tuple[$name]=[string]$active.$name
+    }
+    $receipt=$null;$receiptPath='';$receiptSha='';$restorePath='';$restoreSha=''
+    $handoverPath='';$handoverSha='';$helperId=0;$helperStart=''
+    $ownerId=[int]$PID;$ownerStart=(Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')
+    if($Operation -ceq 'RESTORE_VERIFIED_REPLACEMENT'){
+        $receiptPath=[string]$Audit.code_replacement.receipt_path;$receiptSha=[string]$Audit.code_replacement.receipt_sha256
+        $receipt=Read-BootstrapReplacementReceipt $receiptPath $receiptSha
+        $restorePath=[string]$Audit.code_replacement.restore_evidence_path;$restoreSha=[string]$Audit.code_replacement.restore_evidence_sha256
+    }else{
+        $handoverPath=Join-Path ([string]$Configuration.protected_root) 'handover.json'
+        $handoverSha=Sha $handoverPath
+        $handover=(Read-InstallationTransactionFile $handoverPath $handoverSha).Record
+        $ownerId=[int]$handover.parent_process_id;$ownerStart=[string]$handover.parent_started_at_utc
+        $helperId=[int]$PID;$helperStart=(Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')
+        if([int]$handover.helper_process_id -ne $helperId -or [string]$handover.helper_started_at_utc -cne $helperStart){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    }
+    $present=Test-Path -LiteralPath $install
+    $codeRoot=if($present){Get-CanonicalCompletedFenceCodeRoot $install $receipt}else{$install}
+    return [ordered]@{schema='container-audit-completed-fence-release-v1';operation=$Operation;
+        install_root=$install;source_root=$source;source_manifest_sha256=$sourceManifestSha256;
+        operator_sid=$operatorSid;operator_local_appdata_root=$lad;data_root=$activeDataRoot;fence=$tuple;
+        owner_process_id=$ownerId;owner_started_at_utc=$ownerStart;helper_process_id=$helperId;helper_started_at_utc=$helperStart;
+        protected_handover_path=$handoverPath;protected_handover_sha256=$handoverSha;
+        result=[ordered]@{current_exists=[bool]$present;current_manifest_sha256=if($present){Sha (Join-Path $codeRoot 'portable-manifest.json')}else{''};
+            current_bootstrap_sha256=if($present){Sha (Join-Path $codeRoot 'bootstrap-integrity.json')}else{''};
+            stop_path=$stop;stop_absent=(-not(Test-Path -LiteralPath $stop));run_preimage=$before;
+            scheduled_writer_preimage=$writerBefore;legacy_writer_preimage=$legacyRelayPreimage;
+            restore_receipt_path=$receiptPath;restore_receipt_sha256=$receiptSha;restore_evidence_path=$restorePath;restore_evidence_sha256=$restoreSha};
+        completed_steps=$steps.completed;pending_followups=$steps.pending}
+}
+function Read-CanonicalCompletedFenceJson([string]$Path,[string]$ExpectedSha256='') {
+    $full=Full $Path 'completed fence evidence'
+    Assert-BootstrapNoReparsePoint $full 'completed fence evidence'
+    $item=Get-Item -LiteralPath $full -ErrorAction Stop
+    if($item.PSIsContainer -or $item.Length -le 0 -or $item.Length -gt 131072){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    $sha=Sha $full
+    if($ExpectedSha256 -and $sha -cne $ExpectedSha256){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    $record=Get-Content -LiteralPath $full -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+    if((Sha $full) -cne $sha){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    return $record
+}
+function Assert-CanonicalCompletedFenceOrdinaryAcl([string]$Path,[string]$Sid) {
+    $acl=Get-Acl -LiteralPath $Path -ErrorAction Stop
+    if(-not $acl.AreAccessRulesProtected -or $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne $Sid){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){
+        if($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -cnotin @($Sid,'S-1-5-18','S-1-5-32-544')){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    }
+}
+function Assert-CanonicalCompletedFenceEvidencePath([string]$Path,$Audit,$Proof) {
+    $parent=Split-Path -Parent $Path
+    Assert-BootstrapNoReparsePoint $parent 'completed fence audit parent'
+    if([string]$Proof.operation -ceq 'RESTORE_VERIFIED_REPLACEMENT'){
+        $auditRoot=Join-Path ([string]$Proof.operator_local_appdata_root) 'KMTech\ContainerAudit\install-audit'
+        if(-not(Same $parent $auditRoot) -or [string]$Audit.run_id -cnotmatch '^\d{8}T\d{9}Z-[0-9a-f]{32}$' -or
+            [IO.Path]::GetFileName($Path) -cne ('canonical-portable-'+[string]$Audit.run_id+'.json')){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+        $stage=Full ([string]$Audit.stage_evidence_root) 'completed fence stage'
+        $store=Join-Path (Get-InstallationEvidenceControlRoot) 'installation-evidence'
+        if(Same (Split-Path -Parent (Split-Path -Parent $stage)) $store){Assert-InstallationEvidenceProtectedPath $stage}
+        else{
+            if(-not(Same (Split-Path -Parent $stage) $auditRoot) -or
+                [IO.Path]::GetFileName($stage) -cne ('canonical-portable-'+[string]$Audit.run_id+'.json.evidence.'+[string]$Proof.owner_process_id)){
+                throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'
+            }
+            Assert-BootstrapNoReparsePoint $stage 'completed fence ordinary stage'
+            Assert-CanonicalCompletedFenceOrdinaryAcl $stage ([string]$Proof.operator_sid)
+        }
+    }else{
+        $store=Join-Path (Get-InstallationEvidenceControlRoot) 'installation-evidence'
+        if(-not(Same (Split-Path -Parent $parent) $store) -or [IO.Path]::GetFileName($parent) -cnotmatch '^run-[0-9a-f]{32}$' -or
+            [IO.Path]::GetFileName($Path) -cne 'transaction-rollback-audit.json' -or
+            -not(Same ([string]$Proof.protected_handover_path) (Join-Path $parent 'handover.json'))){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+        Assert-InstallationEvidenceProtectedPath $parent
+        Assert-InstallationEvidenceProtectedPath $Path
+    }
+}
+function Assert-CanonicalCompletedFenceProof($Audit,[string]$Path,[string]$Source,[string]$Root,$Manifest,[string]$Sid,[string]$Local) {
+    $proof=$Audit.completed_fence_release
+    if(-not(Test-ExactPropertySet $proof @('schema','operation','install_root','source_root','source_manifest_sha256','operator_sid',
+        'operator_local_appdata_root','data_root','fence','owner_process_id','owner_started_at_utc','helper_process_id','helper_started_at_utc',
+        'protected_handover_path','protected_handover_sha256','result','completed_steps','pending_followups')) -or
+        [string]$proof.schema -cne 'container-audit-completed-fence-release-v1' -or
+        -not(Test-ExactStringProperties $proof @('schema','operation','install_root','source_root','source_manifest_sha256','operator_sid',
+            'operator_local_appdata_root','data_root','owner_started_at_utc','helper_started_at_utc','protected_handover_path','protected_handover_sha256')) -or
+        -not(Same ([string]$proof.install_root) $Root) -or -not(Same ([string]$proof.source_root) $Source) -or
+        [string]$proof.source_manifest_sha256 -cne (Sha (Join-Path $Source 'portable-manifest.json')) -or
+        [string]$proof.operator_sid -cne $Sid -or $Sid -cne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -or
+        -not(Same ([string]$proof.operator_local_appdata_root) $Local) -or
+        -not(Same $Local (Get-ContainerWriterFenceProfileLocalAppDataRoot $Sid))){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    $dataRoot=if($env:CONTAINER_AUDIT_DATA_ROOT){Full $env:CONTAINER_AUDIT_DATA_ROOT 'completed data root'}else{Join-Path $Local 'KMTech\ContainerAudit'}
+    if(-not(Same ([string]$proof.data_root) $dataRoot)){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    $fence=$proof.fence
+    $fields=@('session_id','attempt_id','replacement_transaction_id','session_started_at_utc','orchestrator_sha256',
+        'writer_contract_sha256','writer_inventory_sha256','prepared_receipt_path','prepared_receipt_sha256','session_authority_mutex_name')
+    if(-not(Test-ExactPropertySet $fence $fields) -or -not(Test-ExactStringProperties $fence $fields)){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    foreach($name in @('session_id','attempt_id','replacement_transaction_id')){
+        if([string]$fence.$name -cnotmatch '^[0-9a-f]{32}$'){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    }
+    foreach($name in @('orchestrator_sha256','writer_contract_sha256','writer_inventory_sha256','prepared_receipt_sha256')){
+        if([string]$fence.$name -cnotmatch '^[0-9a-f]{64}$'){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    }
+    [void](ConvertTo-ContainerWriterFenceUtc ([string]$fence.session_started_at_utc))
+    if([string]$fence.orchestrator_sha256 -cne (Sha (Join-Path $Source 'INSTALL_CANONICAL_PORTABLE.ps1')) -or
+        [string]$fence.orchestrator_sha256 -cne [string]$Manifest.installer_sha256 -or
+        [string]$fence.writer_contract_sha256 -cne (Sha (Join-Path $Source 'tools\container_writer_session_contract.json')) -or
+        [string]$fence.writer_contract_sha256 -cne [string]$Manifest.writer_session_contract_sha256 -or
+        [string]$fence.session_authority_mutex_name -cne (Get-ContainerWriterSessionAuthorityMutexName $fence.session_id $fence.attempt_id `
+            $fence.orchestrator_sha256 $fence.replacement_transaction_id $fence.writer_contract_sha256)){
+        throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'
+    }
+    $steps=Get-CanonicalCompletedFenceSteps ([string]$proof.operation)
+    if((@($proof.completed_steps) -join '|') -cne ($steps.completed -join '|') -or
+        (@($proof.pending_followups) -join '|') -cne ($steps.pending -join '|')){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    Assert-CanonicalCompletedFenceEvidencePath $Path $Audit $proof
+    $prepared=Read-CanonicalCompletedFenceJson ([string]$fence.prepared_receipt_path) ([string]$fence.prepared_receipt_sha256)
+    if(-not(Test-ExactPropertySet $prepared @('schema','status','app_id','session_id','attempt_id','replacement_transaction_id','session_started_at_utc',
+            'orchestrator_sha256','writer_contract_sha256','writer_inventory_sha256','source_manifest_sha256','operator_sid','operator_local_appdata_root','created_at_utc','secret_values_recorded')) -or
+        [string]$prepared.schema -cne 'container-audit-canonical-writer-prepared-v1' -or [string]$prepared.status -cne 'PREPARED' -or
+        [string]$prepared.app_id -cne 'container_audit' -or [string]$prepared.operator_sid -cne $Sid -or
+        -not(Same ([string]$prepared.operator_local_appdata_root) $Local) -or
+        [string]$prepared.source_manifest_sha256 -cne [string]$proof.source_manifest_sha256 -or
+        $prepared.secret_values_recorded -isnot [bool] -or $prepared.secret_values_recorded){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    foreach($name in @('session_id','attempt_id','replacement_transaction_id','session_started_at_utc','orchestrator_sha256','writer_contract_sha256')){
+        if([string]$prepared.$name -cne [string]$fence.$name){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    }
+    if([string]$prepared.writer_inventory_sha256 -cne [string]$Manifest.writer_sink_inventory_contract_sha256){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    $result=$proof.result
+    if(-not(Test-ExactPropertySet $result @('current_exists','current_manifest_sha256','current_bootstrap_sha256','stop_path','stop_absent',
+        'run_preimage','scheduled_writer_preimage','legacy_writer_preimage','restore_receipt_path','restore_receipt_sha256','restore_evidence_path','restore_evidence_sha256')) -or
+        $result.current_exists -isnot [bool] -or $result.stop_absent -isnot [bool] -or -not $result.stop_absent -or
+        -not(Test-ExactStringProperties $result @('current_manifest_sha256','current_bootstrap_sha256','stop_path','restore_receipt_path',
+            'restore_receipt_sha256','restore_evidence_path','restore_evidence_sha256')) -or
+        -not(Same ([string]$result.stop_path) (Join-Path $(if($env:CONTAINER_AUDIT_DATA_ROOT){Join-Path $dataRoot 'direct_sync'}else{Join-Path $Local 'KMTech\DirectSync\container_audit'}) 'control\container_audit_user_relay.stop.json'))){
+        throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'
+    }
+    if([string]$proof.operation -ceq 'RESTORE_VERIFIED_REPLACEMENT'){
+        if([string]$Audit.schema -cne 'container-audit-canonical-portable-install-v2' -or [string]$Audit.operation -cne 'RESTORE_VERIFIED_REPLACEMENT' -or
+            [string]$Audit.status -cne 'RESTORE_AWAITING_FENCE_RELEASE' -or [string]$Audit.code_placement -cne 'RESTORED_VERIFIED' -or
+            [string]$Audit.source_manifest_sha256 -cne [string]$proof.source_manifest_sha256 -or -not(Same ([string]$Audit.install_root) $Root) -or
+            [string]$Audit.code_replacement.controller_transaction_id -cne [string]$fence.replacement_transaction_id -or
+            [string]$Audit.code_replacement.later_restore_surface -cne 'CONSUMED' -or -not(Test-JsonInteger $proof.helper_process_id) -or $proof.helper_process_id -ne 0 -or
+            $proof.helper_started_at_utc -cne '' -or $proof.protected_handover_path -cne '' -or $proof.protected_handover_sha256 -cne '' -or
+            ($Audit.preimage|ConvertTo-Json -Depth 12 -Compress) -cne ($result.run_preimage|ConvertTo-Json -Depth 12 -Compress)){
+            throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'
+        }
+    }else{
+        if([string]$Audit.status -cne 'ROLLBACK_AWAITING_FENCE_RELEASE' -or
+            $Audit.rollback.code_exact -isnot [bool] -or -not $Audit.rollback.code_exact -or
+            $Audit.rollback.runtime_restored -isnot [bool] -or -not $Audit.rollback.runtime_restored -or
+            $Audit.rollback.scheduled_writer_restored -isnot [bool] -or -not $Audit.rollback.scheduled_writer_restored -or
+            [string]$Audit.rollback.commit_point_status -cnotin @('NOT_REACHED','REACHED') -or @($Audit.rollback.steps).Count -ne $steps.completed.Count){
+            throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'
+        }
+        for($i=0;$i -lt $steps.completed.Count;$i++){
+            if([string]$Audit.rollback.steps[$i].step -cne [string]$steps.completed[$i] -or [string]$Audit.rollback.steps[$i].status -cne 'PROVEN'){
+                throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'
+            }
+        }
+        $handover=(Read-InstallationTransactionFile ([string]$proof.protected_handover_path) ([string]$proof.protected_handover_sha256)).Record
+        if([string]$handover.operator_sid -cne $Sid -or -not(Same ([string]$handover.local_appdata_root) $Local) -or
+            -not(Same ([string]$handover.install_root) $Root) -or -not(Same ([string]$handover.source_root) $Source) -or
+            -not(Same ([string]$handover.data_root) $dataRoot) -or [string]$handover.transaction_id -cne [string]$fence.replacement_transaction_id -or
+            [string]$handover.session_id -cne [string]$fence.session_id -or [string]$handover.attempt_id -cne [string]$fence.attempt_id -or
+            [string]$handover.orchestrator_sha256 -cne [string]$fence.orchestrator_sha256 -or
+            [string]$handover.writer_contract_sha256 -cne [string]$fence.writer_contract_sha256 -or
+            -not(Same ([string]$handover.prepared_path) ([string]$fence.prepared_receipt_path)) -or
+            [string]$handover.prepared_sha256 -cne [string]$fence.prepared_receipt_sha256 -or
+            [int64]$handover.parent_process_id -ne [int64]$proof.owner_process_id -or [string]$handover.parent_started_at_utc -cne [string]$proof.owner_started_at_utc -or
+            [int64]$handover.helper_process_id -ne [int64]$proof.helper_process_id -or [string]$handover.helper_started_at_utc -cne [string]$proof.helper_started_at_utc -or
+            [string]$handover.context.sourceManifestSha256 -cne [string]$proof.source_manifest_sha256){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+        foreach($pair in @(@('run_preimage','before'),@('scheduled_writer_preimage','writerBefore'),@('legacy_writer_preimage','legacyRelayPreimage'))){
+            if(($result.($pair[0])|ConvertTo-Json -Depth 16 -Compress) -cne ($handover.context.($pair[1])|ConvertTo-Json -Depth 16 -Compress)){
+                throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'
+            }
+        }
+    }
+    return $proof
+}
+function Assert-CanonicalCompletedFenceResult($Proof,$Audit,$Manifest) {
+    $result=$Proof.result;$receipt=$null
+    if([string]$Proof.operation -ceq 'RESTORE_VERIFIED_REPLACEMENT'){
+        if(-not(Same ([string]$Audit.code_replacement.receipt_path) ([string]$result.restore_receipt_path)) -or
+            [string]$Audit.code_replacement.receipt_sha256 -cne [string]$result.restore_receipt_sha256 -or
+            -not(Same ([string]$Audit.code_replacement.restore_evidence_path) ([string]$result.restore_evidence_path)) -or
+            [string]$Audit.code_replacement.restore_evidence_sha256 -cne [string]$result.restore_evidence_sha256){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+        $restoreReceiptFull=[string]$result.restore_receipt_path;$RestoreReceiptSha256=[string]$result.restore_receipt_sha256
+        $sourceManifest=$Manifest;$sourceManifestSha256=[string]$Proof.source_manifest_sha256;$sourceWriterInventory=Assert-WriterSinkInventory `
+            (Join-Path $source 'tools\container_writer_sink_inventory.json') ([string]$Manifest.writer_sink_inventory_sha256) ([string]$Manifest.writer_sink_inventory_contract_sha256)
+        $sourceHelperSha256=Sha (Join-Path $source 'INSTALL_THIS_PC.ps1');$sourceIntegrityHelperSha256=Sha (Join-Path $source 'tools\bootstrap_integrity.ps1')
+        $rollbackContinuation=$null
+        $restored=Read-CanonicalReplacementRestore
+        if([string]$restored.state -cne 'RESTORED' -or [string]$Audit.code_replacement.transaction_id -cne [string]$restored.receipt.transaction_id){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+        [void](Read-CanonicalCompletedFenceJson ([string]$result.restore_evidence_path) ([string]$result.restore_evidence_sha256))
+        [void](ReadReplacementRestoreEvidence ([string]$result.restore_evidence_path) ([string]$restored.receipt.transaction_id) $restoreReceiptFull $RestoreReceiptSha256 $install)
+        $receipt=$restored.receipt
+    }
+    if((Test-Path -LiteralPath $install) -ne [bool]$result.current_exists -or (Test-Path -LiteralPath ([string]$result.stop_path))){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    if($result.current_exists){
+        $codeRoot=Get-CanonicalCompletedFenceCodeRoot $install $receipt
+        Assert-BootstrapNoReparsePoint $codeRoot 'completed current'
+        if([string]$result.current_manifest_sha256 -cnotmatch '^[0-9a-f]{64}$' -or [string]$result.current_bootstrap_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+            (Sha (Join-Path $codeRoot 'portable-manifest.json')) -cne [string]$result.current_manifest_sha256 -or
+            (Sha (Join-Path $codeRoot 'bootstrap-integrity.json')) -cne [string]$result.current_bootstrap_sha256){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+        $current=InstalledManifest $codeRoot $SkipSignatureValidationForTest
+        [void](Assert-BootstrapIntegrityRecord $codeRoot)
+        if([string]$Proof.fence.writer_inventory_sha256 -cne [string]$current.writer_sink_inventory_contract_sha256){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+        Assert-ContainerDataGenerationTarget $codeRoot $operatorSid $lad ([string]$Proof.data_root) $source
+    }elseif($result.current_manifest_sha256 -cne '' -or $result.current_bootstrap_sha256 -cne '' -or
+        [string]$Proof.fence.writer_inventory_sha256 -cne [string]$Manifest.writer_sink_inventory_contract_sha256){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    $run=Snapshot
+    if($result.run_preimage.exists -isnot [bool] -or [bool]$run.exists -ne [bool]$result.run_preimage.exists -or
+        [string]$run.kind -cne [string]$result.run_preimage.kind -or [string]$run.data -cne [string]$result.run_preimage.data){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    $beforeWriter=$result.scheduled_writer_preimage;$writer=Get-CanonicalWriterSnapshot $install
+    if($beforeWriter.present -isnot [bool] -or [bool]$writer.present -ne [bool]$beforeWriter.present){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    if($beforeWriter.present -and ([bool]$writer.enabled -ne [bool]$beforeWriter.enabled -or [string]$writer.binding_sha256 -cne [string]$beforeWriter.binding_sha256)){
+        throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'
+    }
+    $legacy=$result.legacy_writer_preimage
+    if($null -ne $legacy){
+        $record=Read-CanonicalCompletedFenceJson ([string]$legacy.path) ([string]$legacy.sha256)
+        $actual=Get-CanonicalOfficialLegacyRelayPreimage
+        if($null -eq $actual -or [string]$actual.identity.sha256 -cne [string]$record.identity_sha256 -or
+            [bool]$actual.enabled -ne [bool]$record.enabled){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    }
+    if([string]$Proof.operation -ceq 'TRANSACTION_ROLLBACK'){
+        $handover=(Read-InstallationTransactionFile ([string]$Proof.protected_handover_path) ([string]$Proof.protected_handover_sha256)).Record
+        $point=Get-CanonicalInstallationCommitPoint $Manifest $operatorSid $lad ([string]$Proof.data_root) $source
+        if($point -cne [string]$Audit.rollback.commit_point_status){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+        if($point -ceq 'REACHED'){$expected=$handover.source_manifest}
+        elseif([bool]$handover.context.currentAbsentBeforePlacement){$expected=$null;if($result.current_exists){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}}
+        else{$expected=$handover.context.candidate}
+        if($null -ne $expected -and (-not $result.current_exists -or [string]$current.source_commit -cne [string]$expected.source_commit -or
+            [string]$current.source_tree -cne [string]$expected.source_tree)){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+        if($null -eq $expected -and -not [bool]$handover.context.currentAbsentBeforePlacement){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    }
+}
+function Read-CanonicalCompletedFenceAuthorization([string]$Path,$Proof,[string]$AuditPath,[string]$AuditSha256,[string]$Phase,[string]$ExpectedInventorySha256='') {
+    $sha=Sha $Path
+    $record=Read-CanonicalCompletedFenceJson $Path $sha
+    $fields=@('schema','status','phase','app_id','session_id','attempt_id','replacement_transaction_id','writer_inventory_sha256',
+        'task_name','task_path','binding_sha256','future_natural_trigger_utc','install_audit_path','install_audit_sha256','created_at_utc','secret_values_recorded')
+    if(-not(Test-ExactPropertySet $record $fields) -or -not(Test-ExactStringProperties $record @($fields|Where-Object {$_ -cne 'secret_values_recorded'})) -or
+        [string]$record.schema -cne 'container-audit-writer-release-authorization-v1' -or [string]$record.status -cne 'AUTHORIZED' -or
+        [string]$record.phase -cne $Phase -or [string]$record.app_id -cne 'container_audit' -or
+        $record.secret_values_recorded -isnot [bool] -or $record.secret_values_recorded -or
+        -not(Same ([string]$record.install_audit_path) $AuditPath) -or [string]$record.install_audit_sha256 -cne $AuditSha256){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    foreach($name in @('session_id','attempt_id','replacement_transaction_id')){
+        if([string]$record.$name -cne [string]$Proof.fence.$name){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    }
+    $inventory=if($ExpectedInventorySha256){$ExpectedInventorySha256}else{[string]$Proof.fence.writer_inventory_sha256}
+    if([string]$record.writer_inventory_sha256 -cne $inventory){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    foreach($name in @('task_name','task_path','binding_sha256','future_natural_trigger_utc')){
+        if([string]$record.$name -cne ''){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    }
+    [void](ConvertTo-ContainerWriterFenceUtc ([string]$record.created_at_utc))
+    return [pscustomobject]@{path=(Full $Path 'completed fence authorization');sha256=$sha}
+}
+function New-CanonicalCompletedFenceAuthorization([string]$Path,$Proof,[string]$AuditPath,[string]$AuditSha256,[string]$Phase) {
+    $record=[ordered]@{schema='container-audit-writer-release-authorization-v1';status='AUTHORIZED';phase=$Phase;app_id='container_audit';
+        session_id=[string]$Proof.fence.session_id;attempt_id=[string]$Proof.fence.attempt_id;replacement_transaction_id=[string]$Proof.fence.replacement_transaction_id;
+        writer_inventory_sha256=[string]$Proof.fence.writer_inventory_sha256;task_name='';task_path='';binding_sha256='';future_natural_trigger_utc='';
+        install_audit_path=$AuditPath;install_audit_sha256=$AuditSha256;created_at_utc=[DateTime]::UtcNow.ToString('o');secret_values_recorded=$false}
+    $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($record|ConvertTo-Json -Depth 8)+[char]10)
+    $stream=[IO.FileStream]::new($Path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
+    return Read-CanonicalCompletedFenceAuthorization $Path $Proof $AuditPath $AuditSha256 $Phase
+}
+function Confirm-CanonicalCompletedFenceProcessesExit($Proof) {
+    Confirm-CanonicalMachineRecoveryOwnerExit $Proof
+    if([string]$Proof.operation -ceq 'TRANSACTION_ROLLBACK'){
+        Confirm-CanonicalMachineRecoveryOwnerExit ([pscustomobject]@{owner_process_id=$Proof.helper_process_id;owner_started_at_utc=$Proof.helper_started_at_utc})
+    }
+    foreach($process in @(Get-CimInstance Win32_Process -Property ProcessId,CommandLine -ErrorAction Stop)){
+        if([int]$process.ProcessId -ne $PID -and [string]$process.CommandLine -match [regex]::Escape([string]$Proof.fence.replacement_transaction_id)){
+            throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'
+        }
+    }
+}
+function Invoke-CanonicalCompletedWriterFenceRecovery([string]$Source,[string]$Root,$Manifest,[string]$AuditPath,[string]$AuditSha256,[string]$OperatorSid,[string]$LocalAppDataRoot) {
+    $authority=$null;$admission=$null
+    $previousInventory=$Script:ContainerWriterFenceAcceptedInstalledInventorySha256
+    try{
+        if($AuditSha256 -cnotmatch '^[0-9a-f]{64}$'){throw 'invalid audit hash'}
+        $auditFull=Full $AuditPath 'completed fence audit'
+        $record=Read-CanonicalCompletedFenceJson $auditFull $AuditSha256
+        $proof=Assert-CanonicalCompletedFenceProof $record $auditFull $Source $Root $Manifest $OperatorSid $LocalAppDataRoot
+        $install=$Root;$lad=$LocalAppDataRoot;$sourceManifest=$Manifest;$activeDataRoot=[string]$proof.data_root
+        $tuple=$proof.fence
+        $authority=Enter-ContainerWriterSessionAuthority -SessionId $tuple.session_id -AttemptId $tuple.attempt_id -OrchestratorSha256 $tuple.orchestrator_sha256 `
+            -ReplacementTransactionId $tuple.replacement_transaction_id -WriterContractSha256 $tuple.writer_contract_sha256 -RecoverExisting
+        $admission=Enter-ContainerWriterAdmission
+        Confirm-CanonicalCompletedFenceProcessesExit $proof
+        Assert-CanonicalCompletedFenceResult $proof $record $Manifest
+        $Script:ContainerWriterFenceAcceptedInstalledInventorySha256=[string]$tuple.writer_inventory_sha256
+        $activePath=Get-ContainerWriterFenceActivePath
+        $active=Read-ContainerWriterFence -AllowAbsent
+        $activeSha=if($null -ne $active){Sha $activePath}else{''}
+        $phase=if([string]$proof.operation -ceq 'RESTORE_VERIFIED_REPLACEMENT'){'PRODUCT_COMPLETE'}else{'ROLLBACK_COMPLETE'}
+        $fixed=Join-Path (Split-Path -Parent $auditFull) ('recovered-release-'+[string]$tuple.replacement_transaction_id+'.json')
+        Assert-BootstrapNoReparsePoint $fixed 'completed fence release' -PathOnly
+        if($null -ne $active){
+            Assert-ContainerWriterSessionAuthority $active $authority
+            if([string]$active.owner_kind -cne 'canonical_installer'){throw 'foreign owner'}
+            foreach($name in @('session_id','attempt_id','replacement_transaction_id','session_started_at_utc','orchestrator_sha256',
+                'writer_contract_sha256','writer_inventory_sha256','session_authority_mutex_name')){
+                if([string]$active.$name -cne [string]$tuple.$name){throw 'foreign fence'}
+            }
+            if([string]$active.status -ceq 'PREPARED'){
+                $original=if($phase -ceq 'PRODUCT_COMPLETE'){
+                    Join-Path (Split-Path -Parent $auditFull) ('canonical-portable-'+[string]$record.run_id+'-product-complete-release.json')
+                }else{Join-Path (Split-Path -Parent $auditFull) 'rollback-release.json'}
+                if(-not(Same ([string]$active.prepared_receipt_path) $original) -and -not(Same ([string]$active.prepared_receipt_path) $fixed)){throw 'foreign authorization'}
+                # Original release producers bind the admitted source inventory;
+                # the new fixed release binds the validated residual inventory.
+                $expectedInventory=if(Same ([string]$active.prepared_receipt_path) $fixed){[string]$tuple.writer_inventory_sha256}else{[string]$Manifest.writer_sink_inventory_contract_sha256}
+                $bound=Read-CanonicalCompletedFenceAuthorization ([string]$active.prepared_receipt_path) $proof $auditFull $AuditSha256 $phase $expectedInventory
+                if([string]$active.prepared_receipt_sha256 -cne [string]$bound.sha256){throw 'authorization hash differs'}
+            }elseif([string]$proof.operation -ceq 'TRANSACTION_ROLLBACK' -and [string]$active.status -ceq 'RESTORING'){
+                if(-not(Same ([string]$active.prepared_receipt_path) ([string]$tuple.prepared_receipt_path)) -or
+                    [string]$active.prepared_receipt_sha256 -cne [string]$tuple.prepared_receipt_sha256){throw 'helper fence differs'}
+            }else{throw 'unsupported residual state'}
+        }
+        $authorization=$null
+        if(Test-Path -LiteralPath $fixed){$authorization=Read-CanonicalCompletedFenceAuthorization $fixed $proof $auditFull $AuditSha256 $phase}
+        if($null -ne $authorization){
+            $receiptPath=Join-Path (Get-ContainerWriterFenceControlRoot) ('release-'+[string]$tuple.replacement_transaction_id+'-'+[string]$authorization.sha256+'.json')
+            if(Test-Path -LiteralPath $receiptPath){
+                $priorRelease=Read-ContainerWriterFenceReleaseReceipt $receiptPath
+                [void](Assert-ContainerWriterFenceReleaseReceiptMatches $priorRelease $tuple.session_id $tuple.attempt_id $tuple.replacement_transaction_id $authorization.path $authorization.sha256)
+                if([string]$priorRelease.writer_inventory_sha256 -cne [string]$tuple.writer_inventory_sha256){throw 'release inventory differs'}
+            }
+        }
+        if($null -eq $active){
+            if($null -eq $authorization){throw 'release proof missing'}
+            $release=Read-ContainerWriterFenceReleaseReceipt (Join-Path (Get-ContainerWriterFenceControlRoot) `
+                ('release-'+[string]$tuple.replacement_transaction_id+'-'+[string]$authorization.sha256+'.json'))
+            [void](Assert-ContainerWriterFenceReleaseReceiptMatches $release $tuple.session_id $tuple.attempt_id $tuple.replacement_transaction_id $authorization.path $authorization.sha256)
+            if([string]$release.writer_inventory_sha256 -cne [string]$tuple.writer_inventory_sha256){throw 'release inventory differs'}
+        }
+        # No output/authorization/state mutation precedes this second complete read.
+        [void](Assert-CanonicalCompletedFenceProof (Read-CanonicalCompletedFenceJson $auditFull $AuditSha256) $auditFull $Source $Root $Manifest $OperatorSid $LocalAppDataRoot)
+        Confirm-CanonicalCompletedFenceProcessesExit $proof
+        Assert-CanonicalCompletedFenceResult $proof $record $Manifest
+        if($activeSha){if((Sha $activePath) -cne $activeSha){throw 'fence changed'}}
+        elseif(Test-Path -LiteralPath $activePath){throw 'new fence appeared'}
+        if($null -ne $active){
+            if($null -eq $authorization){$authorization=New-CanonicalCompletedFenceAuthorization $fixed $proof $auditFull $AuditSha256 $phase}
+            [void](Set-ContainerWriterFencePrepared -SessionId $tuple.session_id -AttemptId $tuple.attempt_id -ReplacementTransactionId $tuple.replacement_transaction_id `
+                -PreparedReceiptPath $authorization.path -PreparedReceiptSha256 $authorization.sha256 -Status 'PREPARED' -AuthorityLease $authority)
+            [void](Stop-ContainerWriterFence -SessionId $tuple.session_id -AttemptId $tuple.attempt_id -ReplacementTransactionId $tuple.replacement_transaction_id `
+                -ReleaseAuthorizationPath $authorization.path -ReleaseAuthorizationSha256 $authorization.sha256 -AuthorityLease $authority)
+        }
+        return [pscustomobject]@{status='FENCE_RELEASED_FOLLOWUP_PENDING';original_audit_status=[string]$record.status;
+            audit_path=$auditFull;audit_sha256=$AuditSha256;completed_steps=@($proof.completed_steps);pending_followups=@($proof.pending_followups)}
+    }catch{throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+    finally{
+        if($null -ne $admission){Exit-ContainerWriterAdmission $admission}
+        if($null -ne $authority){Exit-ContainerWriterSessionAuthority $authority}
+        $Script:ContainerWriterFenceAcceptedInstalledInventorySha256=$previousInventory
+    }
 }
 function Read-CanonicalMachineRecoveryReleaseAuthorization([string]$State,[string]$Run,[string]$AuditPath,[string]$AuditSha256,$Prestate,[string]$Phase) {
     try {
@@ -5268,6 +5667,33 @@ function Assert-CanonicalOperatingWorkerAccount([string]$Operation,[bool]$Contin
     }
 }
 
+if($RecoverCompletedWriterFence -or $CompletedFenceAuditPath -or $CompletedFenceAuditSha256){
+    try{
+        if(-not $RecoverCompletedWriterFence -or -not $CompletedFenceAuditPath -or $CompletedFenceAuditSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+            $RecoverMachineInstallation -or $MachineRecoveryAuditPath -or $MachineRecoveryAuditSha256 -or $Uninstall -or $RestoreVerifiedReplacement -or
+            $RestoreReceiptPath -or $RestoreReceiptSha256 -or $CompleteRetiredRemoval -or $OldSourceRoot -or $RetiredRemovalReceiptSha256 -or
+            $RetiredStopMarkerSha256 -or $ResumeRetirementReceiptPath -or $ResumeRetirementReceiptSha256 -or $WorkerAccount -or $WorkerSurveyInventory -or
+            $PlanOnly -or $ServerBaseUrl -or $EvidencePath){throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'}
+        $source=Full $(if($SourceRoot){$SourceRoot}else{$PSScriptRoot}) 'completed recovery SourceRoot'
+        $install=Full $InstallRoot 'completed recovery InstallRoot'
+        if((-not $testMode -and -not(Same $install $CanonicalRoot)) -or -not(Same $PSCommandPath (Join-Path $source 'INSTALL_CANONICAL_PORTABLE.ps1'))){
+            throw 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS'
+        }
+        $sourceManifest=Manifest $source $SkipSignatureValidationForTest
+        [void](Assert-WriterSinkInventory (Join-Path $source 'tools\container_writer_sink_inventory.json') `
+            ([string]$sourceManifest.writer_sink_inventory_sha256) ([string]$sourceManifest.writer_sink_inventory_contract_sha256))
+        . (Join-Path $source 'tools\container_writer_fence.ps1')
+        $completed=Invoke-CanonicalCompletedWriterFenceRecovery $source $install $sourceManifest $CompletedFenceAuditPath $CompletedFenceAuditSha256 `
+            ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value) (Full $env:LOCALAPPDATA 'LOCALAPPDATA')
+        'completed_fence_recovery_status='+[string]$completed.status
+        'original_audit_status='+[string]$completed.original_audit_status
+        'audit_path='+[string]$completed.audit_path
+        'audit_sha256='+[string]$completed.audit_sha256
+        'completed_steps='+(@($completed.completed_steps) -join ',')
+        'pending_followups='+(@($completed.pending_followups) -join ',')
+        exit 0
+    }catch{Write-Output 'CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS';exit 1}
+}
 try {
 if (-not $SourceRoot) { $SourceRoot = $PSScriptRoot }
 if ($CompleteRetiredRemoval) {
@@ -6174,6 +6600,7 @@ $enteredPlacementTry = $true
         }
         $audit.after = $check
         $audit.status = 'RESTORE_AWAITING_FENCE_RELEASE'
+        $audit['completed_fence_release']=New-CanonicalCompletedFenceProof 'RESTORE_VERIFIED_REPLACEMENT' $audit
         Save $auditPath $audit $true
         $releaseAuthorization = New-CanonicalWriterFenceReleaseAuthorization `
             -Path $productCompleteAuthorizationPath -Phase 'PRODUCT_COMPLETE' -AuditPath $auditPath
