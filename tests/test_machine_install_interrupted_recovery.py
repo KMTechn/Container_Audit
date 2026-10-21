@@ -19,6 +19,12 @@ FUNCTIONS = [
     "Write-CanonicalMachinePublicRecord", "Get-CanonicalMachineRecoveryEntry",
 ]
 
+FUNCTIONS += [
+    "Test-CanonicalMachineCompensationComplete", "Test-CanonicalMachineRecoveryCompleted",
+    "Confirm-CanonicalMachineRecoveryOwnerExit", "Read-CanonicalMachineRecoveryReleaseAuthorization",
+    "Read-CanonicalMachineRecoveryReleaseState",
+]
+
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 @pytest.mark.parametrize("case, expected", (
