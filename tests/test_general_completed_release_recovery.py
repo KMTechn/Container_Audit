@@ -51,8 +51,9 @@ def test_completed_general_boundary_has_an_official_fence_only_exit(tmp_path, mo
 
 
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
-def test_general_restore_before_set_retains_the_g59_exit(tmp_path, monkeypatch, engine):
-    values = {"CA_GENERAL_BOUNDARY": "A_BEFORE_SET", "CA_GENERAL_STAGE": "setup"}
+@pytest.mark.parametrize("boundary", ("A_BEFORE_SET", "B_INSTALLING_BEFORE_SET"))
+def test_general_before_set_retains_the_g59_exit(tmp_path, monkeypatch, engine, boundary):
+    values = {"CA_GENERAL_BOUNDARY": boundary, "CA_GENERAL_STAGE": "setup"}
     result = run_functions(tmp_path, INSTALLER, FUNCTIONS, DRIVER, values=values, engine=engine)
     assert result.returncode == 73, "producer boundary failed; raw diagnostics suppressed"
     values["CA_GENERAL_STAGE"] = "observe"
