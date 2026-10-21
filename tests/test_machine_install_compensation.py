@@ -83,8 +83,9 @@ if((Sha $prior) -cne $sha -or (Get-BootstrapAclComparisonKey ((Get-Acl -LiteralP
 def test_machine_removal_only_removes_bound_pending_and_owned_direct_shortcut(tmp_path, engine, state):
     result = run_functions(tmp_path, INSTALLER,
         ["Full", "Same", "Sha", "Get-CanonicalMachineShortcutArguments", "Remove-CanonicalMachineArtifacts"], _emergency_runtime_prelude() + r'''
+# Keep the emergency directory's parent inside the case's admitted shortcut root.
 function ConvertTo-ProcessArgument([string]$Value){return '"'+$Value+'"'}
-$root=Join-Path $env:CA_CONTRACT_ROOT 'current'
+$root=Join-Path $env:CA_CONTRACT_ROOT 'application\current'
 $pending=Join-Path $env:CA_CONTRACT_ROOT 'pending.json'
 $shortcut=Join-Path $env:CA_CONTRACT_ROOT 'direct.lnk'
 $worker=@{sid='fixture-worker'}

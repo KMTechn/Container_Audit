@@ -64,6 +64,8 @@ $blocks=@($definition_nodes|Where-Object {$_.Name -cin $env:CA_CONTRACT_NAMES.Sp
 [IO.File]::WriteAllText($actualHelpers,($blocks -join [Environment]::NewLine),[Text.UTF8Encoding]::new($true))
 . $actualHelpers
 $testMode=$true;$EvidencePath=''
+# Each recovery case owns its machine state, including the immutable prepared receipt.
+$env:PROGRAMDATA=Join-Path $env:CA_CONTRACT_ROOT 'program-data'
 $state=Get-ContainerMachineInstallStateRoot
 $control=Join-Path $state 'control\writer-session'
 $source=Join-Path $env:CA_CONTRACT_ROOT 'source'
