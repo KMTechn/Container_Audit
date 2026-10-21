@@ -1,4 +1,6 @@
+import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,12 @@ from tests.test_general_completed_release_recovery import DRIVER, FUNCTIONS, INS
 
 ENGINES = ["powershell.exe", "pwsh.exe"]
 STAMPS = ["2026-10-21T00:00:00.1234500Z", "2026-10-21T00:00:00.0000000Z"]
+
+
+def _record(kind, engine, stamp, **fields):
+    evidence = Path(os.environ["KMTECH_TEST_CA_EVIDENCE_ROOT"])
+    name = f"p1-01-{kind}-{engine}-{STAMPS.index(stamp)}.json"
+    (evidence / name).write_text(json.dumps({"engine": engine, "stamp": stamp, **fields}), encoding="utf-8")
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -37,7 +45,12 @@ $json=ConvertTo-CanonicalAuditJson $payload -PrivateDiagnostics:($env:CA_AUDIT_T
     )
     assert result.returncode == 0
     # This exact, ordered, compact UTF-8 envelope is the original PS5.1 output.
-    assert (tmp_path / "audit-wire.json").read_bytes() == wire.encode("utf-8")
+    actual = (tmp_path / "audit-wire.json").read_bytes()
+    expected = wire.encode("utf-8")
+    _record("wire-private" if private else "wire-public", engine, stamp,
+            expected_sha256=hashlib.sha256(expected).hexdigest(),
+            actual_sha256=hashlib.sha256(actual).hexdigest(), exact_wire_match=actual == expected)
+    assert actual == expected
 
 
 def _actual_audit_driver(stamp):
@@ -84,3 +97,8 @@ def test_actual_audit_public_recovery_releases_ledger_admission(tmp_path, engine
     assert audit_path.read_bytes() == before
     with fence._writer_admission("ledger_storage", control_root=control, environ=environment):
         pass
+    _record("public", engine, stamp, public_exit_code=result.returncode,
+            audit_bytes_unchanged=audit_path.read_bytes() == before,
+            timestamp_binding_equal=proof["fence"]["session_started_at_utc"] == prepared["session_started_at_utc"],
+            waiting_status_preserved=audit["status"] == "RESTORE_AWAITING_FENCE_RELEASE",
+            ledger_blocked_before=blocked.value.code == "ACTIVE_WRITER_FENCE", ledger_allowed_after=True)
