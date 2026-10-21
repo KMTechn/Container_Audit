@@ -261,6 +261,7 @@ G10 연결 정상 표시는 성공 envelope 검증 뒤로 옮겼다. 끊김 뒤 
 ## 문서 작성 진행과 제품 준비도
 
 - 관리자 끄기 요청의 portable 관문 앞 처리·시작 단위 경계·작업자 선택 화면 감시·창 닫힘 뒤 60초 상한은 소스와 headless 회귀로 확인한다. 관리자 SSH·실제 첫 설정·HDD 화면 확인은 별도 현장/랩 검증 대상으로 남긴다([운영](operations.md#관리자-정상-멈춤-요청)).
+- **sub-465 독립 시작 안내 멈춤(진행 중):** 기존 공식 요청 소비를 재사용하는 500ms 공통 Tk 감시기와 5초 native 대체 경로는 bounded fake Tk·격리 Python 자식 10개 시험으로 확인했다. 개별 안내 7개 연결·실제 trace 기록은 레인의 기록 위치/루트 해석 실패/추가 잠금 안내 범위 답변을 기다린다. 고침 전 안내 시험은 20 F / 1 P이며 전체 GREEN이나 현장 종료 수용을 뜻하지 않는다. 자체 5초·30초 안내 예외와 실창 미관측 범위는 [운영](operations.md#관리자-정상-멈춤-요청)에 기록한다.
 
 - **w9cap1fix (P1-2·P1-5·P1-3 CA 몫):** 못 보낸 이적 완료를 새 완료·재시작 없이 30초마다 배경에서 다시 보내고(완료와 같은 3초 한도·FIFO·hold 검사), 화면은 완료 대신 `서버 전송 대기 N건(자동으로 다시 보냄)`, 바닥 한 줄의 보낼 것 수에 완료 전송 대기 수를 합친다([배경 재전송](contracts.md#ca-background-seal-retry)). lease 시각 확인에 서버와 같은 30초 허용, 봉인 완료 시각은 발급 시각 아래로 가지 않게 올리고, 과도기 켬은 발급 전·끊김 조회를 같은 key로 한 번 더 한 뒤에만 로컬로 간다([시계 허용](contracts.md#ca-lease-clock)). 버린 트레이의 쓰지 않은 lease는 서버에 해제 요청한다([기기 해제](contracts.md#ca-lease-release)). [RESULT](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9cap1fix/RESULT.md). 실제 화면·서버 해제 API(w9srvp1fix 판)와의 결합은 랩 몫(NOT VERIFIED).
 - <a id="ca-g19"></a>**CA-G19 늦게 커밋된 해제와 같은 PC 재생의 경합 — 확인 필요, 담당 Web·CA:** 해제 요청이 3초에서 끊긴 뒤 서버가 늦게 커밋하는 사이 같은 PC가 같은 현품표를 다시 스캔해 같은 issue key 재생으로 `ACTIVE`를 받으면, 그 트레이 완료는 뒤이어 커밋된 해제 때문에 서버에서 거절될 수 있다(완료 후 관리자 확인, 조용한 유실은 아님). 서버의 발급 재생과 해제가 같은 행 잠금으로 직렬화되는지(`immediate_transaction`) 확인이 필요하다(w9cap1fixrev P2-G).

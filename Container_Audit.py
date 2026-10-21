@@ -23577,6 +23577,72 @@ def _startup_check_observe(action, *args, **kwargs):
         return False
 
 
+def _watch_startup_notice_stop(root, direct_sync_root, record_stop):
+    """Share the official startup request consumer; leave all writes to it."""
+    state = {"stopped": False, "cancelled": False, "job": None}
+
+    def poll():
+        state["job"] = None
+        if state["cancelled"]:
+            return
+        try:
+            requested = _consume_startup_app_stop_request(direct_sync_root)
+        except Exception:
+            requested = False
+        if requested:
+            state["stopped"] = True
+            try:
+                record_stop(stage="APP_STOP_REQUESTED_CLOSE", message="멈춤 요청으로 닫힘")
+            except Exception:
+                pass
+            root.destroy()
+            return
+        state["job"] = root.after(500, poll)
+
+    def cancel():
+        state["cancelled"] = True
+        if state["job"] is not None:
+            try:
+                root.after_cancel(state["job"])
+            except Exception:
+                pass
+            state["job"] = None
+
+    state["job"] = root.after(500, poll)
+    return state, cancel
+
+
+def _show_stop_aware_startup_notice(title, message, kind, *, direct_sync_root, record_stop):
+    """Acknowledge a startup notice, or return True only for an official stop."""
+    root = None
+    state = {"stopped": False}
+    cancel = lambda: None
+    try:
+        root = tk.Tk()
+        root.title(title)
+        root.resizable(False, False)
+        tk.Label(root, text=message, padx=20, pady=20).pack()
+        tk.Button(root, text="닫기", command=root.destroy).pack(pady=(0, 12))
+        root.protocol("WM_DELETE_WINDOW", root.destroy)
+        state, cancel = _watch_startup_notice_stop(root, direct_sync_root, record_stop)
+        root.mainloop()
+    except Exception:
+        if not state["stopped"]:
+            try:
+                from runtime_instance_win32 import timed_notice
+                timed_notice(message, title, {"error": 0x10, "warning": 0x30, "info": 0x40}[kind])
+            except Exception:
+                pass
+    finally:
+        cancel()
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+    return state["stopped"]
+
+
 def _show_startup_unavailable(notice=None):
     root = None
     try:

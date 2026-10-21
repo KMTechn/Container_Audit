@@ -1,5 +1,5 @@
 """Independent startup notices use bounded fake Tk, never a real window."""
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 import json
 from pathlib import Path
 import subprocess
