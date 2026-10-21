@@ -49,6 +49,23 @@ def test_real_onboarding_defers_relay_under_valid_installation_delegation(monkey
     (control / "policy.json").write_text(json.dumps({"operator_sid": auto_update.current_process_sid()}), encoding="utf-8")
     (control / "active.json").write_text(json.dumps({"sha": SHA}), encoding="utf-8")
     (app.parent / "portable-manifest.json").write_text(json.dumps({"source_commit": SHA}), encoding="utf-8")
+    # Match the installed current/ packet; keep the integrity verification real.
+    (app / "Container_Audit.py").write_bytes(b"# isolated onboarding entrypoint\n")
+    packet = app.parent
+    files = []
+    for path in sorted(packet.rglob("*")):
+        if path.is_file():
+            content = path.read_bytes()
+            files.append({"path": path.relative_to(packet).as_posix(), "size": len(content),
+                          "sha256": hashlib.sha256(content).hexdigest()})
+    aggregate = hashlib.sha256("".join(
+        f"{item['sha256']} {item['size']} {item['path']}\n" for item in files
+    ).encode("utf-8")).hexdigest()
+    (packet / "bootstrap-integrity.json").write_text(json.dumps({
+        "schema_version": onboarding.BOOTSTRAP_INTEGRITY_VERSION,
+        "status": "PASS", "code_root": ".", "file_count": len(files),
+        "aggregate_sha256": aggregate, "files": files,
+    }), encoding="utf-8")
     environment = {"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "state")}
     paths = onboarding.resolve_current_user_onboarding_paths(app, environ=environment)
     _ready_state(paths)
@@ -81,6 +98,8 @@ def test_real_onboarding_defers_relay_under_valid_installation_delegation(monkey
         registration_runner=lambda paths: 0, profile_loader=_profile_loader,
         credential_loader=_credential_loader, ledger_factory=_ledger_factory,
         autostart_installer=_autostart, relay_launcher=user_relay.start_user_relay_process)
+    assert paths.bootstrap_integrity_path == app.parent / "bootstrap-integrity.json"
+    assert report["bootstrap_integrity"] == "pass"
     assert report["status"] == "READY"
     assert report["relay_start"] == {"status": "DEFERRED_CANONICAL_RELEASE", "process_id": 0}
     assert launches == []
