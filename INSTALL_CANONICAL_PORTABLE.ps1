@@ -5045,8 +5045,12 @@ function New-CanonicalCompletedFenceAuthorization([string]$Path,$Proof,[string]$
         writer_inventory_sha256=[string]$Proof.fence.writer_inventory_sha256;task_name='';task_path='';binding_sha256='';future_natural_trigger_utc='';
         install_audit_path=$AuditPath;install_audit_sha256=$AuditSha256;created_at_utc=[DateTime]::UtcNow.ToString('o');secret_values_recorded=$false}
     $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($record|ConvertTo-Json -Depth 8)+[char]10)
-    $stream=[IO.FileStream]::new($Path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
-    try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
+    $temporary=Join-Path (Split-Path -Parent $Path) ('.recovered-release.'+[Guid]::NewGuid().ToString('N')+'.tmp')
+    try{
+        $stream=[IO.FileStream]::new($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
+        Invoke-ContainerAtomicReplace $temporary $Path -Mode CreateNew
+    }finally{if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary -ErrorAction Stop}}
     return Read-CanonicalCompletedFenceAuthorization $Path $Proof $AuditPath $AuditSha256 $Phase
 }
 function Confirm-CanonicalCompletedFenceProcessesExit($Proof) {
