@@ -115,7 +115,7 @@ $canonicalWriterFenceContractSha256=Sha (Join-Path $repo 'tools/container_writer
 $canonicalWriterFenceDelegatedSources=@((Get-Content -LiteralPath (Join-Path $repo 'tools/container_writer_sink_inventory.json') -Raw|ConvertFrom-Json).writer_sink_sources)
 $preparedPath=Join-Path $auditRoot ('canonical-portable-'+$runId+'-writer-prepared.json')
 if($kind -like 'A_*'){
-    $transaction=$Script:CanonicalWriterFenceTransactionId
+    $transaction=if($env:CA_GENERAL_PREIMAGE -ceq 'receipt_transaction'){[Guid]::NewGuid().ToString('N')}else{$Script:CanonicalWriterFenceTransactionId}
     $failed=Join-Path $base ('.current.failed.'+$transaction)
     foreach($directory in @($install,$failed)){[void][IO.Directory]::CreateDirectory($directory)}
     $inventoryPath=Join-Path $repo 'tools/container_writer_sink_inventory.json'
@@ -187,7 +187,7 @@ try{
         $auditPath=Join-Path $auditRoot ('canonical-portable-'+$runId+'.json')
         $audit=[ordered]@{schema='container-audit-canonical-portable-install-v2';operation='RESTORE_VERIFIED_REPLACEMENT';run_id=$runId;
             install_root=$install;source_manifest_sha256=$sourceManifestSha256;preimage=$before;code_placement='RESTORED_VERIFIED';
-            code_replacement=@{transaction_id=$Script:CanonicalWriterFenceTransactionId;controller_transaction_id=$Script:CanonicalWriterFenceTransactionId;
+            code_replacement=@{transaction_id=$transaction;controller_transaction_id=$Script:CanonicalWriterFenceTransactionId;
                 receipt_path=$restoreReceiptFull;receipt_sha256=Sha $restoreReceiptFull;later_restore_surface='CONSUMED'}}
         $stage=$auditPath+'.evidence.'+$PID
         [void][IO.Directory]::CreateDirectory($stage)
@@ -201,7 +201,7 @@ try{
         $audit['stage_evidence_root']=$stage
         $restoreProof=Join-Path $stage 'restore-evidence.json'
         Save $restoreProof @{schema_version='container-audit-verified-replacement-code-restore-v1';status='PASS';action='RESTORED';app_id='container_audit';
-            transaction_id=$Script:CanonicalWriterFenceTransactionId;receipt_path=$restoreReceiptFull;receipt_sha256=Sha $restoreReceiptFull;
+            transaction_id=$transaction;receipt_path=$restoreReceiptFull;receipt_sha256=Sha $restoreReceiptFull;
             install_root=$install;failed_new_root=$failed;prior_code_exact=$true;failed_new_preserved=$true;identity_or_credential_copied=$false;
             completed_at=[DateTime]::UtcNow.ToString('o')}
         $audit.code_replacement['restore_evidence_path']=$restoreProof

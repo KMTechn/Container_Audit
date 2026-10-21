@@ -9,7 +9,7 @@ from tests.powershell_contracts import run_functions
 from tests.test_general_completed_release_recovery import DRIVER, FUNCTIONS, INSTALLER
 
 
-PREIMAGES = (('A_AFTER_SET', 'run_present'), ('A_AFTER_SET', 'different_inventory'),
+PREIMAGES = (('A_AFTER_SET', 'run_present'), ('A_AFTER_SET', 'different_inventory'), ('A_AFTER_SET', 'receipt_transaction'),
              ('B_RESTORING_BEFORE_SET', 'run_present'), ('B_RESTORING_BEFORE_SET', 'prior_code'),
              ('B_RESTORING_BEFORE_SET', 'commit_reached'), ('B_RESTORING_BEFORE_SET', 'scheduled_writer'),
              ('B_RESTORING_BEFORE_SET', 'legacy_writer'))

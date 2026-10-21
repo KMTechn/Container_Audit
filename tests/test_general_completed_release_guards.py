@@ -109,6 +109,17 @@ if($variant -ceq 'interrupt_authorization'){
         exit 74
     }
 }
+if($variant -ceq 'interrupt_authorization_temp'){
+    $originalAtomic=(Get-Command Invoke-ContainerAtomicReplace).Definition
+    function Invoke-ContainerAtomicReplace{
+        param($Source,$Destination,$Mode,$Backup)
+        if($Mode -ceq 'CreateNew' -and (Same $Destination $fixed)){
+            [IO.File]::WriteAllText($Source,'partial metadata')
+            [Environment]::Exit(74)
+        }
+        & ([scriptblock]::Create($originalAtomic)) @PSBoundParameters
+    }
+}
 if($variant -ceq 'interrupt_prepared'){
     $originalPrepare=(Get-Command Set-ContainerWriterFencePrepared).Definition
     function Set-ContainerWriterFencePrepared{
@@ -190,16 +201,22 @@ def test_completed_general_recovery_keeps_process_birth_and_admission_rules(tmp_
 
 @pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
 @pytest.mark.parametrize('boundary', ('A_AFTER_SET', 'B_RESTORING_BEFORE_SET'))
-@pytest.mark.parametrize('case', ('interrupt_authorization', 'interrupt_prepared', 'interrupt_release_receipt'))
+@pytest.mark.parametrize('case', ('interrupt_authorization_temp', 'interrupt_authorization', 'interrupt_prepared', 'interrupt_release_receipt'))
 def test_general_release_interruption_reuses_the_same_proof(tmp_path, engine, boundary, case):
     values = setup(tmp_path, engine, boundary)
     values.update(CA_GENERAL_STAGE='recover', CA_GENERAL_CASE=case)
     interrupted = run_functions(tmp_path, INSTALLER, FUNCTIONS, driver_with_mutation(), values=values, engine=engine)
     assert interrupted.returncode == 74, 'release interruption was not reached'
     authorizations = list(tmp_path.rglob('recovered-release-*.json'))
-    assert len(authorizations) == 1
-    fixed = authorizations[0]
-    original = (fixed.read_bytes(), fixed.stat().st_mtime_ns)
+    if case == 'interrupt_authorization_temp':
+        assert not authorizations
+        assert len(list(tmp_path.rglob('.recovered-release.*.tmp'))) == 1
+        fixed = None
+        original = None
+    else:
+        assert len(authorizations) == 1
+        fixed = authorizations[0]
+        original = (fixed.read_bytes(), fixed.stat().st_mtime_ns)
     values.pop('CA_GENERAL_CASE')
     releases = None
     for attempt in range(2):
@@ -207,6 +224,9 @@ def test_general_release_interruption_reuses_the_same_proof(tmp_path, engine, bo
         assert result.returncode == 0, 'release retry failed; diagnostics suppressed'
         observed = json.loads((tmp_path/'general-recovery-result.json').read_text(encoding='utf-8-sig'))
         assert observed['code'] == '' and not observed['fence_present'] and observed['audit_preserved']
+        if fixed is None:
+            fixed = next(tmp_path.rglob('recovered-release-*.json'))
+            original = fixed.read_bytes(), fixed.stat().st_mtime_ns
         assert (fixed.read_bytes(), fixed.stat().st_mtime_ns) == original
         assert len(list(tmp_path.rglob('recovered-release-*.json'))) == 1
         current = {str(path): (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns)
