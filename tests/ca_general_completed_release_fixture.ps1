@@ -41,6 +41,8 @@ function Start-CanonicalRelayAfterFenceRelease{throw 'UNEXPECTED_RELAY'}
 function Get-BootstrapWorkerShortcutCommonRecordPath{param($Root);Join-Path $base 'shortcut-preimage.json'}
 function Restore-BootstrapWorkerShortcuts{param($Root,$Record,$Scope);@{status='FIXTURE_PREIMAGE_RESTORED'}}
 function InstalledManifest($Root,$Unsigned){Get-Content -LiteralPath (Join-Path $Root 'portable-manifest.json') -Raw|ConvertFrom-Json}
+function Assert-BootstrapIntegrityRecord($Root){[void](Assert-BootstrapRelocatedIntegrityRecord $Root $Root)}
+function Get-CanonicalWriterSnapshot($Root){[pscustomobject]@{present=$false;enabled=$false}}
 # Packet/signature checking is a fixture seam; the receipt, path/tree identity,
 # manifest hashes, ACL identities, restore-state and canonical readers are real.
 function Assert-BootstrapRelocatedIntegrityRecord{
@@ -55,10 +57,10 @@ $install=Join-Path $base 'current'
 $source=Join-Path $base 'packet'
 $operatorSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $activeDataRoot=Join-Path $base 'data'
-$stop=Join-Path $base 'stop.json'
+$stop=Join-Path $base 'data/direct_sync/control/container_audit_user_relay.stop.json'
 $before=[pscustomobject]@{exists=$false;kind='';data=''}
 $old=@();$legacyRelayPreimage=$null
-$writerBefore=[pscustomobject]@{restore_required=$false}
+$writerBefore=[pscustomobject]@{present=$false;classification='TEST_BYPASS';restore_required=$false}
 $currentAbsentBeforePlacement=$true
 if($env:CA_GENERAL_STAGE -ceq 'setup'){
     [void][IO.Directory]::CreateDirectory((Join-Path $source 'tools'))
@@ -77,6 +79,7 @@ $sourceManifestSha256=Sha (Join-Path $source 'portable-manifest.json')
 $sourceHelperSha256=Sha (Join-Path $source 'INSTALL_THIS_PC.ps1')
 $sourceIntegrityHelperSha256=Sha (Join-Path $source 'tools/bootstrap_integrity.ps1')
 $RunName='KMTech.ContainerAudit.Relay'
+$env:CONTAINER_AUDIT_DATA_ROOT=$activeDataRoot
 $auditRoot=Join-Path $lad 'KMTech/ContainerAudit/install-audit'
 $kind=$env:CA_GENERAL_BOUNDARY
 if($env:CA_GENERAL_STAGE -ceq 'setup'){
@@ -150,7 +153,25 @@ try{
         $auditPath=Join-Path $auditRoot ('canonical-portable-'+$runId+'.json')
         $audit=[ordered]@{schema='container-audit-canonical-portable-install-v2';operation='RESTORE_VERIFIED_REPLACEMENT';run_id=$runId;
             install_root=$install;source_manifest_sha256=$sourceManifestSha256;preimage=$before;code_placement='RESTORED_VERIFIED';
-            code_replacement=@{transaction_id=$Script:CanonicalWriterFenceTransactionId;later_restore_surface='CONSUMED'}}
+            code_replacement=@{transaction_id=$Script:CanonicalWriterFenceTransactionId;controller_transaction_id=$Script:CanonicalWriterFenceTransactionId;
+                receipt_path=$restoreReceiptFull;receipt_sha256=Sha $restoreReceiptFull;later_restore_surface='CONSUMED'}}
+        $stage=$auditPath+'.evidence.'+$PID
+        [void][IO.Directory]::CreateDirectory($stage)
+        $stageAcl=Get-Acl -LiteralPath $stage
+        $stageAcl.SetAccessRuleProtection($true,$false)
+        foreach($trustee in @($operatorSid,'S-1-5-18','S-1-5-32-544')){
+            $stageAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+                [Security.Principal.SecurityIdentifier]::new($trustee),'FullControl','ContainerInherit,ObjectInherit','None','Allow'))
+        }
+        Set-Acl -LiteralPath $stage -AclObject $stageAcl
+        $audit['stage_evidence_root']=$stage
+        $restoreProof=Join-Path $stage 'restore-evidence.json'
+        Save $restoreProof @{schema_version='container-audit-verified-replacement-code-restore-v1';status='PASS';action='RESTORED';app_id='container_audit';
+            transaction_id=$Script:CanonicalWriterFenceTransactionId;receipt_path=$restoreReceiptFull;receipt_sha256=Sha $restoreReceiptFull;
+            install_root=$install;failed_new_root=$failed;prior_code_exact=$true;failed_new_preserved=$true;identity_or_credential_copied=$false;
+            completed_at=[DateTime]::UtcNow.ToString('o')}
+        $audit.code_replacement['restore_evidence_path']=$restoreProof
+        $audit.code_replacement['restore_evidence_sha256']=Sha $restoreProof
         $check=Snapshot
         $productCompleteAuthorizationPath=Join-Path $auditRoot ('canonical-portable-'+$runId+'-product-complete-release.json')
         # Execute the unchanged producer tail; interruption is immediately at Set.
@@ -249,4 +270,3 @@ Save (Join-Path $base 'general-observed.json') @{
     indented_audit=($auditRaw -match '"status"\s*:\s+"');continuation_refused=$continuationRefused;
     fence_preserved=((Sha $activePath) -ceq $fenceBefore);audit_preserved=((Sha $auditPath) -ceq $auditBefore);
     control_root=(Get-ContainerWriterFenceControlRoot);local_appdata=$lad;operator_sid=$operatorSid;fence_present=(Test-Path -LiteralPath $activePath)}
-
