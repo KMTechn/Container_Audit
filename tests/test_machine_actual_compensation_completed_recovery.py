@@ -12,11 +12,26 @@ assert COMPENSATED_DRIVER.count("$audit.status='FAILED_ROLLED_BACK'") == 1
 ACTUAL_COMPENSATED_DRIVER = COMPENSATED_DRIVER.replace(
     "$audit.status='FAILED_ROLLED_BACK'", "$audit.status='MACHINE_INSTALL_FAILED'", 1,
 )
+_ACTUAL_SAVE = r"""
+if($case -ceq 'worker_pass') {
+    $audit.compensation.worker_run_restore='PASS'
+    $audit.compensation.worker_directory_restore='PASS'
+}
+if($audit.status -cne 'MACHINE_INSTALL_FAILED' -or
+    $audit.compensation.child_exit -cne 'PASS' -or $audit.compensation.code_restore -cne 'PASS' -or
+    $audit.compensation.artifact_restore -cne 'PASS' -or
+    $audit.compensation.worker_run_restore -cnotin @('PASS','NOT_CHANGED') -or
+    $audit.compensation.worker_directory_restore -cnotin @('PASS','NOT_CHANGED')) {
+    throw 'actual compensation Save fixture does not match producer completion'
+}
+"""
+ACTUAL_COMPENSATED_DRIVER = ACTUAL_COMPENSATED_DRIVER.replace("$auditPath=Join-Path", _ACTUAL_SAVE + "$auditPath=Join-Path", 1)
 
 @pytest.mark.parametrize("engine", ["powershell", "pwsh"])
 @pytest.mark.parametrize("operation,case,accepted", [
     ('INSTALL', 'completed', True),
     ('INSTALL', 'new_install_absent', True),
+    ('INSTALL', 'worker_pass', True),
     ('INSTALL', 'preimage_differs', False),
     ('INSTALL', 'owner_alive', False),
     ('INSTALL', 'tuple_differs', False),
