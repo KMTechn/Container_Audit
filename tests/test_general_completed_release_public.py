@@ -48,3 +48,23 @@ def test_public_general_recovery_arguments_refuse_without_effects(tmp_path, engi
     assert result.stdout.splitlines() == ['CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS']
     assert (audit.read_bytes(), fence.read_bytes()) == before
     assert not list(tmp_path.rglob('recovered-release-*.json'))
+
+
+@pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
+def test_general_public_entry_rejects_an_actual_machine_audit(tmp_path, engine):
+    from tests.test_machine_install_completed_recovery import DRIVER as MACHINE_DRIVER, FUNCTIONS as MACHINE_FUNCTIONS
+    values = setup(tmp_path, engine, 'A_AFTER_SET')
+    machine_root = tmp_path/'machine'
+    machine_root.mkdir()
+    seed = run_functions(machine_root, INSTALLER, MACHINE_FUNCTIONS, MACHINE_DRIVER,
+                         values={'CA_COMPLETED_STAGE': 'setup', 'CA_COMPLETED_CASE': 'valid'}, engine=engine)
+    assert seed.returncode == 0, 'machine audit preparation failed; diagnostics suppressed'
+    audit = next((machine_root/'machine-install/install-audit').glob('canonical-portable-*.json'))
+    active = next(machine_root.rglob('writer-session/active.json'))
+    before = audit.read_bytes(), active.read_bytes()
+    values.update(CA_GENERAL_STAGE='public', CA_CROSS_AUDIT_PATH=str(audit))
+    result = run_functions(tmp_path, INSTALLER, FUNCTIONS, DRIVER, values=values, engine=engine)
+    assert result.returncode == 1
+    assert result.stdout.splitlines() == ['CANONICAL_COMPLETED_RELEASE_PROOF_DIFFERS']
+    assert (audit.read_bytes(), active.read_bytes()) == before
+    assert not list(tmp_path.rglob('recovered-release-*.json'))
