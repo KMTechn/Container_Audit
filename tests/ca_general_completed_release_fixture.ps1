@@ -130,7 +130,7 @@ if($kind -like 'A_*'){
     if($env:CA_GENERAL_PREIMAGE -ceq 'different_inventory'){
         $oldInventory=Get-Content -LiteralPath $inventoryPath -Raw|ConvertFrom-Json
         $oldInventory.inventory_sha256='b'*64
-        Save (Join-Path $install 'tools/container_writer_sink_inventory.json') $oldInventory
+        [IO.File]::WriteAllText((Join-Path $install 'tools/container_writer_sink_inventory.json'),($oldInventory|ConvertTo-Json -Depth 40 -Compress),[Text.UTF8Encoding]::new($false))
         $oldManifest.writer_sink_inventory_sha256=Sha (Join-Path $install 'tools/container_writer_sink_inventory.json')
         $oldManifest.writer_sink_inventory_contract_sha256='b'*64
         Save (Join-Path $install 'portable-manifest.json') $oldManifest
