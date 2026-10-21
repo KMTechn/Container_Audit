@@ -16,6 +16,22 @@ $payload=Get-Content -LiteralPath $auditPath -Raw|ConvertFrom-ContainerWriterFen
 $proof=$payload.completed_fence_release
 $active=Read-ContainerWriterFence -AllowAbsent
 $fixed=Join-Path (Split-Path -Parent $auditPath) ('recovered-release-'+[string]$proof.fence.replacement_transaction_id+'.json')
+function Set-FixtureStageDacl([string]$Path,[string]$Variant){
+    if(-not ([IO.Path]::GetFullPath($Path)).StartsWith(([IO.Path]::GetFullPath($base)+[IO.Path]::DirectorySeparatorChar),[StringComparison]::OrdinalIgnoreCase)){throw 'FIXTURE_ACL_PATH_OUTSIDE_BASE'}
+    $beforeAcl=Get-Acl -LiteralPath $Path
+    $accessOnly=[Security.AccessControl.DirectorySecurity]::new()
+    $accessOnly.SetSecurityDescriptorSddlForm($beforeAcl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access),[Security.AccessControl.AccessControlSections]::Access)
+    if($Variant -ceq 'acl_unprotected'){$accessOnly.SetAccessRuleProtection($false,$true)}
+    else{$accessOnly.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+        [Security.Principal.SecurityIdentifier]::new('S-1-1-0'),'ReadAndExecute','ContainerInherit,ObjectInherit','None','Allow'))}
+    if($PSVersionTable.PSEdition -ceq 'Desktop'){[IO.Directory]::SetAccessControl($Path,$accessOnly)}
+    else{[IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($Path),$accessOnly)}
+    $afterAcl=Get-Acl -LiteralPath $Path
+    if($afterAcl.Owner -cne $beforeAcl.Owner -or $afterAcl.Group -cne $beforeAcl.Group){throw 'FIXTURE_ACL_IDENTITY_CHANGED'}
+    if($Variant -ceq 'acl_unprotected'){
+        if($afterAcl.AreAccessRulesProtected){throw 'FIXTURE_ACL_MUTATION_MISSING'}
+    }elseif(-not @($afterAcl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])|Where-Object {$_.IdentityReference.Value -ceq 'S-1-1-0' -and $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow}).Count){throw 'FIXTURE_ACL_MUTATION_MISSING'}
+}
 switch($variant){
  'old_audit'{$payload.PSObject.Properties.Remove('completed_fence_release')}
  'schema'{$proof.schema='UNSUPPORTED'}
@@ -43,9 +59,8 @@ switch($variant){
  'handover_changed'{[IO.File]::AppendAllText([string]$proof.protected_handover_path,' ')}
  'child_alive'{function Get-CimInstance{param($ClassName,$Property,$ErrorAction);[pscustomobject]@{ProcessId=1;CommandLine=$proof.fence.replacement_transaction_id}}}
  'child_unknown'{function Get-CimInstance{param($ClassName,$Property,$ErrorAction);throw 'PROCESS_OBSERVATION_UNKNOWN'}}
- 'acl_unprotected'{$acl=Get-Acl -LiteralPath $payload.stage_evidence_root;$acl.SetAccessRuleProtection($false,$true);Set-Acl -LiteralPath $payload.stage_evidence_root -AclObject $acl}
- 'acl_foreign_allow'{$acl=Get-Acl -LiteralPath $payload.stage_evidence_root;$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
-    [Security.Principal.SecurityIdentifier]::new('S-1-1-0'),'ReadAndExecute','ContainerInherit,ObjectInherit','None','Allow'));Set-Acl -LiteralPath $payload.stage_evidence_root -AclObject $acl}
+ 'acl_unprotected'{Set-FixtureStageDacl $payload.stage_evidence_root $variant}
+ 'acl_foreign_allow'{Set-FixtureStageDacl $payload.stage_evidence_root $variant}
 }
 if($variant -in @('owner_alive','owner_unknown','owner_reused','helper_alive','helper_unknown')){
     if($variant -like 'helper_*'){
