@@ -1,5 +1,6 @@
 """Completed machine placement recovery keeps code and releases its exact fence."""
 import json
+import re
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -17,6 +18,13 @@ FUNCTIONS = [
     "New-CanonicalWriterFenceReleaseAuthorization",
     "Test-ExactPropertySet", "Test-ExactStringProperties",
 ]
+
+# Extraction dependencies are selected when present, including the new result readers.
+_available_functions = set(re.findall(r"(?m)^function ([A-Za-z0-9_-]+)", INSTALLER.read_text(encoding="utf-8-sig")))
+FUNCTIONS += [name for name in (
+    "Find-CanonicalRemovalMoveJournal", "ReadReplacementRestoreEvidence",
+    "Read-CanonicalMachineRemovalResult", "Read-CanonicalMachineRestoreResult",
+) if name in _available_functions]
 
 DRIVER = r'''
 Set-StrictMode -Version Latest
@@ -39,8 +47,8 @@ function Same([string]$Left,[string]$Right) {
 }
 function Sha([string]$Path) { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function Save([string]$Path,$Value) {
-    [IO.Directory]::CreateDirectory((Split-Path -Parent $Path)) | Out-Null
-    [IO.File]::WriteAllText($Path,($Value | ConvertTo-Json -Depth 40),[Text.UTF8Encoding]::new($false))
+    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $Path))
+    [IO.File]::WriteAllText($Path,(($Value | ConvertTo-Json -Depth 40)+[char]10),[Text.UTF8Encoding]::new($false))
 }
 function Write-Utf8Json([string]$Path,$Value) { Save $Path $Value }
 function Get-ContainerMachineInstallStateRoot { return $state }
@@ -73,6 +81,31 @@ $SkipSignatureValidationForTest=$true
 $EvidencePath=''
 $script:InstalledChecks=0;$script:IntegrityChecks=0;$script:AuditWrites=0
 $script:ProcessChecks=0;$script:Restores=0;$script:PublicCode=''
+
+# Extract the established receipt reader without executing bootstrap entry code.
+$bootstrap=Join-Path (Split-Path -Parent $originalSource) 'tools\bootstrap_integrity.ps1'
+$bootstrapTokens=$null;$bootstrapErrors=$null
+$bootstrapAst=[Management.Automation.Language.Parser]::ParseFile($bootstrap,[ref]$bootstrapTokens,[ref]$bootstrapErrors)
+$receiptFunction=$bootstrapAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Read-BootstrapReplacementReceipt'},$false)
+. ([ScriptBlock]::Create($receiptFunction[0].Extent.Text))
+function Get-StrictFullPath([string]$Path,[string]$Label){Full $Path $Label}
+function Get-FileSha256([string]$Path){Sha $Path}
+function Initialize-InstallationChildCapture {}
+if($case -like 'recorded_child_*') {
+    Add-Type -TypeDefinition @'
+public static class KMTechInstallationChildCapture {
+ public static string ObservedStart;
+ public static bool Unreadable;
+ public static string ReadProcessStartTimeUtc(int processId) {
+  if (Unreadable) throw new System.IO.IOException("process observation denied");
+  return ObservedStart;
+ }
+}
+'@
+    if($case -eq 'recorded_child_alive'){[KMTechInstallationChildCapture]::ObservedStart='2026-10-21T00:00:00.0000000Z'}
+    if($case -eq 'recorded_child_unknown'){[KMTechInstallationChildCapture]::Unreadable=$true}
+}
+
 $idsPath=Join-Path $base 'ids.json'
 if($env:CA_COMPLETED_STAGE -ceq 'setup'){
     $run=[Guid]::NewGuid().ToString('N')
@@ -102,8 +135,13 @@ if($env:CA_COMPLETED_STAGE -ceq 'setup'){
     if($case -ceq 'source_differs'){$audit.source_manifest_sha256='d'*64}
     if($case -ceq 'worker_differs'){$audit.worker_sid='S-1-5-21-101-202-303-1002'}
     if($case -ceq 'commit_differs'){$audit.source_commit='d'*40}
-    if($case -ceq 'unsupported_status'){$audit.status='PASS_UNINSTALLED_DATA_PRESERVED';$audit.operation='UNINSTALL'}
-    $auditPath=Join-Path $state ('install-audit\canonical-portable-'+$run+'.json');Save $auditPath $audit
+    if($case -ceq 'unsupported_status'){$audit.status='UNSUPPORTED_COMPLETION';$audit.operation='UNINSTALL'}
+
+if($case -like 'recorded_child_*') {
+    $audit.placement_child=@{status='EXITED';process_id=12345;started_at_utc='2026-10-21T00:00:00.0000000Z';exit_code=0}
+}
+
+$auditPath=Join-Path $state ('install-audit\canonical-portable-'+$run+'.json');Save $auditPath $audit
     $authority=Enter-ContainerWriterSessionAuthority -SessionId $session -AttemptId $attempt `
         -OrchestratorSha256 (Sha $originalSource) -ReplacementTransactionId $run -WriterContractSha256 $contract
     try{
@@ -144,7 +182,7 @@ Save (Join-Path $base 'completed-result.json') @{
     code=$code;fence_present=(Test-Path -LiteralPath (Join-Path $control 'active.json'));
     restored=$script:Restores;audit_writes=$script:AuditWrites;
     code_preserved=((Sha (Join-Path $root 'keep.bin')) -ceq $codeBefore);
-    audit_preserved=([Convert]::ToBase64String([IO.File]::ReadAllBytes($auditPath)) -ceq [Convert]::ToBase64String($originalAudit));
+    audit_spaced=([Text.Encoding]::UTF8.GetString($originalAudit) -match '\r?\n\s+"schema"\s*:\s+');audit_preserved=([Convert]::ToBase64String([IO.File]::ReadAllBytes($auditPath)) -ceq [Convert]::ToBase64String($originalAudit));
     installed_checks=$script:InstalledChecks;integrity_checks=$script:IntegrityChecks;process_checks=$script:ProcessChecks;
     public_code=$script:PublicCode;release_receipts=@(Get-ChildItem -LiteralPath $control -Filter 'release-*.json' -File).Count
 }
@@ -160,6 +198,10 @@ Save (Join-Path $base 'completed-result.json') @{
     ("live_child", False), ("process_unknown", False),
     ("integrity_failure", False), ("installed_changed", False),
     ("audit_changed", False), ("unsupported_status", False), ("no_fence", False),
+
+    ("recorded_child_exited", True),
+    ("recorded_child_alive", False),
+    ("recorded_child_unknown", False),
 ))
 def test_completed_installation_only_releases_proven_fence(tmp_path, engine, case, accepted):
     values = {"CA_COMPLETED_STAGE": "setup", "CA_COMPLETED_CASE": case}
@@ -172,6 +214,7 @@ def test_completed_installation_only_releases_proven_fence(tmp_path, engine, cas
         result = run_functions(tmp_path, INSTALLER, FUNCTIONS, DRIVER, values=values, engine=engine)
     assert result.returncode == 0, "isolated recovery driver failed"
     summary = json.loads((tmp_path / "completed-result.json").read_text(encoding="utf-8-sig"))
+    assert summary["audit_spaced"], "audit must use indented ConvertTo-Json"
     assert summary["restored"] == 0
     assert summary["audit_writes"] == 0
     assert summary["code_preserved"]
@@ -199,6 +242,9 @@ def test_completed_installation_only_releases_proven_fence(tmp_path, engine, cas
             "installed_changed": "MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS",
             "audit_changed": "MACHINE_RECOVERY_AUDIT_CHANGED",
             "unsupported_status": "MACHINE_RECOVERY_AUDIT_BINDING_DIFFERS",
+
+            "recorded_child_alive": "MACHINE_RECOVERY_CHILD_ACTIVE",
+            "recorded_child_unknown": "MACHINE_RECOVERY_CHILD_EXIT_UNPROVEN",
         }
         if case in expected:
             assert summary["code"] == expected[case]
