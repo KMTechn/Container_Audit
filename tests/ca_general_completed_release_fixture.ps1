@@ -122,7 +122,7 @@ $prepared=[ordered]@{schema='container-audit-canonical-writer-prepared-v1';statu
     replacement_transaction_id=$Script:CanonicalWriterFenceTransactionId;session_started_at_utc=$canonicalWriterFenceStartedAtUtc;
     orchestrator_sha256=$canonicalWriterFenceOrchestratorSha256;writer_contract_sha256=$canonicalWriterFenceContractSha256;
     writer_inventory_sha256=$Script:ContainerWriterFenceInventorySha256;source_manifest_sha256=$sourceManifestSha256;
-    operator_sid=$operatorSid;operator_local_appdata_root=$lad;secret_values_recorded=$false}
+    operator_sid=$operatorSid;operator_local_appdata_root=$lad;created_at_utc=[DateTime]::UtcNow.ToString('o');secret_values_recorded=$false}
 Save $preparedPath $prepared
 $canonicalWriterFencePreparedReceipt=@{path=$preparedPath;sha256=Sha $preparedPath}
 $canonicalTransactionJob=$null
@@ -214,8 +214,15 @@ if($env:CA_GENERAL_STAGE -ceq 'recover'){
     $activePath=Get-ContainerWriterFenceActivePath
     $auditBefore=Sha $auditPath
     $recoveryCode='';$recovered=$null
+    $Error.Clear()
     try{$recovered=Invoke-CanonicalCompletedWriterFenceRecovery $source $install $sourceManifest $auditPath (Sha $auditPath) $operatorSid $lad}
-    catch{$recoveryCode=if($_.Exception.Message -cmatch '^[A-Z_]+$'){$_.Exception.Message}else{'RECOVERY_UNAVAILABLE'}}
+    catch{
+        $recoveryCode=if($_.Exception.Message -cmatch '^[A-Z_]+$'){$_.Exception.Message}else{'RECOVERY_UNAVAILABLE'}
+        $sites=@($Error|Select-Object -First 16|ForEach-Object {@{type=$_.Exception.GetType().FullName;
+            line=$_.InvocationInfo.ScriptLineNumber;file=[IO.Path]::GetFileName($_.InvocationInfo.ScriptName);
+            function=($_.ScriptStackTrace -split '[\r\n]')[0] -replace ', .+',''}})
+        Save (Join-Path $base 'recovery-failure-sites.json') $sites
+    }
     Save (Join-Path $base 'general-recovery-result.json') @{code=$recoveryCode;result=$recovered;
         fence_present=(Test-Path -LiteralPath $activePath);audit_preserved=((Sha $auditPath) -ceq $auditBefore)}
     return
