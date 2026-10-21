@@ -49,7 +49,7 @@ foreach($name in @('ConvertTo-CanonicalSafeDiagnostic','ConvertTo-CanonicalAudit
 }
 $value=[Environment]::GetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','Process')
 $other=[Environment]::GetEnvironmentVariable('KM_LOGISTICS_INSTALL_BEARER_TOKEN','Process')
-Save $Audit @{status='FAILED';failure_code='PRODUCT_FAILED';child_output=$value;nested=@{stderr=$other}} $true
+Save $Audit @{status='FAILED';failure_code='PRODUCT_FAILED';stdout=$value;nested=@{stderr=$other}} $true
 Write-Output (ConvertTo-CanonicalSafeDiagnostic ('PRODUCT_FAILED: '+$value+' '+$other))
 
 $codeRollbackFailure=$value+' '+$other
@@ -75,7 +75,7 @@ foreach($code in $codes) {
         raise AssertionError("isolated diagnostic boundary fixture failed")
     document = json.loads(payloads[2])
     assert document["failure_code"] == "PRODUCT_FAILED"
-    assert document["child_output"] == "[REDACTED]"
+    assert document["stdout"] == "[REDACTED]"
     assert document["nested"]["stderr"] == "[REDACTED]"
 
 

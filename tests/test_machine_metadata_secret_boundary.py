@@ -134,7 +134,7 @@ def test_public_audit_save_masks_sensitive_bytes_and_keeps_valid_json(tmp_path):
 $id=$env:CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID
 $path=Join-Path $env:CA_CONTRACT_ROOT 'audit.json'
 $body=('head-'+$env:CUSTOM_AUDIT_SECRET+' '+('가나다'*40000)+' tail '+$env:CUSTOM_AUDIT_SECRET)
-Save $path @{schema='audit-fixture';code_replacement=@{transaction_id=$id};failure=@{message=$body};
+Save $path @{schema='audit-fixture';code_replacement=@{transaction_id=$id};failure=@{message=$body};}
 'OK'
 """,
         values={'CUSTOM_AUDIT_SECRET': synthetic, 'CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID': identity},
