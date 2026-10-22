@@ -808,11 +808,12 @@ v2 sidecar를 그대로 읽기·쓰기·복구하는 회귀, 정본 checker·wri
 이 끄기 모드는 portable 진입점에서 사용자 업데이트 관문보다 먼저 처리한다.
 
 ```text
-<설치루트>/runtime/python.exe -I -B <설치루트>/app/main.py --container-audit-user-relay --request-app-stop --data-root <실제자료루트> --direct-sync-root <실제relay루트>
+<설치루트>/runtime/python.exe -I -B <설치루트>/app/main.py --container-audit-user-relay --request-app-stop --data-root <실제자료루트> --direct-sync-root <실제자료루트>/direct_sync
 ```
 
 설치 정책으로 같은 작업자 계정임이 확인된 경우에만 기본 루트 인수를 생략할 수 있다.
 다른 계정이나 설치 정책이 없는 경우 두 루트를 모두 지정해야 한다. 같은 relay `control` 폴더에
+`--direct-sync-root`는 앱이 실제로 감시하는 `<실제자료루트>/direct_sync`여야 한다. 다른 폴더를 적으면 표지가 감시 밖에 놓여 앱은 멈추지 않고, 명령은 150초 뒤 `UNKNOWN`/`APP_PROCESS_ABSENCE_UNPROVEN`/rc 1로 끝난다(자료 변경 없음). 그때는 루트를 고쳐 다시 요청한다.
 `container_audit_app.stop.json`과 기존 relay stop JSON을 원자적으로 쓴다.
 GUI는 작업자 선택 화면부터 독립된 1초 감시로 요청을 확인한다. 작업자 변경·닫기 중단·
 outbox 원본 미저장으로 창을 유지한 뒤에도 감시한다. 설치 확인·첫 설정·품목 준비는

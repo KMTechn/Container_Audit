@@ -951,3 +951,5 @@ sub-298 소스 구현: 최초 격리 journal·원 작업자·현품표·격리 �
 - G104 이적118/sub-421 일반 경계 추가: RESTORE_AWAITING_FENCE_RELEASE의 Set 뒤와 지속 helper ROLLBACK_AWAITING_FENCE_RELEASE의 자기 RESTORING/Set 전후·INSTALLING/Set 뒤를 일반 전용 -RecoverCompletedWriterFence로 마감한다. 기다림 Save와 함께 원 source/worker/tuple/owner/helper/result 증거를 저장하고, 종료/현재 결과/preimage와 같은 고정 최종 증명 아래 fence만 정리한다. AWAITING/PASS 혼동·복원/보상 재실행·후속 완료 꾸밈 0. 기계 G104와 일반 확인은 별도 기록한다. User 바로 가기는 원 source/receipt를 보존한 기존 명시 복원 정상 흐름을 지원 담당이 따로 수행하고, 실행 readback은 원 감사/preimage를 기존 코디 지원 확인 단계에 인계한다. 새 입구는 후속을 실행하거나 완료로 표시하지 않는다. 최종 통합 머리 독립 검토와 VM 수용은 RESULT를 따르며, 독립 검토는 함수 내부 authority/admission 수명의 일반 도출 규칙도 따로 확인한다.
 
 - P3(후보·제품 변경 0): 공개 encoder 미분류 문자열 칸의 비밀은 최종 guard 로 fail-closed(감사 저장 거절) — canonical 생산자 칸 census 는 11/1 뒤.
+
+- P3(11/15 · 10/23 w9firstupd): 관리자 `--request-app-stop`에서 `--direct-sync-root`가 `--data-root` 기준 `direct_sync`와 다르면 거절(지금은 표지를 감시 밖에 써서 150초 UNKNOWN). 자동 호출자 0, 수동 SSH 절차만(operations.md 「관리자 정상 멈춤 요청」).
