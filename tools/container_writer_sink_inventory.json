@@ -10852,7 +10852,7 @@
       "tools.register_container_audit_worker_pc"
     ]
   },
-  "inventory_sha256": "5d3c4f466855f559e5d4f9ae1268a7e637f1b27e7921f4a5b58ca66817066c2d",
+  "inventory_sha256": "42b793b11a6a01b4a12fc43627b02abf9c5dfa3d69a531ff6e8e38b086bc8b21",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -25756,7 +25756,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 23980,
+      "line": 23989,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },

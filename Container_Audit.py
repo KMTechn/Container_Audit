@@ -470,7 +470,7 @@ def container_startup_logistics_client():
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.118"
+CURRENT_VERSION = "v2.0.119"
 CA_NEW_SCREEN_ARGUMENT = "--new-screen"
 CA_OLD_SCREEN_ARGUMENT = "--old-screen"
 CA_SCREEN_HOST = {"requested": False, "active": False, "run": None}
@@ -22145,10 +22145,19 @@ class ContainerAudit:
                     errors.append(exc)
         # Keep existing data workers. Printer submitters record only guarded
         # late diagnostics and never keep window exit waiting for the driver.
+        # The screen owner returns from this cleanup before Bridge.close and
+        # the host can stop their resident threads. Waiting for those here
+        # would hold that owner in a cycle until the cleanup deadline fires.
+        screen_residents = {
+            "shell-push", "pedal-publisher", "shell-force-exit",
+            "shell-start-watch", "shell-exit", "shell-test-control",
+            "shell-closing", "shell-start-destroy",
+        } if CA_SCREEN_HOST["active"] else set()
         while any(
             thread is not threading.current_thread() and thread.is_alive()
             and thread not in PRINT_SUBMISSION_THREADS and thread is not cleanup_watch
             and not (CA_SCREEN_HOST["active"] and thread is threading.main_thread())
+            and not (thread.daemon and thread.name in screen_residents)
             for thread in threading.enumerate()
         ):
             wait_tick()
