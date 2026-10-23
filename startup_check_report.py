@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 from threading import Thread
+from app_data_workers import register_data_worker
 import uuid
 
 from startup_check import NONBLOCKING_CATEGORIES, REASON_CATEGORIES, startup_result
@@ -54,8 +55,10 @@ def gui_ready(version, build_sha):
     try:
         ready_at = startup_result()["checked_at"]
         _GUI_READY_STARTED = True
-        Thread(target=_publish_gui_ready, args=(version, build_sha, ready_at),
-               name="startup-gui-ready-report", daemon=True).start()
+        register_data_worker(Thread(
+            target=_publish_gui_ready, args=(version, build_sha, ready_at),
+            name="startup-gui-ready-report", daemon=True,
+        )).start()
     except Exception:
         _GUI_READY_STARTED = False
 

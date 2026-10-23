@@ -53,6 +53,7 @@ RUNTIME_ROOT_FILES = (
 # consumers. Add new runtime modules here explicitly; unrelated root scripts
 # must not enter the packet or seed its tools import closure.
 APP_ROOT_FILES = (
+    "app_data_workers.py",
     "atomic_replace.py",
     "worker_roster.py",
     "auto_update.py",

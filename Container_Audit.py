@@ -18,6 +18,7 @@ import io
 import os
 import sys
 import threading
+from app_data_workers import data_workers, register_data_worker
 import time
 import json
 import re
@@ -153,7 +154,6 @@ from preflight_scan_hold import (
     QuarantinedPreflightHold,
 )
 from phs_label_workflow import (
-    PRINT_SUBMISSION_THREADS,
     PHSLabelExchangeCoordinator,
     PHSLabelExchangeJournal,
     PHSLabelRenderer,
@@ -470,7 +470,7 @@ def container_startup_logistics_client():
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.119"
+CURRENT_VERSION = "v2.0.120"
 CA_NEW_SCREEN_ARGUMENT = "--new-screen"
 CA_OLD_SCREEN_ARGUMENT = "--old-screen"
 CA_SCREEN_HOST = {"requested": False, "active": False, "run": None}
@@ -1329,6 +1329,7 @@ class ContainerAudit:
         self.log_file_path: Optional[str] = None
         self._event_log_close_requested = False
         self.log_thread = threading.Thread(target=self._event_log_writer, daemon=True)
+        register_data_worker(self.log_thread)
         self.log_thread.start()
         
         try:
@@ -3627,6 +3628,7 @@ class ContainerAudit:
             results.put({"roster_answer": answer, "registrations": registrations,
                          "identity_enabled": enabled, "stage_b": stage_b})
         self._roster_thread = threading.Thread(target=read, name="container-audit-roster", daemon=True)
+        register_data_worker(self._roster_thread)
         self._roster_thread.start()
         self._poll_worker_roster(results, attempt, epoch, requested_version, expected_roster=roster)
 
@@ -15776,11 +15778,11 @@ class ContainerAudit:
             if test_command.action == "generate_test_logs":
                 self._generate_test_logs(count=test_command.count)
             elif test_command.action == "create_parked_trays":
-                threading.Thread(
+                register_data_worker(threading.Thread(
                     target=self._create_test_parked_trays,
                     args=(test_command.item_code, test_command.count),
                     daemon=True,
-                ).start()
+                )).start()
             elif test_command.action == "run_auto_test":
                 self.root.after(0, self._prompt_for_test_item)
             elif test_command.action == "error":
@@ -17971,6 +17973,7 @@ class ContainerAudit:
             self._event_log_close_deadline = None
             self._ui_close_requested = False
             self.log_thread = threading.Thread(target=self._event_log_writer, daemon=True)
+            register_data_worker(self.log_thread)
             self.log_thread.start()
             self.show_status_message(
                 '로그 저장 실패\n재시도 중입니다. 저장 공간을 확인하세요. 저장 전에는 종료할 수 없습니다.',
@@ -21935,7 +21938,9 @@ class ContainerAudit:
             if selected_display_name:
                 item_code = item_map[selected_display_name]
                 popup.destroy()
-                threading.Thread(target=self._run_auto_test_sequence, args=(item_code,), daemon=True).start()
+                register_data_worker(threading.Thread(
+                    target=self._run_auto_test_sequence, args=(item_code,), daemon=True,
+                )).start()
 
         ttk.Button(popup, text="테스트 시작", command=start_test).pack(pady=20)
         
@@ -22143,22 +22148,12 @@ class ContainerAudit:
                     self._application_close_complete = True
                 except BaseException as exc:
                     errors.append(exc)
-        # Keep existing data workers. Printer submitters record only guarded
-        # late diagnostics and never keep window exit waiting for the driver.
-        # The screen owner returns from this cleanup before Bridge.close and
-        # the host can stop their resident threads. Waiting for those here
-        # would hold that owner in a cycle until the cleanup deadline fires.
-        screen_residents = {
-            "shell-push", "pedal-publisher", "shell-force-exit",
-            "shell-start-watch", "shell-exit", "shell-test-control",
-            "shell-closing", "shell-start-destroy",
-        } if CA_SCREEN_HOST["active"] else set()
+        # Wait only for our explicitly registered durable work, in either UI.
+        # Shell/library/native threads belong to their own lifecycle. Printer
+        # submitters retain their existing nonblocking late-diagnostic policy.
         while any(
             thread is not threading.current_thread() and thread.is_alive()
-            and thread not in PRINT_SUBMISSION_THREADS and thread is not cleanup_watch
-            and not (CA_SCREEN_HOST["active"] and thread is threading.main_thread())
-            and not (thread.daemon and thread.name in screen_residents)
-            for thread in threading.enumerate()
+            for thread in data_workers()
         ):
             wait_tick()
         if data_root is not None:

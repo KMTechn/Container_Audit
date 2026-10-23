@@ -1,7 +1,9 @@
 """Headless packet checks: accepted shell/UI bytes and the new-screen route."""
 import ast
 import hashlib
+import importlib.util
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -97,6 +99,14 @@ def test_packet_new_screen_and_forced_close_keep_the_accepted_shell(tmp_path):
     assert receipt["shell_file_count"] == 20
     assert receipt["ui_manifest_file_count"] == 86
     assert_packet_screen_entry(app)
+    # Load the copied dependency independently of the checkout's module cache.
+    registry_path = app / "app_data_workers.py"
+    spec = importlib.util.spec_from_file_location("packet_data_workers", registry_path)
+    registry = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(registry)
+    thread = threading.Thread(target=lambda: None)
+    registry.register_data_worker(thread)
+    assert thread in registry.data_workers()
     (app / "shell/host.py").write_bytes(b"changed")
     with pytest.raises(builder.PortableBuildError):
         builder._assert_screen_bundle(ROOT, app)

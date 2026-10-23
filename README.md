@@ -1,5 +1,9 @@
 ﻿# Container Audit - 이적 검사 시스템
 
+v2.0.120: 정상 닫기의 끝 정리는 생성 시 등록한 자료 일꾼만 기다립니다.
+화면 모드·Tk 모드에서 모르는 스레드와 native Dummy 스레드는 종료를 막지 않으며,
+자료 쓰기 완료 대기·60초 상한·다음 시작 복구는 유지합니다.
+
 문서 적용 commit: `dc7c50dd6217e2a373d57704a6b9523862a5d7b8`
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://python.org)

@@ -10,6 +10,7 @@ import queue
 import subprocess
 import sys
 import threading
+from app_data_workers import register_data_worker
 from datetime import datetime, timezone
 from typing import Any
 import uuid
@@ -289,6 +290,7 @@ def start_session_direct_sync(
         name="direct-sync-session-container-audit",
         daemon=True,
     )
+    register_data_worker(thread)
     thread.start()
     return thread
 
@@ -363,5 +365,6 @@ def start_direct_sync_auto_bootstrap(
         name="direct-sync-bootstrap-container-audit",
         daemon=True,
     )
+    register_data_worker(thread)
     thread.start()
     return thread

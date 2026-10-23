@@ -11,6 +11,7 @@ from pathlib import Path
 import queue
 import re
 import threading
+from app_data_workers import register_data_worker
 from typing import Any, Callable, Mapping
 
 from storage_utils import atomic_write_json
@@ -539,6 +540,7 @@ class PreflightScanHoldWriter:
             daemon=True,
         )
         from writer_session_fence import start_lane_worker
+        register_data_worker(self.thread)
         start_lane_worker(self.thread)
         try:
             self._schedule_pump()

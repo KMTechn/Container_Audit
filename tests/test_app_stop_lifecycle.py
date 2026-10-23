@@ -163,7 +163,10 @@ def test_unstaged_close_keeps_stop_poll_running(tmp_path, monkeypatch):
     app.log_thread = SimpleNamespace(is_alive=lambda: False)
     app._event_log_writer = lambda: None
     app.show_status_message = app._poll_event_log_notice = lambda *a, **k: None
-    monkeypatch.setattr(ca.threading, "Thread", lambda *a, **k: SimpleNamespace(start=lambda: None))
+    class RestartedLogThread:
+        def start(self):
+            pass
+    monkeypatch.setattr(ca.threading, "Thread", lambda *a, **k: RestartedLogThread())
     app._start_app_stop_poll()
     app._finalize_application_close()
     assert not app._ui_close_requested
@@ -201,6 +204,7 @@ def _deadline_child(directory, mode):
             time.sleep(0.01)
     if mode == "stop-thread":
         worker = threading.Thread(target=blocked, daemon=False)
+        ca.register_data_worker(worker)
         worker.start()
     else:
         app.root = SimpleNamespace(after_cancel=lambda job: None, destroy=lambda: None)
