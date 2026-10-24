@@ -149,3 +149,46 @@ def test_system_repeated_late_receipt_keeps_retained_journal_and_audit_unchanged
     assert s.launches == []
     assert len([row for row in s.rows if row["role"] == "relay"]) == 1
     assert s.rows[0]["pid"] == gui["pid"]
+
+
+@pytest.mark.parametrize("role", ["gui", "relay"])
+def test_retained_ordinary_start_preserves_requested_role(scene, monkeypatch, role):
+    s = scene
+    s.write(s.control / "transition.json", {
+        **s.state, "phase": "DEFERRED", "retained_candidate": True,
+        "deferred_at": stamp(0),
+        "failure_decision": {"selected_sha": NEW, "code": "TRIAL_GENERATION_ADVANCED"}})
+    monkeypatch.setattr(updates, "apply_claim_status", lambda *_: "NONE")
+    calls = []
+    monkeypatch.setattr(updates, "start_current", lambda *a, **k: calls.append(a[4]) or 0)
+    arguments = ["--container-audit-user-relay"] if role == "relay" else []
+    assert updates._bootstrap(s.control.parent, arguments, role=role) == 0
+    assert calls == [arguments]
+
+
+def test_restored_trial_completion_preserves_relay_role(scene, monkeypatch):
+    from tests.test_auto_update_trial_supervision import OLD
+    s = scene
+    monkeypatch.setattr(updates, "apply_claim_status", lambda *_: "NONE")
+    state = {**s.state, "phase": "ROLLBACK_PENDING_READY", "rollback_at": stamp(0)}
+    s.write(s.control / "transition.json", state)
+    s.write(s.control / "active.json", {"sha": OLD})
+    s.rows[:] = [s.relay(OLD), dict(s.relay(OLD), role="gui", pid=101)]
+    calls = []
+    monkeypatch.setattr(updates, "start_current", lambda *a, **k: calls.append(a[4]) or 0)
+
+    def complete():
+        s.write(s.control / "transition.json", {**state, "phase": "ROLLED_BACK"})
+    s.tick[0] = complete
+    arguments = ["--container-audit-user-relay"]
+    assert updates._bootstrap(s.control.parent, arguments, role="relay") == 0
+    assert calls == [arguments]
+
+
+def test_confirmed_ordinary_relay_start_is_unchanged(scene, monkeypatch):
+    s = scene
+    s.write(s.control / "transition.json", {**s.state, "phase": "CONFIRMED"})
+    monkeypatch.setattr(updates, "apply_claim_status", lambda *_: "NONE")
+    arguments = ["--container-audit-user-relay"]
+    assert updates._bootstrap(s.control.parent, arguments, role="relay") == 0
+    assert [args for _, _, args, _ in s.launches] == [arguments]

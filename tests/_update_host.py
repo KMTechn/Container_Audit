@@ -1114,16 +1114,26 @@ def gui_readiness_loop(config, app, arguments=()):
         if 'context' not in called:
             event(root, 'gui_trial_context_called')
             called.add('context')
-        if updates.trial_context(app) is not None:
-            try:
-                if 'ready' not in called:
-                    event(root, 'gui_publish_ready_called')
-                    called.add('ready')
-                if updates.publish_gui_ready(app) and not published:
-                    event(root, 'gui_ready_published')
-                    published = True
-            except (OSError, ValueError):
-                pass  # Same read-only retry as Container_Audit.py:23943-23948.
+        context = updates.trial_context(app)
+        if context is not None:
+            marker = root / 'withhold-trial-ready'
+            withheld = (context[2]['phase'] == 'APPLIED_PENDING_READY'
+                        and marker.exists() and marker.stat().st_size <= 64
+                        and marker.read_text(encoding='ascii').strip() == context[2]['candidate_sha'])
+            if withheld:
+                if 'withheld' not in called:
+                    event(root, 'gui_ready_withheld', candidate_sha=context[2]['candidate_sha'])
+                    called.add('withheld')
+            else:
+                try:
+                    if 'ready' not in called:
+                        event(root, 'gui_publish_ready_called')
+                        called.add('ready')
+                    if updates.publish_gui_ready(app) and not published:
+                        event(root, 'gui_ready_published')
+                        published = True
+                except (OSError, ValueError):
+                    pass  # Same read-only retry as Container_Audit.py:23943-23948.
         # The real GUI readiness callback uses 250 ms; this substitutes its
         # event-loop scheduling, not a product timeout or readiness decision.
         time.sleep(0.25)
@@ -1146,3 +1156,96 @@ def run_chain(config, target):
     result['ordinary'] = json.loads((root / 'ordinary-result.json').read_bytes())
     write(root / 'chain-result.json', result)
     return result
+
+
+def prepare_followup_update(config, signer):
+    """ANSWER-8: signed Y from retained active X, with compatibility floor X."""
+    import auto_update as updates
+    from data_generation_guard import verified_private_compatibility
+    root = config.parent.resolve()
+    value = json.loads(config.read_bytes())
+    active = json.loads((Path(value['control']) / 'active.json').read_bytes())['sha']
+    selected = root / 'machine/versions' / active
+    before = updates.version_manifest(selected)
+    numbers = [int(n) for n in before['version'].removeprefix('v').split('.')]
+    numbers[-1] += 1
+    next_version = 'v' + '.'.join(str(n) for n in numbers)
+    source_x, source_y = root / 's121', root / 'followup-source'
+    assert source_x.is_dir() and not source_y.exists()
+    shutil.copytree(source_x, source_y,
+                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '.cache-binding.json'))
+    version_file = source_y / 'Container_Audit.py'
+    old = ('CURRENT_VERSION = "' + before['version'] + '"').encode()
+    raw = version_file.read_bytes()
+    assert raw.count(old) == 1
+    version_file.write_bytes(raw.replace(old, ('CURRENT_VERSION = "' + next_version + '"').encode(), 1))
+    declarations = []
+    for mode in ('--write', '--check'):
+        with (root / ('followup-declarations-' + mode[2:] + '.private.log')).open('xb') as stream:
+            result = NATIVE_RUN(
+                [sys.executable, '-s', '-B', str(source_y / 'tools/refresh_container_update_declarations.py'), mode],
+                cwd=source_y, stdout=stream, stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW)
+        declarations.append({'mode': mode, 'rc': result.returncode})
+        assert result.returncode == 0, 'inspect bounded followup declaration diagnostics'
+    binding = {'files': {q.relative_to(source_y).as_posix(): hashlib.sha256(q.read_bytes()).hexdigest()
+                         for q in source_y.rglob('*') if q.is_file()},
+               'declarations': declarations}
+    write(source_y / '.cache-binding.json', binding)
+
+    previous_offer = root / 'offer-x'
+    assert not previous_offer.exists()
+    assert (root / 'offer').resolve().is_relative_to(root)
+    assert previous_offer.resolve().is_relative_to(root)
+    (root / 'offer').rename(previous_offer)
+    value.update(selected=str(selected), next_version=next_version)
+    write(config, value)
+    name = 'CONTAINER_AUDIT_HOST_TEST_SOURCE121'
+    previous_cache = os.environ.get(name)
+    os.environ[name] = str(source_y)
+    try:
+        target = prepare_update(config, signer)
+    finally:
+        if previous_cache is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = previous_cache
+
+    candidate = root / 'offer/Container_Audit'
+    declared = json.loads((candidate / 'portable-manifest.json').read_bytes())
+    compatibility = manifest(next_version, target)
+    compatibility['data_compatible_min_version'] = before['version']
+    encoded = json.dumps(compatibility, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()
+    signature = signer.sign_es256(encoded)
+    public = json.loads((candidate / 'app/update-manifest-key-config.json').read_bytes())['manifest_public_key']
+    proof = verified_private_compatibility(compatibility, signature, public,
+                                          version=next_version, build_id=target)
+    assert proof['compatibility_verified'] is True
+    assert proof['data_compatible_min_version'] == before['version']
+    declared.update(data_compatible_min_version=before['version'],
+                    data_generation_signed_manifest=compatibility,
+                    data_generation_signature_hex=signature.hex())
+    write(candidate / 'portable-manifest.json', declared)
+    packet = root / ('offer/Container_Audit-' + next_version + '.zip')
+    archived = root / 'followup-before-compat.zip'
+    assert packet.resolve().is_relative_to(root) and not archived.exists()
+    packet.rename(archived)
+    with zipfile.ZipFile(packet, 'x', compression=zipfile.ZIP_DEFLATED) as archive:
+        for q in sorted(candidate.rglob('*')):
+            if q.is_file():
+                archive.write(q, 'Container_Audit/' + q.relative_to(candidate).as_posix())
+    feed_path = root / 'offer/feed.json'
+    feed = json.loads(feed_path.read_bytes())
+    feed['data_compatible_min_version'] = before['version']
+    with packet.open('rb') as stream:
+        digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+    feed['artifact'].update(size_bytes=packet.stat().st_size, sha256=digest)
+    write(feed_path, feed)
+    (root / 'offer/feed.sig').write_bytes(signer.sign_es256(
+        json.dumps(feed, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()))
+    write(root / 'followup-compatible-proof.json', {
+        'from_commit': active, 'target_commit': target, 'version': next_version,
+        'data_compatible_min_version': before['version'], 'signature_verified': True,
+        'source_declarations': declarations, 'packet_sha256': digest,
+        'test_key_only': True, 'product_source_modified_by_hook': False})
+    return target

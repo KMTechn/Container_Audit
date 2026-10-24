@@ -370,6 +370,8 @@ PowerShell 관측·ACL·고정 helper·새 SYSTEM 로그온 action은 자식 인
 모듈 이름으로 writer sink를 식별한다. 앱 밖 정의는 `__main__`을 유지하며,
 기존 허용 목록·source·fence 판정과 로그온 작업 JSON/XML 계약을 그대로 적용한다.
 
+업데이트 뒤 확정 안 됨(유지된 후보) PC 는 다음 업데이트 때 풀림 · 현장 손 0.
+
 READY 실패 뒤 `update-control/transition.json`의 `retained_candidate=true`이면
 새 판을 current로 유지한 상태다. `failure_decision.code`가
 `TRIAL_GENERATION_ADVANCED`이면 새 판 세대가 기록됐고,

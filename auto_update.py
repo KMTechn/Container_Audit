@@ -3298,10 +3298,10 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                     elif prepared:
                         action = "REQUEST_APPLY"
                     else:
-                        return start_current(control, policy, state, active, gui_arguments, code="UPDATE_TERMINAL_RECOVERED", deadline=deadline)
+                        return start_current(control, policy, state, active, arguments, code="UPDATE_TERMINAL_RECOVERED", deadline=deadline)
                 if state and state["phase"] in {"CONFIRMED", "ROLLED_BACK"} and saw_trial:
                     if state["phase"] == "ROLLED_BACK":
-                        return start_current(control, policy, state, active, gui_arguments, code="UPDATE_PREVIOUS_CONFIRMED", deadline=deadline)
+                        return start_current(control, policy, state, active, arguments, code="UPDATE_PREVIOUS_CONFIRMED", deadline=deadline)
                     return 0  # The already-launched GUI owns input and its ordinary relay.
                 if state and state["phase"] == "DEFERRED" and requested_at and _utc(state["deferred_at"]) >= _utc(requested_at):
                     code = state.get("reason_code")
