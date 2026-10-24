@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+import json
 import threading
 import time
 
@@ -270,7 +271,8 @@ def test_overlapping_empty_observations_do_not_launch_two_trial_relays(tmp_path,
                control / "apply-claim.json": {"pid": 606, "creation_identity": "system-owner"},
                stage / "trial.json": {"pid": 101, "nonce": state["nonce"]}}
     mutex, local, both_observed = threading.RLock(), threading.local(), threading.Barrier(2)
-    launches, errors = [], []
+    launches, errors, observations = [], [], []
+    original_records = deepcopy(records)
     deadline = time.monotonic() + 30
 
     @contextmanager
@@ -284,6 +286,7 @@ def test_overlapping_empty_observations_do_not_launch_two_trial_relays(tmp_path,
 
     def observe(*_):
         assert local.depth == 0
+        observations.append(True)
         both_observed.wait(3)
         return []  # Both samples precede either launch.
 
@@ -318,6 +321,12 @@ def test_overlapping_empty_observations_do_not_launch_two_trial_relays(tmp_path,
         both_observed.abort()
         for thread in threads:
             thread.join(5)
+    (tmp_path / "empty-observation-race-proof.json").write_text(json.dumps({
+        "launch_count": len(launches), "expected_launch_count": 1,
+        "observe_calls": len(observations), "errors": len(errors),
+        "threads_alive": sum(thread.is_alive() for thread in threads),
+        "protected_records_unchanged": records == original_records,
+    }), encoding="utf-8")
     assert not any(thread.is_alive() for thread in threads)
     assert errors == []
     assert len(launches) == 1
