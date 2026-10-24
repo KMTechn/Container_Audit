@@ -1087,9 +1087,14 @@ def gui_readiness_loop(config, app, arguments=()):
     if gate is not None:
         event(root, 'gui_gate_returned', rc=gate)
         return gate
-    event(root, 'gui_onboard_called')
-    report = onboarding.onboard_current_user(app, server_base_url=ORIGIN, startup=True)
-    event(root, 'gui_onboarded', status=report['status'])
+    # Match Container_Audit.main: consume machine completion before optional
+    # first-run onboarding, using the native caller setting for this branch.
+    report = onboarding.consume_pending_machine_onboarding(app)
+    if onboarding.first_run_onboarding_enabled() and report is None:
+        event(root, 'gui_onboard_called')
+        report = onboarding.onboard_current_user(app, server_base_url=ORIGIN, startup=True)
+    if report is not None:
+        event(root, 'gui_onboarded', status=report['status'])
     published = False
     called = set()
     while not (root / 'host-finish').exists():
