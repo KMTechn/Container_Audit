@@ -1833,9 +1833,11 @@ Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종�
 
 ### 업데이트 확인창 획득 busy 재시도(120 초 안)
 
+사용자 bootstrap 반복문의 Observe·prepared/세대·일반 복구 증명은 update→trial 잠금을 놓은 뒤 실행한다. 다시 같은 순서로 잠금을 얻고 transition 전체(단계·nonce·trial PID/시각 포함), active, apply claim, trial claim, READY, trial failure, prepared 기록과 native PID 생성 수명을 재확인한다. 하나라도 달라졌거나 수명을 확인할 수 없으면 결과를 버리고 기존 감독 창에서 다음 반복을 한다. 새 창을 만들지 않는다. 실행·claim/READY 기록의 기존 원자적 보호 경계는 유지한다.
+
 느린 process Observe는 writer gate를 쥐지 않으므로 trial GUI/onboarding·relay의 입장을 막지 않는다. Authority·Apply·Verify 등 fixed helper의 쓰기/검증은 gate 안에 남는다. Observe의 기존 subprocess 무응답 마감은 이번 고침에서 바꾸지 않으며, 별도 상한 근거는 sub-553 보고에 기록한다.
 
-사용자 bootstrap이 Observe 중 업데이트 잠금을 보유하면 SYSTEM의 후보·되돌림 READY 확인은 최초 journal 획득을 포함해 획득 busy만 원래 120초 창 안에서 다시 기다린다. 최초 busy의 잠금 전 보호 journal 판독은 원 시각의 상한 계산에만 쓰며, 판독 실패·형식/시각 이상은 재시도하지 않는다. 획득 뒤 본문은 journal을 다시 읽는다. 재시작이나 재시도로 `applied_at`·`rollback_at`을 갱신하지 않는다. native 5초 대기와 bootstrap의 잠금 범위는 유지하며 abandoned·다른 오류·획득 뒤 본문 오류·마감 뒤 busy는 기존 fail-closed/UNKNOWN 경로를 따른다. 확인 증명이나 실패 뒤 복구 정책을 완화하지 않는다. 검증·잠금 자리별 근거는 `work/program/w9firstupd/sub-553/RESULT.md`에 남긴다. 공식 빌드는 하네스 RED 뒤 동일 사슬 GREEN을 확인한 다음 허용되며 게시·병합은 하지 않는다.
+사용자 bootstrap이 Observe 중 업데이트 잠금을 보유하면 SYSTEM의 후보·되돌림 READY 확인은 최초 journal 획득을 포함해 획득 busy만 원래 120초 창 안에서 다시 기다린다. 최초 busy의 잠금 전 보호 journal 판독은 원 시각의 상한 계산에만 쓰며, 판독 실패·형식/시각 이상은 재시도하지 않는다. 획득 뒤 본문은 journal을 다시 읽는다. 재시작이나 재시도로 `applied_at`·`rollback_at`을 갱신하지 않는다. native 5초 대기는 유지하며 abandoned·다른 오류·획득 뒤 본문 오류·마감 뒤 busy는 기존 fail-closed/UNKNOWN 경로를 따른다. 확인 증명이나 실패 뒤 복구 정책을 완화하지 않는다. 검증·잠금 자리별 근거는 `work/program/w9firstupd/sub-553/RESULT.md`에 남긴다. 공식 빌드는 하네스 RED 뒤 동일 사슬 GREEN을 확인한 다음 허용되며 게시·병합은 하지 않는다.
 
 ### Bootstrap relay 시작의 일시 admission 대기
 

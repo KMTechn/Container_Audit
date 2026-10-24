@@ -2,9 +2,11 @@
 
 ### 업데이트 확인창 획득 busy 재시도(120 초 안)
 
+사용자 bootstrap 반복문의 Observe·prepared/세대·일반 복구 증명은 update→trial 잠금을 놓은 뒤 실행한다. 다시 같은 순서로 잠금을 얻고 transition 전체(단계·nonce·trial PID/시각 포함), active, apply claim, trial claim, READY, trial failure, prepared 기록과 native PID 생성 수명을 재확인한다. 하나라도 달라졌거나 수명을 확인할 수 없으면 결과를 버리고 기존 감독 창에서 다음 반복을 한다. 새 창을 만들지 않는다. 실행·claim/READY 기록의 기존 원자적 보호 경계는 유지한다.
+
 읽기 전용 process Observe는 writer admission 밖에서 실행해 trial GUI/onboarding·relay가 입장할 수 있게 한다. Authority·Apply·Verify 등 기존 fixed helper의 쓰기/검증 경로는 writer admission 안에 유지한다. PowerShell Observe의 기존 실행 상한은 이번에 변경하지 않는다.
 
-v2.0.121 고침 가지: SYSTEM의 후보·되돌림 READY 확인은 최초 journal 획득을 포함해 원래 내구 시각에 묶인 120초 창 안에서만 업데이트 잠금 획득 busy를 다시 기다린다. 잠금 전 판독은 대기 상한에만 쓰고, 획득 뒤 journal과 확인 증명을 다시 검사한다. abandoned·다른 오류·잠금 획득 뒤 본문 오류·마감 뒤 busy는 기존 거절을 유지한다. native 5초 대기, 사용자 bootstrap의 잠금 범위와 정상 시작 증명은 그대로다. 고침 가지 검증은 `work/program/w9firstupd/sub-553/RESULT.md`에 기록하며 공식 빌드·현장 적용은 별도 지시 대상이다.
+v2.0.121 고침 가지: SYSTEM의 후보·되돌림 READY 확인은 최초 journal 획득을 포함해 원래 내구 시각에 묶인 120초 창 안에서만 업데이트 잠금 획득 busy를 다시 기다린다. 잠금 전 판독은 대기 상한에만 쓰고, 획득 뒤 journal과 확인 증명을 다시 검사한다. abandoned·다른 오류·잠금 획득 뒤 본문 오류·마감 뒤 busy는 기존 거절을 유지한다. native 5초 대기와 정상 시작 증명은 그대로다. 고침 가지 검증은 `work/program/w9firstupd/sub-553/RESULT.md`에 기록하며 공식 빌드·현장 적용은 별도 지시 대상이다.
 
 - v2.0.120: 정상 닫기의 끝 정리는 생성 시 명시 등록한 자료 일꾼만 기다린다. 화면·Tk 모두 화면 껍질·라이브러리·native Dummy·모르는 스레드는 대기하지 않는다. 자료 쓰기·60초 상한·종료 지연 표지와 다음 시작 복구는 유지한다. 집중 검증 근거는 `work/program/w9firstupd/sub-502/RESULT.md`이며 ZIP 빌드·실제 화면 검증은 후속 단계다.
 
