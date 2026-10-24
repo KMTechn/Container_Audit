@@ -13,7 +13,8 @@ def test_ready_diagnostic(tmp_path):
         pytest.skip('authenticated frozen 120 packet required')
     from vendor.kmtech_zero_pe.cng_p256 import P256KeyPair
     with P256KeyPair.generate() as signer:
-        config = host.prepare(tmp_path, Path(__file__).resolve().parents[1], Path(packet), signer)
+        config = host.prepare(tmp_path, Path(__file__).resolve().parents[1], Path(packet), signer,
+                              departure=host.departure_identity())
         try:
             host.ready(config)
             helper = host.launch(config, 'helper-probe', ['--apply-prepared'])
@@ -28,7 +29,8 @@ def test_prepare_121_and_initial_120_ready(tmp_path):
         pytest.skip('authenticated frozen 120 packet required')
     from vendor.kmtech_zero_pe.cng_p256 import P256KeyPair
     with P256KeyPair.generate() as signer:
-        config = host.prepare(tmp_path, Path(__file__).resolve().parents[1], Path(packet), signer)
+        config = host.prepare(tmp_path, Path(__file__).resolve().parents[1], Path(packet), signer,
+                              departure=host.departure_identity())
         host.prepare_update(config, signer)
         try:
             host.ready(config)
@@ -43,7 +45,8 @@ def test_update_120_to_121(tmp_path, delay):
         pytest.skip('authenticated frozen 120 packet required')
     from vendor.kmtech_zero_pe.cng_p256 import P256KeyPair
     with P256KeyPair.generate() as signer:
-        config = host.prepare(tmp_path, Path(__file__).resolve().parents[1], Path(packet), signer, slow_observe=delay)
+        config = host.prepare(tmp_path, Path(__file__).resolve().parents[1], Path(packet), signer,
+                              slow_observe=delay, departure=host.departure_identity())
         target = host.prepare_update(config, signer)
         try:
             host.ready(config)

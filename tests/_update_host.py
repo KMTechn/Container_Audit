@@ -21,6 +21,17 @@ SID = "S-1-5-21-100-200-300-1001"
 NATIVE_POPEN = getattr(subprocess.Popen, "native", subprocess.Popen)
 NATIVE_RUN = subprocess.run
 
+
+def departure_identity():
+    """Select the attested starting release; defaults retain the frozen RED."""
+    return {
+        'version': os.environ.get('CONTAINER_AUDIT_HOST_TEST_START_VERSION', 'v2.0.120'),
+        'source_commit': os.environ.get('CONTAINER_AUDIT_HOST_TEST_START_COMMIT',
+                                      '50d6b83bc8d6bac7cbc564d8a818225e9f396eb3'),
+        'sha256': os.environ.get('CONTAINER_AUDIT_HOST_TEST_START_SHA256',
+                                'ea12e50bcd6716dcf9897ebd4a65f04afc855792ad6fff788512c68917f639f9'),
+    }
+
 def write(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
@@ -337,9 +348,12 @@ def install_writer_gate_os(root):
     fence._NamedMutexLease.release = observed_gate_release
 
 
-def prepare(root, source, packet, signer, *, slow_observe=0):
+def prepare(root, source, packet, signer, *, slow_observe=0, departure=None):
     import auto_update as updates
     root = Path(root).resolve()
+    departure = departure_identity() if departure is None else departure
+    with Path(packet).open('rb') as stream:
+        assert hashlib.file_digest(stream, 'sha256').hexdigest() == departure['sha256']
     install_writer_gate_os(root)
     current = root / 'machine/current'
     current.mkdir(parents=True)
@@ -356,8 +370,8 @@ def prepare(root, source, packet, signer, *, slow_observe=0):
             with archive.open(info) as stream, target.open('xb') as output:
                 shutil.copyfileobj(stream, output)
     declared = json.loads((current / 'portable-manifest.json').read_bytes())
-    assert declared['version'] == 'v2.0.120'
-    assert declared['source_commit'] == '50d6b83bc8d6bac7cbc564d8a818225e9f396eb3'
+    assert declared['version'] == departure['version']
+    assert declared['source_commit'] == departure['source_commit']
     for name in ('auto_update.py', 'Container_Audit.py', 'user_relay.py', 'current_user_onboarding.py'):
         assert (current / 'app' / name).read_bytes() == (source / name).read_bytes()
     settings = {'feed_url': ORIGIN + '/feed/latest.json', 'channel': 'stable',
@@ -382,7 +396,11 @@ def prepare(root, source, packet, signer, *, slow_observe=0):
         (root / name).mkdir()
     config = root / 'host-config.json'
     write(config, {'root': str(root), 'repo': str(source), 'current': str(current), 'selected': str(selected),
-                   'control': str(control), 'slow_observe': slow_observe, 'gui_trial_authorized': True})
+                   'control': str(control), 'slow_observe': slow_observe, 'gui_trial_authorized': True,
+                   'start_version': declared['version'], 'start_source_commit': declared['source_commit'],
+                   'start_sha256': departure['sha256'],
+                   'next_version': declared['version'].rsplit('.', 1)[0] + '.' +
+                                   str(int(declared['version'].rsplit('.', 1)[1]) + 1)})
     feed = manifest(declared['version'], declared['source_commit'])
     write(root / 'feed.json', feed)
     (root / 'feed.sig').write_bytes(signer.sign_es256(
@@ -396,6 +414,7 @@ def prepare_update(config, signer):
     value = json.loads(config.read_bytes())
     root, current = config.parent, Path(value['selected'])
     before = updates.version_manifest(current)
+    next_version = value['next_version']
     source = Path(value['repo'])
     cached = os.environ.get('CONTAINER_AUDIT_HOST_TEST_SOURCE121')
     if cached:
@@ -415,9 +434,10 @@ def prepare_update(config, signer):
                        check=True, stdout=stream, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
         path = source121 / 'Container_Audit.py'
         raw = path.read_bytes()
-        old = b'CURRENT_VERSION = "v2.0.120"'
+        old = ('CURRENT_VERSION = "' + before['version'] + '"').encode()
         assert raw.count(old) == 1
-        path.write_bytes(raw.replace(old, b'CURRENT_VERSION = "v2.0.121"', 1))
+        new = ('CURRENT_VERSION = "' + next_version + '"').encode()
+        path.write_bytes(raw.replace(old, new, 1))
         declarations = []
         for mode in ('--write', '--check'):
             with (root / ('declarations-' + mode[2:] + '.private.log')).open('xb') as stream:
@@ -448,24 +468,24 @@ def prepare_update(config, signer):
             shutil.copyfile(source_path, target)
     hot = hashlib.sha1((before['source_commit'] + ':host121').encode()).hexdigest()
     declared = json.loads((candidate / 'portable-manifest.json').read_bytes())
-    declared.update(version='v2.0.121', data_compatible_min_version='v2.0.121', source_commit=hot)
+    declared.update(version=next_version, data_compatible_min_version=next_version, source_commit=hot)
     refresh_file_pins(candidate, declared)
     declared['writer_sink_inventory_contract_sha256'] = json.loads(
         (candidate / 'tools/container_writer_sink_inventory.json').read_bytes())['inventory_sha256']
     write(candidate / 'portable-manifest.json', declared)
-    assert updates.version_manifest(candidate, require_version=True)['version'] == 'v2.0.121'
+    assert updates.version_manifest(candidate, require_version=True)['version'] == next_version
     after = updates.version_identity(lambda name: (candidate / name).read_bytes())
     forward = {'from_commit': before['source_commit'], 'to_commit': hot,
                'from_contract_sha256': before['contract_sha256'], 'to_contract_sha256': after['contract_sha256']}
     reverse = {'from_commit': hot, 'to_commit': before['source_commit'],
                'from_contract_sha256': after['contract_sha256'], 'to_contract_sha256': before['contract_sha256']}
     pin = lambda row: hashlib.sha256(json.dumps(row, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    packet = root / 'offer/Container_Audit-v2.0.121.zip'
+    packet = root / ('offer/Container_Audit-' + next_version + '.zip')
     with zipfile.ZipFile(packet, 'x', compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(candidate.rglob('*')):
             if path.is_file():
                 archive.write(path, 'Container_Audit/' + path.relative_to(candidate).as_posix())
-    feed = manifest('v2.0.121', hot)
+    feed = manifest(next_version, hot)
     feed.update(approved_transitions=[forward, reverse],
                 auto_update={'from_commit': before['source_commit'], 'to_commit': hot,
                              'forward_contract_sha256': pin(forward), 'rollback_contract_sha256': pin(reverse)})
