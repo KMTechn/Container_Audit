@@ -1831,6 +1831,10 @@ Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종�
 
 사망한 SYSTEM의 같은 claim은 같은 세션에서 재요청하지 않고 현재 G 허용 판을 일반 실행한다. 지원 코드는 같은 protected claim hash에 대해 한 번 게시하며 다음 로그온의 기존 SYSTEM 작업이 새 claim을 덮어써 재시도한다(1차 결정 msg_c93ef274762a).
 
+### 업데이트 확인창 획득 busy 재시도(120 초 안)
+
+사용자 bootstrap이 Observe 중 업데이트 잠금을 보유하면 SYSTEM의 후보·되돌림 READY 확인은 획득 busy만 원래 120초 창 안에서 다시 기다린다. 재시작이나 재시도로 `applied_at`·`rollback_at`을 갱신하지 않는다. native 5초 대기와 bootstrap의 잠금 범위는 유지하며 abandoned·다른 오류·획득 뒤 본문 오류·마감 뒤 busy는 기존 fail-closed/UNKNOWN 경로를 따른다. 확인 증명이나 실패 뒤 복구 정책을 완화하지 않는다. 검증·잠금 자리별 근거는 `work/program/w9firstupd/sub-553/RESULT.md`에 남기며 이 가지는 공식 빌드·게시·병합 없이 준비한다.
+
 ### Bootstrap relay 시작의 일시 admission 대기
 
 Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRITER_GATE_TIMEOUT`을 감독 마감 안에서 0.1초씩 쉬며 재시도한다. 각 시도는 기존 launch_version의 admission을 다시 얻으며 시도 사이에는 admission을 보유하지 않는다. 마지막 admission 대기는 기존 최대 5초이며 마감 뒤에는 기존 실패 출구를 유지한다. fence 확정·버려진 소유권 등 다른 거절과 GUI 실행 자체의 timeout은 재시도하지 않는다. 포인터·trial claim·READY·CONFIRMED·G 허가·cohort·잠금 순서는 유지한다. bootstrap 밖의 relay launcher admission과 실제 로그온/pythonw 수용은 별도 범위다.

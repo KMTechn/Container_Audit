@@ -1699,6 +1699,23 @@ def update_lock(control: Path, operator_sid: str, *, trial: bool = False, timeou
         kernel.CloseHandle(handle)
 
 
+@contextmanager
+def _ready_window_update_lock(control: Path, operator_sid: str, *, deadline: float):
+    """Retry only acquisition busy, without renewing the caller's READY window."""
+    with ExitStack() as stack:
+        while True:
+            try:
+                stack.enter_context(update_lock(control, operator_sid))
+                break
+            except RuntimeError as error:
+                if (str(error) != "update mutex ownership is busy or abandoned"
+                        or getattr(error, "wait_result", None) != 0x102
+                        or time.monotonic() >= deadline):
+                    raise
+        # Keep the protected body outside the acquisition exception handler.
+        yield
+
+
 @writer_sink("auto_update_control")
 def fixed_helper(control: Path, mode: str, *, code_root: Path | None = None) -> str:
     import subprocess
@@ -1971,7 +1988,7 @@ def wait_for_rollback_ready(control: Path, policy: Mapping[str, Any]) -> int:
         remaining = max(0.0, 120 - (_utc(now_utc()) - _utc(state.get("rollback_at", state["applied_at"]))).total_seconds())
     deadline = time.monotonic() + min(120.0, remaining)
     while time.monotonic() < deadline:
-        with update_lock(control, policy["operator_sid"]):
+        with _ready_window_update_lock(control, policy["operator_sid"], deadline=deadline):
             state = read_json(control / "transition.json")
             if state.get("phase") == "ROLLED_BACK":
                 return 0
@@ -2173,7 +2190,7 @@ def _apply_prepared_once(control: Path) -> int:
     remaining = 120 - (_utc(now_utc()) - _utc(state["applied_at"])).total_seconds()
     deadline = time.monotonic() + min(120.0, max(0.0, remaining))
     while time.monotonic() < deadline:
-        with update_lock(control, policy["operator_sid"]):
+        with _ready_window_update_lock(control, policy["operator_sid"], deadline=deadline):
             state = read_json(control / "transition.json")
             if state["phase"] in {"CONFIRMED", "ROLLED_BACK"}:
                 return 0

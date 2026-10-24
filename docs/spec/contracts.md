@@ -909,6 +909,10 @@ locator를 준비하므로, owner가 높은 판으로 바뀌면 locator 재판�
 
 사망한 SYSTEM의 같은 claim은 같은 세션에서 재요청하지 않고 현재 G 허용 판을 일반 실행한다. 지원 코드는 같은 protected claim hash에 대해 한 번 게시하며 다음 로그온의 기존 SYSTEM 작업이 새 claim을 덮어써 재시도한다(1차 결정 msg_c93ef274762a).
 
+### 업데이트 확인창 획득 busy 재시도(120 초 안)
+
+SYSTEM의 후보·되돌림 READY 고리는 원래 `applied_at`·`rollback_at`에서 계산한 120초 마감을 그대로 사용한다. `update_lock`의 획득 단계에서 정확한 `RuntimeError("update mutex ownership is busy or abandoned")`와 `wait_result == 0x102`가 함께 확인되고 아직 마감 전이면 재획득한다. native 대기는 시도마다 기존 5초이며 새 마감을 만들지 않는다. abandoned·그 밖의 오류·획득 뒤 본문의 오류·마감에 도달한 busy는 그대로 전파한다. 재시도 중 SYSTEM은 다른 잠금을 보유하지 않으며 사용자 bootstrap의 잠금 범위, READY/receipt/trial/process 증명, journal·pointer와 권한은 유지한다. 확인창 밖의 최초 판독·최종 실패 정리·60초 정상 종료 고리는 기존 획득·실패 계약을 유지한다.
+
 ### Bootstrap relay 시작의 일시 admission 대기
 
 Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRITER_GATE_TIMEOUT`을 감독 마감 안에서 0.1초씩 쉬며 재시도한다. 각 시도는 기존 launch_version의 admission을 다시 얻으며 시도 사이에는 admission을 보유하지 않는다. 마지막 admission 대기는 기존 최대 5초이며 마감 뒤에는 기존 실패 출구를 유지한다. fence 확정·버려진 소유권 등 다른 거절과 GUI 실행 자체의 timeout은 재시도하지 않는다. 포인터·trial claim·READY·CONFIRMED·G 허가·cohort·잠금 순서는 유지한다. bootstrap 밖의 relay launcher admission과 실제 로그온/pythonw 수용은 별도 범위다.
