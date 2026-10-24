@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "07a1466403a9485b45ca371c80e2a08437cd27b51c7f18f034d8216b12d3ddd0",
+  "after_inventory_sha256": "d008e489f345d65736f5352ad92296681ace6a544c9e15c39cc8a131eb8fb98f",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -1463,7 +1463,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "2de35e1268b30c7e7b82722c7ea1458379f3ccabcdf6a2cbdec5ddce9b768051"
+      "after": "4f702f030c91bbbb5ca1ad5002aa3b8b4cd284b13435131466a1fff7574585ca"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4513,7 +4513,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "21c0ac3d02cd9ff70dfcc2e9ea1155daafb0014fd7d9c876429aa47e7f8de662"
+      "after": "2c5acf4bbe83c5cf8f85d661ce3d9c392101513685e4be8cb8082f2f51394e56"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4523,12 +4523,12 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "ea6b6e1fdd6ff4c1ec3572d65c68484a0e9363db1145fb94508fd3e75c8c3a7d"
+      "after": "f07a8d56c48dbd753703a381268f4be01cf921bfd352c10c391eb14aa611691f"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "8514c0506f2e0161cc759bec4312c392d7b0e903b95c83c23fd7e3c91486a46c"
+      "after": "3df8515abdcd0558f5eea54075fee8ce1d779619b3773eff914d37eabedb371c"
     }
   ],
   "source_replacements": [
@@ -4645,7 +4645,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "21c0ac3d02cd9ff70dfcc2e9ea1155daafb0014fd7d9c876429aa47e7f8de662"
+      "after": "2c5acf4bbe83c5cf8f85d661ce3d9c392101513685e4be8cb8082f2f51394e56"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4695,7 +4695,7 @@
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "2de35e1268b30c7e7b82722c7ea1458379f3ccabcdf6a2cbdec5ddce9b768051"
+      "after": "4f702f030c91bbbb5ca1ad5002aa3b8b4cd284b13435131466a1fff7574585ca"
     }
   ],
   "hash_provenance": {

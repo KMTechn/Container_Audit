@@ -1699,8 +1699,30 @@ def update_lock(control: Path, operator_sid: str, *, trial: bool = False, timeou
         kernel.CloseHandle(handle)
 
 
+def _ready_window_deadline(control: Path) -> float | None:
+    """Read protected window bounds only; ownership still requires a fresh read."""
+    try:
+        state = read_json(control / "transition.json")
+        if state.get("schema") != SCHEMA:
+            return None
+        if state.get("phase") == "APPLIED_PENDING_READY":
+            timestamp = state["applied_at"]
+        elif state.get("phase") == "ROLLBACK_PENDING_READY":
+            timestamp = state.get("rollback_at", state["applied_at"])
+        else:
+            return None
+        started = time.monotonic()
+        elapsed = (_utc(now_utc()) - _utc(timestamp)).total_seconds()
+        if not 0 <= elapsed < 120:
+            return None
+        return started + (120 - elapsed)
+    except Exception:
+        # A failed window probe never turns the original busy into permission.
+        return None
+
+
 @contextmanager
-def _ready_window_update_lock(control: Path, operator_sid: str, *, deadline: float):
+def _ready_window_update_lock(control: Path, operator_sid: str, *, deadline: float | None = None):
     """Retry only acquisition busy, without renewing the caller's READY window."""
     with ExitStack() as stack:
         while True:
@@ -1709,8 +1731,11 @@ def _ready_window_update_lock(control: Path, operator_sid: str, *, deadline: flo
                 break
             except RuntimeError as error:
                 if (str(error) != "update mutex ownership is busy or abandoned"
-                        or getattr(error, "wait_result", None) != 0x102
-                        or time.monotonic() >= deadline):
+                        or getattr(error, "wait_result", None) != 0x102):
+                    raise
+                if deadline is None:
+                    deadline = _ready_window_deadline(control)
+                if deadline is None or time.monotonic() >= deadline:
                     raise
         # Keep the protected body outside the acquisition exception handler.
         yield
@@ -1979,7 +2004,7 @@ def wait_for_rollback_ready(control: Path, policy: Mapping[str, Any]) -> int:
     import time
 
     stage = Path(policy["staging_root"])
-    with update_lock(control, policy["operator_sid"]):
+    with _ready_window_update_lock(control, policy["operator_sid"]):
         state = read_json(control / "transition.json")
         if state.get("phase") == "ROLLED_BACK":
             return 0
@@ -2037,7 +2062,7 @@ def _apply_prepared_once(control: Path) -> int:
     # SYSTEM must never resolve user credentials or start a user process.
     os.environ["LOCALAPPDATA"] = policy["operator_local_app_data"]
     stage = Path(policy["staging_root"])
-    with update_lock(control, policy["operator_sid"]):
+    with _ready_window_update_lock(control, policy["operator_sid"]):
         state = optional_record(control / "transition.json")
         if state and state.get("reason_code") == "UPDATE_PREPARATION_FAILED" and state["phase"] == "DEFERRED" and not state.get("recovery_pending") and not prepared_pending(control, policy, state):
             return 0

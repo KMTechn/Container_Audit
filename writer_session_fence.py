@@ -104,7 +104,7 @@ def close_and_wait_writers(timeout_seconds: float) -> bool:
 
 # This pin is generated and checked by tools/derive_container_writer_sinks.py.
 # It is updated together with the inventory after all sink markers are placed.
-WRITER_INVENTORY_SHA256 = "07a1466403a9485b45ca371c80e2a08437cd27b51c7f18f034d8216b12d3ddd0"
+WRITER_INVENTORY_SHA256 = "d008e489f345d65736f5352ad92296681ace6a544c9e15c39cc8a131eb8fb98f"
 
 DELEGATION_TOKEN_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN"
 DELEGATION_SESSION_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID"
