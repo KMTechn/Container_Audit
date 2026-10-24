@@ -246,13 +246,15 @@ def test_bootstrap_prepared_read_runs_outside_both_locks_and_discards_stale_stat
 
     def observe(*_):
         assert s.held == []
+        if snapshots:
+            return False  # The journal changes once; the next poll is stable.
         with s.lock("update"):
             pass
         s.clock[0] += seconds
         snapshots.append(seconds)
         s.records[s.control / "transition.json"]["phase"] = "CONFIRMED"
         s.records[s.control / "apply-claim.json"]["status"] = "SETTLED"
-        return []
+        return False
 
     monkeypatch.setattr(updates, "prepared_pending", observe)
     assert updates._bootstrap(s.control / "app", [], role="gui") == 0
