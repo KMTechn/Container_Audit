@@ -589,9 +589,11 @@
       "unsunk_paths": []
     },
     {
-      "caller_guard_reason": "",
-      "caller_guard_sources": [],
-      "coverage_status": "uncovered",
+      "caller_guard_reason": "fixed helper remains fenced; only the pinned process_snapshot literal Observe edge is read-only",
+      "caller_guard_sources": [
+        "auto_update_control"
+      ],
+      "coverage_status": "covered",
       "covered_entrypoints": [
         "Container_Audit.__file_entry__",
         "Container_Audit.main",
@@ -642,163 +644,8 @@
       ],
       "reachable_from_product_entrypoint": true,
       "trust_reason": "",
-      "unsunk_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "auto_update.__file_entry__",
-        "portable.main.__file_entry__",
-        "tools.check_logistics_runtime_profile.__file_entry__",
-        "tools.direct_sync_relay_install_pack.__file_entry__",
-        "tools.direct_sync_relay_operator.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.install_logistics_runtime_profile.__file_entry__",
-        "tools.install_protected_admin.__file_entry__",
-        "tools.register_container_audit_worker_pc.__file_entry__",
-        "user_relay.__file_entry__"
-      ],
-      "unsunk_paths": [
-        {
-          "entrypoint": "Container_Audit.__file_entry__",
-          "path": [
-            "Container_Audit.__file_entry__",
-            "Container_Audit.main",
-            "Container_Audit._run_application_main",
-            "auto_update.startup_gate",
-            "auto_update.assert_ordinary_recovery",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "Container_Audit.main",
-          "path": [
-            "Container_Audit.main",
-            "Container_Audit._run_application_main",
-            "auto_update.startup_gate",
-            "auto_update.assert_ordinary_recovery",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "auto_update.__file_entry__",
-          "path": [
-            "auto_update.__file_entry__",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "portable.main.__file_entry__",
-          "path": [
-            "portable.main.__file_entry__",
-            "portable.main.main",
-            "auto_update.startup_gate",
-            "auto_update.assert_ordinary_recovery",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "tools.check_logistics_runtime_profile.__file_entry__",
-          "path": [
-            "tools.check_logistics_runtime_profile.__file_entry__",
-            "auto_update.run_support_main",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "tools.direct_sync_relay_install_pack.__file_entry__",
-          "path": [
-            "tools.direct_sync_relay_install_pack.__file_entry__",
-            "auto_update.run_support_main",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "tools.direct_sync_relay_operator.__file_entry__",
-          "path": [
-            "tools.direct_sync_relay_operator.__file_entry__",
-            "auto_update.run_support_main",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "tools.direct_sync_relay_runner.__file_entry__",
-          "path": [
-            "tools.direct_sync_relay_runner.__file_entry__",
-            "auto_update.run_support_main",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "tools.install_logistics_runtime_profile.__file_entry__",
-          "path": [
-            "tools.install_logistics_runtime_profile.__file_entry__",
-            "auto_update.run_support_main",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "tools.install_protected_admin.__file_entry__",
-          "path": [
-            "tools.install_protected_admin.__file_entry__",
-            "auto_update.run_support_main",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "tools.register_container_audit_worker_pc.__file_entry__",
-          "path": [
-            "tools.register_container_audit_worker_pc.__file_entry__",
-            "auto_update.run_support_main",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "user_relay.__file_entry__",
-          "path": [
-            "user_relay.__file_entry__",
-            "auto_update.run_support_main",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        }
-      ]
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
     },
     {
       "caller_guard_reason": "",
@@ -9853,7 +9700,7 @@
     "sink_function_count": 262,
     "total_cross_language_sink_count": 264,
     "trusted_control_plane_mutation_count": 0,
-    "uncovered_mutation_function_count": 1
+    "uncovered_mutation_function_count": 0
   },
   "detector_limitations": [
     "Discovery is syntactic over the shipped local import closure and does not execute code.",
@@ -11013,7 +10860,7 @@
       "tools.register_container_audit_worker_pc"
     ]
   },
-  "inventory_sha256": "81bd4ad4e1f81e874821ef6aa0b682265b5142d88f88e79f8c56a23ce40e1c27",
+  "inventory_sha256": "149068320bbd5e1797b82e978d9ba3fa0a07d54279d3a1085be7a17dd9d93f3b",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -11164,7 +11011,7 @@
     },
     {
       "kind": "python",
-      "pass": false,
+      "pass": true,
       "reachable_direct_mutation_functions": [
         "Container_Audit.ContainerAudit._delete_current_tray_state",
         "Container_Audit.ContainerAudit._prepare_tray_state_snapshot",
@@ -11329,9 +11176,7 @@
       "route_id": "gui_startup",
       "start": "Container_Audit.main",
       "start_present": true,
-      "unfenced_direct_mutation_functions": [
-        "auto_update._run_fixed_helper"
-      ]
+      "unfenced_direct_mutation_functions": []
     },
     {
       "kind": "python",
@@ -25263,220 +25108,7 @@
     "writer_source": "screen_shell_fileio"
   },
   "trusted_control_plane_mutations": [],
-  "uncovered_direct_mutation_functions": [
-    {
-      "caller_guard_reason": "",
-      "caller_guard_sources": [],
-      "coverage_status": "uncovered",
-      "covered_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "auto_update.__file_entry__",
-        "portable.main.__file_entry__",
-        "tools.check_logistics_runtime_profile.__file_entry__",
-        "tools.direct_sync_relay_install_pack.__file_entry__",
-        "tools.direct_sync_relay_operator.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.install_logistics_runtime_profile.__file_entry__",
-        "tools.install_protected_admin.__file_entry__",
-        "tools.register_container_audit_worker_pc.__file_entry__",
-        "user_relay.__file_entry__",
-        "user_relay.main"
-      ],
-      "decorated_source": "",
-      "direct_callers": [
-        "auto_update.fixed_helper",
-        "auto_update.process_snapshot"
-      ],
-      "file": "auto_update.py",
-      "kind": "function",
-      "line": 1749,
-      "mutation_sites": [
-        {
-          "category": "external_process",
-          "external_control_commands": [],
-          "line": 1757,
-          "operation": "subprocess.run",
-          "writer_admission_sources": []
-        }
-      ],
-      "node": "auto_update._run_fixed_helper",
-      "reachable_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "auto_update.__file_entry__",
-        "portable.main.__file_entry__",
-        "tools.check_logistics_runtime_profile.__file_entry__",
-        "tools.direct_sync_relay_install_pack.__file_entry__",
-        "tools.direct_sync_relay_operator.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.install_logistics_runtime_profile.__file_entry__",
-        "tools.install_protected_admin.__file_entry__",
-        "tools.register_container_audit_worker_pc.__file_entry__",
-        "user_relay.__file_entry__",
-        "user_relay.main"
-      ],
-      "reachable_from_product_entrypoint": true,
-      "trust_reason": "",
-      "unsunk_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "auto_update.__file_entry__",
-        "portable.main.__file_entry__",
-        "tools.check_logistics_runtime_profile.__file_entry__",
-        "tools.direct_sync_relay_install_pack.__file_entry__",
-        "tools.direct_sync_relay_operator.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.install_logistics_runtime_profile.__file_entry__",
-        "tools.install_protected_admin.__file_entry__",
-        "tools.register_container_audit_worker_pc.__file_entry__",
-        "user_relay.__file_entry__"
-      ],
-      "unsunk_paths": [
-        {
-          "entrypoint": "Container_Audit.__file_entry__",
-          "path": [
-            "Container_Audit.__file_entry__",
-            "Container_Audit.main",
-            "Container_Audit._run_application_main",
-            "auto_update.startup_gate",
-            "auto_update.assert_ordinary_recovery",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "Container_Audit.main",
-          "path": [
-            "Container_Audit.main",
-            "Container_Audit._run_application_main",
-            "auto_update.startup_gate",
-            "auto_update.assert_ordinary_recovery",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "auto_update.__file_entry__",
-          "path": [
-            "auto_update.__file_entry__",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "portable.main.__file_entry__",
-          "path": [
-            "portable.main.__file_entry__",
-            "portable.main.main",
-            "auto_update.startup_gate",
-            "auto_update.assert_ordinary_recovery",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "tools.check_logistics_runtime_profile.__file_entry__",
-          "path": [
-            "tools.check_logistics_runtime_profile.__file_entry__",
-            "auto_update.run_support_main",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "tools.direct_sync_relay_install_pack.__file_entry__",
-          "path": [
-            "tools.direct_sync_relay_install_pack.__file_entry__",
-            "auto_update.run_support_main",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "tools.direct_sync_relay_operator.__file_entry__",
-          "path": [
-            "tools.direct_sync_relay_operator.__file_entry__",
-            "auto_update.run_support_main",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "tools.direct_sync_relay_runner.__file_entry__",
-          "path": [
-            "tools.direct_sync_relay_runner.__file_entry__",
-            "auto_update.run_support_main",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "tools.install_logistics_runtime_profile.__file_entry__",
-          "path": [
-            "tools.install_logistics_runtime_profile.__file_entry__",
-            "auto_update.run_support_main",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "tools.install_protected_admin.__file_entry__",
-          "path": [
-            "tools.install_protected_admin.__file_entry__",
-            "auto_update.run_support_main",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "tools.register_container_audit_worker_pc.__file_entry__",
-          "path": [
-            "tools.register_container_audit_worker_pc.__file_entry__",
-            "auto_update.run_support_main",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        },
-        {
-          "entrypoint": "user_relay.__file_entry__",
-          "path": [
-            "user_relay.__file_entry__",
-            "auto_update.run_support_main",
-            "auto_update.main",
-            "auto_update.resolve_lifecycle_context",
-            "auto_update.assert_failed_support_quiescent",
-            "auto_update.process_snapshot",
-            "auto_update._run_fixed_helper"
-          ]
-        }
-      ]
-    }
-  ],
+  "uncovered_direct_mutation_functions": [],
   "writer_sink_sources": [
     "active_work_probe_report",
     "admin_pin_intent",
