@@ -82,7 +82,9 @@ $rows=Get-StartupUpdateProcesses $Root
     prefix_counts = []
 
     def run(processes, *, root_override=None):
-        input_file, output_file = tmp_path / "processes.json", tmp_path / "observed.json"
+        attempt = tmp_path / ("observe-" + uuid.uuid4().hex)
+        attempt.mkdir()
+        input_file, output_file = attempt / "processes.json", attempt / "observed.json"
         input_file.write_text(json.dumps(processes), encoding="utf-8")
         process = Popen([
             "powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
