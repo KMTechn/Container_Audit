@@ -3188,7 +3188,11 @@ class _BootstrapPoll:
 
     def read(self, operation):
         records = self._records()
-        identities = self._identities(records)
+        # SYSTEM's apply owner keeps the existing LIVE/UNKNOWN contract. Its
+        # protected PID/birth record and derived status are rechecked below;
+        # ordinary bootstrap must not gain a new right to query SYSTEM.
+        identities = self._identities(records[:2] + records[3:])
+        claim_status = apply_claim_status(self.control)
         self.trial_ownership.close()
         self.ownership.close()
         result, failure = None, None
@@ -3216,7 +3220,9 @@ class _BootstrapPoll:
         if self.in_trial:
             self.trial_ownership.enter_context(update_lock(
                 self.control, self.policy["operator_sid"], trial=True))
-        if not births_match or self._records() != records or time.monotonic() >= self.deadline:
+        if (not births_match or self._records() != records
+                or apply_claim_status(self.control) != claim_status
+                or time.monotonic() >= self.deadline):
             raise _BootstrapObservationChanged()
         for expected in (identities, observed):
             for pid, identity in expected.items():

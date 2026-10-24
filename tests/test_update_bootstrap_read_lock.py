@@ -147,6 +147,29 @@ def test_stable_absent_apply_owner_keeps_existing_recovery_path(poll_scene):
         assert poll.read(lambda: "ALLOW") == "ALLOW"
 
 
+def test_existing_unknown_system_apply_owner_does_not_add_query_permission(poll_scene, monkeypatch):
+    s = poll_scene
+    s.records[s.control / "apply-claim.json"] = {"pid": 202, "creation_identity": "protected-system-birth", "status": "RUNNING"}
+    s.identities[202] = {"status": "UNKNOWN"}
+    monkeypatch.setattr(updates, "apply_claim_status", lambda *_: "UNKNOWN")
+    with updates._BootstrapPoll(s.control, s.policy, deadline=120) as poll:
+        assert poll.read(lambda: "ALLOW") == "ALLOW"
+
+
+def test_changed_apply_owner_status_discards_read(poll_scene, monkeypatch):
+    s = poll_scene
+    status = ["LIVE"]
+    monkeypatch.setattr(updates, "apply_claim_status", lambda *_: status[0])
+
+    def observe():
+        status[0] = "UNKNOWN"
+        return []
+
+    with pytest.raises(updates._BootstrapObservationChanged):
+        with updates._BootstrapPoll(s.control, s.policy, deadline=120) as poll:
+            poll.read(observe)
+
+
 @pytest.mark.parametrize("change", ["none", "birth", "reused", "unknown"])
 def test_observed_row_requires_matching_native_birth_and_reacquired_lifetime(poll_scene, monkeypatch, change):
     s = poll_scene
@@ -211,7 +234,7 @@ def test_bootstrap_trial_observe_runs_outside_both_locks_and_discards_stale_stat
     launches, snapshots = [], []
     monkeypatch.setattr(updates, "control_root", lambda *_: s.control)
     monkeypatch.setattr(updates, "ordinary_user_context", lambda *_: True)
-    monkeypatch.setattr(updates, "apply_claim_status", lambda *_: "LIVE")
+    monkeypatch.setattr(updates, "apply_claim_status", lambda *_: "NONE" if s.records[s.control / "apply-claim.json"]["status"] == "SETTLED" else "LIVE")
     monkeypatch.setattr(updates, "prepared_pending", lambda *_: False)
     monkeypatch.setattr(updates, "_bootstrap_recovery_gui", lambda *a, **k: None)
     monkeypatch.setattr(updates, "request_apply_task", lambda *_: None)
@@ -225,6 +248,7 @@ def test_bootstrap_trial_observe_runs_outside_both_locks_and_discards_stale_stat
         s.clock[0] += seconds
         snapshots.append(seconds)
         s.records[s.control / "transition.json"]["phase"] = "CONFIRMED"
+        s.records[s.control / "apply-claim.json"]["status"] = "SETTLED"
         return []
 
     monkeypatch.setattr(updates, "process_snapshot", observe)
