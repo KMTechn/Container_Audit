@@ -12,6 +12,7 @@ import uuid
 import pytest
 
 import auto_update as updates
+from _update_native_rows import native_row_identity
 import writer_session_fence as fence
 
 
@@ -66,7 +67,7 @@ def recovery(tmp_path, monkeypatch):
         yield
 
     def snapshot(*args):
-        assert held.depth > 0
+        # Bootstrap reads now release ownership; launch below still requires it.
         return list(rows)
 
     def launch(command, **kwargs):
@@ -99,11 +100,12 @@ def recovery(tmp_path, monkeypatch):
             raise OSError("injected task request failure")
 
     monkeypatch.setattr(updates, "control_root", lambda *_: control)
-    monkeypatch.setattr(updates, "optional_record", lambda p: state if p.name == "transition.json" else updates.read_json(p))
+    monkeypatch.setattr(updates, "optional_record", lambda p: state if p.name == "transition.json" else updates.read_json(p) if p.is_file() else None)
     monkeypatch.setattr(updates, "ordinary_user_context", lambda *_: True)
     monkeypatch.setattr(updates, "startup_update_lock", locked)
     monkeypatch.setattr(updates, "update_lock", locked)
     monkeypatch.setattr(updates, "process_snapshot", snapshot)
+    monkeypatch.setattr(updates, "native_process_identity", lambda pid: native_row_identity(rows, pid, current_pid=os.getpid()))
     monkeypatch.setattr(updates, "current_generation_status", lambda *_: "ALLOW")
     monkeypatch.setattr(updates, "prepared_pending", prepared)
     monkeypatch.setattr(updates, "apply_claim_status", claim)

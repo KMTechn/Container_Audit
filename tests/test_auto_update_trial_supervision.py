@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 import auto_update as updates
+from _update_native_rows import native_row_identity
 from tests.test_current_user_onboarding import existing_possession_key_contract
 from user_relay import user_relay_stop_path
 
@@ -76,6 +77,7 @@ def scene(tmp_path, monkeypatch):
     monkeypatch.setattr(updates, "apply_claim_status", lambda *_: "LIVE")
     monkeypatch.setattr(updates, "prepared_pending", lambda *a: False)
     monkeypatch.setattr(updates, "process_snapshot", lambda *_: list(rows))
+    monkeypatch.setattr(updates, "native_process_identity", lambda pid: native_row_identity(rows, pid, current_pid=os.getpid()))
     monkeypatch.setattr(updates, "request_apply_task", lambda *a: requests.append(clock[0]))
     monkeypatch.setattr(updates, "launch_version", launch)
     monkeypatch.setattr(updates, "_bootstrap_recovery_gui", lambda *a, **k: None)

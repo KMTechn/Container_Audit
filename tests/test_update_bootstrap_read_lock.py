@@ -4,6 +4,8 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+import threading
+import time
 
 import pytest
 
@@ -255,3 +257,67 @@ def test_bootstrap_trial_observe_runs_outside_both_locks_and_discards_stale_stat
     assert updates._bootstrap(s.control / "app", [], role="gui") == 0
     assert snapshots == [seconds] and launches == [] and s.held == []
     assert max(duration for _, duration in s.intervals) <= 1
+
+
+def test_overlapping_empty_observations_do_not_launch_two_trial_relays(tmp_path, monkeypatch):
+    control, stage = tmp_path / "control", tmp_path / "stage"
+    policy = {"operator_sid": "test-operator", "staging_root": str(stage)}
+    state = {"phase": "APPLIED_PENDING_READY", "nonce": "1" * 32,
+             "transition_id": "f" * 32, "trial_pid": 101,
+             "applied_at": datetime.now(timezone.utc).isoformat()}
+    active = {"sha": "b" * 40}
+    records = {control / "transition.json": state, control / "active.json": active,
+               control / "apply-claim.json": {"pid": 606, "creation_identity": "system-owner"},
+               stage / "trial.json": {"pid": 101, "nonce": state["nonce"]}}
+    mutex, local, both_observed = threading.RLock(), threading.local(), threading.Barrier(2)
+    launches, errors = [], []
+    deadline = time.monotonic() + 30
+
+    @contextmanager
+    def locked(*args, **kwargs):
+        with mutex:
+            local.depth = getattr(local, "depth", 0) + 1
+            try:
+                yield True
+            finally:
+                local.depth -= 1
+
+    def observe(*_):
+        assert local.depth == 0
+        both_observed.wait(3)
+        return []  # Both samples precede either launch.
+
+    def launch(*args, **kwargs):
+        assert local.depth == 2
+        launches.append(kwargs["nonce"])
+        return 200 + len(launches)
+
+    def run():
+        try:
+            with updates._BootstrapPoll(control, policy, deadline=deadline) as poll:
+                with poll.trial():
+                    updates._bootstrap_trial_relay(control, policy, state, active, [], {},
+                        deadline=deadline, read_only=poll.read)
+        except Exception as error:
+            errors.append(error)
+
+    monkeypatch.setattr(updates, "optional_record", lambda path: deepcopy(records.get(Path(path))))
+    monkeypatch.setattr(updates, "startup_update_lock", locked)
+    monkeypatch.setattr(updates, "update_lock", locked)
+    monkeypatch.setattr(updates, "apply_claim_status", lambda *_: "LIVE")
+    monkeypatch.setattr(updates, "native_process_identity", lambda pid: {"status": "LIVE", "creation_identity": "same-lifetime"})
+    monkeypatch.setattr(updates, "process_snapshot", observe)
+    monkeypatch.setattr(updates, "launch_version", launch)
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(5)
+    finally:
+        both_observed.abort()
+        for thread in threads:
+            thread.join(5)
+    assert not any(thread.is_alive() for thread in threads)
+    assert errors == []
+    assert len(launches) == 1

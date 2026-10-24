@@ -11,6 +11,7 @@ import uuid
 import pytest
 
 import auto_update as updates
+from _update_native_rows import native_row_identity
 from kmtech_shared import data_generation as generation
 import startup_check_report
 
@@ -92,7 +93,7 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(updates,'fixed_helper',lambda *a,**k:None)
     monkeypatch.setattr(updates,'version_bundle',lambda c,s:tmp_path/s)
     monkeypatch.setattr(updates,'version_manifest',lambda *a,**k:{'source_commit':w.active(),'version':'1.0.0'})
-    monkeypatch.setattr(updates,'native_process_identity',lambda pid:{'status':'LIVE','creation_identity':'current'} if pid==os.getpid() else {'status':'ABSENT'})
+    monkeypatch.setattr(updates,'native_process_identity',lambda pid:native_row_identity(w.rows,pid,current_pid=os.getpid()))
     monkeypatch.setattr(updates,'emit_support_record',lambda *a,**k:None)
     monkeypatch.setattr(updates,'emit_progress_guidance',lambda:None)
     monkeypatch.setattr(updates,'now_utc',w.now)
