@@ -1,5 +1,10 @@
 # 이적 목표 명세 (Container_Audit)
 
+### retained 후보와 다음 업데이트 요청 (sub-555)
+
+retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요청을 한 번 수행하고 journal을 다시 읽는다. 기존 writer가 있으면 SYSTEM의 유예를 따른다. 늦은 READY 확정은 현재 기록에서 같은 전환의 timeout만 식별할 수 없어 닫아 둔다(실패 사유는 세대 code로 덮이고 failed_shas는 sha만 보존). 새 기록 형식·사유 값·phase·대기창을 만들지 않는다.
+
+
 ### 업데이트 확인창 획득 busy 재시도(120 초 안)
 
 사용자 bootstrap의 실행 전 부재 확인 Observe와 실행은 같은 update→trial 잠금 안에서 원자적으로 수행한다. 반복 감독은 프로세스 안에 보관한 relay PID/생성 수명을 native 조회로 확인하며, 최초 실행 전과 그 수명이 끝난 뒤에만 Observe한다. 실행 상한 3회와 2초 간격은 유지한다. 한 번짜리 ordinary relay·recovery GUI·start_current·15분 stale UNKNOWN 복구의 Observe/증명/실행은 기존 잠금 안에 둔다. 실행을 결정하지 않는 prepared/READY 상태 읽기만 잠금 밖에서 하고 재획득 뒤 transition·nonce·PID/birth·claim·READY·active를 재확인한다. 바뀐 관측은 기존 감독 창으로 돌리며 새 마감·공유 기록을 만들지 않는다. 실행·request·claim 기록의 기존 잠금 순서를 유지한다.

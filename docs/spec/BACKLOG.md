@@ -1,3 +1,7 @@
+### retained 후보와 다음 업데이트 요청 (sub-555)
+
+retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요청을 한 번 수행하고 journal을 다시 읽는다. 기존 writer가 있으면 SYSTEM의 유예를 따른다. 늦은 READY 확정은 현재 기록에서 같은 전환의 timeout만 식별할 수 없어 닫아 둔다(실패 사유는 세대 code로 덮이고 failed_shas는 sha만 보존). 새 기록 형식·사유 값·phase·대기창을 만들지 않는다.
+
 ### 업데이트 확인창 획득 busy 재시도(120 초 안)
 
 인벤토리는 고정 process_snapshot의 literal Observe→raw helper 간선 하나만 비변경 호출로 분류한다. 함수·첫 rows 대입 호출 위치·literal mode·실행 본체 AST가 일치해야 하며 다른 mode/호출자/모듈/본문은 미보호로 남는다. fixed_helper의 writer 선언, registry schema와 빌더의 uncovered 거절 기준은 유지한다.

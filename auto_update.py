@@ -139,6 +139,9 @@ def ready_matches(
 ) -> bool:
     """PID/heartbeat/exit zero alone do not establish application readiness."""
     phase = transition.get("phase")
+    # Retained DEFERRED has no trustworthy timeout-only provenance: the
+    # generation decision replaces the original reason, and failed_shas has
+    # no transition identity. Keep late READY fail-closed for this schema.
     if phase not in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"}:
         return False
     sha = transition.get("previous_sha" if phase == "ROLLBACK_PENDING_READY" else "candidate_sha")
@@ -3292,6 +3295,8 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                 if state and state["phase"] == "DEFERRED" and state.get("retained_candidate") is True:
                     if active["sha"] != recovery_sha(state, pointer_sha=active["sha"]):
                         action = "WAIT_FOR_RECOVERY"
+                    elif prepared:
+                        action = "REQUEST_APPLY"
                     else:
                         return start_current(control, policy, state, active, gui_arguments, code="UPDATE_TERMINAL_RECOVERED", deadline=deadline)
                 if state and state["phase"] in {"CONFIRMED", "ROLLED_BACK"} and saw_trial:
