@@ -202,6 +202,12 @@ DIRECTORY_PREPARATION_CALLS = {
 INVENTORY_ALL_SOURCES_SENTINEL = "__INVENTORY_ALL_SOURCES__"
 TRUSTED_CONTROL_PLANE_MUTATIONS: dict[str, str] = {}
 CALLER_FENCED_MUTATIONS: dict[str, dict[str, tuple[str, ...] | str]] = {
+    "auto_update._run_fixed_helper": {
+        "callers": ("auto_update.fixed_helper",),
+        "reference_callers": ("auto_update.fixed_helper", "auto_update.process_snapshot"),
+        "sources": ("auto_update_control",),
+        "reason": "fixed helper remains fenced; only the pinned process_snapshot literal Observe edge is read-only",
+    },
     "auto_update._copy_prepared_bytes": {
         "callers": ("auto_update.copy_prepared_file", "auto_update.stage_prepared_copies"),
         "sources": ("auto_update_control",),
@@ -1790,6 +1796,29 @@ def _sink_rows(
     return rows
 
 
+def _observe_only_helper_caller(parsed_modules, *, target, caller):
+    """Recognize one approved read-only edge without widening helper authority."""
+    if target != "auto_update._run_fixed_helper" or caller != "auto_update.process_snapshot":
+        return False
+    payload = parsed_modules.get("auto_update")
+    if payload is None or _relative(payload["path"]) != "auto_update.py":
+        return False
+    functions = payload["collector"].functions
+    body = functions.get(target, {}).get("node")
+    snapshot = functions.get(caller, {}).get("node")
+    # A changed execution body must be audited again, even with the same name.
+    if body is None or _ast_sha256(body) != "dd0da7f51094eedd2d5ca277009c01b67a0ae64f0748b9759c193efc07022c43":
+        return False
+    if snapshot is None or not snapshot.body:
+        return False
+    expected = ast.parse('rows = json.loads(_run_fixed_helper(control, "Observe"))').body[0]
+    if ast.dump(snapshot.body[0], include_attributes=False) != ast.dump(expected, include_attributes=False):
+        return False
+    references = [node for node in ast.walk(snapshot)
+                  if isinstance(node, ast.Name) and node.id == "_run_fixed_helper"]
+    return len(references) == 1
+
+
 def _closure_mutation_rows(
     *,
     parsed_modules: dict[str, dict[str, Any]],
@@ -1829,18 +1858,25 @@ def _closure_mutation_rows(
             kind = "function"
             decorated_source = sink_sources.get(qualname, "")
         direct_callers = sorted(set(callers_by_node.get(qualname, [])))
+        mutating_callers = [caller for caller in direct_callers
+                            if not _observe_only_helper_caller(
+                                parsed_modules, target=qualname, caller=caller)]
         caller_guard_sources = sorted(
             {
                 sink_sources[caller]
-                for caller in direct_callers
+                for caller in mutating_callers
                 if caller in sink_sources
             }
         )
         caller_contract = CALLER_FENCED_MUTATIONS.get(qualname)
         caller_contract_matches = bool(caller_contract) and (
-            direct_callers == list(caller_contract["callers"])
+            mutating_callers == list(caller_contract["callers"])
             and caller_guard_sources == list(caller_contract["sources"])
         )
+        if caller_contract_matches and mutating_callers != direct_callers:
+            # Every mutating caller has its original fence. The only remaining
+            # unsunk paths end in the exact read-only Observe edge above.
+            unsunk = []
         trust_reason = TRUSTED_CONTROL_PLANE_MUTATIONS.get(qualname, "")
         if decorated_source:
             coverage_status = "covered"

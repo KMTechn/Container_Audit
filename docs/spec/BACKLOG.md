@@ -1,5 +1,7 @@
 ### 업데이트 확인창 획득 busy 재시도(120 초 안)
 
+인벤토리는 고정 process_snapshot의 literal Observe→raw helper 간선 하나만 비변경 호출로 분류한다. 함수·첫 rows 대입 호출 위치·literal mode·실행 본체 AST가 일치해야 하며 다른 mode/호출자/모듈/본문은 미보호로 남는다. fixed_helper의 writer 선언, registry schema와 빌더의 uncovered 거절 기준은 유지한다.
+
 사용자 bootstrap의 실행 전 부재 확인 Observe와 실행은 같은 update→trial 잠금 안에서 원자적으로 수행한다. 반복 감독은 프로세스 안에 보관한 relay PID/생성 수명을 native 조회로 확인하며, 최초 실행 전과 그 수명이 끝난 뒤에만 Observe한다. 실행 상한 3회와 2초 간격은 유지한다. 한 번짜리 ordinary relay·recovery GUI·start_current·15분 stale UNKNOWN 복구의 Observe/증명/실행은 기존 잠금 안에 둔다. 실행을 결정하지 않는 prepared/READY 상태 읽기만 잠금 밖에서 하고 재획득 뒤 transition·nonce·PID/birth·claim·READY·active를 재확인한다. 바뀐 관측은 기존 감독 창으로 돌리며 새 마감·공유 기록을 만들지 않는다. 실행·request·claim 기록의 기존 잠금 순서를 유지한다.
 
 - 10/24 sub-553 추가 P1: process Observe만 writer gate 밖으로 옮겨 trial GUI/onboarding·relay의 입장을 허용한다. Authority·Apply·Verify는 기존 gate 안에 유지한다. Observe subprocess 상한은 변경하지 않고 별도 검토 근거를 보고한다.
