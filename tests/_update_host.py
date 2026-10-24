@@ -1090,11 +1090,18 @@ def gui_readiness_loop(config, app, arguments=()):
     # Match Container_Audit.main: consume machine completion before optional
     # first-run onboarding, using the native caller setting for this branch.
     report = onboarding.consume_pending_machine_onboarding(app)
-    if onboarding.first_run_onboarding_enabled() and report is None:
+    enabled = onboarding.first_run_onboarding_enabled()
+    event(root, 'gui_native_onboarding_route', first_run_enabled=enabled,
+          pending_report_available=report is not None,
+          pending_report_status=report.get('status') if report is not None else None)
+    if enabled and report is None:
         event(root, 'gui_onboard_called')
         report = onboarding.onboard_current_user(app, server_base_url=ORIGIN, startup=True)
-    if report is not None:
         event(root, 'gui_onboarded', status=report['status'])
+    else:
+        state = onboarding.inspect_current_user_state(onboarding.resolve_current_user_onboarding_paths(app))
+        event(root, 'gui_existing_onboarding_state', status=state.get('status'),
+              first_run_enabled=enabled, pending_report_available=report is not None)
     published = False
     called = set()
     while not (root / 'host-finish').exists():
