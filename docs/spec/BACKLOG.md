@@ -1,5 +1,7 @@
 ### 업데이트 확인창 획득 busy 재시도(120 초 안)
 
+- 10/24 sub-553 추가 P1: process Observe만 writer gate 밖으로 옮겨 trial GUI/onboarding·relay의 입장을 허용한다. Authority·Apply·Verify는 기존 gate 안에 유지한다. Observe subprocess 상한은 변경하지 않고 별도 검토 근거를 보고한다.
+
 - 10/24 sub-553: SYSTEM 후보·되돌림 READY 확인의 최초 획득과 고리에서 exact busy(`wait_result=0x102`)만 원래 120초 마감 안에서 재시도한다. 최초 busy는 보호 journal의 원 시각을 대기 상한에만 쓰고 획득 뒤 다시 읽는다. 판독 실패·형식/시각 이상·abandoned·다른 오류·본문 오류·마감 뒤 busy는 그대로 거절하며 native 5초 대기·bootstrap 잠금 범위·확인 증명을 유지한다. 공식 빌드는 하네스 동일 사슬 GREEN 뒤, 현장 수용은 별도 단계다. 근거: `work/program/w9firstupd/sub-553/RESULT.md`.
 
 - 10/23 sub-502 고침: v2.0.120 정상 닫기는 생성 시 명시 등록한 자료 일꾼만 기다리며 화면·Tk의 모르는 스레드·native Dummy 대기를 없앤다. 자료 쓰기·60초 상한·stall 표지·다음 시작 복구는 유지한다. 진단 개선 후보: stall 파일에 daemon 여부·등록 여부도 남기기(이번엔 구현하지 않음). 근거: `work/program/w9firstupd/sub-502/RESULT.md`.

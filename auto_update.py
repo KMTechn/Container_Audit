@@ -1743,6 +1743,10 @@ def _ready_window_update_lock(control: Path, operator_sid: str, *, deadline: flo
 
 @writer_sink("auto_update_control")
 def fixed_helper(control: Path, mode: str, *, code_root: Path | None = None) -> str:
+    return _run_fixed_helper(control, mode, code_root=code_root)
+
+
+def _run_fixed_helper(control: Path, mode: str, *, code_root: Path | None = None) -> str:
     import subprocess
 
     root = control.parent / "current"
@@ -1759,7 +1763,9 @@ def fixed_helper(control: Path, mode: str, *, code_root: Path | None = None) -> 
 
 
 def process_snapshot(control: Path) -> list[dict[str, Any]]:
-    rows = json.loads(fixed_helper(control, "Observe"))
+    # Observe lists processes and mutates no product state. Keep its slow
+    # PowerShell wait outside writer admission so trial GUI/relay can enter.
+    rows = json.loads(_run_fixed_helper(control, "Observe"))
     if not isinstance(rows, list):
         raise ValueError("update process observation is incomplete")
     return rows
