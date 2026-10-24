@@ -67,7 +67,8 @@ def recovery(tmp_path, monkeypatch):
         yield
 
     def snapshot(*args):
-        # Bootstrap reads now release ownership; launch below still requires it.
+        # Absence observations and the resulting launch share ownership.
+        assert held.depth > 0
         return list(rows)
 
     def launch(command, **kwargs):

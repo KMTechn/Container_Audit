@@ -348,14 +348,19 @@ def test_trial_relay_reuses_native_lifetime_without_repeating_observe(poll_scene
     s = poll_scene
     state = s.records[s.control / "transition.json"]
     active = s.records[s.control / "active.json"]
-    attempts, observations, launches = {}, [], []
+    attempts, observations, launches, loop_holds = {}, [], [], []
     s.identities[202] = {"status": "LIVE", "creation_identity": "relay-first"}
     monkeypatch.setattr(updates, "apply_claim_status", lambda *_: "LIVE")
 
     def observe(*_):
         assert s.held == ["update", "trial"]
         observations.append(s.clock[0])
+        s.clock[0] += 15
         return []
+
+    def identity(pid):
+        s.clock[0] += 0.001
+        return s.identity(pid)
 
     def launch(*args, **kwargs):
         assert s.held == ["update", "trial"]
@@ -364,15 +369,18 @@ def test_trial_relay_reuses_native_lifetime_without_repeating_observe(poll_scene
 
     monkeypatch.setattr(updates, "process_snapshot", observe)
     monkeypatch.setattr(updates, "launch_version", launch)
+    monkeypatch.setattr(updates, "native_process_identity", identity)
     for tick in range(31):
-        s.clock[0] = float(tick)
+        s.clock[0] += 3
         if tick == 15:
             s.identities[202] = ({"status": "LIVE", "creation_identity": "relay-second"}
                                   if later == "REUSED" else
                                   {"status": later, **({"creation_identity": "relay-first"} if later == "LIVE" else {})})
-        with updates._BootstrapPoll(s.control, s.policy, deadline=120) as poll:
+        began, before = s.clock[0], len(observations)
+        with updates._BootstrapPoll(s.control, s.policy, deadline=240) as poll:
             with poll.trial():
-                updates._bootstrap_trial_relay(s.control, s.policy, state, active, [], attempts, deadline=120)
+                updates._bootstrap_trial_relay(s.control, s.policy, state, active, [], attempts, deadline=240)
+        loop_holds.append((len(observations) - before, s.clock[0] - began))
         if later in {"ABSENT", "REUSED"} and tick == 15:
             # A successful restarted relay has a new native lifetime.
             s.identities[202] = {"status": "LIVE", "creation_identity": "relay-second"}
@@ -382,4 +390,10 @@ def test_trial_relay_reuses_native_lifetime_without_repeating_observe(poll_scene
         assert len(observations) == len(launches) == 2
     else:
         assert len(observations) == len(launches) == 3
-    assert max(duration for _, duration in s.intervals) == 0
+    assert max(duration for census, duration in loop_holds if not census) <= 0.002
+    (s.tmp_path / "relay-loop-holds.json").write_text(json.dumps({
+        "loop_count": len(loop_holds), "observe_loop_count": len(observations),
+        "max_hold_without_observe_seconds": max(d for census, d in loop_holds if not census),
+        "max_hold_with_observe_seconds": max(d for census, d in loop_holds if census),
+        "clock": "virtual: native query 0.001s, Observe 15s",
+    }), encoding="utf-8")
