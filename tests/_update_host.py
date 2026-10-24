@@ -5,6 +5,7 @@ product. OS identity/ACL, task dispatch, local feed transport and credential
 protection are fixture boundaries. No real host credentials are accessed.
 """
 import contextlib
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -616,25 +617,44 @@ def install_os(config, app):
     updates.unredirected_source = source_identity
     real_lock = updates.update_lock
     held = [0]
+    role = ('SYSTEM' if system else 'bootstrap' if '--bootstrap' in sys.argv
+            else 'relay' if '--container-audit-user-relay' in sys.argv else 'GUI')
+    def lock_fields():
+        import traceback
+        return {'role': role, 'utc': datetime.now(timezone.utc).isoformat(),
+                'caller_frames': [{'file': Path(frame.filename).name, 'function': frame.name,
+                                   'line': frame.lineno}
+                                  for frame in traceback.extract_stack(limit=12)[:-2]]}
     @contextlib.contextmanager
     def observed_lock(control, sid, **kwargs):
         began = time.monotonic()
         trial = kwargs.get('trial', False)
-        event(root, 'lock_request', trial=trial, system=system, timeout_ms=kwargs.get('timeout_ms', 5000))
+        event(root, 'lock_request', trial=trial, system=system, timeout_ms=kwargs.get('timeout_ms', 5000), **lock_fields())
         try:
             with real_lock(control, native_sid, **kwargs):
                 if not trial:
                     held[0] += 1
-                event(root, 'lock_acquired', trial=trial, system=system, waited=time.monotonic()-began)
+                event(root, 'lock_acquired', trial=trial, system=system, waited=time.monotonic()-began, **lock_fields())
+                try:
+                    state = updates.optional_record(control / 'transition.json') or {}
+                    phase = state.get('phase')
+                    original = state.get('rollback_at', state.get('applied_at')) if phase == 'ROLLBACK_PENDING_READY' else state.get('applied_at')
+                    if phase in {'APPLIED_PENDING_READY', 'ROLLBACK_PENDING_READY'} and original:
+                        observed_at = time.monotonic()
+                        end = observed_at + 120 - (updates._utc(updates.now_utc()) - updates._utc(original)).total_seconds()
+                        event(root, 'ready_window', phase=phase, applied_at=state.get('applied_at'),
+                              rollback_at=state.get('rollback_at'), monotonic_deadline=end, **lock_fields())
+                except Exception:
+                    pass  # Instrumentation grants no authority and changes no lock result.
                 try:
                     yield
                 finally:
                     if not trial:
                         held[0] -= 1
-                    event(root, 'lock_releasing', trial=trial, system=system)
+                    event(root, 'lock_releasing', trial=trial, system=system, **lock_fields())
         except RuntimeError as error:
             event(root, 'lock_error', trial=trial, system=system, elapsed=time.monotonic()-began,
-                  type=type(error).__name__, wait_result=getattr(error, 'wait_result', None))
+                  type=type(error).__name__, wait_result=getattr(error, 'wait_result', None), **lock_fields())
             raise
     updates.update_lock = observed_lock
     real_rollback_ready = updates.wait_for_rollback_ready

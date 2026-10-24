@@ -2959,12 +2959,8 @@ def _launch_bootstrap_version(control: Path, sha: str, arguments: list[str], *, 
 
 
 
-def _bootstrap_read(read_only, operation):
-    return operation() if read_only is None else read_only(operation)
-
-
 def _bootstrap_recovery_gui(control: Path, policy: Mapping[str, Any], state, active, arguments,
-                            *, claim_status: str, deadline: float, read_only=None) -> int | None:
+                            *, claim_status: str, deadline: float) -> int | None:
     """Caller owns the update lock; only a settled ordinary relay admits a GUI."""
     phase = (state or {}).get("phase")
     eligible = (phase in {"FAILED", "UNKNOWN"}
@@ -2973,7 +2969,7 @@ def _bootstrap_recovery_gui(control: Path, policy: Mapping[str, Any], state, act
     if not eligible or claim_status not in {"NONE", "ABSENT"}:
         return None
     try:
-        writers = writer_processes(_bootstrap_read(read_only, lambda: process_snapshot(control)), own_pid=os.getpid())
+        writers = writer_processes(process_snapshot(control), own_pid=os.getpid())
         if not writers:
             return None
         if any(row.get("role") == "gui" for row in writers):
@@ -2986,7 +2982,7 @@ def _bootstrap_recovery_gui(control: Path, policy: Mapping[str, Any], state, act
         boundary = relay.get("created_at")
         if _utc(boundary) > _utc(now_utc()):
             raise ValueError("relay creation time is in the future")
-        proved = _bootstrap_read(read_only, lambda: assert_ordinary_recovery(control, policy, active["sha"], boundary))
+        proved = assert_ordinary_recovery(control, policy, active["sha"], boundary)
         if (len(proved) != 1 or proved[0].get("role") != "relay"
                 or type(proved[0].get("pid")) is not int
                 or proved[0].get("pid") != relay.get("pid")
@@ -3000,10 +2996,10 @@ def _bootstrap_recovery_gui(control: Path, policy: Mapping[str, Any], state, act
 
 
 def _bootstrap_existing_writers(control: Path, policy: Mapping[str, Any], active, arguments,
-                                *, role: str, deadline: float, read_only=None) -> int | None:
+                                *, role: str, deadline: float) -> int | None:
     """Caller owns the update lock; relay success requires launch or live proof."""
     try:
-        writers = writer_processes(_bootstrap_read(read_only, lambda: process_snapshot(control)), own_pid=os.getpid())
+        writers = writer_processes(process_snapshot(control), own_pid=os.getpid())
         if not writers:
             return None
         if role != "relay":
@@ -3014,11 +3010,11 @@ def _bootstrap_existing_writers(control: Path, policy: Mapping[str, Any], active
             if _utc(deferred_at) >= _utc(now_utc()):
                 raise ValueError("ordinary recovery boundary must precede this request")
             # Return the exact observation that passed the existing cohort proof.
-            writers = _bootstrap_read(read_only, lambda: assert_ordinary_recovery(control, policy, sha, deferred_at))
+            writers = assert_ordinary_recovery(control, policy, sha, deferred_at)
         else:
             # A logon request has no inherited boundary. It may reuse a proven
             # ordinary relay, but cannot create a new cohort beside a writer.
-            if read_json(control / "active.json")["sha"] != sha or _bootstrap_read(read_only, lambda: current_generation_status(control, policy, sha)) != "ALLOW":
+            if read_json(control / "active.json")["sha"] != sha or current_generation_status(control, policy, sha) != "ALLOW":
                 raise ValueError("ordinary relay reuse requires the active allowed version")
             for row in writers:
                 if (row.get("sha") != sha or row.get("sid") != policy["operator_sid"]
@@ -3038,7 +3034,7 @@ def _bootstrap_existing_writers(control: Path, policy: Mapping[str, Any], active
         return 20
 
 
-def start_current(control: Path, policy: Mapping[str, Any], state, active, arguments, *, code: str, report_once: bool = False, deadline: float | None = None, read_only=None) -> int:
+def start_current(control: Path, policy: Mapping[str, Any], state, active, arguments, *, code: str, report_once: bool = False, deadline: float | None = None) -> int:
     """Reuse ordinary launch and publish only the E9 allowlisted support fields."""
     report = support_record({"reason_code": code,
         "transition_code": (state or {}).get("failure_decision", {}).get("code", code),
@@ -3063,7 +3059,7 @@ def start_current(control: Path, policy: Mapping[str, Any], state, active, argum
         emit_support_record({"reason_code": "REPORT_UNAVAILABLE"}, stage="update_apply")
     started_at = now_utc()
     if state and state["phase"] in {"PREPARED", "FAILED", "UNKNOWN", "APPLIED_PENDING_READY"}:
-        _bootstrap_read(read_only, lambda: assert_ordinary_recovery(control, policy, active["sha"], started_at))
+        assert_ordinary_recovery(control, policy, active["sha"], started_at)
     if deadline is None:
         launch_version(control, active["sha"], arguments, deferred_at=started_at)
     else:
@@ -3100,21 +3096,35 @@ def bootstrap_supervision_deadline(state, *, started: float, now: float, utc_now
     return min(started + 480, max(started + 240, stage_end + 15))
 
 
-def _bootstrap_trial_relay(control, policy, state, active, gui_arguments, attempts, *, deadline, read_only=None):
+def _bootstrap_trial_relay(control, policy, state, active, gui_arguments, attempts, *, deadline):
     """One sampled start attempt per nonce, with process-local retry accounting."""
     if apply_claim_status(control) == "ABSENT":
         return  # The caller resumes the existing ordinary recovery proof path.
-    count, previous, reported = attempts.get(state["nonce"], (0, None, False))
+    attempt = attempts.setdefault(state["nonce"], {
+        "count": 0, "previous": None, "reported": False, "relay": None})
+    relay = attempt["relay"]
+    if relay is not None:
+        identity = native_process_identity(relay["pid"])
+        if identity.get("status") == "UNKNOWN" or identity == relay["identity"]:
+            return  # Uncertainty never establishes absence or permits a restart.
+        attempt["relay"] = None
+    count, previous, reported = attempt["count"], attempt["previous"], attempt["reported"]
     if count >= 3 or previous is not None and time.monotonic() - previous < 2:
         return
     if time.monotonic() >= deadline:
         return
-    rows = writer_processes(_bootstrap_read(read_only, lambda: process_snapshot(control)), own_pid=os.getpid())
+    # Absence and launch must share update→trial ownership. Only the first
+    # sample, or a known relay lifetime ending, needs the slow census.
+    rows = writer_processes(process_snapshot(control), own_pid=os.getpid())
     if time.monotonic() >= deadline:
         return
     relays = [row for row in rows if process_matches_trial(row, state=state,
         sha=active["sha"], sid=policy["operator_sid"], role="relay")]
     if relays:
+        pid = relays[0]["pid"]
+        identity = native_process_identity(pid)
+        if identity.get("status") == "LIVE":
+            attempt["relay"] = {"pid": pid, "identity": identity}
         return
     root_arguments = []
     if "--data-root" in gui_arguments:
@@ -3123,14 +3133,17 @@ def _bootstrap_trial_relay(control, policy, state, active, gui_arguments, attemp
             raise ValueError("trial data root argument is absent")
         root_arguments = gui_arguments[index:index + 2]
     count += 1
-    attempts[state["nonce"]] = (count, time.monotonic(), reported)
+    attempt.update(count=count, previous=time.monotonic())
     try:
-        _launch_bootstrap_version(control, active["sha"],
+        pid = _launch_bootstrap_version(control, active["sha"],
             ["--container-audit-user-relay", *root_arguments], nonce=state["nonce"], deadline=deadline)
+        identity = native_process_identity(pid)
+        if identity.get("status") == "LIVE":
+            attempt["relay"] = {"pid": pid, "identity": identity}
     except OSError:
         if count == 3 and not reported:
             emit_support_record({"reason_code": TRIAL_RELAY_START_FAILED}, stage="update_apply", policy=policy)
-            attempts[state["nonce"]] = (count, attempts[state["nonce"]][1], True)
+            attempt["reported"] = True
 
 
 class _BootstrapObservationChanged(Exception):
@@ -3273,48 +3286,48 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                 gui_arguments = arguments[1:] if role == "relay" and arguments[:1] == ["--container-audit-user-relay"] else arguments
                 if role == "gui":
                     recovery_gui = _bootstrap_recovery_gui(control, policy, state, active, arguments,
-                                                           claim_status=claim_status, deadline=deadline, read_only=poll.read)
+                                                           claim_status=claim_status, deadline=deadline)
                     if recovery_gui is not None:
                         return recovery_gui
                 if state and state["phase"] == "DEFERRED" and state.get("retained_candidate") is True:
                     if active["sha"] != recovery_sha(state, pointer_sha=active["sha"]):
                         action = "WAIT_FOR_RECOVERY"
                     else:
-                        return start_current(control, policy, state, active, gui_arguments, code="UPDATE_TERMINAL_RECOVERED", deadline=deadline, read_only=poll.read)
+                        return start_current(control, policy, state, active, gui_arguments, code="UPDATE_TERMINAL_RECOVERED", deadline=deadline)
                 if state and state["phase"] in {"CONFIRMED", "ROLLED_BACK"} and saw_trial:
                     if state["phase"] == "ROLLED_BACK":
-                        return start_current(control, policy, state, active, gui_arguments, code="UPDATE_PREVIOUS_CONFIRMED", deadline=deadline, read_only=poll.read)
+                        return start_current(control, policy, state, active, gui_arguments, code="UPDATE_PREVIOUS_CONFIRMED", deadline=deadline)
                     return 0  # The already-launched GUI owns input and its ordinary relay.
                 if state and state["phase"] == "DEFERRED" and requested_at and _utc(state["deferred_at"]) >= _utc(requested_at):
                     code = state.get("reason_code")
                     if code not in {"UPDATE_PREPARATION_FAILED", "UPDATE_EXISTING_WRITER", UPDATE_RELAY_STOP_REQUESTED}:
                         code = "UPDATE_TERMINAL_RECOVERED"
                     launch_arguments = gui_arguments if code == UPDATE_RELAY_STOP_REQUESTED else arguments
-                    return start_current(control, policy, state, active, launch_arguments, code=code, deadline=deadline, read_only=poll.read)
+                    return start_current(control, policy, state, active, launch_arguments, code=code, deadline=deadline)
                 if claim_status == "ABSENT":
-                    existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline, read_only=poll.read)
+                    existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline)
                     if existing is not None:
                         return existing
-                    if poll.read(lambda: current_generation_status(control, policy, active["sha"])) != "ALLOW":
+                    if current_generation_status(control, policy, active["sha"]) != "ALLOW":
                         emit_progress_guidance()
                         return 20
-                    return start_current(control, policy, state, active, arguments, code="UPDATE_SUPERVISION_UNAVAILABLE", report_once=True, deadline=deadline, read_only=poll.read)
+                    return start_current(control, policy, state, active, arguments, code="UPDATE_SUPERVISION_UNAVAILABLE", report_once=True, deadline=deadline)
                 if action == "START_CURRENT":
                     if state and state["phase"] in {"ROLLED_BACK", "DEFERRED"}:
-                        return start_current(control, policy, state, active, arguments, code="UPDATE_TERMINAL_RECOVERED", deadline=deadline, read_only=poll.read)
+                        return start_current(control, policy, state, active, arguments, code="UPDATE_TERMINAL_RECOVERED", deadline=deadline)
                     _launch_bootstrap_version(control, active["sha"], arguments, deadline=deadline)
                     return 0
                 if state and state["phase"] in {"UNKNOWN", "FAILED"}:
                     if claim_status not in {"LIVE", "UNKNOWN"}:
-                        existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline, read_only=poll.read)
+                        existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline)
                         if existing is not None:
                             return existing
-                        if poll.read(lambda: current_generation_status(control, policy, active["sha"])) == "ALLOW" and not prepared:
-                            return start_current(control, policy, state, active, arguments, code="UPDATE_TERMINAL_RECOVERED", deadline=deadline, read_only=poll.read)
+                        if current_generation_status(control, policy, active["sha"]) == "ALLOW" and not prepared:
+                            return start_current(control, policy, state, active, arguments, code="UPDATE_TERMINAL_RECOVERED", deadline=deadline)
                 if action in {"REQUEST_APPLY", "REQUEST_TRIAL", "WAIT_FOR_RECOVERY", "WAIT_FOR_TRIAL"} and not requested:
                     if action == "REQUEST_APPLY" and update_relay_stop_requested(policy):
                         return start_current(control, policy, state, active, gui_arguments,
-                            code=UPDATE_RELAY_STOP_REQUESTED, deadline=deadline, read_only=poll.read)
+                            code=UPDATE_RELAY_STOP_REQUESTED, deadline=deadline)
                     requested_at = now_utc()
                     progress_deadline = time.monotonic() + APPLY_PROGRESS_TIMEOUT
                     try:
@@ -3325,11 +3338,11 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                             continue
                         if not state or state["phase"] in {"PREPARED", "CONFIRMED", "ROLLED_BACK", "DEFERRED", "FAILED", "UNKNOWN", "APPLIED_PENDING_READY"}:
                             if state and state["phase"] == "APPLIED_PENDING_READY":
-                                existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline, read_only=poll.read)
+                                existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline)
                                 if existing is not None:
                                     return existing
                             code = "UPDATE_SUPERVISION_UNAVAILABLE" if state and state["phase"] == "APPLIED_PENDING_READY" else "UPDATE_APPLY_REQUEST_FAILED"
-                            return start_current(control, policy, state, active, arguments, code=code, deadline=deadline, read_only=poll.read)
+                            return start_current(control, policy, state, active, arguments, code=code, deadline=deadline)
                         raise
                     requested = True
                     # The task may already have settled or switched this journal.
@@ -3339,14 +3352,14 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                     claim_status = apply_claim_status(control)
                     if claim_status == "ABSENT":
                         if state and state["phase"] == "APPLIED_PENDING_READY":
-                            existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline, read_only=poll.read)
+                            existing = _bootstrap_existing_writers(control, policy, active, arguments, role=role, deadline=deadline)
                             if existing is not None:
                                 return existing
-                        return start_current(control, policy, state, active, arguments, code="UPDATE_SUPERVISION_UNAVAILABLE", report_once=True, deadline=deadline, read_only=poll.read)
+                        return start_current(control, policy, state, active, arguments, code="UPDATE_SUPERVISION_UNAVAILABLE", report_once=True, deadline=deadline)
                     if claim_status in {"LIVE", "UNKNOWN"}:
                         apply_started = True
                     if not apply_started and time.monotonic() >= progress_deadline:
-                        return start_current(control, policy, state, active, arguments, code="UPDATE_APPLY_NO_PROGRESS", deadline=deadline, read_only=poll.read)
+                        return start_current(control, policy, state, active, arguments, code="UPDATE_APPLY_NO_PROGRESS", deadline=deadline)
                 if action in {"REQUEST_TRIAL", "WAIT_FOR_TRIAL"}:
                     # Both the Run relay and a launcher request this same GUI trial.
                     # The GUI's ordinary onboarding starts its single normal relay.
@@ -3366,7 +3379,7 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                             saw_trial = True
                         _bootstrap_trial_relay(control, policy, state, active, gui_arguments,
                             relay_attempts, deadline=min(deadline, time.monotonic() + max(0.0,
-                                120 - (_utc(now_utc()) - _utc(trial_at)).total_seconds())), read_only=poll.read)
+                                120 - (_utc(now_utc()) - _utc(trial_at)).total_seconds())))
         except _BootstrapObservationChanged:
             pass
         except RuntimeError as error:

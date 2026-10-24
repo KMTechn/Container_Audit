@@ -232,7 +232,7 @@ def test_original_deadline_not_reopened_by_slow_read(poll_scene):
 
 
 @pytest.mark.parametrize("seconds", [15, 30])
-def test_bootstrap_trial_observe_runs_outside_both_locks_and_discards_stale_state(poll_scene, monkeypatch, seconds):
+def test_bootstrap_prepared_read_runs_outside_both_locks_and_discards_stale_state(poll_scene, monkeypatch, seconds):
     s = poll_scene
     launches, snapshots = [], []
     monkeypatch.setattr(updates, "control_root", lambda *_: s.control)
@@ -254,7 +254,7 @@ def test_bootstrap_trial_observe_runs_outside_both_locks_and_discards_stale_stat
         s.records[s.control / "apply-claim.json"]["status"] = "SETTLED"
         return []
 
-    monkeypatch.setattr(updates, "process_snapshot", observe)
+    monkeypatch.setattr(updates, "prepared_pending", observe)
     assert updates._bootstrap(s.control / "app", [], role="gui") == 0
     assert snapshots == [seconds] and launches == [] and s.held == []
     assert max(duration for _, duration in s.intervals) <= 1
@@ -270,7 +270,9 @@ def test_overlapping_empty_observations_do_not_launch_two_trial_relays(tmp_path,
     records = {control / "transition.json": state, control / "active.json": active,
                control / "apply-claim.json": {"pid": 606, "creation_identity": "system-owner"},
                stage / "trial.json": {"pid": 101, "nonce": state["nonce"]}}
-    mutex, local, both_observed = threading.RLock(), threading.local(), threading.Barrier(2)
+    mutex, local = threading.RLock(), threading.local()
+    start, second_observed = threading.Barrier(2), threading.Event()
+    rows = []
     launches, errors, observations = [], [], []
     original_records = deepcopy(records)
     deadline = time.monotonic() + 30
@@ -285,22 +287,31 @@ def test_overlapping_empty_observations_do_not_launch_two_trial_relays(tmp_path,
                 local.depth -= 1
 
     def observe(*_):
-        assert local.depth == 0
+        assert local.depth == 2
+        sampled = list(rows)
         observations.append(True)
-        both_observed.wait(3)
-        return []  # Both samples precede either launch.
+        if len(observations) == 1:
+            second_observed.wait(0.2)
+        else:
+            second_observed.set()
+        return sampled
 
     def launch(*args, **kwargs):
         assert local.depth == 2
         launches.append(kwargs["nonce"])
-        return 200 + len(launches)
+        pid = 200 + len(launches)
+        rows.append(dict(pid=pid, observable=True, role="relay", sha=active["sha"],
+                         sid=policy["operator_sid"], ordinary_user=True,
+                         created_at=state["applied_at"]))
+        return pid
 
     def run():
         try:
+            start.wait(3)
             with updates._BootstrapPoll(control, policy, deadline=deadline) as poll:
                 with poll.trial():
                     updates._bootstrap_trial_relay(control, policy, state, active, [], {},
-                        deadline=deadline, read_only=poll.read)
+                        deadline=deadline)
         except Exception as error:
             errors.append(error)
 
@@ -318,7 +329,7 @@ def test_overlapping_empty_observations_do_not_launch_two_trial_relays(tmp_path,
         for thread in threads:
             thread.join(5)
     finally:
-        both_observed.abort()
+        start.abort()
         for thread in threads:
             thread.join(5)
     (tmp_path / "empty-observation-race-proof.json").write_text(json.dumps({
@@ -330,3 +341,45 @@ def test_overlapping_empty_observations_do_not_launch_two_trial_relays(tmp_path,
     assert not any(thread.is_alive() for thread in threads)
     assert errors == []
     assert len(launches) == 1
+
+
+@pytest.mark.parametrize("later", ["LIVE", "ABSENT", "REUSED", "UNKNOWN"])
+def test_trial_relay_reuses_native_lifetime_without_repeating_observe(poll_scene, monkeypatch, later):
+    s = poll_scene
+    state = s.records[s.control / "transition.json"]
+    active = s.records[s.control / "active.json"]
+    attempts, observations, launches = {}, [], []
+    s.identities[202] = {"status": "LIVE", "creation_identity": "relay-first"}
+    monkeypatch.setattr(updates, "apply_claim_status", lambda *_: "LIVE")
+
+    def observe(*_):
+        assert s.held == ["update", "trial"]
+        observations.append(s.clock[0])
+        return []
+
+    def launch(*args, **kwargs):
+        assert s.held == ["update", "trial"]
+        launches.append(s.clock[0])
+        return 202
+
+    monkeypatch.setattr(updates, "process_snapshot", observe)
+    monkeypatch.setattr(updates, "launch_version", launch)
+    for tick in range(31):
+        s.clock[0] = float(tick)
+        if tick == 15:
+            s.identities[202] = ({"status": "LIVE", "creation_identity": "relay-second"}
+                                  if later == "REUSED" else
+                                  {"status": later, **({"creation_identity": "relay-first"} if later == "LIVE" else {})})
+        with updates._BootstrapPoll(s.control, s.policy, deadline=120) as poll:
+            with poll.trial():
+                updates._bootstrap_trial_relay(s.control, s.policy, state, active, [], attempts, deadline=120)
+        if later in {"ABSENT", "REUSED"} and tick == 15:
+            # A successful restarted relay has a new native lifetime.
+            s.identities[202] = {"status": "LIVE", "creation_identity": "relay-second"}
+    if later in {"LIVE", "UNKNOWN"}:
+        assert len(observations) == len(launches) == 1
+    elif later == "REUSED":
+        assert len(observations) == len(launches) == 2
+    else:
+        assert len(observations) == len(launches) == 3
+    assert max(duration for _, duration in s.intervals) == 0

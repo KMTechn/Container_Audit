@@ -1833,7 +1833,7 @@ Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종�
 
 ### 업데이트 확인창 획득 busy 재시도(120 초 안)
 
-사용자 bootstrap 반복문의 Observe·prepared/세대·일반 복구 증명은 update→trial 잠금을 놓은 뒤 실행한다. 다시 같은 순서로 잠금을 얻고 transition 전체(단계·nonce·trial PID/시각 포함), active, apply claim, trial claim, READY, trial failure, prepared 기록과 native PID 생성 수명을 재확인한다. 하나라도 달라졌거나 수명을 확인할 수 없으면 결과를 버리고 기존 감독 창에서 다음 반복을 한다. 새 창을 만들지 않는다. 실행·claim/READY 기록의 기존 원자적 보호 경계는 유지한다.
+사용자 bootstrap의 실행 전 부재 확인 Observe와 실행은 같은 update→trial 잠금 안에서 원자적으로 수행한다. 반복 감독은 프로세스 안에 보관한 relay PID/생성 수명을 native 조회로 확인하며, 최초 실행 전과 그 수명이 끝난 뒤에만 Observe한다. 실행 상한 3회와 2초 간격은 유지한다. 한 번짜리 ordinary relay·recovery GUI·start_current·15분 stale UNKNOWN 복구의 Observe/증명/실행은 기존 잠금 안에 둔다. 실행을 결정하지 않는 prepared/READY 상태 읽기만 잠금 밖에서 하고 재획득 뒤 transition·nonce·PID/birth·claim·READY·active를 재확인한다. 바뀐 관측은 기존 감독 창으로 돌리며 새 마감·공유 기록을 만들지 않는다. 실행·request·claim 기록의 기존 잠금 순서를 유지한다.
 
 느린 process Observe는 writer gate를 쥐지 않으므로 trial GUI/onboarding·relay의 입장을 막지 않는다. Authority·Apply·Verify 등 fixed helper의 쓰기/검증은 gate 안에 남는다. Observe의 기존 subprocess 무응답 마감은 이번 고침에서 바꾸지 않으며, 별도 상한 근거는 sub-553 보고에 기록한다.
 
