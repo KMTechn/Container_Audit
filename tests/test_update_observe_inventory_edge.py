@@ -50,7 +50,7 @@ def classify(change):
     for name, value in trees.items():
         collector = module.FunctionCollector(module_name=name)
         collector.visit(value)
-        parsed[name] = {"path": module.ROOT / (name + ".py"), "tree": value,
+        parsed[name] = {"path": Path(name + ".py"), "tree": value,
                         "collector": collector}
     known = {name for payload in parsed.values() for name in payload["collector"].functions}
     for payload in parsed.values():
