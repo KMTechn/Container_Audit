@@ -49,7 +49,7 @@ def recovery(tmp_path, monkeypatch):
                   role="gui", sha=SHA, sid=policy["operator_sid"],
                   ordinary_user=True, created_at=CREATED)
     rows, launches, guidance = [parent], [], []
-    clock, case = [0.0], ["absent"]
+    clock, case, requested = [0.0], ["absent"], [False]
     mutex = threading.RLock()
     held = threading.local()
 
@@ -84,7 +84,7 @@ def recovery(tmp_path, monkeypatch):
             return "UNKNOWN"
         if case[0] == "after-request":
             claim.calls += 1
-            return "ABSENT" if claim.calls >= 3 else "NONE"
+            return "ABSENT" if requested[0] else "NONE"
         return "NONE"
     claim.calls = 0
 
@@ -96,6 +96,7 @@ def recovery(tmp_path, monkeypatch):
         return False
 
     def request(*args):
+        requested[0] = True
         if case[0] == "request-error":
             raise OSError("injected task request failure")
 
@@ -123,6 +124,7 @@ def recovery(tmp_path, monkeypatch):
 
     def configure(value):
         case[0] = value
+        requested[0] = False
         state["phase"] = {"failed": "FAILED", "unknown": "UNKNOWN", "stale": "UNKNOWN",
                           "request-error": "PREPARED"}.get(value, "APPLIED_PENDING_READY")
 
