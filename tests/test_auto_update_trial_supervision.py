@@ -133,7 +133,7 @@ def test_a_slow_rollback_is_supervised_after_240_seconds(scene, monkeypatch):
     def sample(*args):
         state = updates.read_json(s.control / "transition.json")
         if state["phase"] == "UNKNOWN":
-            assert state["normal_stop_started_at"] == stamp(120)
+            assert state["normal_stop_started_at"] == stamp(240)
             raise StopObserved
         return [dict(s.relay(), pid=101, role="gui")]
 
