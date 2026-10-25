@@ -558,6 +558,46 @@ function Invoke-CimMethod { param($InputObject,$MethodName) return @{ReturnValue
             + ' -Mode Observe\nexit $LASTEXITCODE\n')
 
 
+def _task_xml_read_model(root, current, updates):
+    """Model only the installer's task readback in this isolated machine."""
+    from unittest.mock import patch
+
+    root, current = Path(root).resolve(), Path(current).resolve()
+    assert current.is_relative_to(root / 'machine')
+    spec = updates.install_task_spec(current, SID)
+    xml_bytes = spec['xml'].encode('utf-16')
+    (root / 'task-readback-fixture.xml').write_bytes(xml_bytes)
+    write(root / 'task-readback-fixture.json', {
+        'generator': 'auto_update.install_task_spec -> logon_task_xml',
+        'installer_spec_call': 'INSTALL_THIS_PC.ps1:1371',
+        'installer_registration': 'INSTALL_THIS_PC.ps1:1638',
+        'fixed_root': str(current), 'operator_sid': SID,
+        'xml_sha256': hashlib.sha256(xml_bytes).hexdigest(),
+    })
+    commands = []
+
+    def capture(command, *args, **kwargs):
+        commands.append(tuple(str(part) for part in command))
+        return subprocess.CompletedProcess(command, 1, '', '')
+
+    # Capture the product's exact query; never duplicate its query template.
+    with patch.object(subprocess, 'run', capture):
+        assert updates.supported_task_present(current, SID) is False
+    assert len(commands) == 1
+    expected = commands[0]
+
+    def read(command, *args, **kwargs):
+        supplied = tuple(str(part) for part in command)
+        if supplied == expected:
+            return subprocess.CompletedProcess(command, 0, spec['xml'], '')
+        if '-Command' in supplied and any('Schedule.Service' in part for part in supplied):
+            return subprocess.CompletedProcess(command, 1, '', '')
+        return None
+
+    return read
+
+
+
 def install_os(config, app):
     global TEST_POSSESSION_FINGERPRINT
     import auto_update as updates
@@ -809,7 +849,11 @@ def install_os(config, app):
         def __exit__(self, *_):
             pass
     requests.Session = Session
+    task_read = _task_xml_read_model(root, current, updates)
     def run(command, *args, **kwargs):
+        modeled = task_read(command, *args, **kwargs)
+        if modeled is not None:
+            return modeled
         if any(str(part).endswith('apply_prepared_update.ps1') for part in command):
             mode = command[command.index('-Mode') + 1]
             if mode == 'Observe':
