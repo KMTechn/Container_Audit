@@ -5,13 +5,17 @@
 retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요청을 한 번 수행하고 journal을 다시 읽는다. 기존 writer가 있으면 SYSTEM의 유예를 따른다. 일반 복귀는 요청한 GUI/relay 역할을 보존한다. 늦은 READY 확정은 현재 기록에서 같은 전환의 timeout만 식별할 수 없어 닫아 둔다(실패 사유는 세대 code로 덮이고 failed_shas는 sha만 보존). 새 기록 형식·사유 값·phase·대기창을 만들지 않는다.
 
 
-### 업데이트 확인창 획득 busy 재시도(120 초 안)
+### LIVE SYSTEM 결정과 bootstrap 감독 상한
+
+원래 감독 마감이 지나도 SYSTEM의 apply claim이 `LIVE`이고 전이가 `APPLIED_PENDING_READY`·`ROLLBACK_PENDING`·`ROLLBACK_PENDING_READY`이면 같은 bootstrap의 시작+480초까지만 결정을 더 기다린다. 연장 중 update lock을 못 얻어도 같은 대기 고리로 돌아간다. 잠금 밖 읽기는 기다림만 정하며, 실행과 포인터 변경의 기존 잠금·재확인은 그대로다. `UNKNOWN`·`ABSENT`·이미 결정된 기록에는 이 연장을 새로 주지 않는다. 480초에 닿으면 기존 마지막 읽기와 안내·rc20 출구를 유지한다. READY 240초·정상 종료 60초·단계 끝 여유 15초·relay 시도 수와 간격·nonce·G 판정은 바꾸지 않는다.
+
+### 업데이트 확인창 획득 busy 재시도(240 초 안)
 
 사용자 bootstrap의 실행 전 부재 확인 Observe와 실행은 같은 update→trial 잠금 안에서 원자적으로 수행한다. 반복 감독은 프로세스 안에 보관한 relay PID/생성 수명을 native 조회로 확인하며, 최초 실행 전과 그 수명이 끝난 뒤에만 Observe한다. 실행 상한 3회와 2초 간격은 유지한다. 한 번짜리 ordinary relay·recovery GUI·start_current·15분 stale UNKNOWN 복구의 Observe/증명/실행은 기존 잠금 안에 둔다. 실행을 결정하지 않는 prepared/READY 상태 읽기만 잠금 밖에서 하고 재획득 뒤 transition·nonce·PID/birth·claim·READY·active를 재확인한다. 바뀐 관측은 기존 감독 창으로 돌리며 새 마감·공유 기록을 만들지 않는다. 실행·request·claim 기록의 기존 잠금 순서를 유지한다.
 
 읽기 전용 process Observe는 writer admission 밖에서 실행해 trial GUI/onboarding·relay가 입장할 수 있게 한다. Authority·Apply·Verify 등 기존 fixed helper의 쓰기/검증 경로는 writer admission 안에 유지한다. PowerShell Observe의 기존 실행 상한은 이번에 변경하지 않는다.
 
-v2.0.121 고침 가지: SYSTEM의 후보·되돌림 READY 확인은 최초 journal 획득을 포함해 원래 내구 시각에 묶인 120초 창 안에서만 업데이트 잠금 획득 busy를 다시 기다린다. 잠금 전 판독은 대기 상한에만 쓰고, 획득 뒤 journal과 확인 증명을 다시 검사한다. abandoned·다른 오류·잠금 획득 뒤 본문 오류·마감 뒤 busy는 기존 거절을 유지한다. native 5초 대기와 정상 시작 증명은 그대로다. 고침 가지 검증은 `work/program/w9firstupd/sub-553/RESULT.md`에 기록하며 공식 빌드·현장 적용은 별도 지시 대상이다.
+v2.0.121 다시 설치 때(current 교체 길) 고침: SYSTEM의 후보·되돌림 READY 확인은 최초 journal 획득을 포함해 원래 내구 시각에 묶인 240초 창 안에서만 업데이트 잠금 획득 busy를 다시 기다린다. 잠금 전 판독은 대기 상한에만 쓰고, 획득 뒤 journal과 확인 증명을 다시 검사한다. abandoned·다른 오류·잠금 획득 뒤 본문 오류·마감 뒤 busy는 기존 거절을 유지한다. native 5초 대기와 정상 시작 증명은 그대로다. 고침 가지 검증은 `work/program/w9firstupd/sub-553/RESULT.md`에 기록하며 공식 빌드·현장 적용은 별도 지시 대상이다.
 
 - v2.0.120: 정상 닫기의 끝 정리는 생성 시 명시 등록한 자료 일꾼만 기다린다. 화면·Tk 모두 화면 껍질·라이브러리·native Dummy·모르는 스레드는 대기하지 않는다. 자료 쓰기·60초 상한·종료 지연 표지와 다음 시작 복구는 유지한다. 집중 검증 근거는 `work/program/w9firstupd/sub-502/RESULT.md`이며 ZIP 빌드·실제 화면 검증은 후속 단계다.
 

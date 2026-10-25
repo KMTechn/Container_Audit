@@ -3269,10 +3269,32 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
     started = time.monotonic()
     deadline = started + 240
     relay_attempts = {}
-    while time.monotonic() < deadline:
+    live_apply_wait = False
+
+    def extend_live_apply_wait():
+        nonlocal deadline, live_apply_wait
+        now = time.monotonic()
+        if now >= started + 480 or (not live_apply_wait and now < deadline):
+            return False
+        if apply_claim_status(control) != "LIVE":
+            return False
+        pending = optional_record(control / "transition.json")
+        if not pending or pending.get("phase") not in {
+            "APPLIED_PENDING_READY", "ROLLBACK_PENDING", "ROLLBACK_PENDING_READY"
+        }:
+            return False
+        # This unlocked read only bounds waiting. The protected poll still
+        # rechecks the journal and all authority before any existing action.
+        deadline = started + 480
+        live_apply_wait = True
+        return True
+
+    while time.monotonic() < deadline or extend_live_apply_wait():
         try:
             with _BootstrapPoll(control, policy, deadline=deadline) as poll:
                 if not poll.acquired:
+                    if extend_live_apply_wait():
+                        raise _BootstrapObservationChanged()
                     break
                 state = optional_record(control / "transition.json")
                 deadline = bootstrap_supervision_deadline(state, started=started,

@@ -370,7 +370,7 @@ PowerShell 관측·ACL·고정 helper·새 SYSTEM 로그온 action은 자식 인
 모듈 이름으로 writer sink를 식별한다. 앱 밖 정의는 `__main__`을 유지하며,
 기존 허용 목록·source·fence 판정과 로그온 작업 JSON/XML 계약을 그대로 적용한다.
 
-업데이트 뒤 확정 안 됨(유지된 후보) PC 는 다음 업데이트 때 풀림 · 현장 손 0.
+업데이트 뒤 확정 안 됨(유지된 후보) PC는 `failure_decision.code`가 `TRIAL_GENERATION_ADVANCED`이고 설치된 고정 `current`가 v2.0.121 이상이면 호환되는 다음 판이 올라올 때 그 업데이트로 풀린다 · 현장 손 0. `TRIAL_GENERATION_UNKNOWN`이면 자료를 보존하고 지원 담당자가 확인한다.
 
 READY 실패 뒤 `update-control/transition.json`의 `retained_candidate=true`이면
 새 판을 current로 유지한 상태다. `failure_decision.code`가
@@ -382,7 +382,7 @@ READY 실패 뒤 `update-control/transition.json`의 `retained_candidate=true`�
 보존한다. 임의 옛 판 복귀·marker 삭제·자료 복원으로 우회하지 않는다.
 세대가 변하지 않았고 옛 판이 허용된 경우만 옛 포인터를 복원하고 `ROLLBACK_PENDING_READY`로 기다린다.
 복원 판의 새 일반 사용자 GUI/relay READY를 실제 프로세스와 대조한 뒤에만 `ROLLED_BACK`과 confirmed_at을 기록한다.
-재시작·다른 감독도 기존 rollback_at 기준 120초 창을 이어 가며, 완료 전이와 후보 실패 목록·옛 포인터·자료는 보존한다.
+재시작·다른 감독도 기존 rollback_at 기준 240초 창을 이어 가며, 완료 전이와 후보 실패 목록·옛 포인터·자료는 보존한다.
 READY 부재·위조·다른 사용자/판·단순 생존은 완료 증거가 아니며, 시간 초과에는 기존 FAILED/지원 복구 정책을 유지한다.
 GUI와 relay는 같은 판정 함수를 사용한다.
 이전 실행이 남긴 업데이트 확인을 이어받으면 자료가 그대로일 때 정상 새 판도 이전 판으로 돌아갈 수 있다. 자동 갱신이 켜져 있으면 다음 시작 때 새 판을 감독하며 다시 적용한다.
@@ -1833,7 +1833,15 @@ Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종�
 
 사망한 SYSTEM의 같은 claim은 같은 세션에서 재요청하지 않고 현재 G 허용 판을 일반 실행한다. 지원 코드는 같은 protected claim hash에 대해 한 번 게시하며 다음 로그온의 기존 SYSTEM 작업이 새 claim을 덮어써 재시도한다(1차 결정 msg_c93ef274762a).
 
-### 업데이트 확인창 획득 busy 재시도(120 초 안)
+### LIVE SYSTEM 결정과 bootstrap 감독 상한
+
+원래 감독 마감이 지나도 SYSTEM의 apply claim이 `LIVE`이고 전이가 `APPLIED_PENDING_READY`·`ROLLBACK_PENDING`·`ROLLBACK_PENDING_READY`이면 같은 bootstrap의 시작+480초까지만 결정을 더 기다린다. 연장 중 update lock을 못 얻어도 같은 대기 고리로 돌아간다. 잠금 밖 읽기는 기다림만 정하며, 실행과 포인터 변경의 기존 잠금·재확인은 그대로다. `UNKNOWN`·`ABSENT`·이미 결정된 기록에는 이 연장을 새로 주지 않는다. 480초에 닿으면 기존 마지막 읽기와 안내·rc20 출구를 유지한다. READY 240초·정상 종료 60초·단계 끝 여유 15초·relay 시도 수와 간격·nonce·G 판정은 바꾸지 않는다.
+
+### 업데이트 확인창 획득 busy 재시도(240 초 안)
+
+표지 처리와 READY 창 고침은 다시 설치 때 고정 `current`를 교체하는 길에 반영된다. 11/1 판 수명 동안은 기존 실패 거절·자료 보존·지원 복구 그물이 지킨다.
+
+수동 멈춤 표지는 `%LOCALAPPDATA%\KMTech\DirectSync\container_audit\control\container_audit_user_relay.stop.json`이다. 원격 app-stop 등으로 이 표지가 남은 이적 PC는 재부팅·앱 재시작으로 풀리지 않고 relay가 서지 않으며 업데이트 적용도 미뤄진다(`UPDATE_RELAY_STOP_REQUESTED`). 다시 켜기는 지원이 작업자 계정으로 `--onboard-current-user`를 실행한 뒤 relay 상태 파일의 `status == RUNNING`을 되읽는다.
 
 인벤토리는 고정 process_snapshot의 literal Observe→raw helper 간선 하나만 비변경 호출로 분류한다. 함수·첫 rows 대입 호출 위치·literal mode·실행 본체 AST가 일치해야 하며 다른 mode/호출자/모듈/본문은 미보호로 남는다. fixed_helper의 writer 선언, registry schema와 빌더의 uncovered 거절 기준은 유지한다.
 
@@ -1841,13 +1849,13 @@ Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종�
 
 느린 process Observe는 writer gate를 쥐지 않으므로 trial GUI/onboarding·relay의 입장을 막지 않는다. Authority·Apply·Verify 등 fixed helper의 쓰기/검증은 gate 안에 남는다. Observe의 기존 subprocess 무응답 마감은 이번 고침에서 바꾸지 않으며, 별도 상한 근거는 sub-553 보고에 기록한다.
 
-사용자 bootstrap이 Observe 중 업데이트 잠금을 보유하면 SYSTEM의 후보·되돌림 READY 확인은 최초 journal 획득을 포함해 획득 busy만 원래 120초 창 안에서 다시 기다린다. 최초 busy의 잠금 전 보호 journal 판독은 원 시각의 상한 계산에만 쓰며, 판독 실패·형식/시각 이상은 재시도하지 않는다. 획득 뒤 본문은 journal을 다시 읽는다. 재시작이나 재시도로 `applied_at`·`rollback_at`을 갱신하지 않는다. native 5초 대기는 유지하며 abandoned·다른 오류·획득 뒤 본문 오류·마감 뒤 busy는 기존 fail-closed/UNKNOWN 경로를 따른다. 확인 증명이나 실패 뒤 복구 정책을 완화하지 않는다. 검증·잠금 자리별 근거는 `work/program/w9firstupd/sub-553/RESULT.md`에 남긴다. 공식 빌드는 하네스 RED 뒤 동일 사슬 GREEN을 확인한 다음 허용되며 게시·병합은 하지 않는다.
+사용자 bootstrap이 Observe 중 업데이트 잠금을 보유하면 SYSTEM의 후보·되돌림 READY 확인은 최초 journal 획득을 포함해 획득 busy만 원래 240초 창 안에서 다시 기다린다. 최초 busy의 잠금 전 보호 journal 판독은 원 시각의 상한 계산에만 쓰며, 판독 실패·형식/시각 이상은 재시도하지 않는다. 획득 뒤 본문은 journal을 다시 읽는다. 재시작이나 재시도로 `applied_at`·`rollback_at`을 갱신하지 않는다. native 5초 대기는 유지하며 abandoned·다른 오류·획득 뒤 본문 오류·마감 뒤 busy는 기존 fail-closed/UNKNOWN 경로를 따른다. 확인 증명이나 실패 뒤 복구 정책을 완화하지 않는다. 검증·잠금 자리별 근거는 `work/program/w9firstupd/sub-553/RESULT.md`에 남긴다. 공식 빌드는 하네스 RED 뒤 동일 사슬 GREEN을 확인한 다음 허용되며 게시·병합은 하지 않는다.
 
 ### Bootstrap relay 시작의 일시 admission 대기
 
 Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRITER_GATE_TIMEOUT`을 감독 마감 안에서 0.1초씩 쉬며 재시도한다. 각 시도는 기존 launch_version의 admission을 다시 얻으며 시도 사이에는 admission을 보유하지 않는다. 마지막 admission 대기는 기존 최대 5초이며 마감 뒤에는 기존 실패 출구를 유지한다. fence 확정·버려진 소유권 등 다른 거절과 GUI 실행 자체의 timeout은 재시도하지 않는다. 포인터·trial claim·READY·CONFIRMED·G 허가·cohort·잠금 순서는 유지한다. bootstrap 밖의 relay launcher admission과 실제 로그온/pythonw 수용은 별도 범위다.
 
-감독 마감은 시작+240초를 기본으로, 내구 기록된 현재 단계 창 끝+15초까지 늘리되 시작+480초를 넘지 않는다. 후보 READY 120초·후보 정상 종료 60초·원 rollback_at 기준 되돌림 READY 120초 자체는 늘리지 않는다. 같은 trial GUI claim 뒤에도 relay 실제 표본을 다시 확인하며, 없을 때만 같은 bootstrap 프로세스의 nonce마다 최대 3회/간격 2초 이상으로 시작한다. 재시작해도 원 READY 창은 늘지 않는다. Popen OSError의 세 번 실패는 사용자 `staging/startup-support.json`과 공개 지원 한 줄에 `TRIAL_RELAY_START_FAILED`로 남기며 기존 되돌림/FAILED 판정을 따른다. 사용자 bootstrap이 SYSTEM 소유 transition을 쓰지 않는다.
+감독 마감은 시작+240초를 기본으로, 내구 기록된 현재 단계 창 끝+15초까지 늘리되 시작+480초를 넘지 않는다. 후보 READY·되돌림 READY는 같은 240초 상수로 원 applied_at·rollback_at에 묶고, 후보 정상 종료는 60초다. 재시작으로 이 기준 시각이나 마감을 새로 열지 않는다. 같은 trial GUI claim 뒤에도 relay 실제 표본을 다시 확인하며, 없을 때만 같은 bootstrap 프로세스의 nonce마다 최대 3회/간격 2초 이상으로 시작한다. 재시작해도 원 READY 창은 늘지 않는다. Popen OSError의 세 번 실패는 사용자 `staging/startup-support.json`과 공개 지원 한 줄에 `TRIAL_RELAY_START_FAILED`로 남기며 기존 되돌림/FAILED 판정을 따른다. 사용자 bootstrap이 SYSTEM 소유 transition을 쓰지 않는다.
 
 정식 멈춤 PC는 업데이트 날 전에 `--onboard-current-user`로 onboarding하여 되살린다. relay 멈춤 표지가 있으면 SYSTEM은 포인터를 바꾸지 않고 기존 적용 전 보류와 같은 `DEFERRED`·`UPDATE_RELAY_STOP_REQUESTED`로 보류하며 recovery_pending은 두지 않는다. 사용자 bootstrap도 같은 표지에서 REQUEST_APPLY를 보내지 않고, 지원 기록·안내 한 번 뒤 기존 검증을 거쳐 지금 판 화면을 연다. relay는 표지대로 멈춘 채다. 표지는 업데이트가 지우지 않으며 onboarding 뒤 다음 로그온에서 적용한다. trial 도중 운영자가 새로 건 멈춤은 기존 READY 실패·되돌림/FAILED 흐름을 따른다.
 

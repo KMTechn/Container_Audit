@@ -2,7 +2,13 @@
 
 retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요청을 한 번 수행하고 journal을 다시 읽는다. 기존 writer가 있으면 SYSTEM의 유예를 따른다. 일반 복귀는 요청한 GUI/relay 역할을 보존한다. 늦은 READY 확정은 현재 기록에서 같은 전환의 timeout만 식별할 수 없어 닫아 둔다(실패 사유는 세대 code로 덮이고 failed_shas는 sha만 보존). 새 기록 형식·사유 값·phase·대기창을 만들지 않는다.
 
-### 업데이트 확인창 획득 busy 재시도(120 초 안)
+- 10/25 sub-555: 다시 설치 때 고정 current를 교체하는 길의 READY 창을 원 applied_at·rollback_at 기준 240초 한 상수로 모았다. 감독 마감 뒤 LIVE SYSTEM이 APPLIED_PENDING_READY·ROLLBACK_PENDING·ROLLBACK_PENDING_READY에 있으면 bootstrap 원 시작+480초까지만 기다리고, update lock busy도 같은 고리로 돌아간다. UNKNOWN/ABSENT/결정 끝에는 연장0, 240/60/+15/480·relay 재시도·nonce·G·포인터/자료 의미는 유지한다. 재부팅 전후 ZIP·사슬과 원시 F는 출처별로 보존하며 수용 상태는 work/program/w9firstupd/sub-555/RESULT.md에 기록한다.
+
+### LIVE SYSTEM 결정과 bootstrap 감독 상한
+
+원래 감독 마감이 지나도 SYSTEM의 apply claim이 `LIVE`이고 전이가 `APPLIED_PENDING_READY`·`ROLLBACK_PENDING`·`ROLLBACK_PENDING_READY`이면 같은 bootstrap의 시작+480초까지만 결정을 더 기다린다. 연장 중 update lock을 못 얻어도 같은 대기 고리로 돌아간다. 잠금 밖 읽기는 기다림만 정하며, 실행과 포인터 변경의 기존 잠금·재확인은 그대로다. `UNKNOWN`·`ABSENT`·이미 결정된 기록에는 이 연장을 새로 주지 않는다. 480초에 닿으면 기존 마지막 읽기와 안내·rc20 출구를 유지한다. READY 240초·정상 종료 60초·단계 끝 여유 15초·relay 시도 수와 간격·nonce·G 판정은 바꾸지 않는다.
+
+### 업데이트 확인창 획득 busy 재시도(240 초 안)
 
 인벤토리는 고정 process_snapshot의 literal Observe→raw helper 간선 하나만 비변경 호출로 분류한다. 함수·첫 rows 대입 호출 위치·literal mode·실행 본체 AST가 일치해야 하며 다른 mode/호출자/모듈/본문은 미보호로 남는다. fixed_helper의 writer 선언, registry schema와 빌더의 uncovered 거절 기준은 유지한다.
 
@@ -10,7 +16,7 @@ retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요
 
 - 10/24 sub-553 추가 P1: process Observe만 writer gate 밖으로 옮겨 trial GUI/onboarding·relay의 입장을 허용한다. Authority·Apply·Verify는 기존 gate 안에 유지한다. Observe subprocess 상한은 변경하지 않고 별도 검토 근거를 보고한다.
 
-- 10/24 sub-553: SYSTEM 후보·되돌림 READY 확인의 최초 획득과 고리에서 exact busy(`wait_result=0x102`)만 원래 120초 마감 안에서 재시도한다. 최초 busy는 보호 journal의 원 시각을 대기 상한에만 쓰고 획득 뒤 다시 읽는다. 판독 실패·형식/시각 이상·abandoned·다른 오류·본문 오류·마감 뒤 busy는 그대로 거절하며 native 5초 대기·bootstrap 잠금 범위·확인 증명을 유지한다. 공식 빌드는 하네스 동일 사슬 GREEN 뒤, 현장 수용은 별도 단계다. 근거: `work/program/w9firstupd/sub-553/RESULT.md`.
+- 10/24 sub-553: SYSTEM 후보·되돌림 READY 확인의 최초 획득과 고리에서 exact busy(`wait_result=0x102`)만 원래 120초 마감 안에서 재시도한다. 최초 busy는 보호 journal의 원 시각을 대기 상한에만 쓰고 획득 뒤 다시 읽는다. 판독 실패·형식/시각 이상·abandoned·다른 오류·본문 오류·마감 뒤 busy는 그대로 거절하며 native 5초 대기·bootstrap 잠금 범위·확인 증명을 유지한다. 공식 빌드는 하네스 동일 사슬 GREEN 뒤, 현장 수용은 별도 단계다. 근거: `work/program/w9firstupd/sub-553/RESULT.md`. (당시 120초 기록이며 10/25 후속 고침은 원 READY 창 240초를 사용한다.)
 
 - 10/23 sub-502 고침: v2.0.120 정상 닫기는 생성 시 명시 등록한 자료 일꾼만 기다리며 화면·Tk의 모르는 스레드·native Dummy 대기를 없앤다. 자료 쓰기·60초 상한·stall 표지·다음 시작 복구는 유지한다. 진단 개선 후보: stall 파일에 daemon 여부·등록 여부도 남기기(이번엔 구현하지 않음). 근거: `work/program/w9firstupd/sub-502/RESULT.md`.
 - 10/23 sub-498 P2 고침: v2.0.119 정상 기본 화면 닫기의 끝 정리에서 화면 owner 종료 뒤에야 멈추는 껍질 상주 스레드를 제외해 60초 대기·exit 1 순환을 끊었다. 자료 쓰기·Tk 모드·진짜 멈춤의 표지와 다음 시작 복구는 유지한다. 실제 Bridge/Pedal 자식 프로세스 RED→GREEN과 집중 팩·공식 선언 검사 근거: `work/program/w9firstupd/sub-498/RESULT.md`.
