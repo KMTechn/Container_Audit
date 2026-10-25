@@ -464,9 +464,9 @@
   },
   {
    "path": "app/frame.css",
-   "sha256": "ce7791bb1d356d16175fd345d0ff2955b9e4bd9d2d50b00958f959f5b57175f6",
-   "bytes": 34483,
-   "gzip": 8442
+   "sha256": "43f15c464feed26999bd008af17899ce01521289ec1f07a3c91ae7d61c906fe2",
+   "bytes": 34426,
+   "gzip": 8426
   },
   {
    "path": "app/frame.js",
