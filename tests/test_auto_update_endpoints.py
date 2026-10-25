@@ -191,7 +191,7 @@ def test_e7_retained_candidate_starts_in_same_bootstrap(endpoint, role):
     updates.write_json_durable(control / "transition.json", state)
     arguments = ["--container-audit-user-relay"] if role == "relay" else []
     assert_ordinary(endpoint, NEW, role=role, arguments=arguments)
-    assert json.loads(endpoint[-1].read_text())["relay"] is False
+    assert json.loads(endpoint[-1].read_text())["relay"] is (role == "relay")
 
 
 def test_x7_terminal_recovery_reopens_prepared_path(endpoint):

@@ -355,6 +355,11 @@ def test_overlapping_run_and_gui_reuse_sampled_single_trial_relay(scene, monkeyp
         thread.start()
     for thread in threads:
         thread.join()
+    (s.control.parent / "overlapping-trial-observed.json").write_text(json.dumps({
+        "results": results, "launches": s.launches, "observed": observed,
+        "row_roles": [row["role"] for row in s.rows],
+        "phase": updates.read_json(s.control / "transition.json")["phase"],
+    }, default=str), encoding="utf-8")
     assert results == [0, 0]
     assert sum(args[:1] == ["--container-audit-user-relay"]
                for _, _, args, _ in s.launches) == 1
