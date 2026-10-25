@@ -8,9 +8,9 @@
  "files": [
   {
    "path": "app/ca/ca.css",
-   "sha256": "0be621cfc6d6451238bb00a944ece8aebe10ff84f84de8e124fe2b669edf0fae",
-   "bytes": 24441,
-   "gzip": 4824
+   "sha256": "6b806e3ebf662ca385c6baa6c80de8afff9505b9da98f4c317a0d9b542f7990c",
+   "bytes": 24184,
+   "gzip": 4874
   },
   {
    "path": "app/ca/ca.js",

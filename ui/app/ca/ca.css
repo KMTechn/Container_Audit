@@ -303,6 +303,13 @@
   :root[data-text-level] .work { padding-top: 0; padding-bottom: 2px; row-gap: 0; }
   :root:is([data-text-level="2"], [data-text-level="3"]) .ca-count { position: relative; padding-top: 0; padding-bottom: 0; }
   :root:is([data-text-level="2"], [data-text-level="3"]) .ca-bar { position: absolute; bottom: 2px; left: 2px; right: 2px; height: 8px; }
+  :root[data-text-level="3"] .top { flex-wrap: wrap; gap: 0 16px; padding-block: 0; line-height: 1.2; }
+  :root[data-text-level="3"] .top__who, :root[data-text-level="3"] .top__nav { flex-wrap: wrap; }
+  :root[data-text-level="3"] .top .link { min-height: 44px; height: auto; padding-block: 0; line-height: 1.2; }
+  /* 같이 채우기 큰 글자는 다음 할 일을 넓혀 수 카드와 막대의 세로 자리를 확보한다. */
+  :root[data-text-level="3"] .work--side-list:has([data-cofill]:not([hidden])) { grid-template-areas: "next next next" "result result list" "count count list" "actions actions actions"; }
+  :root[data-text-level="3"] .work--side-list:has([data-cofill]:not([hidden])) .ca-count { grid-template-rows: auto auto auto 10px; }
+  :root[data-text-level="3"] .work--side-list:has([data-cofill]:not([hidden])) .ca-bar { position: static; }
 }
 
 .work > .result small.ca-separator-flow { display: flex; flex-wrap: wrap; }
@@ -325,20 +332,7 @@
 
 @media (min-width: 601px) and (max-width: 1365px) and (min-height: 800px) {
   :root[data-text-level] .work { padding-bottom: 0; }
-  :root[data-text-level="3"] .top__who { gap: 16px; }
-  :root[data-text-level="3"] .top { gap: 16px; }
-  :root[data-text-level="3"] .top { display: grid; grid-template-columns: max-content max-content minmax(0, 1fr) max-content; grid-template-rows: auto auto; padding-block: 0; }
-  :root[data-text-level="3"] .top__who { display: contents; }
-  :root[data-text-level="3"] .top__app { grid-column: 1; grid-row: 1 / span 2; }
-  :root[data-text-level="3"] .top__worker { grid-column: 2; grid-row: 1; }
-  :root[data-text-level="3"] [data-text-size] { grid-column: 3; grid-row: 1; justify-self: start; }
-  :root[data-text-level="3"] [data-text-extra] { grid-column: 2; grid-row: 2; justify-self: start; }
-  :root[data-text-level="3"] [data-change] { grid-column: 3; grid-row: 2; justify-self: start; }
-  :root[data-text-level="3"] .top__tag { grid-column: 4; grid-row: 1; }
-  :root[data-text-level="3"] .top__nav { grid-column: 4; grid-row: 2; justify-self: end; }
-  :root[data-text-level="3"] .top { line-height: 1.2; }
-  :root[data-text-level="3"] .top .link { min-height: 44px; height: auto; padding-block: 0; line-height: 1.2; }
-  :root[data-text-level="3"] .top { row-gap: 0; }
+  :root[data-text-level="3"] .top__who { gap: 0 16px; }
   .top__nav { gap: 16px; }
 }
 
