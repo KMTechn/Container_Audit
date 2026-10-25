@@ -64,7 +64,8 @@ def world(scene, monkeypatch, *, decision=True, final_claim="ABSENT", repeated_b
                 state.update(retained_candidate=True, failure_decision={
                     "selected_sha": NEW, "code": "TRIAL_GENERATION_ADVANCED"})
             s.write(s.control / "transition.json", state)
-            s.rows.clear()
+            if terminal != "CONFIRMED":
+                s.rows.clear()
 
     events = [applied, ready_end, stop, old_end, decided, released, 480]
     if claim_boundary is not None:
@@ -142,10 +143,11 @@ def test_live_apply_finishes_after_stage_deadline_and_opens_original_role(scene,
     assert result == 0
     assert len(ordinary(w)) == 1
     assert ordinary(w)[0]["relay"] is (role == "relay")
-    # The unchanged protected poll discards an observation at its expired old
-    # deadline, sleeps once, then takes the unchanged final START_CURRENT path.
-    assert ordinary(w)[0]["at"] == pytest.approx(w.released + 0.1)
-    assert w.s.clock[0] == pytest.approx(w.released + 0.1)
+    support = updates.read_json(w.s.stage / "startup-support.json")
+    assert support["reason_code"] == "UPDATE_TERMINAL_RECOVERED"
+    assert support["retained_candidate"] is True
+    assert ordinary(w)[0]["at"] == pytest.approx(w.released)
+    assert w.s.clock[0] == pytest.approx(w.released)
     assert not w.progress
 
 
@@ -204,9 +206,9 @@ def test_live_preapply_owner_finishes_and_opens_app_in_same_attempt(scene, monke
     })
     assert result == 0
     assert any(row["trial"] and not row["relay"] for row in w.popens)
-    # The existing protected poll observes the terminal phase with its expired
-    # original deadline, then takes its existing final read after one 0.1s sleep.
-    assert w.s.clock[0] == pytest.approx(w.decided + 0.1, rel=0, abs=1e-6)
+    # The existing saw_trial/CONFIRMED branch keeps the trial as the current GUI.
+    assert ordinary(w) == []
+    assert w.s.clock[0] == pytest.approx(w.released, rel=0, abs=1e-6)
     assert not w.progress
 
 

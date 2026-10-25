@@ -255,7 +255,8 @@ def test_refresh_uses_provisioned_logistics_profile_headers(
         load_profile,
     )
 
-    def fake_get(url, timeout, allow_redirects, headers):
+    def fake_get(url, timeout, allow_redirects, headers, stream):
+        assert stream is True
         assert allow_redirects is False
         calls.append((url, timeout, headers))
         return FakeResponse(CATALOG)
@@ -272,7 +273,7 @@ def test_refresh_uses_provisioned_logistics_profile_headers(
     assert calls == [
         (
             catalog_url,
-            2.0,
+            10.0,
             {
                 "User-Agent": "KMTech-ContainerAudit/1.0",
                 "Authorization": f"Bearer {SECRET_MARKER}",
@@ -354,7 +355,8 @@ def test_runtime_profile_origin_drives_default_catalog_route(monkeypatch, tmp_pa
         lambda required=None: _profile(base_url=PROFILE_CATALOG_ORIGIN),
     )
 
-    def fake_get(url, timeout, allow_redirects, headers):
+    def fake_get(url, timeout, allow_redirects, headers, stream):
+        assert stream is True
         calls.append((url, timeout, allow_redirects, headers))
         return FakeResponse(CATALOG)
 
@@ -362,7 +364,7 @@ def test_runtime_profile_origin_drives_default_catalog_route(monkeypatch, tmp_pa
     assert calls == [
         (
             PROFILE_CATALOG_URL,
-            2.0,
+            10.0,
             False,
             {
                 "User-Agent": "KMTech-ContainerAudit/1.0",
@@ -412,7 +414,8 @@ def test_runtime_profile_preserves_production_catalog_route(monkeypatch, tmp_pat
         lambda required=None: _profile(),
     )
 
-    def fake_get(url, timeout, allow_redirects, headers):
+    def fake_get(url, timeout, allow_redirects, headers, stream):
+        assert stream is True
         calls.append((url, timeout, allow_redirects, headers))
         return FakeResponse(CATALOG)
 
@@ -425,7 +428,7 @@ def test_runtime_profile_preserves_production_catalog_route(monkeypatch, tmp_pat
     assert calls == [
         (
             PRODUCTION_CATALOG_URL_WITH_PORT,
-            2.0,
+            10.0,
             False,
             {
                 "User-Agent": "KMTech-ContainerAudit/1.0",
@@ -514,7 +517,8 @@ def test_absent_profile_preserves_unauthenticated_override(monkeypatch, tmp_path
         load_profile,
     )
 
-    def fake_get(url, timeout, allow_redirects):
+    def fake_get(url, timeout, allow_redirects, headers):
+        assert headers == {"User-Agent": sync.DEFAULT_PRODUCER_USER_AGENT}
         assert allow_redirects is False
         calls.append((url, timeout))
         return FakeResponse(CATALOG)
@@ -607,7 +611,8 @@ def test_authenticated_request_failure_does_not_log_exception_message(
     )
     calls = []
 
-    def failing_get(url, timeout, allow_redirects, headers):
+    def failing_get(url, timeout, allow_redirects, headers, stream):
+        assert stream is True
         assert allow_redirects is False
         calls.append((url, timeout, headers))
         raise OSError(f"transport failed: {SECRET_MARKER}")
@@ -627,7 +632,7 @@ def test_authenticated_request_failure_does_not_log_exception_message(
     assert calls == [
         (
             PRODUCTION_CATALOG_URL,
-            2.0,
+            10.0,
             {
                 "User-Agent": "KMTech-ContainerAudit/1.0",
                 "Authorization": f"Bearer {SECRET_MARKER}",

@@ -89,7 +89,7 @@
     {
       "caller": "item_catalog_sync._atomic_write",
       "category": "filesystem",
-      "line": 537,
+      "line": 543,
       "operation": "atomic_replace.atomic_replace",
       "writer_admission_sources": []
     },
@@ -1054,12 +1054,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2880,
+      "line": 2882,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 2884,
+          "line": 2886,
           "operation": "subprocess.Popen",
           "writer_admission_sources": []
         }
@@ -1106,12 +1106,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2888,
+      "line": 2890,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 2892,
+          "line": 2894,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -1155,12 +1155,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2900,
+      "line": 2902,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 2914,
+          "line": 2916,
           "operation": "subprocess.Popen",
           "writer_admission_sources": []
         }
@@ -4100,23 +4100,23 @@
       ],
       "file": "item_catalog_sync.py",
       "kind": "function",
-      "line": 519,
+      "line": 525,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 521,
+          "line": 527,
           "operation": "path.parent.mkdir",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 537,
+          "line": 543,
           "operation": "atomic_replace.atomic_replace",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 541,
+          "line": 547,
           "operation": "temporary_path.unlink",
           "writer_admission_sources": []
         }
@@ -10860,7 +10860,7 @@
       "tools.register_container_audit_worker_pc"
     ]
   },
-  "inventory_sha256": "71242d70f087139b359f7ba3a9a844233efc1e4e07ec357aaac9d34cb2d84fc5",
+  "inventory_sha256": "581ea16f3a5afb4c6816b32f69216e92c8966e5e0fb8efb7b1d248287aca13c4",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -25020,7 +25020,7 @@
         ],
         "file": "auto_update.py",
         "function": "auto_update.request_apply_task",
-        "line": 2891
+        "line": 2893
       },
       {
         "commands": [
@@ -25373,7 +25373,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.launch_version",
-      "line": 2900,
+      "line": 2902,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -25405,7 +25405,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.request_apply_task",
-      "line": 2888,
+      "line": 2890,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -25413,7 +25413,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.request_bootstrap",
-      "line": 2880,
+      "line": 2882,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -25853,7 +25853,7 @@
       "direct_mutation_site_count": 3,
       "file": "item_catalog_sync.py",
       "function": "item_catalog_sync._atomic_write",
-      "line": 519,
+      "line": 525,
       "marker_kind": "decorator",
       "source": "item_catalog_atomic_write"
     },
@@ -25861,7 +25861,7 @@
       "direct_mutation_site_count": 0,
       "file": "item_catalog_sync.py",
       "function": "item_catalog_sync._write_authenticated_cache",
-      "line": 672,
+      "line": 678,
       "marker_kind": "decorator",
       "source": "item_catalog_cache_write"
     },
@@ -25869,7 +25869,7 @@
       "direct_mutation_site_count": 0,
       "file": "item_catalog_sync.py",
       "function": "item_catalog_sync.write_item_catalog_failure_diagnostic",
-      "line": 333,
+      "line": 339,
       "marker_kind": "decorator",
       "source": "item_catalog_cache_write"
     },
@@ -25877,7 +25877,7 @@
       "direct_mutation_site_count": 0,
       "file": "item_catalog_sync.py",
       "function": "item_catalog_sync.write_item_catalog_startup_diagnostic",
-      "line": 349,
+      "line": 355,
       "marker_kind": "decorator",
       "source": "item_catalog_cache_write"
     },
@@ -25885,7 +25885,7 @@
       "direct_mutation_site_count": 0,
       "file": "item_catalog_sync.py",
       "function": "item_catalog_sync.refresh_item_catalog",
-      "line": 867,
+      "line": 873,
       "marker_kind": "decorator",
       "source": "item_catalog_refresh"
     },

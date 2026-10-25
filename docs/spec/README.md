@@ -7,7 +7,7 @@ retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요
 
 ### LIVE SYSTEM 결정과 bootstrap 감독 상한
 
-원래 감독 마감이 지나도 SYSTEM의 apply claim이 `LIVE`이고 전이가 아직 없거나 `PREPARED`·`APPLIED_PENDING_READY`·`ROLLBACK_PENDING`·`ROLLBACK_PENDING_READY`이면 같은 bootstrap의 시작+480초까지만 결정을 더 기다린다. 연장 중 update lock을 못 얻어도 매 poll에서 claim·phase를 다시 읽으며, LIVE가 사라지면 기존 마지막 읽기 길로 간다. 잠금 밖 읽기는 기다림만 정하며, 실행과 포인터 변경의 기존 잠금·재확인은 그대로다. `UNKNOWN`·`ABSENT`·이미 결정된 기록에는 이 연장을 새로 주지 않는다. 480초에 닿으면 기존 마지막 읽기와 안내·rc20 출구를 유지한다. READY 240초·정상 종료 60초·단계 끝 여유 15초·relay 시도 수와 간격·nonce·G 판정은 바꾸지 않는다.
+원래 감독 마감이 지나도 SYSTEM의 apply claim이 `LIVE`이고 전이가 아직 없거나 `PREPARED`·`APPLIED_PENDING_READY`·`ROLLBACK_PENDING`·`ROLLBACK_PENDING_READY`이면 같은 bootstrap의 시작+480초까지만 결정을 더 기다린다. 연장 중에는 실제 native mutex의 busy 재시도 사이에도 claim·phase 자격을 다시 읽는다(native 한 시도 최대 5초 유지). LIVE 대기 자격이 사라지면 acquired=false로 기존 마지막 읽기에 돌아간다. DEFERRED·CONFIRMED·ROLLED_BACK 결정을 받으면 원 시작+480초 상한 안에서 잠금 아래 기존 retained·saw_trial·요청 뒤 DEFERRED 분기를 처리하며, terminal의 시작+240초 식으로 보호 관측을 버리지 않는다. 잠금 밖 읽기는 기다림만 정하며, 실행과 포인터 변경의 기존 잠금·재확인은 그대로다. `UNKNOWN`·`ABSENT`·이미 결정된 기록에는 이 연장을 새로 주지 않는다. 480초에 닿으면 기존 마지막 읽기와 안내·rc20 출구를 유지한다. READY 240초·정상 종료 60초·단계 끝 여유 15초·relay 시도 수와 간격·nonce·G 판정은 바꾸지 않는다.
 
 ### 업데이트 확인창 획득 busy 재시도(240 초 안)
 
@@ -304,3 +304,9 @@ v2.0.121 다시 설치 때(current 교체 길) 고침: SYSTEM의 후보·되돌�
 | `postcut/firstupd-ca-w5` · c5599fe | BACKLOG: 「운영 메뉴의 관리자 PIN 재조회·사전조회 보류 격리는 기존 lane 으로 … 실제 PIN 창·메뉴·음성·1366/1920 배율별 맞춤은 별도 화면 수용이 남는다」 | BACKLOG 기존 줄은 그대로 남는다. 화면 수용은 §7 CA-3 |
 | `postcut/firstupd-ca-shared036` · 8d528e0 | README·BACKLOG: 「shared 0.3.6 / 9파일 manifest·lock 고정, diagnostic_log 미사용 잎」 | 기술 내용이라 목표 명세 본문에는 넣지 않는다. 공용 코드 고정은 contracts/operations 와 그 가지 BACKLOG 에 남는다(병합 때 그대로) |
 | `postcut/firstupd-row6` · a2bff65 | README: 「설치 packet의 ES256 호환 하한·검증 실패 때 자기 판 fallback·onboarding 허가 밖 검증」 | 목표 본문은 유지한다. 자료 세대 기술 계약은 contracts.md·operations.md, 실제 서명/되돌림 미검증 범위는 BACKLOG에 남긴다. |
+
+## 10/26 첫 품목표·terminal claim 보호
+
+중앙 등록 profile이 있고 기본 요청 한도(2초)를 사용할 때, 현재 신원·서버 URL로 기존 인증 primary/recovery 검증기를 통과하는 품목표가 둘 다 없으면 첫 요청 한도는 10초다. 첫 시도 시작의 단조 시계부터 예산40초를 두고 다음 연결10초+읽기10초가 남을 때만, 서버 응답 전 연결·TLS·읽기 시간 초과를 0.25초 간격으로 최대 두 번 더 시도한다. 느린 실패가 이어질 때 계산상 약40초+이름 풀이이며, 바로 거절되면 최대 세 번 빨리 끝난다. HTTP 응답·본문 읽기·목록 검증 실패는 다시 시도하지 않는다. 인증 cache가 있거나 한도를 다른 값으로 명시했으면 기존 한 번의 요청과 한도를 유지한다(캐시 길 timeout2초, 연결+읽기 끊김 합산 약4초+이름 풀이). profile 없는 로컬/패키지 경로와 인증·cache 내구 형식은 그대로다.
+
+연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+480초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.

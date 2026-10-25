@@ -2805,7 +2805,7 @@ def startup_requires_bootstrap(state, *, prepared_present, running_sha, active_s
 
 
 @contextmanager
-def startup_update_lock(control: Path, policy: Mapping[str, Any], *, deadline: float | None = None):
+def startup_update_lock(control: Path, policy: Mapping[str, Any], *, deadline: float | None = None, wait_check=None):
     started = time.monotonic()
     limit = started + APPLY_PROGRESS_TIMEOUT
     acquired = False
@@ -2821,6 +2821,8 @@ def startup_update_lock(control: Path, policy: Mapping[str, Any], *, deadline: f
             except RuntimeError as error:
                 if str(error) != "update mutex ownership is busy or abandoned" or getattr(error, "wait_result", 0x102) != 0x102:
                     raise
+                if wait_check is not None and not wait_check():
+                    break
                 if time.monotonic() >= min(limit, deadline if deadline is not None else limit):
                     break
                 time.sleep(min(0.1, max(0, min(limit, deadline if deadline is not None else limit) - time.monotonic())))
@@ -3161,15 +3163,21 @@ class _BootstrapPoll:
     carries either update mutex or writer admission into the slow operation.
     """
 
-    def __init__(self, control, policy, *, deadline):
+    def __init__(self, control, policy, *, deadline, wait_check=None):
         self.control, self.policy, self.deadline = control, policy, deadline
+        self.wait_check = wait_check
         self.ownership, self.trial_ownership = ExitStack(), ExitStack()
         self.in_trial = False
         self.acquired = False
 
+    def _startup_lock(self):
+        options = {"deadline": self.deadline}
+        if self.wait_check is not None:
+            options["wait_check"] = self.wait_check
+        return startup_update_lock(self.control, self.policy, **options)
+
     def __enter__(self):
-        self.acquired = self.ownership.enter_context(
-            startup_update_lock(self.control, self.policy, deadline=self.deadline))
+        self.acquired = self.ownership.enter_context(self._startup_lock())
         return self
 
     def __exit__(self, *error):
@@ -3230,8 +3238,7 @@ class _BootstrapPoll:
                 births_match = births_match and birth == _utc(row.get("created_at"))
             except (KeyError, TypeError, ValueError, OverflowError):
                 births_match = False
-        self.acquired = self.ownership.enter_context(startup_update_lock(
-            self.control, self.policy, deadline=self.deadline))
+        self.acquired = self.ownership.enter_context(self._startup_lock())
         if not self.acquired:
             raise _BootstrapObservationChanged()
         if self.in_trial:
@@ -3271,40 +3278,67 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
     relay_attempts = {}
     live_apply_wait = False
 
+    def apply_pending(state):
+        return state is None or state.get("phase") in {
+            "PREPARED", "APPLIED_PENDING_READY", "ROLLBACK_PENDING", "ROLLBACK_PENDING_READY"
+        }
+
+    def apply_decided(state):
+        return bool(state and state.get("phase") in {"DEFERRED", "CONFIRMED", "ROLLED_BACK"})
+
+    def still_waiting_for_apply():
+        return (time.monotonic() < started + 480
+                and apply_claim_status(control) == "LIVE"
+                and apply_pending(optional_record(control / "transition.json")))
+
     def extend_live_apply_wait():
         nonlocal deadline, live_apply_wait
         now = time.monotonic()
         if now >= started + 480 or (not live_apply_wait and now < deadline):
             return False
-        if apply_claim_status(control) != "LIVE":
-            return False
+        claim_status = apply_claim_status(control)
         pending = optional_record(control / "transition.json")
-        if pending is not None and pending.get("phase") not in {
-            "PREPARED", "APPLIED_PENDING_READY", "ROLLBACK_PENDING", "ROLLBACK_PENDING_READY"
-        }:
-            return False
-        # This unlocked read only bounds waiting. The protected poll still
-        # rechecks the journal and all authority before any existing action.
+        if not (live_apply_wait and apply_decided(pending)):
+            if claim_status != "LIVE" or not apply_pending(pending):
+                return False
+        # Unlocked observations only choose another protected poll. A decision
+        # uses the remaining original cap without renewing any stage window.
         deadline = started + 480
         live_apply_wait = True
         return True
 
     while time.monotonic() < deadline or extend_live_apply_wait():
+        if live_apply_wait and not extend_live_apply_wait():
+            break
         try:
-            with _BootstrapPoll(control, policy, deadline=deadline) as poll:
+            poll_options = {"deadline": deadline}
+            if live_apply_wait:
+                poll_options["wait_check"] = still_waiting_for_apply
+            with _BootstrapPoll(control, policy, **poll_options) as poll:
                 if not poll.acquired:
                     if extend_live_apply_wait():
                         raise _BootstrapObservationChanged()
                     break
                 state = optional_record(control / "transition.json")
-                deadline = bootstrap_supervision_deadline(state, started=started,
-                    now=time.monotonic(), utc_now=now_utc())
+                deadline = (started + 480 if live_apply_wait else
+                    bootstrap_supervision_deadline(state, started=started,
+                        now=time.monotonic(), utc_now=now_utc()))
                 poll.deadline = deadline
                 claim_status = apply_claim_status(control)
+                if (live_apply_wait and not apply_decided(state)
+                        and (claim_status != "LIVE" or not apply_pending(state))):
+                    break
+                if (live_apply_wait and apply_decided(state)
+                        and claim_status in {"LIVE", "UNKNOWN"}):
+                    # SYSTEM publishes its decision before settling its claim.
+                    # Keep the original cap and make the decision under a new lock.
+                    raise _BootstrapObservationChanged()
                 apply_started = apply_started or claim_status in {"LIVE", "UNKNOWN"} or bool(state and state["phase"] in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"})
                 if state and state["phase"] in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"}:
                     saw_trial = True
-                if claim_status in {"LIVE", "UNKNOWN"} and not (state and state["phase"] in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"}):
+                if (claim_status in {"LIVE", "UNKNOWN"}
+                        and not (state and state["phase"] in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"})
+                        and not (live_apply_wait and apply_decided(state))):
                     raise _BootstrapObservationChanged()
                 prepared = poll.read(lambda: prepared_pending(control, policy, state))
                 action = startup_action(state, prepared_present=prepared)
@@ -3418,7 +3452,8 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
         time.sleep(0.1)
     state = optional_record(control / "transition.json")
     if (live_apply_wait and time.monotonic() >= started + 480
-            and state is None and apply_claim_status(control) == "LIVE"):
+            and ((state is None and apply_claim_status(control) == "LIVE")
+                 or (apply_decided(state) and apply_claim_status(control) in {"LIVE", "UNKNOWN"}))):
         # An absent journal cannot authorize launch while apply still owns the cap.
         emit_progress_guidance()
         return 20

@@ -17,6 +17,12 @@ from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
 
 import requests
+from time import sleep as _first_fetch_pause, monotonic as _first_fetch_clock
+
+FIRST_CATALOG_TIMEOUT_SECONDS = 10.0
+FIRST_CATALOG_TRANSPORT_RETRIES = 2
+FIRST_CATALOG_RETRY_INTERVAL_SECONDS = 0.25
+FIRST_CATALOG_FETCH_BUDGET_SECONDS = 40.0
 
 from kmtech_shared import catalog as _catalog_core
 from writer_session_fence import writer_admission, writer_sink
@@ -982,28 +988,60 @@ def refresh_item_catalog(
         security_guard = getattr(profile, "admit_security_inputs", None)
         if security_guard is not None:
             security_guard()
+        first_fetch = False
+        if profile is not None and timeout_seconds == 2.0:
+            authority = {
+                "url": effective_url,
+                "source_host_id": str(profile.source_host_id),
+                "device_id": str(profile.device_id),
+                "bearer_token": str(profile.bearer_token),
+            }
+            first_fetch = (
+                _read_authenticated_cache_payload(cache, **authority) is None
+                and _read_authenticated_recovery_payload(cache, **authority) is None
+            )
+        if first_fetch:
+            request_kwargs["timeout"] = FIRST_CATALOG_TIMEOUT_SECONDS
+            # Return at response headers: body/HTTP/validation failures never retry.
+            request_kwargs["stream"] = True
         cache_paths = (cache, _cache_authority_path(cache), _cache_recovery_path(cache))
         prior_cache = tuple(path.read_bytes() if path.is_file() else None for path in cache_paths)
         _update_catalog_attempt_context(request_sent=True)
-        response = transport(effective_url, **request_kwargs)
-        status_code = getattr(response, "status_code", None)
+        fetch_started = _first_fetch_clock() if first_fetch else None
+        for attempt in range(FIRST_CATALOG_TRANSPORT_RETRIES + 1):
+            try:
+                response = transport(effective_url, **request_kwargs)
+                break
+            except (requests.ConnectionError, requests.Timeout) as error:
+                if (not first_fetch or getattr(error, "response", None) is not None
+                        or attempt >= FIRST_CATALOG_TRANSPORT_RETRIES
+                        or FIRST_CATALOG_FETCH_BUDGET_SECONDS - (_first_fetch_clock() - fetch_started)
+                           < 2 * FIRST_CATALOG_TIMEOUT_SECONDS):
+                    raise
+                _first_fetch_pause(FIRST_CATALOG_RETRY_INTERVAL_SECONDS)
         try:
-            observed_status_code = (
-                int(status_code) if status_code is not None else None
+            status_code = getattr(response, "status_code", None)
+            try:
+                observed_status_code = (
+                    int(status_code) if status_code is not None else None
+                )
+            except (TypeError, ValueError):
+                observed_status_code = None
+            _update_catalog_attempt_context(
+                http_status_code=observed_status_code,
+                http_reason_phrase=_bounded_http_reason_phrase(
+                    observed_status_code,
+                    getattr(response, "reason", ""),
+                ),
             )
-        except (TypeError, ValueError):
-            observed_status_code = None
-        _update_catalog_attempt_context(
-            http_status_code=observed_status_code,
-            http_reason_phrase=_bounded_http_reason_phrase(
-                observed_status_code,
-                getattr(response, "reason", ""),
-            ),
-        )
-        if status_code is not None and 300 <= int(status_code) < 400:
-            raise ValueError("item catalog redirects are not allowed")
-        response.raise_for_status()
-        payload = bytes(response.content)
+            if status_code is not None and 300 <= int(status_code) < 400:
+                raise ValueError("item catalog redirects are not allowed")
+            response.raise_for_status()
+            payload = bytes(response.content)
+        finally:
+            close_response = getattr(response, "close", None)
+            if first_fetch and callable(close_response):
+                close_response()
         validate_catalog_bytes(payload)
         with writer_admission("item_catalog_refresh"):
             if not _CATALOG_CALL.get()["attempt"].is_current():
