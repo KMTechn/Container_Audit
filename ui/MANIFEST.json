@@ -2,7 +2,7 @@
  "schema": "ui-parts/1",
  "source": "WorkerAnalysisGUI-web",
  "commit": "7bbd2158f7b46ddbfdfa6d25f4b9c275beb32684",
- "dirty": false,
+ "dirty": true,
  "app": "ca",
  "parts_fingerprint": "c603bdb1abc7d8ac",
  "files": [
@@ -464,9 +464,9 @@
   },
   {
    "path": "app/frame.css",
-   "sha256": "13c5709371c87c995105f529001b3754227a71ebc44b0afe6d602a0c87440194",
-   "bytes": 33720,
-   "gzip": 8225
+   "sha256": "282f842693e2fc197a1aaff3c4bd174ec93381f3249f3f4d216d8c945e3e978e",
+   "bytes": 33698,
+   "gzip": 8226
   },
   {
    "path": "app/frame.js",
