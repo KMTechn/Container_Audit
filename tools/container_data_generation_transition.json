@@ -4630,7 +4630,7 @@
     {
       "path": "tools/build_portable_release_candidate.py",
       "before": "e6ab630ccf3fb366ab866dd29b137b5dee9188a64c80ef34cc04d790e8fc4650",
-      "after": "ac7591a498956730fdcbd9cfb81596d9afff998b67573d33b2f486e92a830103"
+      "after": "e2662687f293c223b62373d4563c04c8fdd276036ea016bb9f25c0de90242f30"
     },
     {
       "path": "tools/check_logistics_runtime_profile.py",
