@@ -8,15 +8,15 @@
  "files": [
   {
    "path": "app/ca/ca.css",
-   "sha256": "65e1d46a2c86bf693e5cc8bbe915ab0591e7476dc4ef7da4def6b4be75f1be95",
-   "bytes": 18086,
-   "gzip": 4322
+   "sha256": "0be621cfc6d6451238bb00a944ece8aebe10ff84f84de8e124fe2b669edf0fae",
+   "bytes": 24441,
+   "gzip": 4824
   },
   {
    "path": "app/ca/ca.js",
-   "sha256": "8781f64d8d96981b3d0a454d3073143828a384955bb0c6dbdd0642844f201b50",
-   "bytes": 19895,
-   "gzip": 7238
+   "sha256": "766e155ddf1c02b9b1e6819d00a24822ead02a456212f20e551f0acfd16506a0",
+   "bytes": 30237,
+   "gzip": 9781
   },
   {
    "path": "app/ca/contract.json",
@@ -464,9 +464,9 @@
   },
   {
    "path": "app/frame.css",
-   "sha256": "a09256964182a2c3fc8e176e491363b14550ea770ca34c1596c5c66a9cbc0faa",
-   "bytes": 33663,
-   "gzip": 8212
+   "sha256": "43f15c464feed26999bd008af17899ce01521289ec1f07a3c91ae7d61c906fe2",
+   "bytes": 34426,
+   "gzip": 8426
   },
   {
    "path": "app/frame.js",
@@ -482,9 +482,9 @@
   },
   {
    "path": "app/sheet.js",
-   "sha256": "0db6633d274b6fce3e6e34f6604a14815ecce7c134b34bfeb8d8b150d8c3734f",
-   "bytes": 9263,
-   "gzip": 2998
+   "sha256": "2e818fbb6ac862771972b42783872e6d2ae82ce30de0cd86a5bb2d02f85c0e75",
+   "bytes": 9826,
+   "gzip": 3150
   },
   {
    "path": "app/transport.js",
