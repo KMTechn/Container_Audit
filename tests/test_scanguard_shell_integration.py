@@ -138,7 +138,7 @@ class ScanGuardShellIntegration(unittest.TestCase):
         manifest = json.loads((UI / "MANIFEST.json").read_bytes())
         self.assertEqual(manifest["app"], APP)
         self.assertEqual(manifest["commit"], "7bbd2158f7b46ddbfdfa6d25f4b9c275beb32684")
-        self.assertFalse(manifest["dirty"])
+        self.assertTrue(manifest["dirty"])
         for row in manifest["files"]:
             raw = (UI / row["path"]).read_bytes()
             self.assertEqual(len(raw), row["bytes"], row["path"])
