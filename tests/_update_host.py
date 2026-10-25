@@ -38,6 +38,7 @@ def write(path, value):
     path.write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
 
 def inventory(root):
+    from datetime import datetime, timezone
     rows = []
     for path in sorted(root.rglob("*"),
                        key=lambda item: item.relative_to(root).as_posix().encode("utf-16-be")):
@@ -51,7 +52,9 @@ def inventory(root):
     write(target, {"schema_version": "container-audit-bootstrap-integrity-v1", "status": "PASS",
                    "code_root": str(root.resolve()), "file_count": len(rows), "files": rows,
                    "aggregate_sha256": aggregate, "identity_profile_created": False,
-                   "state_scope": "current_user_first_run"})
+                   "state_scope": "current_user_first_run",
+        'installed_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + '0Z',
+    })
     return target
 
 def relocate_ancestor_boundary(bundle, root):
@@ -379,7 +382,9 @@ def prepare(root, source, packet, signer, *, slow_observe=0, departure=None):
                 'profile_auth': True, 'apply_during_work': False}
     raw = (json.dumps(settings, sort_keys=True, separators=(',', ':')) + '\n').encode()
     (current / 'app/auto-update-settings.json').write_bytes(raw)
-    write(current / 'app/update-manifest-key-config.json', {'manifest_public_key': json.dumps(signer.public_jwk)})
+    write(current / 'app/update-manifest-key-config.json', {'manifest_public_key': json.dumps(signer.public_jwk),
+        'schema': 'container-audit-update-key-config-v1',
+    })
     refresh_file_pins(current, declared)
     write(current / 'portable-manifest.json', declared)
     relocate_ancestor_boundary(current, root)
@@ -388,11 +393,21 @@ def prepare(root, source, packet, signer, *, slow_observe=0, departure=None):
     shutil.copytree(current, selected)
     inventory(selected)
     policy = {**settings, 'operator_sid': SID, 'operator_local_app_data': str(root / 'local'),
-              'settings_sha256': hashlib.sha256(raw).hexdigest(), 'staging_root': str(root / 'stage')}
+              'settings_sha256': hashlib.sha256(raw).hexdigest(), 'staging_root': str(root / 'stage'),
+        'schema': 'container-audit-startup-update-policy-v1',
+        'approved_transitions': [],
+        'hiberboot_enabled': None,
+        'hiberboot_read_status': 'UNPROVEN',
+    }
     control = root / 'machine/update-control'
     write(control / 'policy.json', policy)
-    write(control / 'active.json', {'schema': updates.SCHEMA, 'sha': declared['source_commit']})
-    write(control / 'transition.json', {'schema': updates.SCHEMA, 'phase': 'DEFERRED', 'deferred_at': updates.now_utc()})
+    write(control / 'active.json', {'schema': updates.SCHEMA, 'sha': declared['source_commit'],
+        'transition_id': 'CANONICAL_INSTALL',
+    })
+    write(control / 'transition.json', {'schema': updates.SCHEMA, 'phase': 'DEFERRED', 'deferred_at': updates.now_utc(),
+        'reason': 'canonical installation',
+        'failed_shas': [],
+    })
     for name in ('local', 'stage'):
         (root / name).mkdir()
     config = root / 'host-config.json'
