@@ -2,11 +2,13 @@
 
 retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요청을 한 번 수행하고 journal을 다시 읽는다. 기존 writer가 있으면 SYSTEM의 유예를 따른다. 일반 복귀는 요청한 GUI/relay 역할을 보존한다. 늦은 READY 확정은 현재 기록에서 같은 전환의 timeout만 식별할 수 없어 닫아 둔다(실패 사유는 세대 code로 덮이고 failed_shas는 sha만 보존). 새 기록 형식·사유 값·phase·대기창을 만들지 않는다.
 
-- 10/25 sub-555: 다시 설치 때 고정 current를 교체하는 길의 READY 창을 원 applied_at·rollback_at 기준 240초 한 상수로 모았다. 감독 마감 뒤 LIVE SYSTEM이 APPLIED_PENDING_READY·ROLLBACK_PENDING·ROLLBACK_PENDING_READY에 있으면 bootstrap 원 시작+480초까지만 기다리고, update lock busy도 같은 고리로 돌아간다. UNKNOWN/ABSENT/결정 끝에는 연장0, 240/60/+15/480·relay 재시도·nonce·G·포인터/자료 의미는 유지한다. 재부팅 전후 ZIP·사슬과 원시 F는 출처별로 보존하며 수용 상태는 work/program/w9firstupd/sub-555/RESULT.md에 기록한다.
+- 10/25 sub-555: 다시 설치 때 고정 current를 교체하는 길의 READY 창을 원 applied_at·rollback_at 기준 240초 한 상수로 모았다. 감독 마감 뒤 LIVE SYSTEM이 기록 없음·PREPARED·APPLIED_PENDING_READY·ROLLBACK_PENDING·ROLLBACK_PENDING_READY에 있으면 bootstrap 원 시작+480초까지만 기다리고, update lock busy도 같은 고리로 돌아간다. UNKNOWN/ABSENT/결정 끝에는 연장0, 240/60/+15/480·relay 재시도·nonce·G·포인터/자료 의미는 유지한다. 재부팅 전후 ZIP·사슬과 원시 F는 출처별로 보존하며 수용 상태는 work/program/w9firstupd/sub-555/RESULT.md에 기록한다.
+
+- [P3 · 재설치 밤 목록] terminal 만료 뒤 옛 판을 계속 쓰는 길에는 반복 횟수 막이가 없다. 재설치 밤 점검 목록에서 확인한다. (10/25 레인 판정, ANSWER-28)
 
 ### LIVE SYSTEM 결정과 bootstrap 감독 상한
 
-원래 감독 마감이 지나도 SYSTEM의 apply claim이 `LIVE`이고 전이가 `APPLIED_PENDING_READY`·`ROLLBACK_PENDING`·`ROLLBACK_PENDING_READY`이면 같은 bootstrap의 시작+480초까지만 결정을 더 기다린다. 연장 중 update lock을 못 얻어도 같은 대기 고리로 돌아간다. 잠금 밖 읽기는 기다림만 정하며, 실행과 포인터 변경의 기존 잠금·재확인은 그대로다. `UNKNOWN`·`ABSENT`·이미 결정된 기록에는 이 연장을 새로 주지 않는다. 480초에 닿으면 기존 마지막 읽기와 안내·rc20 출구를 유지한다. READY 240초·정상 종료 60초·단계 끝 여유 15초·relay 시도 수와 간격·nonce·G 판정은 바꾸지 않는다.
+원래 감독 마감이 지나도 SYSTEM의 apply claim이 `LIVE`이고 전이가 아직 없거나 `PREPARED`·`APPLIED_PENDING_READY`·`ROLLBACK_PENDING`·`ROLLBACK_PENDING_READY`이면 같은 bootstrap의 시작+480초까지만 결정을 더 기다린다. 연장 중 update lock을 못 얻어도 매 poll에서 claim·phase를 다시 읽으며, LIVE가 사라지면 기존 마지막 읽기 길로 간다. 잠금 밖 읽기는 기다림만 정하며, 실행과 포인터 변경의 기존 잠금·재확인은 그대로다. `UNKNOWN`·`ABSENT`·이미 결정된 기록에는 이 연장을 새로 주지 않는다. 480초에 닿으면 기존 마지막 읽기와 안내·rc20 출구를 유지한다. READY 240초·정상 종료 60초·단계 끝 여유 15초·relay 시도 수와 간격·nonce·G 판정은 바꾸지 않는다.
 
 ### 업데이트 확인창 획득 busy 재시도(240 초 안)
 

@@ -3279,8 +3279,8 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
         if apply_claim_status(control) != "LIVE":
             return False
         pending = optional_record(control / "transition.json")
-        if not pending or pending.get("phase") not in {
-            "APPLIED_PENDING_READY", "ROLLBACK_PENDING", "ROLLBACK_PENDING_READY"
+        if pending is not None and pending.get("phase") not in {
+            "PREPARED", "APPLIED_PENDING_READY", "ROLLBACK_PENDING", "ROLLBACK_PENDING_READY"
         }:
             return False
         # This unlocked read only bounds waiting. The protected poll still
@@ -3417,6 +3417,11 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                 raise
         time.sleep(0.1)
     state = optional_record(control / "transition.json")
+    if (live_apply_wait and time.monotonic() >= started + 480
+            and state is None and apply_claim_status(control) == "LIVE"):
+        # An absent journal cannot authorize launch while apply still owns the cap.
+        emit_progress_guidance()
+        return 20
     active = read_json(control / "active.json")
     if startup_action(state, prepared_present=False) == "START_CURRENT" and (not (state or {}).get("retained_candidate") or active["sha"] == recovery_sha(state, pointer_sha=active["sha"])) and current_generation_status(control, policy, active["sha"]) == "ALLOW":
         return start_current(control, policy, state, active, arguments, code="UPDATE_LOCK_WAIT_EXPIRED", deadline=deadline)

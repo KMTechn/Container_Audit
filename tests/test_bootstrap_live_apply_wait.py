@@ -17,9 +17,9 @@ LAUNCH_BODY = getattr(updates.launch_version, "__wrapped__", updates.launch_vers
 
 def world(scene, monkeypatch, *, decision=True, final_claim="ABSENT", repeated_busy=False,
           ready_phase="APPLIED_PENDING_READY", terminal="DEFERRED", normal_stop=True,
-          terminal_at_old_end=False):
+          terminal_at_old_end=False, applied=110.941488, initial_missing=False,
+          decision_at=None, released_at=None, claim_boundary=None):
     s = scene
-    applied = 110.941488
     ready_end = applied + 240
     old_end = ready_end + 15
     stop = ready_end + 1.699512
@@ -27,10 +27,16 @@ def world(scene, monkeypatch, *, decision=True, final_claim="ABSENT", repeated_b
     released = ready_end + 38.605512 if decision else float("inf")
     if terminal_at_old_end:
         decided = released = old_end
+    if decision_at is not None:
+        decided = decision_at
+    if released_at is not None:
+        released = released_at
     unlocked = released
     (s.stage / "trial.json").unlink()
     initial = {**s.state, "phase": "PREPARED"}
     s.write(s.control / "transition.json", initial)
+    if initial_missing:
+        (s.control / "transition.json").unlink()
     current_sha = OLD if ready_phase == "ROLLBACK_PENDING_READY" else NEW
     popens, denials, progress, consumed = [], [], [], set()
 
@@ -61,6 +67,8 @@ def world(scene, monkeypatch, *, decision=True, final_claim="ABSENT", repeated_b
             s.rows.clear()
 
     events = [applied, ready_end, stop, old_end, decided, released, 480]
+    if claim_boundary is not None:
+        events.append(claim_boundary)
 
     def advance_to(target):
         for point in sorted({point for point in events if s.clock[0] < point <= target}):
@@ -76,7 +84,8 @@ def world(scene, monkeypatch, *, decision=True, final_claim="ABSENT", repeated_b
         advance_to(min(target, next_event))
 
     def claim(*_):
-        if final_claim in {"ABSENT", "UNKNOWN"} and not decision and s.clock[0] >= old_end:
+        boundary = old_end if claim_boundary is None else claim_boundary
+        if final_claim in {"ABSENT", "UNKNOWN"} and not decision and s.clock[0] >= boundary:
             return final_claim
         return "ABSENT" if s.clock[0] >= released else "LIVE"
 
@@ -182,3 +191,55 @@ def test_already_terminal_record_does_not_extend_supervision(scene, monkeypatch)
     assert updates._bootstrap(w.s.control.parent, [], role="gui") == 0
     assert len(ordinary(w)) == 1
     assert w.s.clock[0] == pytest.approx(w.old_end + 0.1)
+
+
+@pytest.mark.parametrize("initial_missing", [False, True], ids=["PREPARED", "missing"])
+def test_live_preapply_owner_finishes_and_opens_app_in_same_attempt(scene, monkeypatch, initial_missing):
+    w = world(scene, monkeypatch, applied=260, initial_missing=initial_missing,
+              terminal="CONFIRMED", normal_stop=False, decision_at=280, released_at=281)
+    result = updates._bootstrap(w.s.control.parent, [], role="gui")
+    w.s.write(w.s.control / "preapply-finished.json", {
+        "rc": result, "finished": w.s.clock[0], "decision_at": w.decided,
+        "popens": w.popens,
+    })
+    assert result == 0
+    assert any(row["trial"] and not row["relay"] for row in w.popens)
+    # The existing protected poll observes the terminal phase with its expired
+    # original deadline, then takes its existing final read after one 0.1s sleep.
+    assert w.s.clock[0] == pytest.approx(w.decided + 0.1, rel=0, abs=1e-6)
+    assert not w.progress
+
+
+@pytest.mark.parametrize("initial_missing", [False, True], ids=["PREPARED", "missing"])
+def test_preapply_without_live_claim_keeps_original_exit(scene, monkeypatch, initial_missing):
+    w = world(scene, monkeypatch, applied=600, initial_missing=initial_missing,
+              decision=False, final_claim="ABSENT", claim_boundary=240)
+    result = updates._bootstrap(w.s.control.parent, [], role="gui")
+    observed = {"rc": result, "finished": w.s.clock[0], "popens": w.popens}
+    (w.s.control / "preapply-absent-observed.json").write_text(json.dumps(observed), encoding="utf-8")
+    assert w.s.clock[0] == pytest.approx(240)
+    assert result == (0 if initial_missing else 20)
+    assert len(ordinary(w)) == (1 if initial_missing else 0)
+
+
+@pytest.mark.parametrize("initial_missing", [False, True], ids=["PREPARED", "missing"])
+def test_live_preapply_owner_never_exceeds_existing_480_cap(scene, monkeypatch, initial_missing):
+    w = world(scene, monkeypatch, applied=600, initial_missing=initial_missing,
+              decision=False, final_claim="LIVE")
+    assert updates._bootstrap(w.s.control.parent, [], role="gui") == 20
+    assert w.s.clock[0] == pytest.approx(480)
+    assert w.popens == []
+
+
+@pytest.mark.parametrize("claim", ["UNKNOWN", "ABSENT"])
+def test_busy_extension_rechecks_live_claim_each_poll(scene, monkeypatch, claim):
+    w = world(scene, monkeypatch, decision=False, final_claim=claim, repeated_busy=True,
+              claim_boundary=366.941488)
+    assert updates._bootstrap(w.s.control.parent, [], role="gui") == 20
+    # The claim can change during the mocked one-second root-lock wait.
+    # Recheck at its first completed busy poll, rather than at the event instant.
+    first_nonlive_poll = min(t for t in w.denials if t >= w.claim_boundary)
+    assert w.s.clock[0] == pytest.approx(first_nonlive_poll, rel=0, abs=1e-6)
+    assert w.s.clock[0] < 480
+    assert ordinary(w) == []
+    assert any(w.old_end < denied for denied in w.denials)
