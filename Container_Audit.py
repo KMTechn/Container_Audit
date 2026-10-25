@@ -18588,6 +18588,7 @@ class ContainerAudit:
                 oldest_pending_at=previous_health.oldest_pending_at,
                 observed_at=health.observed_at,
                 error_code=health.error_code,
+                scan_file_error_count=previous_health.scan_file_error_count,
             )
         elif not read_failed:
             self._direct_sync_last_read_health = health
@@ -18602,6 +18603,7 @@ class ContainerAudit:
                 oldest_pending_at=health.oldest_pending_at,
                 observed_at=health.observed_at,
                 error_code=health.error_code if read_failed else wake_error,
+                scan_file_error_count=health.scan_file_error_count,
             )
         self._direct_sync_health = health
         self._render_direct_sync_status_line()
@@ -18665,6 +18667,10 @@ class ContainerAudit:
                 short_text += f" · {pending}건"
         else:
             long_text, short_text = "회사 서버: 첫 이적 때 확인", "첫 이적 때 확인"
+        if isinstance(health, RelayHealth) and health.scan_file_error_count > 0:
+            file_notice = f" · 기록 파일 {health.scan_file_error_count}개 안 올라감"
+            long_text += file_notice
+            short_text += file_notice
         size = max(9, int(11 * float(getattr(self, "scale_factor", 1.0))))
         available, required = 0, 1
         width = 0

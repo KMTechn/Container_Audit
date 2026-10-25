@@ -36,6 +36,8 @@ from direct_sync_push import (
     RELAY_STATUS_PENDING,
     RELAY_STATUS_RETRY_WAIT,
     RelaySpoolFileError,
+    SourceFileInputError,
+    SOURCE_FILE_ERROR_CODES,
     SIGNATURE_VERSION,
     UploadResult,
     drain_one_relay_batch,
@@ -833,6 +835,67 @@ def _write_runtime_status(
     return _write_runtime_payload(config, payload)
 
 
+def _read_source_scan_failures(db_path: str | os.PathLike[str]) -> list[dict[str, str]]:
+    path = Path(db_path)
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return []
+    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='direct_sync_source_scan_failures'").fetchone():
+            return []  # An older queue has not observed a file error yet.
+        rows = conn.execute(
+            "SELECT source_name, first_failed_at, error_code FROM direct_sync_source_scan_failures ORDER BY source_key"
+        ).fetchall()
+        failures = []
+        for row in rows:
+            if (not isinstance(row["source_name"], str) or not row["source_name"]
+                    or any(separator in row["source_name"] for separator in ("/", "\\"))
+                    or not isinstance(row["first_failed_at"], str) or not row["first_failed_at"]
+                    or row["error_code"] not in SOURCE_FILE_ERROR_CODES):
+                raise sqlite3.DatabaseError("invalid source scan failure record")
+            failures.append(dict(row))
+        return failures
+    finally:
+        conn.close()
+
+
+@writer_sink("direct_sync_scan_result")
+def record_source_scan_failure(config: DirectSyncRuntimeConfig, *, source_key: str, source_name: str, error_code: str) -> dict[str, Any]:
+    if error_code not in SOURCE_FILE_ERROR_CODES:
+        raise ValueError("unknown source file error code")
+    conn = sqlite3.connect(str(config.db_path))
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS direct_sync_source_scan_failures ("
+            "source_key TEXT PRIMARY KEY, source_name TEXT NOT NULL, first_failed_at TEXT NOT NULL, error_code TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO direct_sync_source_scan_failures VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(source_key) DO UPDATE SET source_name=excluded.source_name, error_code=excluded.error_code",
+            (source_key, source_name, utc_now_text(), error_code),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return _write_runtime_status(config, status="enqueue_error", queue=_safe_relay_queue_status(config.db_path),
+                                 disk={"status": "not_checked", "reason": "source_file_error"}, error_code=error_code)
+
+
+@writer_sink("direct_sync_scan_result")
+def clear_source_scan_failure(config: DirectSyncRuntimeConfig, *, source_key: str) -> None:
+    # No schema creation is needed for a source that never failed.
+    conn = sqlite3.connect(str(config.db_path))
+    try:
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='direct_sync_source_scan_failures'").fetchone():
+            conn.execute("DELETE FROM direct_sync_source_scan_failures WHERE source_key=?", (source_key,))
+            conn.commit()
+    finally:
+        conn.close()
+
+
 def _write_runtime_payload(config: DirectSyncRuntimeConfig, payload: dict[str, Any]) -> dict[str, Any]:
     from auto_update import mixed_status_record
     payload = mixed_status_record(payload)
@@ -840,6 +903,17 @@ def _write_runtime_payload(config: DirectSyncRuntimeConfig, payload: dict[str, A
     with writer_admission("direct_sync_runtime_status"):
         if attempt is not None and not attempt.is_current():
             return {**payload, "superseded": True}
+        # Re-read durable failures for every enqueue/drain/status producer. A
+        # failed SELECT propagates as a global error, never a false empty list.
+        if payload.get("queue", {}).get("status") == "unavailable":
+            # The queue is already a global failure. Keep its original error
+            # report usable without pretending that the failure list is empty.
+            payload.pop("scan_file_errors", None)
+            payload.pop("scan_file_error_count", None)
+        else:
+            failures = _read_source_scan_failures(config.db_path)
+            payload["scan_file_errors"] = failures
+            payload["scan_file_error_count"] = len(failures)
         payload["runtime_status_write_status"] = "PASS"
         payload.pop("runtime_status_write_error_code", None)
         payload.pop("runtime_status_write_error_message", None)
@@ -989,7 +1063,10 @@ def enqueue_completed_source_file(
     except (DirectSyncPushError, sqlite3.DatabaseError, OSError) as exc:
         queue = _safe_relay_queue_status(config.db_path)
         error_code, error_message = _runtime_error_details(exc)
-        if isinstance(exc, RelaySpoolFileError):
+        if isinstance(exc, SourceFileInputError):
+            error_code = exc.error_code
+            error_message = exc.error_code
+        elif isinstance(exc, RelaySpoolFileError):
             error_code = "relay_spool_filesystem_error"
             error_message = _redact_runtime_error_message(str(exc))
         elif isinstance(exc, DirectSyncPushError):

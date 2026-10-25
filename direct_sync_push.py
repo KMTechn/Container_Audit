@@ -5,6 +5,8 @@ from __future__ import annotations
 from storage_utils import RemoteAttempt, close_sqlite_connection
 
 import csv
+import errno
+from contextlib import contextmanager
 from contextvars import ContextVar
 from email.utils import parsedate_to_datetime
 import hashlib
@@ -119,6 +121,36 @@ SOURCE_FILE_STABLE_KEY_PREFIX = "source-file:"
 
 class DirectSyncPushError(Exception):
     pass
+
+
+SOURCE_FILE_ERROR_CODES = frozenset({
+    "source_csv_header_invalid", "source_csv_utf8_invalid",
+    "source_file_read_failed", "source_delta_write_failed",
+})
+_SOURCE_LOCAL_ERRNOS = frozenset({errno.EACCES, errno.EPERM, errno.ENOENT, errno.ENOTDIR, errno.EISDIR})
+
+
+class SourceFileInputError(DirectSyncPushError):
+    """A classified failure confined to one source or its delta input."""
+
+    def __init__(self, error_code: str, message: str = ""):
+        if error_code not in SOURCE_FILE_ERROR_CODES:
+            raise ValueError("unknown source file error code")
+        self.error_code = error_code
+        super().__init__(message or error_code)
+
+
+@contextmanager
+def source_file_error_boundary(error_code: str = "source_file_read_failed"):
+    # Never surround queue/config/fence/shared-spool operations with this scope.
+    try:
+        yield
+    except UnicodeDecodeError as exc:
+        raise SourceFileInputError("source_csv_utf8_invalid") from exc
+    except OSError as exc:
+        if exc.errno not in _SOURCE_LOCAL_ERRNOS:
+            raise
+        raise SourceFileInputError(error_code) from exc
 
 
 class RelayLeaseLostBeforeSourcePost(DirectSyncPushError):
@@ -374,13 +406,11 @@ def count_csv_data_rows(path: str | os.PathLike[str]) -> int:
 
 
 def validate_source_event_log_header(path: str | os.PathLike[str]) -> None:
-    try:
+    with source_file_error_boundary():
         with Path(path).open("r", encoding="utf-8-sig", newline="") as handle:
             header = next(csv.reader(handle), None)
-    except UnicodeDecodeError as exc:
-        raise DirectSyncPushError("source file is not a readable Container_Audit event log CSV") from exc
     if header != EVENT_LOG_HEADERS:
-        raise DirectSyncPushError("source file is not a Container_Audit event log CSV")
+        raise SourceFileInputError("source_csv_header_invalid", "source file is not a Container_Audit event log CSV")
 
 
 def build_source_file_plan(
@@ -393,8 +423,9 @@ def build_source_file_plan(
     idempotency_key: str = "",
 ) -> SourceFilePlan:
     file_path = Path(source_file_path)
-    if not file_path.is_file():
-        raise DirectSyncPushError(f"source file does not exist: {file_path}")
+    with source_file_error_boundary():
+        if not file_path.is_file():
+            raise SourceFileInputError("source_file_read_failed", f"source file does not exist: {file_path}")
     validate_source_event_log_header(file_path)
     manifest = _load_manifest(producer_manifest_path)
     identity = manifest.get("pc_identity") or {}
@@ -412,10 +443,11 @@ def build_source_file_plan(
     safe_relative_path = _safe_relative_path(relative_path or f"legacy_csv/{file_path.name}")
     if safe_relative_path.split("/", 1)[0] == DEFAULT_STREAM_NAME:
         raise DirectSyncPushError("relative_path must not include stream_name")
-    content_sha256, byte_length = _read_file_digest(file_path)
+    with source_file_error_boundary():
+        content_sha256, byte_length = _read_file_digest(file_path)
+        row_count = count_csv_data_rows(file_path)
     source_file_id = f"{source_host_id}/{DEFAULT_PRODUCER_ROLE}/{DEFAULT_STREAM_NAME}/{safe_relative_path}"
     stable_key = _stable_source_file_key(source_file_id, content_sha256)
-    row_count = count_csv_data_rows(file_path)
     metadata = {
         "contract_version": CONTRACT_VERSION,
         "producer_install_id": producer_install_id,
@@ -2178,10 +2210,11 @@ def enqueue_source_file_for_relay(
     dedupe_existing: bool = False,
 ) -> RelayQueueRow:
     init_relay_queue_schema(db_path)
-    source_path = Path(source_file_path).resolve()
+    with source_file_error_boundary():
+        source_path = Path(source_file_path).resolve()
+        if not source_path.is_file():
+            raise SourceFileInputError("source_file_read_failed", f"source file does not exist: {source_path}")
     manifest_path = Path(producer_manifest_path).resolve()
-    if not source_path.is_file():
-        raise DirectSyncPushError(f"source file does not exist: {source_path}")
     relay_id = f"relay-{uuid.uuid4().hex}"
     plan = build_source_file_plan(
         source_file_path=source_path,

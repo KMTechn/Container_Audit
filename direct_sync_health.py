@@ -41,6 +41,7 @@ class RelayHealth:
     oldest_pending_at: str
     observed_at: str
     error_code: str = ""
+    scan_file_error_count: int = 0
 
     @property
     def operator_attention(self) -> bool:
@@ -75,6 +76,8 @@ def read_relay_health(
     runtime_state = str(runtime.get("status") or "").strip().lower()
     runtime_payload = runtime.get("payload") if isinstance(runtime.get("payload"), Mapping) else {}
     runtime_lease = runtime_payload.get("runtime_lease")
+    file_errors = runtime_payload.get("scan_file_error_count", 0)
+    invalid_file_errors = isinstance(file_errors, bool) or not isinstance(file_errors, int) or file_errors < 0
 
     state = "ready"
     error_code = ""
@@ -84,6 +87,9 @@ def read_relay_health(
     elif runtime_enabled and not runtime_available:
         state = "blocked"
         error_code = str(runtime.get("error_code") or "runtime_status_unreadable")
+    elif invalid_file_errors:
+        state = "blocked"
+        error_code = "relay_health_read_failed"
     elif runtime_state in RUNTIME_BLOCKED_STATUSES:
         state = "blocked"
         error_code = "direct_sync_runtime_blocked"
@@ -110,6 +116,7 @@ def read_relay_health(
         oldest_pending_at=str(queue_status.get("oldest_active_created_at") or ""),
         observed_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         error_code=error_code,
+        scan_file_error_count=0 if invalid_file_errors else file_errors,
     )
 
 

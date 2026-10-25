@@ -148,6 +148,15 @@ def _conn(app: Any) -> Tuple[Dict[str, Any], Dict[str, int]]:
     conn: Dict[str, Any] = {"state": state}
     if state == "first":
         conn["label"] = "회사 서버: 첫 이적 때 확인"
+    file_errors = health.scan_file_error_count if isinstance(health, ca.RelayHealth) else 0
+    if file_errors > 0:
+        base_text = conn.get("label") or {
+            "review": f"관리자 확인 {review}건",
+            "offline": f"회사 서버 연결 안 됨 · 오프라인 저장 · 전송 대기 {pending}건",
+            "late": f"회사 서버 연결됨 · 전송 대기 {pending}건",
+            "ok": f"회사 서버 연결됨 · 전송 대기 {pending}건",
+        }[state]
+        conn["label"] = f"{base_text} · 기록 파일 {file_errors}개 안 올라감"
     return conn, {"pending": int(pending), "failed": int(review)}
 
 

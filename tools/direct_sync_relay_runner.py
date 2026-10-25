@@ -17,7 +17,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from event_log_store import LOCK_STALE_SECONDS as EVENT_LOG_LOCK_STALE_SECONDS  # noqa: E402
-from direct_sync_push import reset_stale_relay_leases  # noqa: E402
+from direct_sync_push import (  # noqa: E402
+    reset_stale_relay_leases, SourceFileInputError, SOURCE_FILE_ERROR_CODES, source_file_error_boundary,
+)
 from direct_sync_runtime import (  # noqa: E402
     DirectSyncRuntimeConfig,
     prepare_credential_config,
@@ -25,6 +27,8 @@ from direct_sync_runtime import (  # noqa: E402
     record_scan_drain_status,
     record_scan_result_status,
     record_scan_status,
+    record_source_scan_failure,
+    clear_source_scan_failure,
     run_relay_once,
 )
 from writer_session_fence import writer_sink  # noqa: E402
@@ -157,9 +161,10 @@ def _parse_delta_range(relative_path: str, source_file: Path) -> tuple[int, int]
 
 
 def _delta_content_sha256_for_range(source_file: Path, start_byte: int, end_byte: int) -> str | None:
-    if source_file.stat().st_size < end_byte:
-        return None
-    with source_file.open("rb") as handle:
+    with source_file_error_boundary():
+        if source_file.stat().st_size < end_byte:
+            return None
+    with source_file_error_boundary(), source_file.open("rb") as handle:
         header = handle.readline()
         data_start = handle.tell()
         if start_byte and start_byte < data_start:
@@ -592,7 +597,7 @@ def _build_delta_source_file(config: DirectSyncRuntimeConfig, source_file: Path)
     if sent_byte_count > 0:
         replaced_or_truncated = not sent_prefix_sha256 or source_size < sent_byte_count
         if not replaced_or_truncated:
-            with source_file.open("rb") as handle:
+            with source_file_error_boundary(), source_file.open("rb") as handle:
                 remaining = sent_byte_count
                 while remaining:
                     block = handle.read(min(1024 * 1024, remaining))
@@ -609,7 +614,7 @@ def _build_delta_source_file(config: DirectSyncRuntimeConfig, source_file: Path)
             _record_source_prefix_verification(config, source_file, signature, source_size, sent_prefix_sha256)
         return None
 
-    with source_file.open("rb") as handle:
+    with source_file_error_boundary(), source_file.open("rb") as handle:
         header = handle.readline()
         if not header:
             return None
@@ -645,8 +650,17 @@ def _build_delta_source_file(config: DirectSyncRuntimeConfig, source_file: Path)
         / _source_delta_key(source_file)
         / f"bytes-{start_byte}-{end_byte}-sha256-{delta_hash[:16]}.csv"
     )
-    ensure_user_runtime_directory(delta_source.parent)
-    delta_source.write_bytes(delta_content)
+    try:
+        ensure_user_runtime_directory(delta_source.parent)
+    except OSError as exc:
+        # Recursive mkdir can fail at the shared input root. Only an error
+        # naming this source's own subdirectory qualifies for a file skip.
+        if exc.filename is None or Path(exc.filename) != delta_source.parent:
+            raise
+        with source_file_error_boundary("source_delta_write_failed"):
+            raise
+    with source_file_error_boundary("source_delta_write_failed"):
+        delta_source.write_bytes(delta_content)
     return delta_source, _delta_relative_path(source_file, start_byte, end_byte, delta_hash), end_byte, sent_prefix_sha256
 
 
@@ -820,6 +834,7 @@ def main(argv: list[str] | None = None) -> int:
         attempted_count = 0
         no_new_count = 0
         preflight_status = None
+        file_error_status = None
         terminal_blocked_sources: list[str] = []
         pending_delta_progress: dict[str, tuple[Path, int, str]] = {}
         max_enqueue_files = max(0, int(args.max_enqueue_files or 0))
@@ -840,6 +855,12 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             try:
                 delta = _build_delta_source_file(config, source_file)
+            except SourceFileInputError as exc:
+                attempted_count += 1
+                file_error_status = record_source_scan_failure(
+                    config, source_key=_source_delta_key(source_file), source_name=source_file.name, error_code=exc.error_code,
+                )
+                continue
             except ExistingTerminalDeltaBlocked:
                 attempted_count += 1
                 terminal_blocked_sources.append(str(source_file))
@@ -854,6 +875,12 @@ def main(argv: list[str] | None = None) -> int:
                 relative_path=relative_path,
             )
             attempted_count += 1
+            if current["status"] == "enqueue_error" and current.get("error_code") in SOURCE_FILE_ERROR_CODES:
+                file_error_status = record_source_scan_failure(
+                    config, source_key=_source_delta_key(source_file), source_name=source_file.name,
+                    error_code=current["error_code"],
+                )
+                continue
             if current["status"] == "existing_terminal_blocked":
                 terminal_blocked_sources.append(str(source_file))
                 continue
@@ -861,6 +888,8 @@ def main(argv: list[str] | None = None) -> int:
                 current["scan_failed_source_file"] = str(source_file)
                 preflight_status = current
                 break
+            if current["status"] in SCAN_SUCCESS_STATUSES:
+                clear_source_scan_failure(config, source_key=_source_delta_key(source_file))
             statuses.append(current)
             if current["status"] == "enqueued":
                 enqueued_count += 1
@@ -870,9 +899,14 @@ def main(argv: list[str] | None = None) -> int:
                     pending_delta_progress[relay_id] = (source_file, sent_byte_count, sent_prefix_sha256)
             elif current["status"] not in SCAN_SUCCESS_STATUSES:
                 current["scan_failed_source_file"] = str(source_file)
+                preflight_status = current
                 break
         if preflight_status:
             scan_status = preflight_status
+        elif file_error_status and (statuses or not terminal_blocked_sources):
+            scan_status = file_error_status
+            if statuses and "queue" in statuses[-1]:
+                scan_status["queue"] = statuses[-1]["queue"]
         elif statuses:
             scan_status = statuses[-1]
         elif terminal_blocked_sources:
@@ -917,10 +951,9 @@ def main(argv: list[str] | None = None) -> int:
             scan_status["scan_attempted_count"] = attempted_count
             scan_status["scan_no_new_count"] = no_new_count
             scan_status["scan_terminal_blocked_count"] = len(terminal_blocked_sources)
-        should_drain = args.drain_after_scan and scan_status["status"] not in {
-            *SCAN_BLOCKED_STATUSES,
-            "enqueue_error",
-        }
+        should_drain = args.drain_after_scan and scan_status["status"] not in SCAN_BLOCKED_STATUSES and (
+            scan_status["status"] != "enqueue_error" or (file_error_status is not None and preflight_status is None)
+        )
         if should_drain:
             targeted_drain_results = []
             status = None

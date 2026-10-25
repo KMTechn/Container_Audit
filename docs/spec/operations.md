@@ -645,6 +645,8 @@ Hiberboot 값 관측은 호스트에서 실행하지 않았다. [CA-G19](BACKLOG
 <a id="ca-o01"></a>
 ## CA-O01 실행 구조·시작·권한
 
+relay는 원본 CSV의 머리줄·UTF-8·읽기 접근 오류와 원본별 delta 입력 쓰기 오류만 해당 파일을 제자리에 두고 다음 파일·바퀴 끝 drain을 계속한다. 큐 DB·공용 spool·설정·인증·디스크 압력·역압·운영자 멈춤·분류 불명 오류는 기존 전역 중단을 유지한다. 실패는 큐의 `direct_sync_source_scan_failures(source_key, source_name, first_failed_at, error_code)`에 최초 시각을 보존하며, 상태 JSON의 `scan_file_error_count`·`scan_file_errors:[{source_name, first_failed_at, error_code}]`와 기존 Tk·기본 웹 상태 줄의 「기록 파일 n개 안 올라감」으로 알린다(0은 숨김, 웹은 기존 `conn.label`과 지문 push 사용). 정상 적재·기존 큐/ACK 확인 뒤 해당 실패만 해제하고, 유예·미방문은 유지한다. 옛 판은 추가 표를 무시하고 기존 큐를 읽는다.
+
 설치 키트가 시작 가능 여부를 읽을 때는 [시작 확인 CLI](startup-check.md)의 한 줄 JSON을 사용한다.
 읽기 전용 확인의 UNKNOWN은 시작 허가가 아니며 기존 앱의 시작 관문을 대체하지 않는다.
 FIRST_RUN_PENDING은 앱이 첫 실행에서 마치는 준비의 알림이며 복구·되돌림·시작 불가로 처리하지 않는다.

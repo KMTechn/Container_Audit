@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -76,6 +77,43 @@ def _app(flow):
 
 def _idle(app, predicate=lambda: True):
     _pump_until(app.root, lambda: predicate() and not app._ui_task_lane().is_busy())
+
+
+@pytest.mark.parametrize("count", [0, 2])
+@pytest.mark.parametrize("state,connection,review,oldest,base_text", [
+    ("review", "normal", 1, "", "관리자 확인 1건"),
+    ("offline", "disconnected", 0, "", "회사 서버 연결 안 됨 · 오프라인 저장 · 전송 대기 3건"),
+    ("late", "normal", 0, "2000-01-01T00:00:00Z", "회사 서버 연결됨 · 전송 대기 3건"),
+    ("ok", "normal", 0, "", "회사 서버 연결됨 · 전송 대기 3건"),
+    ("first", "unknown", 0, "", "회사 서버: 첫 이적 때 확인"),
+])
+def test_existing_web_server_label_reports_file_errors_without_changing_state_or_queue(
+    count, state, connection, review, oldest, base_text,
+):
+    app = SimpleNamespace(
+        _direct_sync_health=ca.RelayHealth("ready", 3, review, 0, "", oldest, "", scan_file_error_count=count),
+        _pending_seal_intent_count=0,
+        transfer_seal_coordinator=SimpleNamespace(client=SimpleNamespace(connection_state=connection)),
+    )
+    conn, queued = screen._conn(app)
+    assert conn["state"] == state
+    assert queued == {"pending": 3, "failed": review}
+    if count:
+        assert conn["label"] == base_text + " · 기록 파일 2개 안 올라감"
+    elif state == "first":
+        assert conn == {"state": state, "label": base_text}
+    else:
+        assert conn == {"state": state}
+
+
+def test_web_file_error_notice_changes_and_restores_the_existing_fingerprint(flow):
+    app = _app(flow)
+    app._direct_sync_health = ca.RelayHealth("ready", 0, 0, 0, "", "", "")
+    before = screen.fingerprint(app, None, [], None)
+    app._direct_sync_health = ca.RelayHealth("ready", 0, 0, 0, "", "", "", scan_file_error_count=1)
+    assert screen.fingerprint(app, None, [], None) != before
+    app._direct_sync_health = ca.RelayHealth("ready", 0, 0, 0, "", "", "")
+    assert screen.fingerprint(app, None, [], None) == before
 
 
 def test_state_is_the_contract_shape_and_counts_come_from_the_tray(flow):

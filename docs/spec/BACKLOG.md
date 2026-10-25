@@ -1,3 +1,5 @@
+- 10/26 sub-590: relay의 한 CSV 오류가 뒤 파일과 drain을 막던 길을 파일별 재시도로 분리했다. 원본·오프셋·source_file_id+SHA256 멱등 키는 유지하고, 오류 목록·최초 시각을 큐 DB에 보존해 기존 Tk·기본 웹 상태 줄에 알린다. 전역 오류 중단·독립 검토·서명 판 통합 경계는 유지한다(검증 근거: work/program/w9firstupd/sub-590/RESULT.md).
+
 ### retained 후보와 다음 업데이트 요청 (sub-555)
 
 retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요청을 한 번 수행하고 journal을 다시 읽는다. 기존 writer가 있으면 SYSTEM의 유예를 따른다. 일반 복귀는 요청한 GUI/relay 역할을 보존한다. 늦은 READY 확정은 현재 기록에서 같은 전환의 timeout만 식별할 수 없어 닫아 둔다(실패 사유는 세대 code로 덮이고 failed_shas는 sha만 보존). 새 기록 형식·사유 값·phase·대기창을 만들지 않는다.
