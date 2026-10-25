@@ -124,7 +124,9 @@
     $('[data-left]').replaceChildren(...(LEFT[w.left_kind] || LEFT.none)(w.remaining));
 
     AppFrame.exchange($('[data-next]').parentElement, w.exchange && 'remove' in w.exchange && 'insert' in w.exchange ? { phase: w.exchange.phase, remove: w.exchange.remove.code, insert: w.exchange.insert.code, error: w.result.kind === 'bad' } : null);
-    drawResult($('[data-result]'), w.result, true);
+    const result = $('[data-result]');
+    result.classList.remove('ca-result--needs-room');
+    drawResult(result, w.result, true);
 
     $('[data-list-title]').textContent = w.checking ? `보관한 제품 · ${w.list_count}개` : w.cofill ? `이 PC 가 넣은 · ${w.list_count}건` : `지금 트레이 · ${w.list_count}건`;
     $('[data-list]').replaceChildren(...(w.list.length ? w.list.map((row) => {
@@ -159,6 +161,12 @@
     const list = $('[data-list]');
     const rows = [...list.querySelectorAll('.ca-row')];
     for (const li of rows) li.hidden = false;
+    const more = $('[data-list-more]');
+    if (innerWidth > 600 && innerWidth < 1366 && innerHeight >= 800) {
+      // Measure the full list first; the old notice also occupied its grid gap.
+      more.textContent = '';
+      if (rows.some(li => li.getBoundingClientRect().bottom > list.getBoundingClientRect().bottom + .5)) more.textContent = '그 앞 1건';
+    }
     const bottom = list.getBoundingClientRect().bottom + 0.5;
     let cut = 0;
     for (const li of rows) {
@@ -286,7 +294,144 @@
     $('[data-register-cands]').replaceChildren(...(s.register ? s.register.cands : []).map((c) => button('act act--quiet', `${c.label} — 같은 사람이면 이것`, `command:start_work:${c.id}`)));
   }
 
+  // CA owns these text flows. Clock/code-time updates never invalidate them.
+  let separatorFrame = 0, separatorDirty = true;
+  let separatorFlows = [];
+  const sameSeparatorLine = (a, b) => Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > Math.min(a.height, b.height) / 2;
+  function separatorEntries(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), nodes = []; let text = '';
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (!node.parentElement.checkVisibility({checkVisibilityCSS: true}) || node.parentElement.closest('svg')) continue;
+      nodes.push({node, start: text.length}); text += node.data;
+    }
+    const rangeAt = index => {
+      const item = nodes.find(item => index >= item.start && index < item.start + item.node.length);
+      if (!item) return null;
+      const range = document.createRange(); range.setStart(item.node, index - item.start); range.setEnd(item.node, index - item.start + 1); return range;
+    };
+    const entries = [];
+    for (const item of nodes) {
+      const dot = item.node.parentElement;
+      if (dot.closest('.result__code-group, .result__time')) continue;
+      for (const match of item.node.data.matchAll(/·/g)) {
+      const index = item.start + match.index; let before = index - 1, after = index + 1;
+      while (before >= 0 && /[\s·]/.test(text[before])) before--;
+      while (after < text.length && /[\s·]/.test(text[after])) after++;
+      entries.push({dot, at:rangeAt(index), before:before >= 0 ? rangeAt(before) : null, after:after < text.length ? rangeAt(after) : null});
+      }
+    }
+    return entries;
+  }
+  function joinShortCodes() {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT), nodes = [];
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (/(?:…|\.{3})\d+/.test(node.data) && node.parentElement.checkVisibility() && !node.parentElement.closest('.ca-code-join, .app-code, .result__code-group, .result__time, svg, script, style')) nodes.push(node);
+    }
+    for (const node of nodes) {
+      const fragment = document.createDocumentFragment(); let last = 0;
+      for (const match of node.data.matchAll(/(?:…|\.{3})\d+/g)) {
+        fragment.append(document.createTextNode(node.data.slice(last, match.index)), el('span', 'ca-code-join', match[0])); last = match.index + match[0].length;
+      }
+      fragment.append(document.createTextNode(node.data.slice(last))); node.replaceWith(fragment);
+    }
+  }
+  let separatorPass = 0;
+  function prepareSeparators() {
+    if (document.fonts.status !== 'loaded') { separatorFrame = 0; return; }
+    if (separatorDirty) joinShortCodes();
+    const result = document.querySelector('.work > .result');
+    const fitKey = `${innerWidth}/${innerHeight}/${document.documentElement.dataset.textLevel}`;
+    if (result?.classList.contains('ca-result--needs-room') && result.caFitKey !== fitKey) {
+      result.classList.remove('ca-result--needs-room'); result.caFitKey = fitKey;
+      separatorFrame = requestAnimationFrame(prepareSeparators); return;
+    }
+    if (result && document.fonts.status === 'loaded' && innerWidth > 600 && innerWidth <= 1366 && !result.classList.contains('ca-result--needs-room')) {
+      result.caFitKey = fitKey;
+      const box = result.getBoundingClientRect(), walker = document.createTreeWalker(result, NodeFilter.SHOW_TEXT); let overflow = false;
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (!node.data.trim() || !node.parentElement.checkVisibility() || node.parentElement.closest('svg')) continue;
+        const range = document.createRange(); range.selectNodeContents(node);
+        if ([...range.getClientRects()].some(rect => rect.width && rect.height && rect.bottom > box.bottom + .5)) overflow = true;
+      }
+      if (overflow) result.classList.add('ca-result--needs-room');
+    }
+    if (separatorDirty) {
+      separatorDirty = false;
+      const roots = [...document.querySelectorAll('.top__tag, .band, .next__sub, .ca-count__item, .ca-cofill, .ca-count__left, [data-list-title], .work > .result small, .ca-pane__sub, .ca-pane__foot, .ca-park__item, .ca-park__meta, .ca-today h3, .ca-today__supply, .today-timeline > summary, .ca-f8__facts dd, .ca-start__sub, .sheet__lead, .sheet__facts dd, .status__server')];
+      const scan = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      while (scan.nextNode()) {
+        const node = scan.currentNode;
+        if (!node.data.includes('·') || node.parentElement.closest('svg, script, style, .app-code, .result__code-group, .result__time') || !node.parentElement.checkVisibility()) continue;
+        if (roots.some(root => root.contains(node))) continue;
+        let root = node.parentElement;
+        while (root.parentElement && !root.matches('button, a') && /^(inline|contents)/.test(getComputedStyle(root).display)) root = root.parentElement;
+        while (root.parentElement && !root.parentElement.matches('.result') && /^(inline-)?flex$/.test(getComputedStyle(root.parentElement).display) && getComputedStyle(root.parentElement).flexDirection === 'row') root = root.parentElement;
+        if (!roots.includes(root)) roots.push(root);
+      }
+      const visible = [...roots].filter(root => root.checkVisibility() && root.textContent.includes('·')).filter(root => root.classList.contains('ca-separator-flow') || separatorEntries(root).some(entry => { const box = entry.at.getBoundingClientRect(); return entry.before && !sameSeparatorLine(entry.before.getBoundingClientRect(), box) || entry.after && !sameSeparatorLine(box, entry.after.getBoundingClientRect()); })), nodes = [];
+      for (const root of visible) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          if (node.data.includes('·') && node.parentElement.checkVisibility() && !node.parentElement.closest('.ca-separator, .result__code-group, .result__time, svg')) nodes.push(node);
+        }
+      }
+      // Finish every visibility read before changing the DOM.
+      for (const node of nodes) {
+        const fragment = document.createDocumentFragment(); let last = 0;
+        for (const match of node.data.matchAll(/[ \t]*·[ \t]*/g)) {
+          fragment.append(document.createTextNode(node.data.slice(last, match.index)), el('span', 'ca-separator', match[0])); last = match.index + match[0].length;
+        }
+        fragment.append(document.createTextNode(node.data.slice(last))); node.replaceWith(fragment);
+      }
+      separatorFlows = visible.filter(root => root.querySelector('.ca-separator'));
+    }
+    for (const root of separatorFlows) for (const dot of root.querySelectorAll('.ca-separator--wrapped')) dot.classList.remove('ca-separator--wrapped');
+    separatorPass = 0;
+    separatorFrame = requestAnimationFrame(measureSeparators);
+  }
+  function measureSeparators() {
+    if (separatorDirty) { prepareSeparators(); return; }
+    const hidden = [], regroup = [];
+    for (const root of separatorFlows) {
+      if (!root.isConnected || !root.checkVisibility()) continue;
+      for (const entry of separatorEntries(root)) {
+        if (!entry.dot.matches('.ca-separator')) continue;
+        const box = entry.at.getBoundingClientRect();
+        if (entry.before && !sameSeparatorLine(entry.before.getBoundingClientRect(), box) || entry.after && !sameSeparatorLine(box, entry.after.getBoundingClientRect())) {
+          hidden.push(entry.dot);
+          if (!root.matches('.ca-count__item, .ca-park__item') && !root.classList.contains('ca-separator-flow') && !regroup.includes(root)) regroup.push(root);
+        }
+      }
+    }
+    // Geometry is read as a batch; changed geometry is checked on the next frame.
+    for (const root of regroup) {
+      const dots = [...root.querySelectorAll('.ca-separator')], ranges = []; let previous = document.createRange(); previous.selectNodeContents(root);
+      for (const dot of dots) {
+        const next = document.createRange(); next.setStartBefore(dot); next.setEnd(root, root.childNodes.length);
+        previous.setEndBefore(dot); ranges.push(previous); previous = next;
+      }
+      ranges.push(previous);
+      const phrases = ranges.reverse().map(range => { const phrase = el('span', 'ca-separator-phrase'); phrase.append(range.extractContents()); return phrase; }).reverse();
+      root.replaceChildren(...phrases); root.classList.add('ca-separator-flow');
+    }
+    for (const dot of hidden) dot.classList.add('ca-separator--wrapped');
+    separatorFrame = hidden.length && ++separatorPass < 4 ? requestAnimationFrame(measureSeparators) : 0;
+  }
+  function queueSeparators() {
+    if (separatorFrame) {
+      if (!separatorDirty) return;
+      cancelAnimationFrame(separatorFrame);
+    }
+    // Shared code fitting writes on the next frame; measure after its native layout.
+    separatorFrame = requestAnimationFrame(() => { separatorFrame = requestAnimationFrame(() => { separatorFrame = requestAnimationFrame(prepareSeparators); }); });
+  }
+
   function render(s) {
+    separatorDirty = true;
     renderTop(s);
     renderAdmin(s);
     const view = s.view || 'work';
@@ -296,9 +441,18 @@
     else if (view === 'held' && s.park && s.today) renderHeld(s);
     else if (view === 'f8' && s.f8) renderF8(s.f8);
     else if (view === 'start' && s.roster) renderStart(s);
+    for (const flow of document.querySelectorAll('.ca-separator-flow')) {
+      if (![...flow.children].some(child => child.matches('.ca-separator-phrase'))) flow.classList.remove('ca-separator-flow');
+    }
+    queueSeparators();
   }
 
   window.addEventListener('resize', fitList);
+  window.addEventListener('resize', () => { separatorDirty = true; queueSeparators(); });
+  new ResizeObserver(queueSeparators).observe(document.body);
+  new MutationObserver(() => { separatorDirty = true; queueSeparators(); }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-text-level', 'data-text-expanded', 'style'] });
+  document.fonts.ready.then(() => { separatorDirty = true; queueSeparators(); });
+  document.fonts.addEventListener('loadingdone', () => { separatorDirty = true; queueSeparators(); });
   new ResizeObserver(fitList).observe($('[data-list]'));
   // F8 = 현품표 교체(처리 층이 지금 단계에 맞게 열기 · 인쇄) · Esc · 빈 Enter = 확인(현장 「빈 Enter = 확인」 — 처리 층 ack 가 지금 빈 Enter 문,
   // 한 단계 안 화면이면 작업 화면으로). 글이 있는 Enter 는 늘 스캔(틀 1db33db4)
