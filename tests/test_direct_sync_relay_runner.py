@@ -1,4 +1,5 @@
 import hashlib
+import errno
 import json
 import os
 import sqlite3
@@ -206,6 +207,62 @@ def install_receipt_test_runtime(monkeypatch, session):
     )
 
 
+@pytest.mark.parametrize("failure", ["header", "utf8", "source_read", "delta_write"])
+def test_runner_file_failure_preserves_source_and_reaches_later_file_and_drain(
+    tmp_path, monkeypatch, failure,
+):
+    sync_dir = tmp_path / "sync"
+    failed_source = write_container_csv(sync_dir, name="이적작업이벤트로그_first_20260622.csv")
+    later_source = write_container_csv(sync_dir, name="이적작업이벤트로그_later_20260622.csv")
+    if failure == "header":
+        failed_source.write_bytes(b"wrong,header\n1,2\n")
+    elif failure == "utf8":
+        failed_source.write_bytes(b"timestamp,worker_name,event,details\n\xff,worker,SCAN_OK,{}\n")
+    failed_bytes = failed_source.read_bytes()
+    later_bytes = later_source.read_bytes()
+    os.utime(failed_source, (1, 1))
+    os.utime(later_source, (2, 2))
+    args = runner_args(tmp_path, scan_dir=sync_dir) + ["--drain-after-scan"]
+    real_open = Path.open
+    real_write_bytes = Path.write_bytes
+    failed_delta_key = runner_module._source_delta_key(failed_source)
+
+    def source_open(path, *args, **kwargs):
+        if failure == "source_read" and path == failed_source:
+            raise PermissionError(errno.EACCES, "test source read denied")
+        return real_open(path, *args, **kwargs)
+
+    def delta_write(path, content):
+        if failure == "delta_write" and path.parent.name == failed_delta_key:
+            raise PermissionError(errno.EACCES, "test source delta write denied")
+        return real_write_bytes(path, content)
+
+    drain_calls = []
+
+    def drain(config, **kwargs):
+        drain_calls.append(kwargs)
+        return {"status": "acked", "last_result": {"relay_id": kwargs.get("target_relay_id", "")}}
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", source_open)
+        patch.setattr(Path, "write_bytes", delta_write)
+        patch.setattr(runner_module, "run_relay_once", drain)
+        observed_exception = None
+        try:
+            result = main(args)
+        except (OSError, UnicodeError) as exc:
+            observed_exception = type(exc).__name__
+            result = None
+
+    counts = relay_queue_status(tmp_path / "relay.sqlite3")["counts"]
+    assert (counts.get(RELAY_STATUS_PENDING, 0), len(drain_calls)) == (1, 1), "later enqueue and drain must both run"
+    assert observed_exception is None
+    assert result == 0
+    assert failed_source.read_bytes() == failed_bytes
+    assert later_source.read_bytes() == later_bytes
+    assert sorted(path.name for path in sync_dir.iterdir()) == sorted([failed_source.name, later_source.name])
+
+
 def test_runner_scan_source_dir_enqueues_matching_csv_idempotently(tmp_path, capsys):
     sync_dir = tmp_path / "sync"
     csv_path = write_container_csv(sync_dir)
@@ -227,6 +284,95 @@ def test_runner_scan_source_dir_enqueues_matching_csv_idempotently(tmp_path, cap
     assert "direct_sync_scan_failed_source_file=" not in output
     assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"][RELAY_STATUS_PENDING] == 1
     assert source_scan_state(tmp_path / "relay.sqlite3", csv_path) is None
+
+
+def test_runner_file_failure_survives_restart_and_recovers_with_same_delta_identity(tmp_path, monkeypatch):
+    sync_dir = tmp_path / "sync"
+    failed_source = write_container_csv(sync_dir, name="이적작업이벤트로그_first_20260622.csv")
+    later_source = write_container_csv(sync_dir, name="이적작업이벤트로그_later_20260622.csv")
+    valid_bytes = failed_source.read_bytes()
+    failed_source.write_bytes(b"wrong,header\n1,2\n")
+    os.utime(failed_source, (1, 1))
+    os.utime(later_source, (2, 2))
+    args = runner_args(tmp_path, scan_dir=sync_dir) + ["--drain-after-scan"]
+    session = AcceptedReceiptSession()
+    install_receipt_test_runtime(monkeypatch, session)
+    configs = []
+    build_config = runner_module._build_config
+
+    def capture_config(arguments):
+        config = build_config(arguments)
+        configs.append(config)
+        return config
+
+    monkeypatch.setattr(runner_module, "_build_config", capture_config)
+    status_path = tmp_path / "runtime" / "status.json"
+    assert main(args) == 0
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["scan_file_error_count"] == 1
+    first_failure = status["scan_file_errors"][0]
+    assert first_failure["source_name"] == failed_source.name
+    assert first_failure["error_code"] == "source_csv_header_invalid"
+    assert set(first_failure) == {"source_name", "first_failed_at", "error_code"}
+    assert first_failure["first_failed_at"]
+    assert len(session.calls) == 1
+    assert session.calls[0]["file_bytes"] == later_source.read_bytes()
+
+    # main builds a new config and reopens the database, with no process-local
+    # failure cache. An unrelated runtime status write must retain the list too.
+    direct_sync_runtime.run_relay_once(configs[-1], session=session)
+    assert json.loads(status_path.read_text(encoding="utf-8"))["scan_file_errors"] == [first_failure]
+    assert main(args) == 0
+    assert json.loads(status_path.read_text(encoding="utf-8"))["scan_file_errors"] == [first_failure]
+    assert len(session.calls) == 1
+
+    failed_source.write_bytes(valid_bytes)
+    assert main(args) == 0
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["scan_file_error_count"] == 0
+    assert status["scan_file_errors"] == []
+    assert len(session.calls) == 2
+    assert session.calls[-1]["file_bytes"] == valid_bytes
+    rows = relay_rows(tmp_path / "relay.sqlite3")
+    recovered = next(row for row in rows if runner_module._source_delta_key(failed_source) in row["relative_path"])
+    metadata = json.loads(recovered["metadata_json"])
+    source_file_id = "/".join((metadata["source_host_id"], metadata["producer_role"],
+                               metadata["stream_name"], metadata["relative_path"]))
+    expected_key = direct_sync_push_module._stable_source_file_key(source_file_id, metadata["content_sha256"])
+    assert metadata["idempotency_key"] == expected_key
+    for _ in range(2):
+        replay = direct_sync_runtime.enqueue_completed_source_file(
+            configs[-1], source_file_path=recovered["source_file_path"], relative_path=recovered["relative_path"],
+        )
+        assert replay["status"] == "already_acked"
+        assert replay["last_result"]["relay_id"] == recovered["relay_id"]
+    repeated = [row for row in relay_rows(tmp_path / "relay.sqlite3") if row["relative_path"] == recovered["relative_path"]]
+    assert len(repeated) == 1
+    assert json.loads(repeated[0]["metadata_json"])["idempotency_key"] == expected_key
+    assert repeated[0]["content_sha256"] == recovered["content_sha256"]
+    assert failed_source.read_bytes() == valid_bytes
+
+
+@pytest.mark.parametrize("status", ["blocked_disk_pressure", "blocked_queue_backpressure",
+                                     "paused_by_operator", "blocked_operator_control", "enqueue_error"])
+def test_runner_global_enqueue_failure_stops_later_files_and_drain(tmp_path, monkeypatch, status):
+    sync_dir = tmp_path / "sync"
+    first_source = write_container_csv(sync_dir, name="이적작업이벤트로그_first_20260622.csv")
+    write_container_csv(sync_dir, name="이적작업이벤트로그_later_20260622.csv")
+    os.utime(first_source, (1, 1))
+    args = runner_args(tmp_path, scan_dir=sync_dir) + ["--drain-after-scan"]
+    enqueues, drains = [], []
+
+    def enqueue(config, **kwargs):
+        enqueues.append(kwargs)
+        return {"status": status, "error_code": "test_global_error"}
+
+    monkeypatch.setattr(runner_module, "enqueue_completed_source_file", enqueue)
+    monkeypatch.setattr(runner_module, "run_relay_once", lambda *args, **kwargs: drains.append(kwargs))
+    main(args)
+    assert len(enqueues) == 1
+    assert drains == []
+    assert first_source.exists()
 
 
 def test_runner_scan_source_defers_file_with_active_writer_lock(tmp_path, capsys):

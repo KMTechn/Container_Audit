@@ -103,6 +103,24 @@ def test_footer_zero_pending_and_unknown_counts_are_distinct(footer_app):
     assert "0건" not in app.direct_sync_status_label.options["text"]
 
 
+@pytest.mark.parametrize("width", [1366, 1024])
+@pytest.mark.parametrize("count", [0, 2])
+def test_footer_reports_only_positive_file_error_counts_and_preserves_them_on_read_failure(
+    footer_app, width, count,
+):
+    app = footer_app
+    app.root.width = app.direct_sync_status_label.parent.width = width
+    app._apply_direct_sync_health(RelayHealth("ready", 0, 0, 0, "", "", "", scan_file_error_count=count))
+    text = app.direct_sync_status_label.options["text"]
+    if count:
+        assert text.endswith(" · 기록 파일 2개 안 올라감")
+    else:
+        assert "기록 파일" not in text
+    app._apply_direct_sync_health(RelayHealth("blocked", 0, 0, 0, "", "", "", "relay_health_read_failed"))
+    assert app._direct_sync_health.scan_file_error_count == count
+    assert app.direct_sync_status_label.options["text"] == text
+
+
 @pytest.mark.parametrize("days", [0, 1])
 def test_last_transmission_appears_only_for_delayed_state_in_local_time(footer_app, days):
     app = footer_app
