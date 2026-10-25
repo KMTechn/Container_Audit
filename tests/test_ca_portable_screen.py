@@ -97,7 +97,7 @@ def test_packet_new_screen_and_forced_close_keep_the_accepted_shell(tmp_path):
     receipt = builder._assert_screen_bundle(ROOT, app)
     assert receipt["shell_ready_match"] == "PASS"
     assert receipt["shell_file_count"] == 20
-    assert receipt["ui_manifest_file_count"] == 86
+    assert receipt["ui_manifest_file_count"] == 101
     assert_packet_screen_entry(app)
     # Load the copied dependency independently of the checkout's module cache.
     registry_path = app / "app_data_workers.py"
