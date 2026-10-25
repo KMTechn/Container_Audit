@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "581ea16f3a5afb4c6816b32f69216e92c8966e5e0fb8efb7b1d248287aca13c4",
+  "after_inventory_sha256": "e7a5bffcd8b49fa2744f0509ee2ce43c729a238acc12003c847a5be7da9ce68d",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -278,7 +278,7 @@
     {
       "path": "app/item_catalog_sync.py",
       "before": "732e3bf81c11115fb62d7690379164a25a528fd0e7695bfea75fde9e05fdf431",
-      "after": "0a0778fb8c5e4825daaa398195de7839880c0b75a535930dd333485f1394debf"
+      "after": "2850eaa1634087e0725d11b4cf15ca0d024a2d05321df5c8c965cf48d28bbc98"
     },
     {
       "path": "app/kmtech_factory_contracts/__init__.py",
@@ -1463,7 +1463,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "11fbd29fc602bdccf815fe43b1a22ce43f9efc94575059aafd1de3d35faf9597"
+      "after": "627b2758c6106fc08aacb93e67926e2761bee3aa5e137e6d19bc9e96c3cf5532"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4513,7 +4513,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "1e676eac06a679505436c9fcf573311e05f7e3201c78eb7cec849ba2d8d6f67a"
+      "after": "e1da6359e67990e229ee9486d6da6f964ae47a50d9903236908cb3b82154ff85"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4523,12 +4523,12 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "42b6385c72c8a78b4ced2044d820dd745f5717a7781d42c018447900e697a743"
+      "after": "9b07f21a8200f5e13a379b429b0d388413986507a84139766c2f3ed7394ac020"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "0f9780da76d2f3f1db4fd38ff4b4803d0fffe4c714cd07ceb12464459912bae6"
+      "after": "5ea2e95c4aa180f2781ba0ee2d5f36b8316c816e570580d5d657f4d46b927ab4"
     }
   ],
   "source_replacements": [
@@ -4595,7 +4595,7 @@
     {
       "path": "item_catalog_sync.py",
       "before": "58f20ae6eb8dce66f33b539f7d362c73132e49164eb81a0ea0a18427d46a28da",
-      "after": "0a0778fb8c5e4825daaa398195de7839880c0b75a535930dd333485f1394debf"
+      "after": "2850eaa1634087e0725d11b4cf15ca0d024a2d05321df5c8c965cf48d28bbc98"
     },
     {
       "path": "logistics_runtime_profile.py",
@@ -4645,7 +4645,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "1e676eac06a679505436c9fcf573311e05f7e3201c78eb7cec849ba2d8d6f67a"
+      "after": "e1da6359e67990e229ee9486d6da6f964ae47a50d9903236908cb3b82154ff85"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4695,7 +4695,7 @@
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "11fbd29fc602bdccf815fe43b1a22ce43f9efc94575059aafd1de3d35faf9597"
+      "after": "627b2758c6106fc08aacb93e67926e2761bee3aa5e137e6d19bc9e96c3cf5532"
     }
   ],
   "hash_provenance": {

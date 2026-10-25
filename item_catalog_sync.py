@@ -843,16 +843,91 @@ def _cache_authority_hmac(
     )
 
 
+def _record_catalog_response(response):
+    status_code = getattr(response, "status_code", None)
+    try:
+        observed_status_code = (
+            int(status_code) if status_code is not None else None
+        )
+    except (TypeError, ValueError):
+        observed_status_code = None
+    _update_catalog_attempt_context(
+        http_status_code=observed_status_code,
+        http_reason_phrase=_bounded_http_reason_phrase(
+            observed_status_code,
+            getattr(response, "reason", ""),
+        ),
+    )
+    return status_code
+
+
 def _hardened_get(url: str, **kwargs: object) -> object:
     """Send credentials without inheriting process proxy or CA overrides."""
 
-    with requests.Session() as session:
-        session.trust_env = False
-        return session.get(url, **kwargs)
+    response = None
+    try:
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.get(url, **kwargs)
+            if kwargs.get("stream") is True:
+                _record_catalog_response(response)
+            return response
+    except (requests.ConnectionError, requests.Timeout) as error:
+        if response is not None:
+            error._catalog_response_received = True
+            try:
+                response.close()
+            except Exception:
+                pass
+        raise
 
 
 
 _CATALOG_CALL = ContextVar("ca_catalog_call", default=None)
+
+
+def _wait_for_first_catalog_retry(started: float) -> bool:
+    def room():
+        return (FIRST_CATALOG_FETCH_BUDGET_SECONDS - (_first_fetch_clock() - started)
+                >= 2 * FIRST_CATALOG_TIMEOUT_SECONDS)
+
+    if not room():
+        return False
+    _first_fetch_pause(FIRST_CATALOG_RETRY_INTERVAL_SECONDS)
+    return room()
+
+
+def _read_first_catalog_payload(response, started: float) -> bytes:
+    deadline = started + FIRST_CATALOG_FETCH_BUDGET_SECONDS
+
+    def check():
+        if _first_fetch_clock() >= deadline:
+            raise requests.ReadTimeout("first catalog response exceeded its fetch budget",
+                                       response=response)
+
+    check()
+    try:
+        stream = getattr(response, "iter_content", None)
+        if callable(stream):
+            chunks = iter(stream(chunk_size=65536))
+            payload = bytearray()
+            while True:
+                check()
+                try:
+                    chunk = next(chunks)
+                except StopIteration:
+                    break
+                check()
+                payload.extend(chunk)
+            result = bytes(payload)
+        else:
+            # Injected in-memory responses retain their original contract.
+            result = bytes(response.content)
+        check()
+        return result
+    except (requests.ConnectionError, requests.Timeout) as error:
+        error._catalog_response_received = True
+        raise
 
 
 def _catalog_attempt_boundary(function):
@@ -1013,31 +1088,19 @@ def refresh_item_catalog(
                 response = transport(effective_url, **request_kwargs)
                 break
             except (requests.ConnectionError, requests.Timeout) as error:
-                if (not first_fetch or getattr(error, "response", None) is not None
-                        or attempt >= FIRST_CATALOG_TRANSPORT_RETRIES
-                        or FIRST_CATALOG_FETCH_BUDGET_SECONDS - (_first_fetch_clock() - fetch_started)
-                           < 2 * FIRST_CATALOG_TIMEOUT_SECONDS):
+                if (not first_fetch or getattr(error, "_catalog_response_received", False)
+                        or getattr(error, "response", None) is not None
+                        or attempt >= FIRST_CATALOG_TRANSPORT_RETRIES):
                     raise
-                _first_fetch_pause(FIRST_CATALOG_RETRY_INTERVAL_SECONDS)
+                if not _wait_for_first_catalog_retry(fetch_started):
+                    raise
         try:
-            status_code = getattr(response, "status_code", None)
-            try:
-                observed_status_code = (
-                    int(status_code) if status_code is not None else None
-                )
-            except (TypeError, ValueError):
-                observed_status_code = None
-            _update_catalog_attempt_context(
-                http_status_code=observed_status_code,
-                http_reason_phrase=_bounded_http_reason_phrase(
-                    observed_status_code,
-                    getattr(response, "reason", ""),
-                ),
-            )
+            status_code = _record_catalog_response(response)
             if status_code is not None and 300 <= int(status_code) < 400:
                 raise ValueError("item catalog redirects are not allowed")
             response.raise_for_status()
-            payload = bytes(response.content)
+            payload = (_read_first_catalog_payload(response, fetch_started)
+                       if first_fetch else bytes(response.content))
         finally:
             close_response = getattr(response, "close", None)
             if first_fetch and callable(close_response):
