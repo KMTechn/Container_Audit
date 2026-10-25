@@ -144,24 +144,24 @@ def test_exact_busy_from_initial_locked_body_is_not_retried(ready_window, monkey
     assert w.depth[0] == 0
 
 
-@pytest.mark.parametrize("elapsed", [0, 113, 115, 119])
+@pytest.mark.parametrize("elapsed", [0, 233, 235, 239])
 def test_busy_at_original_deadline_is_rejected_without_a_new_window(ready_window, elapsed):
     w = ready_window
     w.s.clock[0] = elapsed
     error = lock_error()
-    w.failures.extend([error] * 25)
+    w.failures.extend([error] * 49)
     before = (w.s.control / "transition.json").read_bytes()
     with pytest.raises(RuntimeError) as caught:
         w.invoke()
     assert caught.value is error
-    assert len(w.attempts) == 1 + (120 - elapsed + 4) // 5
-    assert w.attempts[-1][0] < 120
-    assert w.s.clock[0] >= 120
+    assert len(w.attempts) == 1 + (240 - elapsed + 4) // 5
+    assert w.attempts[-1][0] < 240
+    assert w.s.clock[0] >= 240
     assert (w.s.control / "transition.json").read_bytes() == before
 
 
 def test_busy_on_initial_journal_read_after_window_is_not_retried(ready_window, monkeypatch):
-    ready_window.s.clock[0] = 120
+    ready_window.s.clock[0] = 240
     error = lock_error()
     calls = []
 
@@ -192,18 +192,18 @@ def test_initial_acquisition_busy_retries_inside_durable_window(ready_window):
         assert result["rollback_at"] == stamp(0)
 
 
-@pytest.mark.parametrize("elapsed", [0, 113, 115, 119, 120])
+@pytest.mark.parametrize("elapsed", [0, 233, 235, 239, 240])
 def test_initial_busy_keeps_the_original_durable_deadline(ready_window, elapsed):
     w = ready_window
     w.fail_initial[0] = True
     w.s.clock[0] = elapsed
     error = lock_error()
-    w.failures.extend([error] * 25)
+    w.failures.extend([error] * 49)
     before = (w.s.control / "transition.json").read_bytes()
     with pytest.raises(RuntimeError) as caught:
         w.invoke()
     assert caught.value is error
-    assert len(w.attempts) == max(1, (120 - elapsed + 4) // 5)
+    assert len(w.attempts) == max(1, (240 - elapsed + 4) // 5)
     assert (w.s.control / "transition.json").read_bytes() == before
 
 
@@ -267,7 +267,7 @@ def test_initial_acquisition_rereads_phase_after_ownership(ready_window, monkeyp
 
 def test_busy_after_window_keeps_final_settlement_fail_closed(ready_window):
     w = ready_window
-    w.s.clock[0] = 120
+    w.s.clock[0] = 240
     error = lock_error()
     w.failures.append(error)
     before = (w.s.control / "transition.json").read_bytes()
@@ -275,5 +275,5 @@ def test_busy_after_window_keeps_final_settlement_fail_closed(ready_window):
         w.invoke()
     assert caught.value is error
     assert len(w.attempts) == 2
-    assert w.attempts[-1][0] == 120
+    assert w.attempts[-1][0] == 240
     assert (w.s.control / "transition.json").read_bytes() == before

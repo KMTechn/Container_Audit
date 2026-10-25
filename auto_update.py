@@ -30,6 +30,7 @@ from storage_policy import ensure_user_runtime_directory
 
 SCHEMA = "container-audit-startup-update-v1"
 APPLY_PROGRESS_TIMEOUT = 60
+READY_WINDOW_SECONDS = 240
 STARTUP_PROGRESS_MESSAGE = '업데이트가 진행 중입니다. 잠시 뒤 다시 시작하세요.'
 READY_CHECKS = (
     "gui_initialized", "identity_readable", "ledger_readable",
@@ -1716,9 +1717,9 @@ def _ready_window_deadline(control: Path) -> float | None:
             return None
         started = time.monotonic()
         elapsed = (_utc(now_utc()) - _utc(timestamp)).total_seconds()
-        if not 0 <= elapsed < 120:
+        if not 0 <= elapsed < READY_WINDOW_SECONDS:
             return None
-        return started + (120 - elapsed)
+        return started + (READY_WINDOW_SECONDS - elapsed)
     except Exception:
         # A failed window probe never turns the original busy into permission.
         return None
@@ -2019,8 +2020,8 @@ def wait_for_rollback_ready(control: Path, policy: Mapping[str, Any]) -> int:
             return 0
         if state.get("phase") != "ROLLBACK_PENDING_READY":
             return 20
-        remaining = max(0.0, 120 - (_utc(now_utc()) - _utc(state.get("rollback_at", state["applied_at"]))).total_seconds())
-    deadline = time.monotonic() + min(120.0, remaining)
+        remaining = max(0.0, READY_WINDOW_SECONDS - (_utc(now_utc()) - _utc(state.get("rollback_at", state["applied_at"]))).total_seconds())
+    deadline = time.monotonic() + min(READY_WINDOW_SECONDS, remaining)
     while time.monotonic() < deadline:
         with _ready_window_update_lock(control, policy["operator_sid"], deadline=deadline):
             state = read_json(control / "transition.json")
@@ -2221,8 +2222,8 @@ def _apply_prepared_once(control: Path) -> int:
                 if writer_processes(process_snapshot(control), own_pid=os.getpid()):
                     return 20
                 persist_switch(control, state, sha)
-    remaining = 120 - (_utc(now_utc()) - _utc(state["applied_at"])).total_seconds()
-    deadline = time.monotonic() + min(120.0, max(0.0, remaining))
+    remaining = READY_WINDOW_SECONDS - (_utc(now_utc()) - _utc(state["applied_at"])).total_seconds()
+    deadline = time.monotonic() + min(READY_WINDOW_SECONDS, max(0.0, remaining))
     while time.monotonic() < deadline:
         with _ready_window_update_lock(control, policy["operator_sid"], deadline=deadline):
             state = read_json(control / "transition.json")
@@ -3090,9 +3091,9 @@ def bootstrap_supervision_deadline(state, *, started: float, now: float, utc_now
     phase = (state or {}).get("phase")
     timestamp, window = None, 0
     if phase == "APPLIED_PENDING_READY":
-        timestamp, window = state.get("applied_at"), 120
+        timestamp, window = state.get("applied_at"), READY_WINDOW_SECONDS
     elif phase == "ROLLBACK_PENDING_READY":
-        timestamp, window = state.get("rollback_at", state.get("applied_at")), 120
+        timestamp, window = state.get("rollback_at", state.get("applied_at")), READY_WINDOW_SECONDS
     elif phase in {"ROLLBACK_PENDING", "UNKNOWN"}:
         timestamp, window = state.get("normal_stop_started_at"), 60
     stage_end = now + (window - (_utc(utc_now) - _utc(timestamp)).total_seconds()) if timestamp else started
@@ -3373,7 +3374,7 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                         if state["phase"] not in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"}:
                             continue
                         trial_at = state.get("rollback_at", state["applied_at"]) if state["phase"] == "ROLLBACK_PENDING_READY" else state["applied_at"]
-                        if (_utc(now_utc()) - _utc(trial_at)).total_seconds() >= 120:
+                        if (_utc(now_utc()) - _utc(trial_at)).total_seconds() >= READY_WINDOW_SECONDS:
                             raise _BootstrapObservationChanged()
                         claim = optional_record(Path(policy["staging_root"]) / "trial.json")
                         if state.get("trial_pid") or claim and claim.get("nonce") == state["nonce"]:
@@ -3384,7 +3385,7 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                             saw_trial = True
                         _bootstrap_trial_relay(control, policy, state, active, gui_arguments,
                             relay_attempts, deadline=min(deadline, time.monotonic() + max(0.0,
-                                120 - (_utc(now_utc()) - _utc(trial_at)).total_seconds())))
+                                READY_WINDOW_SECONDS - (_utc(now_utc()) - _utc(trial_at)).total_seconds())))
         except _BootstrapObservationChanged:
             pass
         except RuntimeError as error:

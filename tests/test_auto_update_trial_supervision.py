@@ -310,7 +310,7 @@ def test_restart_rollback_uses_only_original_remaining_window(scene, monkeypatch
     assert updates.read_json(s.control / "transition.json")["phase"] == "ROLLED_BACK"
     # Re-enter after the original window: no new GUI/relay trial is permitted.
     s.write(s.control / "transition.json", original)
-    s.clock[0] = 121
+    s.clock[0] = 241
     s.launches.clear()
     assert updates._bootstrap(s.control.parent, [], role="gui") == 20
     assert s.launches == []
