@@ -61,7 +61,21 @@ def test_only_stale_clock_backward_bypasses_retry_date(tmp_path, monkeypatch, cl
         connection.execute('UPDATE direct_sync_relay_batches SET status=?, last_error_code=?, updated_at=?, next_attempt_at=?',
             ('retry_wait', error, '2099-01-01T12:00:00Z', '2099-01-01T12:10:00Z'))
     when = '2099-01-01T12:00:01Z' if kind == 'stale_forward' else '2099-01-01T11:00:00Z'
+    monkeypatch.setattr(push, 'utc_now_text', lambda: when)
     args = dict(db_path=tmp_path / 'relay.sqlite3', worker_id='retry-test', now=when)
     result = (push.claim_next_relay_batch(**args) if claim == 'next' else
               push.claim_relay_batch_by_id(relay_id=queue_row(tmp_path)['relay_id'], **args))
     assert (result is not None) is (kind == 'stale_backward')
+
+
+@pytest.mark.parametrize('claim', ['next', 'by_id'])
+def test_fixed_drain_time_is_not_mistaken_for_clock_rollback(tmp_path, monkeypatch, claim):
+    enqueue(tmp_path)
+    with sqlite3.connect(tmp_path / 'relay.sqlite3') as connection:
+        connection.execute('UPDATE direct_sync_relay_batches SET status=?, last_error_code=?, updated_at=?, next_attempt_at=?',
+            ('retry_wait', 'stale_timestamp', '2099-01-01T12:00:05Z', '2099-01-01T12:10:00Z'))
+    monkeypatch.setattr(push, 'utc_now_text', lambda: '2099-01-01T12:00:06Z')
+    args = dict(db_path=tmp_path / 'relay.sqlite3', worker_id='retry-test', now='2099-01-01T12:00:00Z')
+    result = (push.claim_next_relay_batch(**args) if claim == 'next' else
+              push.claim_relay_batch_by_id(relay_id=queue_row(tmp_path)['relay_id'], **args))
+    assert result is None

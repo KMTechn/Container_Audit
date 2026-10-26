@@ -1979,7 +1979,7 @@ def test_cloned_relay_databases_apply_server_rotation_and_quarantine_stale_autho
             if self.outcome["status"] == "accepted":
                 response.payload["runtime_lease"] = self.outcome["runtime_lease"]
                 return response
-            return _Response(409, self.outcome["error"])
+            return _Response(409, {"committed": False, **self.outcome["error"]})
 
     sessions = [VectorSession(outcome) for outcome in vector["outcomes"]]
     results = [
