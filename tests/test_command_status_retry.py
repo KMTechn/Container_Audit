@@ -14,12 +14,16 @@ from tests.test_transfer_seal import (
 
 
 @pytest.mark.parametrize("status_code", [408, 429, 500])
-def test_seal_without_retryable_recovers_with_original_command(tmp_path, status_code):
+@pytest.mark.parametrize("committed", [None, False], ids=["absent", "false"])
+def test_seal_without_retryable_recovers_with_original_command(tmp_path, status_code, committed):
     server = _LogisticsServer()
 
     def respond(call):
         if call["method"] == "POST" and server.mode == "busy":
-            return FakeResponse(status_code, {"ok": False, "error": {"code": "SERVER_BUSY"}})
+            body = {"ok": False, "error": {"code": "SERVER_BUSY"}}
+            if committed is not None:
+                body["committed"] = committed
+            return FakeResponse(status_code, body)
         return server(call)
 
     client, session = _client(respond)
@@ -84,6 +88,39 @@ def test_committed_seal_429_recovers_receipt_without_resubmitting(tmp_path):
     assert coordinator.attempt(prepared.intent_id).status == "ACKED"
     assert len(received) == 1
     assert store.pending_ids() == []
+
+
+@pytest.mark.parametrize("status_code", [408, 429])
+@pytest.mark.parametrize("retryable", [None, False, True], ids=["absent", "false", "true"])
+def test_committed_transient_without_receipt_stays_review(tmp_path, status_code, retryable):
+    server = _LogisticsServer()
+
+    def respond(call):
+        if call["method"] == "POST":
+            body = {"ok": False, "committed": True, "error": {"code": "SERVER_BUSY"}}
+            if retryable is not None:
+                body["retryable"] = retryable
+            return FakeResponse(status_code, body)
+        if "/receipts/" in call["url"]:
+            return FakeResponse(404, {"ok": False, "error": {"code": "NOT_FOUND"}})
+        return server(call)
+
+    client, session = _client(respond)
+    store = TransferSealStore(tmp_path / "committed.db")
+    coordinator = TransferSealCoordinator(store, client)
+    prepared = _prepare(coordinator, require_completion_checkpoint=True)
+    coordinator.confirm_completion_checkpoint(prepared.intent_id)
+    first = coordinator.attempt(prepared.intent_id)
+    before = dict(store.load(prepared.intent_id))
+    coordinator.drain_pending_through(prepared.intent_id)
+    after = dict(store.load(prepared.intent_id))
+
+    assert first.status == after["status"] == "OPERATOR_REVIEW"
+    assert len([call for call in session.calls if call["method"] == "POST"]) == 1
+    assert len([call for call in session.calls if "/receipts/" in call["url"]]) == 1
+    assert store.pending_ids() == []
+    for field in ("command_json", "idempotency_key", "local_completion_id", "scanned_barcodes_json"):
+        assert after[field] == before[field]
 
 
 def _release_app(store, client):
