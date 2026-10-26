@@ -47,7 +47,7 @@ from direct_sync_push import (
     utc_now_text,
     validate_endpoint_url,
 )
-from direct_sync_operator import read_operator_pause
+from direct_sync_operator import read_operator_pause, read_runtime_status
 from producer_runtime_client import ensure_runtime_authority
 from storage_policy import current_user_data_home, is_legacy_syncthing_path
 from writer_session_fence import writer_admission, writer_sink
@@ -788,6 +788,7 @@ def _result_summary(result: UploadResult | None, queue: Mapping[str, Any] | None
         "error_code": result.error_code,
         "relay_id": relay_id,
         "upload_status_path": result.status_path,
+        **({"clock_skew": result.clock_skew} if result.clock_skew else {}),
     }
     if producer_client_batch_id and producer_client_batch_id != relay_id:
         summary["producer_client_batch_id"] = producer_client_batch_id
@@ -840,6 +841,28 @@ def _write_runtime_payload(config: DirectSyncRuntimeConfig, payload: dict[str, A
     with writer_admission("direct_sync_runtime_status"):
         if attempt is not None and not attempt.is_current():
             return {**payload, "superseded": True}
+        last_result = payload.get("last_result") or {}
+        runtime_lease = payload.get("runtime_lease") or {}
+        previous = read_runtime_status(config.runtime_status_path).get("payload") or {}
+        for name in ("scan_terminal_blocked_count", "scan_terminal_blocked_record_count"):
+            if name not in payload:
+                if name in last_result:
+                    payload[name] = last_result[name]
+                elif name in previous:
+                    payload[name] = previous[name]
+        clock_failure = next((value for value in (last_result, runtime_lease)
+                              if value.get("status_code") == 401
+                              and value.get("error_code") == "stale_timestamp"), None)
+        if clock_failure is not None:
+            payload["clock_warning"] = {
+                "status_code": 401, "error_code": "stale_timestamp",
+                **({"clock_skew": clock_failure["clock_skew"]} if clock_failure.get("clock_skew") else {}),
+            }
+        elif last_result.get("success"):
+            payload.pop("clock_warning", None)
+        else:
+            if isinstance(previous.get("clock_warning"), Mapping):
+                payload["clock_warning"] = dict(previous["clock_warning"])
         payload["runtime_status_write_status"] = "PASS"
         payload.pop("runtime_status_write_error_code", None)
         payload.pop("runtime_status_write_error_message", None)
@@ -1059,6 +1082,7 @@ def record_scan_status(
     scan_attempted_count: int,
     scan_failed_source_file: str = "",
     scan_terminal_blocked_count: int = 0,
+    scan_terminal_blocked_record_count: int | None = None,
     scan_terminal_blocked_source_files: list[str] | None = None,
 ) -> dict[str, Any]:
     queue = _safe_relay_queue_status(config.db_path)
@@ -1069,6 +1093,7 @@ def record_scan_status(
         "scan_attempted_count": int(scan_attempted_count),
         "scan_failed_source_file": scan_failed_source_file,
         "scan_terminal_blocked_count": int(scan_terminal_blocked_count),
+        "scan_terminal_blocked_record_count": scan_terminal_blocked_record_count,
     }
     if terminal_blocked_files:
         last_result["scan_terminal_blocked_source_files"] = terminal_blocked_files
@@ -1080,6 +1105,7 @@ def record_scan_status(
         last_result=last_result,
     )
     payload["scan_terminal_blocked_count"] = int(scan_terminal_blocked_count)
+    payload["scan_terminal_blocked_record_count"] = scan_terminal_blocked_record_count
     if terminal_blocked_files:
         payload["scan_terminal_blocked_source_files"] = terminal_blocked_files
     payload = _write_runtime_payload(config, payload)
@@ -1095,6 +1121,7 @@ def record_scan_result_status(
     scan_attempted_count: int,
     scan_failed_source_file: str = "",
     scan_terminal_blocked_count: int = 0,
+    scan_terminal_blocked_record_count: int | None = None,
     scan_terminal_blocked_source_files: list[str] | None = None,
 ) -> dict[str, Any]:
     terminal_blocked_files = list(scan_terminal_blocked_source_files or [])
@@ -1102,6 +1129,7 @@ def record_scan_result_status(
     payload["scan_enqueued_count"] = int(scan_enqueued_count)
     payload["scan_attempted_count"] = int(scan_attempted_count)
     payload["scan_terminal_blocked_count"] = int(scan_terminal_blocked_count)
+    payload["scan_terminal_blocked_record_count"] = scan_terminal_blocked_record_count
     if terminal_blocked_files:
         payload["scan_terminal_blocked_source_files"] = terminal_blocked_files
     if scan_failed_source_file:
@@ -1132,6 +1160,7 @@ def record_scan_drain_status(
     scan_attempted_count: int,
     scan_failed_source_file: str = "",
     scan_terminal_blocked_count: int = 0,
+    scan_terminal_blocked_record_count: int | None = None,
     scan_terminal_blocked_source_files: list[str] | None = None,
 ) -> dict[str, Any]:
     terminal_blocked_files = list(scan_terminal_blocked_source_files or [])
@@ -1140,6 +1169,7 @@ def record_scan_drain_status(
     payload["scan_enqueued_count"] = int(scan_enqueued_count)
     payload["scan_attempted_count"] = int(scan_attempted_count)
     payload["scan_terminal_blocked_count"] = int(scan_terminal_blocked_count)
+    payload["scan_terminal_blocked_record_count"] = scan_terminal_blocked_record_count
     if terminal_blocked_files:
         payload["scan_terminal_blocked_source_files"] = terminal_blocked_files
     if scan_failed_source_file:
@@ -1224,6 +1254,11 @@ def run_relay_once(
             now=cycle_now,
         )
         runtime_lease = dict(runtime_preparation.receipt or {})
+        if runtime_preparation.status_code == 401 and runtime_preparation.error_code == "stale_timestamp":
+            runtime_lease = {
+                "status_code": 401, "error_code": "stale_timestamp",
+                **({"clock_skew": runtime_preparation.clock_skew} if runtime_preparation.clock_skew else {}),
+            }
         if runtime_preparation.operator_review:
             # Not recovered automatically (live clone, stale token, bound row):
             # the operator card asks for an administrator instead of a resume.

@@ -32,6 +32,7 @@ from producer_runtime_client import (
     OPERATOR_REVIEW_CODES as RUNTIME_OPERATOR_REVIEW_CODES,
     apply_runtime_receipt_in_transaction,
     client_runtime_lease_mode,
+    clock_skew_from_response,
     disable_runtime_authority_in_transaction,
     expire_dead_fence_authority_in_transaction,
     init_runtime_schema,
@@ -187,6 +188,7 @@ class UploadResult:
     error_code: str = ""
     error_message: str = ""
     relay_id: str = ""
+    clock_skew: Dict[str, Any] = field(default_factory=dict)
     _runtime_lease: Dict[str, Any] | None = field(default=None, repr=False, compare=False)
     _runtime_disposition: str = field(default="", repr=False, compare=False)
     _runtime_token_unconsumed: bool = field(default=False, repr=False, compare=False)
@@ -1363,6 +1365,7 @@ def _with_upload_status_artifact(
                     "status_context": redact_runtime_secrets(context),
                     "source_file_path": plan.source_file_path,
                     "generated_at": utc_now_text(),
+                    **({"clock_skew": result.clock_skew} if result.clock_skew else {}),
                 })
         else:
             payload = {
@@ -1378,6 +1381,7 @@ def _with_upload_status_artifact(
                 "status_context": redact_runtime_secrets(context),
                 "source_file_path": plan.source_file_path,
                 "generated_at": utc_now_text(),
+                **({"clock_skew": result.clock_skew} if result.clock_skew else {}),
             }
             temporary = _prepare_status_temp(status_path, payload)
             try:
@@ -1411,6 +1415,7 @@ def _with_upload_status_artifact(
         error_code=status_write_error_code or result.error_code,
         error_message=status_write_error_message or result.error_message,
         relay_id=result.relay_id,
+        clock_skew=result.clock_skew,
         _runtime_lease=result._runtime_lease,
         _runtime_disposition=result._runtime_disposition,
         _runtime_token_unconsumed=result._runtime_token_unconsumed,
@@ -1445,7 +1450,7 @@ def _upload_response_result(
             error_message="producer ingest redirected; redirects are not allowed",
         )
     if not payload_is_valid_json and not 200 <= status_code < 300:
-        is_retryable_status = status_code in {408, 429, 500, 502, 503, 504}
+        is_retryable_status = status_code in {408, 429} or 500 <= status_code <= 599
         return UploadResult(
             success=False,
             status_code=status_code,
@@ -1522,7 +1527,8 @@ def _upload_response_result(
     if committed and not 200 <= status_code < 300 and not receipt_error_code and not producer_error_code:
         producer_error_code = "producer_committed_non_2xx"
         producer_error_message = f"producer committed upload but returned HTTP {status_code}"
-    retryable = False if committed or receipt_error_code else payload.get("retryable") is True or status_code in {408, 429, 500, 502, 503, 504}
+    clock_stale = status_code == 401 and producer_error_code == "stale_timestamp" and not committed
+    retryable = False if committed or receipt_error_code else clock_stale or payload.get("retryable") is True or (status_code in {408, 429} or 500 <= status_code <= 599)
     return UploadResult(
         success=success,
         status_code=status_code,
@@ -1532,6 +1538,7 @@ def _upload_response_result(
         retry_after_seconds=retry_after_seconds if retryable else None,
         error_code=receipt_error_code or producer_error_code,
         error_message=receipt_error_message or producer_error_message,
+        clock_skew=clock_skew_from_response(response) if clock_stale else {},
         _runtime_lease=runtime_lease,
         _runtime_disposition=runtime_disposition,
         _runtime_token_unconsumed=(
@@ -3077,6 +3084,7 @@ def drain_one_relay_batch(
             retry_after_seconds=runtime_preparation.retry_after_seconds,
             error_code=runtime_preparation.error_code,
             error_message=runtime_preparation.error_message,
+            clock_skew=runtime_preparation.clock_skew,
         )
         if runtime_preparation.operator_review:
             target_status = RELAY_STATUS_OPERATOR_REVIEW
@@ -3221,6 +3229,8 @@ def drain_one_relay_batch(
         row.runtime_fencing_policy == RUNTIME_FENCING_POLICY_LEGACY_EXACT_REPLAY
         and result._runtime_token_unconsumed
         and client_runtime_lease_mode(credentials) == "enforce"
+        and not (result.status_code == 401 and result.error_code == "stale_timestamp")
+        and not (result.status_code in {408, 429} or 500 <= result.status_code <= 599)
     ):
         if not _set_claimed_relay_status(
             row,

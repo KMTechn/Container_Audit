@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -49,7 +51,87 @@ SCAN_BLOCKED_STATUSES = {
 
 
 class ExistingTerminalDeltaBlocked(Exception):
-    pass
+    def __init__(self, source_file: str, *, start_byte=None, end_byte=None, content_sha256=""):
+        super().__init__(source_file)
+        self.start_byte = start_byte
+        self.end_byte = end_byte
+        self.content_sha256 = content_sha256
+
+
+def _count_blocked_source_records(source_file: Path, blocked: ExistingTerminalDeltaBlocked) -> int | None:
+    """Read one stable scan snapshot; unknown is never converted to zero."""
+    start, end = blocked.start_byte, blocked.end_byte
+    if not isinstance(start, int) or not isinstance(end, int) or not 0 <= start < end:
+        return None
+    def identity(stat):
+        return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
+    try:
+        before = source_file.stat()
+        with source_file.open("rb") as handle:
+            if identity(os.fstat(handle.fileno())) != identity(before) or end > before.st_size:
+                return None
+            # Four canonical CSV fields, UTF-8 (<=4 bytes/character), CSV quote
+            # escaping (<=2 bytes/character). Any longer physical line cannot
+            # pass the same csv.reader field-size limit; bound memory first.
+            line_limit = csv.field_size_limit() * 4 * 8 + 32
+            header = handle.readline(line_limit + 1)
+            if len(header) > line_limit or not header.endswith(b"\n"):
+                return None
+            digest = hashlib.sha256()
+            if start:
+                digest.update(header)
+            handle.seek(start)
+            remaining = end - start
+            while remaining:
+                block = handle.read(min(1024 * 1024, remaining))
+                if not block:
+                    return None
+                digest.update(block)
+                remaining -= len(block)
+            if digest.hexdigest() != blocked.content_sha256:
+                return None
+            handle.seek(-1, os.SEEK_END)
+            if handle.read(1) not in (b"\n", b"\r"):
+                return None
+            handle.seek(0)
+            def lines():
+                first = True
+                while True:
+                    raw = handle.readline(line_limit + 1)
+                    if not raw:
+                        return
+                    if len(raw) > line_limit:
+                        raise ValueError("CSV line exceeds parser field capacity")
+                    yield raw.decode("utf-8-sig" if first else "utf-8")
+                    first = False
+            reader = csv.reader(lines(), strict=True)
+            columns = next(reader)
+            if columns != ["timestamp", "worker_name", "event", "details"]:
+                return None
+            boundaries = {0, handle.tell()}
+            count = 0
+            while True:
+                row_start = handle.tell()
+                try:
+                    row = next(reader)
+                except StopIteration:
+                    break
+                row_end = handle.tell()
+                if row_end in (start, end):
+                    boundaries.add(row_end)
+                if row and len(row) != len(columns):
+                    return None
+                if row and row_start >= start:
+                    count += 1
+            if start not in boundaries or end not in boundaries:
+                return None
+            if identity(os.fstat(handle.fileno())) != identity(before):
+                return None
+        if identity(source_file.stat()) != identity(before):
+            return None
+        return count
+    except (OSError, UnicodeError, csv.Error, ValueError, StopIteration):
+        return None
 
 
 def _validate_source_glob(pattern: str) -> str:
@@ -195,7 +277,7 @@ def _read_delta_progress(
         """
     ).fetchall()
     matching_ranges: dict[int, int] = {}
-    blocked_ranges: dict[int, int] = {}
+    blocked_ranges: dict[int, tuple[int, str]] = {}
     for row in rows:
         source_path = Path(str(row["source_file_path"] or ""))
         if source_path.parent.name != source_delta_key:
@@ -212,7 +294,8 @@ def _read_delta_progress(
             ):
                 matching_ranges[start_byte] = max(matching_ranges.get(start_byte, 0), end_byte)
             elif include_blocked and _delta_relay_row_blocks_progress(row):
-                blocked_ranges[start_byte] = max(blocked_ranges.get(start_byte, 0), end_byte)
+                if end_byte > blocked_ranges.get(start_byte, (0, ""))[0]:
+                    blocked_ranges[start_byte] = (end_byte, str(row["content_sha256"]))
     best_end_byte = 0
     while best_end_byte in matching_ranges:
         next_end_byte = matching_ranges[best_end_byte]
@@ -220,10 +303,11 @@ def _read_delta_progress(
             break
         best_end_byte = next_end_byte
     if include_blocked and best_end_byte in blocked_ranges:
-        blocked_end_byte = blocked_ranges[best_end_byte]
+        blocked_end_byte, blocked_hash = blocked_ranges[best_end_byte]
         if blocked_end_byte <= best_end_byte:
             raise ExistingTerminalDeltaBlocked(str(source_file))
-        raise ExistingTerminalDeltaBlocked(str(source_file))
+        raise ExistingTerminalDeltaBlocked(str(source_file), start_byte=best_end_byte,
+                                           end_byte=blocked_end_byte, content_sha256=blocked_hash)
     if best_end_byte <= 0:
         return 0, ""
     return best_end_byte, _file_prefix_sha256(source_file, best_end_byte)
@@ -821,6 +905,7 @@ def main(argv: list[str] | None = None) -> int:
         no_new_count = 0
         preflight_status = None
         terminal_blocked_sources: list[str] = []
+        terminal_blocked_record_counts: list[int | None] = []
         pending_delta_progress: dict[str, tuple[Path, int, str]] = {}
         max_enqueue_files = max(0, int(args.max_enqueue_files or 0))
         for source_file in _scan_source_files(
@@ -840,9 +925,10 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             try:
                 delta = _build_delta_source_file(config, source_file)
-            except ExistingTerminalDeltaBlocked:
+            except ExistingTerminalDeltaBlocked as blocked:
                 attempted_count += 1
                 terminal_blocked_sources.append(str(source_file))
+                terminal_blocked_record_counts.append(_count_blocked_source_records(source_file, blocked))
                 continue
             if delta is None:
                 no_new_count += 1
@@ -856,6 +942,7 @@ def main(argv: list[str] | None = None) -> int:
             attempted_count += 1
             if current["status"] == "existing_terminal_blocked":
                 terminal_blocked_sources.append(str(source_file))
+                terminal_blocked_record_counts.append(None)
                 continue
             if current["status"] in SCAN_BLOCKED_STATUSES:
                 current["scan_failed_source_file"] = str(source_file)
@@ -871,6 +958,10 @@ def main(argv: list[str] | None = None) -> int:
             elif current["status"] not in SCAN_SUCCESS_STATUSES:
                 current["scan_failed_source_file"] = str(source_file)
                 break
+        blocked_record_count = (
+            None if any(value is None for value in terminal_blocked_record_counts)
+            else sum(terminal_blocked_record_counts)
+        )
         if preflight_status:
             scan_status = preflight_status
         elif statuses:
@@ -890,6 +981,7 @@ def main(argv: list[str] | None = None) -> int:
         scan_status["scan_attempted_count"] = attempted_count
         scan_status["scan_no_new_count"] = no_new_count
         scan_status["scan_terminal_blocked_count"] = len(terminal_blocked_sources)
+        scan_status["scan_terminal_blocked_record_count"] = blocked_record_count
         if terminal_blocked_sources:
             scan_status["scan_terminal_blocked_source_files"] = terminal_blocked_sources
         if scan_status["status"] == "scan_no_files":
@@ -899,6 +991,7 @@ def main(argv: list[str] | None = None) -> int:
                 scan_enqueued_count=enqueued_count,
                 scan_attempted_count=attempted_count,
                 scan_terminal_blocked_count=len(terminal_blocked_sources),
+                scan_terminal_blocked_record_count=blocked_record_count,
                 scan_terminal_blocked_source_files=terminal_blocked_sources,
             )
             scan_status["scan_enqueued_count"] = enqueued_count
@@ -911,6 +1004,7 @@ def main(argv: list[str] | None = None) -> int:
                 scan_enqueued_count=enqueued_count,
                 scan_attempted_count=attempted_count,
                 scan_terminal_blocked_count=len(terminal_blocked_sources),
+                scan_terminal_blocked_record_count=blocked_record_count,
                 scan_terminal_blocked_source_files=terminal_blocked_sources,
             )
             scan_status["scan_enqueued_count"] = enqueued_count
@@ -963,6 +1057,7 @@ def main(argv: list[str] | None = None) -> int:
                 scan_attempted_count=attempted_count,
                 scan_failed_source_file=scan_status.get("scan_failed_source_file", ""),
                 scan_terminal_blocked_count=len(terminal_blocked_sources),
+                scan_terminal_blocked_record_count=blocked_record_count,
                 scan_terminal_blocked_source_files=terminal_blocked_sources,
             )
         else:
@@ -976,6 +1071,7 @@ def main(argv: list[str] | None = None) -> int:
                     scan_attempted_count=attempted_count,
                     scan_failed_source_file=scan_status.get("scan_failed_source_file", ""),
                     scan_terminal_blocked_count=len(terminal_blocked_sources),
+                    scan_terminal_blocked_record_count=blocked_record_count,
                     scan_terminal_blocked_source_files=terminal_blocked_sources,
                 )
     else:

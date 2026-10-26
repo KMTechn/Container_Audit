@@ -4,7 +4,7 @@
  "commit": "7bbd2158f7b46ddbfdfa6d25f4b9c275beb32684",
  "dirty": true,
  "app": "ca",
- "parts_fingerprint": "c603bdb1abc7d8ac",
+ "parts_fingerprint": "310c6c49093d2a9f",
  "files": [
   {
    "path": "app/ca/ca.css",
@@ -20,7 +20,7 @@
   },
   {
    "path": "app/ca/contract.json",
-   "sha256": "2d5886c72c5e4b76b84363bb107c0d1de0d40415fda8befc45c0e5ae1595f657",
+   "sha256": "8b6327607e2df75a261108d124772a9f89be03163c245ff8746aa6bbf376f0ae",
    "bytes": 30970,
    "gzip": 6461
   },

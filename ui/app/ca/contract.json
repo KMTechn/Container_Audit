@@ -190,7 +190,7 @@
      },
      "additionalProperties": false
     },
-    "maxItems": 4
+    "maxItems": 5
    },
    "work": {
     "type": "object",

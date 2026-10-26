@@ -92,6 +92,26 @@ class RuntimePreparation:
     error_code: str = ""
     error_message: str = ""
     receipt: Dict[str, Any] = field(default_factory=dict)
+    clock_skew: Dict[str, Any] = field(default_factory=dict)
+
+
+def clock_skew_from_response(response: Any) -> Dict[str, Any]:
+    """Observe PC minus HTTP Date in seconds; never adjust signed requests."""
+    headers = getattr(response, "headers", {}) or {}
+    try:
+        value = next((value for name, value in headers.items() if str(name).lower() == "date"), "")
+        server = parsedate_to_datetime(str(value))
+        if server.tzinfo is None:
+            return {}
+        server = server.astimezone(timezone.utc)
+        pc = datetime.now(timezone.utc).replace(microsecond=0)
+        return {
+            "pc_time_utc": pc.isoformat().replace("+00:00", "Z"),
+            "server_time_utc": server.isoformat().replace("+00:00", "Z"),
+            "offset_seconds": int((pc - server).total_seconds()),
+        }
+    except (AttributeError, TypeError, ValueError, IndexError, OverflowError):
+        return {}
 
 
 def client_runtime_lease_mode(credentials: Any) -> str:
@@ -309,8 +329,9 @@ def _post_lease_request(
     code = str(error.get("code") or "runtime_lease_request_failed")
     message = str(error.get("message") or f"runtime lease request failed with HTTP {status_code}")
     message = str(_redact_known_values(message, sensitive_values))[:500]
-    retryable = payload.get("retryable") is True or status_code in {408, 429, 500, 502, 503, 504}
-    operator_review = code in OPERATOR_REVIEW_CODES or bool(payload.get("operator_review"))
+    clock_stale = status_code == 401 and code == "stale_timestamp"
+    retryable = clock_stale or payload.get("retryable") is True or (status_code in {408, 429} or 500 <= status_code <= 599)
+    operator_review = not clock_stale and (code in OPERATOR_REVIEW_CODES or bool(payload.get("operator_review")))
     return None, RuntimePreparation(
         status_code=status_code,
         retryable=retryable and not operator_review,
@@ -319,6 +340,7 @@ def _post_lease_request(
         error_code=code,
         error_message=message,
         receipt=safe_payload,
+        clock_skew=clock_skew_from_response(response) if clock_stale else {},
     )
 
 
