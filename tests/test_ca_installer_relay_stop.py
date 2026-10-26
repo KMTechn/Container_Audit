@@ -145,7 +145,9 @@ if($env:CA_STOP_CASE -ceq 'junction-parent' -and [IO.File]::ReadAllText((Join-Pa
  'PASS'
 ''', engine=engine, values={"CA_STOP_CASE": case, "CA_STOP_FIELD_MUTATION": "0"})
     assert result.returncode == 0
-    assert result.stdout.strip() == "PASS"
+    expected_output = (["작업 앱이 서버 보내기를 마치기를 기다리는 중", "PASS"]
+                       if case in {"normal", "stop_failed"} else ["PASS"])
+    assert result.stdout.strip().splitlines() == expected_output
 
 
 def test_installer_stop_is_before_fence_and_machine_scope_is_deferred(tmp_path):

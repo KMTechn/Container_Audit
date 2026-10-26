@@ -1728,17 +1728,18 @@ function Stop-CanonicalInstallerRelayPreimage([object[]]$Expected,[string]$State
 import pathlib, sys
 root, state = map(pathlib.Path, sys.argv[1:3])
 sys.path[:0] = [str(root / 'app'), str(root / 'app/site-packages')]
-from user_relay import request_user_relay_stop
-proof = request_user_relay_stop(state, timeout_seconds=15.0, request_id=sys.argv[3])
+from user_relay import RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS, request_user_relay_stop
+proof = request_user_relay_stop(state, timeout_seconds=RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS + 30, request_id=sys.argv[3])
 if proof['status'] != 'ABSENT':
     raise RuntimeError('installer relay stop unproven')
 print('installer_relay_stop=ABSENT')
 '@
     $probe=$probe.Replace("`r`n","`n").TrimEnd("`n")+"`n"
-    if((Get-BootstrapStringSha256 $probe) -cne 'fa22b7d085661a5833406f690613775fa6b2c29adf35d7454548cb50b14af709'){
+    if((Get-BootstrapStringSha256 $probe) -cne '4d03d07008652b4348393dbeca0b82af7c71cffa60faca6c5e47e4ba7a6e0358'){
         throw 'INSTALLER_RELAY_STOP_PROBE_DIFFERS'
     }
     $Script:CanonicalInstallerRelayStopAttempted=$true
+    Write-Host '작업 앱이 서버 보내기를 마치기를 기다리는 중'
     $result=Invoke-InstallationEvidenceChild 'installer-normal-relay-stop' (Join-Path $CodeRoot 'runtime\python.exe') @('-I','-B','-c',$probe,$CodeRoot,$StateRoot,[string]$Script:CanonicalInstallerRelayStopOwnership.request_id)
     if($result.ExitCode -ne 0 -or $null -ne $result.EvidenceFailure -or $result.Stdout.Trim() -cne 'installer_relay_stop=ABSENT'){
         throw 'INSTALLER_RELAY_NORMAL_STOP_UNPROVEN'
