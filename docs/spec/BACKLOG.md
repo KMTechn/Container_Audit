@@ -1,5 +1,7 @@
 ### retained 후보와 다음 업데이트 요청 (sub-555)
 
+- 10/26 sub-684: 로컬 완료 뒤 전송/redirect 사후 검토를 재시작·snapshot에서도 blocking=False 띠로 표시해 다음 현품표·제품 스캔을 허용한다. 기존 관리자 첫 행 재시도·확인 해제와 의도 막음 6종은 유지한다. 근거 work/program/w9firstupd/sub-684/RESULT.md.
+
 retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요청을 한 번 수행하고 journal을 다시 읽는다. 기존 writer가 있으면 SYSTEM의 유예를 따른다. 일반 복귀는 요청한 GUI/relay 역할을 보존한다. 늦은 READY 확정은 현재 기록에서 같은 전환의 timeout만 식별할 수 없어 닫아 둔다(실패 사유는 세대 code로 덮이고 failed_shas는 sha만 보존). 새 기록 형식·사유 값·phase·대기창을 만들지 않는다.
 
 - 10/25 sub-555: 다시 설치 때 고정 current를 교체하는 길의 READY 창을 원 applied_at·rollback_at 기준 240초 한 상수로 모았다. 감독 마감 뒤 LIVE SYSTEM이 기록 없음·PREPARED·APPLIED_PENDING_READY·ROLLBACK_PENDING·ROLLBACK_PENDING_READY에 있으면 bootstrap 원 시작+480초까지만 기다리고, update lock busy도 같은 고리로 돌아간다. UNKNOWN/ABSENT/결정 끝에는 연장0, 240/60/+15/480·relay 재시도·nonce·G·포인터/자료 의미는 유지한다. 재부팅 전후 ZIP·사슬과 원시 F는 출처별로 보존하며 수용 상태는 work/program/w9firstupd/sub-555/RESULT.md에 기록한다.

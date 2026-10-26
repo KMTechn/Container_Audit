@@ -172,7 +172,7 @@ def _alerts(app: Any, presenter_state: Any, notes: List[Dict[str, Any]], now: da
     if _attr(app, "_scan_entry_broken", False):
         alerts.append({"kind": 'bad', "text": "입력 칸 오류 — 프로그램을 다시 켜세요"})
     notice = presenter_state.active_notice
-    if notice is not None and notice.blocking:
+    if notice is not None and (notice.blocking or notice.code == "transfer.post_review_required"):
         choices = _choices(app)
         band: Dict[str, Any] = {"kind": "bad" if notice.severity is NoticeSeverity.ERROR else "warn",
                                 "text": f"{notice.title} — {_first_line(notice.message)}"}

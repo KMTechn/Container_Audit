@@ -15194,7 +15194,10 @@ class ContainerAudit:
         return None
 
     def _on_scan_entry_escape_during_notice(self, event=None):
-        if self._notice_blocks_scan():
+        notice = getattr(self._warning_state_presenter().state, "active_notice", None)
+        if self._notice_blocks_scan() or (
+            notice is not None and notice.code == "transfer.post_review_required"
+        ):
             self._acknowledge_active_notice()
             return "break"
         return None
@@ -15419,7 +15422,10 @@ class ContainerAudit:
         if raw_barcode and getattr(self, "_progress_visible", False):
             self._hide_logistics_progress(raw_barcode)
         if not raw_barcode:
-            if (self._warning_state_presenter().state.is_blocking
+            state = self._warning_state_presenter().state
+            notice = getattr(state, "active_notice", None)
+            if ((state.is_blocking or (notice is not None
+                    and notice.code == "transfer.post_review_required"))
                 and not self._operator_review_blocks_mutation()
                 and not getattr(self, "_inline_scan_choices", None)):
                 self._acknowledge_active_notice()
@@ -17163,7 +17169,9 @@ class ContainerAudit:
                         activebackground=title_color,
                         activeforeground="white",
                     )
-                elif active_notice is not None and active_notice.blocking:
+                elif active_notice is not None and (
+                    active_notice.blocking or active_notice.code == "transfer.post_review_required"
+                ):
                     acknowledge_button.grid()
                     acknowledge_button.configure(
                         text="확인",
@@ -20153,7 +20161,7 @@ class ContainerAudit:
                 '트레이 완료는 이 PC에 저장했지만 회사 서버 반영은 확인이 필요합니다\n현장 관리자에게 알리세요\n자세히: 관리자에게 알린 뒤 확인 단추를 누르세요.'
             ),
             severity=NoticeSeverity.WARNING,
-            blocking=True,
+            blocking=False,
         )
         presented = self._warning_state_presenter().present(notice)
         if presented:
