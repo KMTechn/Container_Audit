@@ -1967,7 +1967,7 @@ def _clear_log_events(tmp_path):
     if not log.exists():
         return []
     rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
-    return [row for row in rows if row.get("status") == "source_scan_failure_cleared"]
+    return [row for row in rows if row.get("status") == "relay_source_failure_cleared"]
 
 
 def _ledger_snapshot(tmp_path):

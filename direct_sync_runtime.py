@@ -903,8 +903,8 @@ def clear_source_scan_failure(config: DirectSyncRuntimeConfig, *, source_key: st
     finally:
         conn.close()
     if cleared:
-        _append_runtime_event(config, "source_scan_failure_cleared", {
-            "status": "source_scan_failure_cleared", "reason_code": reason, "error_code": cleared[2],
+        _append_runtime_event(config, "relay_source_failure_cleared", {
+            "status": "relay_source_failure_cleared", "reason_code": reason, "error_code": cleared[2],
         })
 
 
