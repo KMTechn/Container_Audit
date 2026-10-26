@@ -21,6 +21,9 @@ from tests import test_direct_sync_relay_runner as runner_helpers
 from tests.test_ca_screen_bridge import _app
 from tests.test_work_details_visibility import Widget
 from tests.test_w9scanonly_workflow import flow, windows  # noqa: F401
+from tests.operation_lease_fixtures import fixed_operation_lease_clock  # noqa: F401
+
+pytestmark = pytest.mark.usefixtures('fixed_operation_lease_clock', 'owned_tk_workers')
 
 
 DATE = 'Mon, 26 Oct 2026 04:00:00 GMT'
@@ -176,6 +179,12 @@ def test_preflight_lease_clock_warning_does_not_make_terminal_rows(tmp_path, mon
 
 
 def test_stale_upload_does_not_block_next_source_scan(tmp_path, monkeypatch, capsys):
+    import data_generation_guard
+    # Source Git identity is verified separately; this workflow uses an isolated
+    # deterministic release and still passes the real generation/admission helpers.
+    monkeypatch.setattr(data_generation_guard, '_runtime_release', lambda: {
+        'version': '2.0.121', 'build_id': '0' * 40,
+        'data_compatible_min_version': '2.0.121', 'compatibility_verified': False})
     source = tmp_path / 'sync'
     csv = runner_helpers.write_container_csv(source)
     args = runner_helpers.runner_args(tmp_path, scan_dir=source)
@@ -190,7 +199,10 @@ def test_stale_upload_does_not_block_next_source_scan(tmp_path, monkeypatch, cap
     output = capsys.readouterr().out
     assert (first_rc, scan_rc, 'direct_sync_relay_status=retry_wait' in first,
             'existing_terminal_blocked' in output) == (0, 0, True, False)
-    assert 'direct_sync_scan_enqueued_count=1' in output
+    assert 'direct_sync_scan_enqueued_count=1' in output, [
+        line for line in output.splitlines() if line.startswith((
+            'direct_sync_relay_status=', 'direct_sync_scan_enqueued_count=',
+            'direct_sync_scan_no_new_count=', 'direct_sync_scan_attempted_count='))]
 
 
 def test_both_screen_adapters_show_warning_without_scan_gate(flow):
