@@ -2382,7 +2382,6 @@ def _apply_prepared_once(control: Path) -> int:
                 persist_switch(control, state, sha)
     remaining = READY_WINDOW_SECONDS - (_utc(now_utc()) - _utc(state["applied_at"])).total_seconds()
     deadline = time.monotonic() + min(READY_WINDOW_SECONDS, max(0.0, remaining))
-    candidate_exited = False
     while time.monotonic() < deadline:
         with _ready_window_update_lock(control, policy["operator_sid"], deadline=deadline):
             state = read_json(control / "transition.json")
@@ -2406,7 +2405,6 @@ def _apply_prepared_once(control: Path) -> int:
             if confirmed:
                 return 0
             if exited:
-                candidate_exited = True
                 break
         time.sleep(0.25)
     with update_lock(control, policy["operator_sid"]):
@@ -2417,19 +2415,18 @@ def _apply_prepared_once(control: Path) -> int:
             write_json_durable(control / "transition.json", {**state, "phase": "FAILED", "reason": "previous version readiness failed"})
             return 20
         if opened_here:
-            # A timeout alone may be a slow or busy PC: the candidate gets another
-            # chance (bounded). A candidate process that already exited stays final.
+            # Failed launch, early exit, and timeout are unknown without
+            # verification evidence and consume only a bounded retry chance.
             state = request_rollback(state, reason="candidate startup failed or readiness timed out",
-                                     transient=not candidate_exited, now=now_utc())
+                                     transient=True, now=now_utc())
         else:
             if state["phase"] != "APPLIED_PENDING_READY":
                 raise ValueError("rollback requires a pending trial")
-            # Keep inherited uncertainty for the generation decision. An elapsed
-            # READY window still consumes the same bounded retry chance.
+            # Keep inherited uncertainty for the generation decision. Every failed
+            # READY attempt consumes the same bounded retry chance exactly once.
             state = {**state, "phase": "UNKNOWN"}
-            if not candidate_exited:
-                state["retry_shas"], _ = record_retry_chance(
-                    state, state["candidate_sha"], now=now_utc())
+            state["retry_shas"], _ = record_retry_chance(
+                state, state["candidate_sha"], now=now_utc())
         state = {**state, "normal_stop_started_at": state.get("normal_stop_started_at") or now_utc()}
         write_json_durable(control / "transition.json", state)
     remaining = 60 - (_utc(now_utc()) - _utc(state["normal_stop_started_at"])).total_seconds()

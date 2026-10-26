@@ -371,7 +371,7 @@ def test_engine_candidate_exit_selects_generation_compatible_code_without_revert
     result = updates.read_json(control / "transition.json")
     assert result["phase"] == ("ROLLED_BACK" if generation_case == "unchanged" else "DEFERRED")
     if transient_failure is None:
-        transient_failure = failure_kind == "timeout"
+        transient_failure = True  # Intentional policy change: startup/exit failures are unknown.
     assert result["failed_shas"] == ([] if transient_failure else [NEW])
     if transient_failure:
         assert result["retry_shas"][NEW]["attempts"] == 1

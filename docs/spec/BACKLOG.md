@@ -1,3 +1,4 @@
+- 10/27 sub-715: 기동 실패·조기 종료의 영구 거절을 UNKNOWN 다시 기회로 변경했다. 신규·상속 후보 모두 900초 간격·24시간 세 번 예산과 소진 안내를 사용하며 서명·해시·검사 거절은 유지한다. 상속 applied_at 마감과 failed-support Python/PS 판정은 기존과 같다. 근거: work/program/w9firstupd/sub-715/RESULT.md.
 - 10/27 sub-695: READY900 검토 P1-1 도우미 죽은 분류 제거·선언 복원, P2-2 서명된 SHA만 영구 거절·공간 부족/설치판 오류 다시 기회·P2-1 failed-support PS/Python 판정 일치·옛 failed_prepared_sha 단독 거절 제거(같은 표지 지문은 보존). RED→GREEN·선언·호출자 근거는 work/program/w9firstupd/sub-695/RESULT.md. P3 메모는 11/15 후속으로 보존한다.
 - 10/26 sub-659 (P1·123/126): 후보·되돌림 READY 900초 / bootstrap 상한 1140초, 준비 중 일시 실패는 마지막 시도+900초 / 24시간 내 3회 예산을 같은 retry_shas로 보존한다. 소진/모르는 예외로 SHA를 영구 거절하지 않으며 관리자 안내 뒤 24시간 경계에서 자동 재시도한다. 확정 거절·UNKNOWN 복구 경계는 유지한다. 포장 실패 JSON은 최근 20개만 남긴다. 새 계약 시험·직접 호출자 바탕 대조·선언 write→check 근거: work/program/w9firstupd/sub-659/RESULT.md. 실제 설치·현장 확인은 별도 회차다.
 

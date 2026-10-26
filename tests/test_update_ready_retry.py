@@ -35,8 +35,10 @@ def test_ready_window_is_fifteen_minutes_and_the_bootstrap_cap_outlasts_it():
     assert deadline == updates.READY_WINDOW_SECONDS + 15
 
 
-def test_a_confirmed_rejection_stays_permanent_at_once():
-    state = updates.request_rollback(trial_state(), reason="candidate startup failed or readiness timed out")
+@pytest.mark.parametrize("evidence", ["signature", "hash", "check"])
+def test_a_confirmed_rejection_stays_permanent_at_once(evidence):
+    # Intentional policy change: only verification evidence makes rejection final.
+    state = updates.request_rollback(trial_state(), reason=f"candidate {evidence} verification failed")
     assert state["failed_shas"] == [NEW] and "retry_shas" not in state
 
 
@@ -133,6 +135,60 @@ def test_a_ready_timeout_uses_three_chances_without_permanent_rejection(world, m
         assert state["failed_shas"] == []
         retry = state["retry_shas"]
         w.clock += 60
+
+
+@pytest.mark.parametrize("failure", ["launch", "exit"])
+@pytest.mark.parametrize("attempts", [0, 2])
+@pytest.mark.parametrize("inherited", [False, True])
+def test_early_candidate_failure_uses_the_unknown_retry_budget(
+        world, monkeypatch, tmp_path, failure, attempts, inherited):
+    w = world
+    pend_candidate(w, monkeypatch, tmp_path)
+    retry = {w.candidate: {"attempts": attempts, "first_at": w.now(), "last_at": w.now()}}
+    if attempts:
+        w.files[w.control / "transition.json"]["retry_shas"] = retry
+    if inherited:
+        w.files[w.control / "transition.json"] = updates.apply_transition(
+            w.state(), writers_absent=True, packet_verified=True, durable_prepared=True, now=w.now())
+        w.files[w.control / "active.json"] = {"schema": updates.SCHEMA, "sha": w.candidate}
+
+    snapshot = updates.process_snapshot
+    candidate_samples = 0
+
+    def candidate_lifetime(*args):
+        nonlocal candidate_samples
+        state = w.state()
+        if failure == "exit" and state["phase"] == "APPLIED_PENDING_READY":
+            candidate_samples += 1
+            # The first snapshot still belongs to SYSTEM's apply admission.
+            # The ordinary bootstrap can start the candidate after that lock.
+            if candidate_samples == 1:
+                return snapshot(*args)
+            if state.get("trial_pid") is None:
+                w.rows = [w.row("gui", 456, born=w.now(), sha=w.candidate)]
+                w.files[w.stage / "trial.json"] = {
+                    "pid": 456, "nonce": state["nonce"], "transition_id": state["transition_id"]}
+            else:
+                w.rows = []  # A claimed candidate exited without verification evidence.
+        return snapshot(*args)
+
+    monkeypatch.setattr(updates, "process_snapshot", candidate_lifetime)
+    assert w.system() == 0
+    state = w.state()
+    assert state["phase"] == "ROLLED_BACK" and w.active() == w.previous
+    assert state["failed_shas"] == []
+    assert state["retry_shas"][w.candidate]["attempts"] == attempts + 1
+    assert updates._retry_review_required(state) is (attempts == 2)
+    assert state["failure_decision"]
+    if attempts == 2:
+        reports, launched = [], []
+        monkeypatch.setattr(updates, "emit_support_record", lambda fields=None, **_kw: reports.append(fields))
+        monkeypatch.setattr(updates, "launch_version", lambda _c, sha, *_a, **_kw: launched.append(sha))
+        assert updates.start_current(w.control, w.policy, state, {"sha": w.previous}, [],
+                                     code="UPDATE_PREPARATION_FAILED") == 0
+        assert launched == [w.previous]
+        assert reports[-1]["reason_code"] == "UPDATE_RETRY_REVIEW_REQUIRED"
+        assert reports[-1]["guidance"] == updates.RETRY_REVIEW_MESSAGE
 
 
 def test_the_retry_record_survives_the_real_journal_writer(isolate_product_state, tmp_path):
