@@ -2974,6 +2974,8 @@ def drain_one_relay_batch(
     )
     if row is None:
         return None
+    # A carried binding may have reached the server in an earlier attempt.
+    runtime_binding_carried = any(name in row.metadata for name in RUNTIME_METADATA_FIELDS)
     try:
         spooled_hash, spooled_bytes = _read_file_digest(Path(row.spooled_file_path))
     except OSError as exc:
@@ -2998,7 +3000,6 @@ def drain_one_relay_batch(
             error_code=result.error_code,
             error_message=result.error_message,
             runtime_credentials=credentials,
-            runtime_authority_action=("release" if any(name in row.metadata for name in RUNTIME_METADATA_FIELDS) else ""),
         ):
             return _relay_status_update_conflict(row, prior_result=result)
         return _local_relay_upload_result(row, result)
@@ -3308,8 +3309,9 @@ def drain_one_relay_batch(
             error_code=result.error_code,
             error_message=result.error_message,
             runtime_credentials=credentials,
-            runtime_authority_action=("release" if (not source_post_started or result._runtime_token_unconsumed)
-                                      and any(name in row.metadata for name in RUNTIME_METADATA_FIELDS) else ""),
+            runtime_authority_action=("release" if (result._runtime_token_unconsumed
+                                                   or (not source_post_started and not runtime_binding_carried))
+                                       and any(name in row.metadata for name in RUNTIME_METADATA_FIELDS) else ""),
         ):
             return _relay_status_update_conflict(row, prior_result=result)
     else:
