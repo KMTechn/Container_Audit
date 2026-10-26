@@ -394,16 +394,35 @@ def test_recovery_clears_the_existing_public_block_episode(tmp_path, capsys, mon
     assert public['blocked_records'] == 0
 
 
+@pytest.mark.parametrize('failure_type', [PermissionError, OSError, RuntimeError, KeyboardInterrupt, SystemExit])
 def test_spool_write_failure_keeps_terminal_and_the_next_scan_continues_partial_repair(
-    tmp_path, capsys, monkeypatch
+    tmp_path, capsys, monkeypatch, failure_type
 ):
+    # Synthetic owner roots use a stable release identity; the real owner guard remains enabled.
+    import data_generation_guard as generation
+    from tools.check_release_version import read_current_version
+    version = read_current_version(Path(__file__).resolve().parents[1] / 'Container_Audit.py')
+    monkeypatch.setattr(generation, '_portable_runtime_release', lambda **kw: {
+        'version': version, 'build_id': 'a' * 40,
+        'data_compatible_min_version': version, 'compatibility_verified': False,
+    })
     _source, args, before, payload = _missing_terminal(tmp_path, capsys, monkeypatch)
-    def denied(*_args, **_kwargs):
-        raise PermissionError('test write denied')
+    helpers.write_container_csv(_source.parent, name='이적작업이벤트로그_zz_20260622.csv')
+    original_copy = push._copy_file_atomic
+    def denied(source, destination):
+        if source == Path(before['source_file_path']):
+            raise failure_type('test write denied')
+        return original_copy(source, destination)
     with monkeypatch.context() as blocked:
-        blocked.setattr(runner, '_copy_spool_file_atomic', denied)
+        blocked.setattr(push, '_copy_file_atomic', denied)
+        if not issubclass(failure_type, Exception):
+            with pytest.raises(failure_type):
+                runner.main(args)
+            assert dict(helpers.relay_rows(tmp_path / 'relay.sqlite3')[0]) == before
+            return
         runner.main(args)
     capsys.readouterr()
+    assert len(helpers.relay_rows(tmp_path / 'relay.sqlite3')) == 2
     after = dict(helpers.relay_rows(tmp_path / 'relay.sqlite3')[0])
     assert after == before
     assert Path(before['source_file_path']).read_bytes() == payload

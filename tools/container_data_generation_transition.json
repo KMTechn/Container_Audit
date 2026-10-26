@@ -1348,7 +1348,7 @@
     {
       "path": "app/tools/direct_sync_relay_runner.py",
       "before": "9cdb6db20d6750dbebbcee0eabc960bcfd41dfccc819e5a75fba94045ff0e9be",
-      "after": "02e05b5fd5b54d0ff43e93795dece62f207786da27113f53cbbfd724686ce260"
+      "after": "6f8b1136bdbc01d489c340ec4623b9d69fe80c28b3ba375e39ac8c2dde919a4f"
     },
     {
       "path": "app/tools/install_logistics_runtime_profile.py",
@@ -4660,7 +4660,7 @@
     {
       "path": "tools/direct_sync_relay_runner.py",
       "before": "9cdb6db20d6750dbebbcee0eabc960bcfd41dfccc819e5a75fba94045ff0e9be",
-      "after": "02e05b5fd5b54d0ff43e93795dece62f207786da27113f53cbbfd724686ce260"
+      "after": "6f8b1136bdbc01d489c340ec4623b9d69fe80c28b3ba375e39ac8c2dde919a4f"
     },
     {
       "path": "tools/install_logistics_runtime_profile.py",

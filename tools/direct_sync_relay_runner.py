@@ -471,7 +471,7 @@ def _reconstruct_delta_copies(config: DirectSyncRuntimeConfig, source_file: Path
                 return False
         conn.commit()
         return True
-    except (OSError, sqlite3.Error, TypeError, ValueError):
+    except Exception:
         return False
     finally:
         conn.close()
@@ -1097,6 +1097,11 @@ def main(argv: list[str] | None = None) -> int:
                 attempted_count += 1
                 terminal_blocked_sources.append(str(source_file))
                 terminal_blocked_record_counts.append(_count_blocked_source_records(source_file, blocked))
+                continue
+            except Exception:
+                attempted_count += 1
+                terminal_blocked_sources.append(str(source_file))
+                terminal_blocked_record_counts.append(None)
                 continue
             if delta is None:
                 no_new_count += 1
