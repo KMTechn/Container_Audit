@@ -312,3 +312,5 @@ v2.0.121 다시 설치 때(current 교체 길) 고침: SYSTEM의 후보·되돌�
 연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+480초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.
 
 - 제거가 뒤 단계에서 실패하면 제거 전 내용 소유 코드·control·바로가기를 원위치로 복원하고 실패를 반환한다. 복원도 실패하면 removal-evidence/<attempt>/rollback.json에 설치 손상을 남기고 승인 새 판 재설치를 안내한다. 자료·기존 evidence는 보존하며, 옛 제거 잔재에 대한 설치·U/stop/소스 증명 거절은 유지한다. current 없음+policy 잔재의 새 복구는 이번 범위 밖이며 PC를 멈추고 자료·증거를 보존해 별도 지원 절차를 따른다(sub-681, 레인 ANSWER-3).
+
+- 제거 보상은 이번 실행이 바꾼 작업만 제거 전 enabled 상태로 되돌리고, canonical current가 있으면 옛 relay를 꺼 둔다(sub-711).

@@ -4465,8 +4465,7 @@ function Restore-CanonicalRemovalFromMoveJournal([string]$Root,[string]$Run) {
         evidence_root=$evidence;journal=$journal}
 }
 function Restore-CanonicalRemovalScheduledTasks([string]$Evidence) {
-    # Best effort: recreate the scheduled tasks the helper deleted (their XML is in evidence) and
-    # re-enable the legacy relay task it only disabled. Never gates the code restore proof.
+    # A sealed task preimage is an intent, not permission to enable an old writer.
     $result=[ordered]@{status='NONE';tasks=@()}
     try {
         $rows=@()
@@ -4483,10 +4482,38 @@ function Restore-CanonicalRemovalScheduledTasks([string]$Evidence) {
         $failed=$false
         foreach ($record in $rows) {
             try {
-                $present=$true
-                try { $task=$folder.GetTask([string]$record.name) } catch { $present=$false }
-                if ($present) { if ([string]$record.name -ieq 'direct-sync-relay-container-audit') { $task.Enabled=$true } }
-                else { [void]$folder.RegisterTask([string]$record.name,[string]$record.xml,6,$null,$null,0) }
+                $legacy=([string]$record.name -ieq 'direct-sync-relay-container-audit')
+                if($legacy -and ($record.enabled -isnot [bool] -or $record.changed -isnot [bool])){throw 'REMOVAL_TASK_RESTORE_UNPROVEN'}
+                if($null -ne $record.PSObject.Properties['changed'] -and -not [bool]$record.changed){
+                    $result.tasks+=@([ordered]@{name=[string]$record.name;state='UNCHANGED'})
+                    continue
+                }
+                $task=$null
+                try { $task=$folder.GetTask([string]$record.name) }
+                catch { $cause=$_.Exception;while($null -ne $cause.InnerException){$cause=$cause.InnerException};if($cause.HResult -ne -2147024894){throw} }
+                if($legacy){
+                    if($null -eq $task){throw 'REMOVAL_TASK_RESTORE_CONFLICT'}
+                    $expected=[xml]::new();$expected.PreserveWhitespace=$true;$expected.LoadXml([string]$record.xml)
+                    $actual=[xml]::new();$actual.PreserveWhitespace=$true;$actual.LoadXml([string]$task.Xml)
+                    $enabledNode=$actual.SelectSingleNode('/*[local-name()="Task"]/*[local-name()="Settings"]/*[local-name()="Enabled"]')
+                    $expectedNode=$expected.SelectSingleNode('/*[local-name()="Task"]/*[local-name()="Settings"]/*[local-name()="Enabled"]')
+                    if($null -eq $enabledNode -or $null -eq $expectedNode){throw 'REMOVAL_TASK_RESTORE_UNPROVEN'}
+                    $enabledNode.InnerText=$expectedNode.InnerText
+                    if($actual.OuterXml -cne $expected.OuterXml -or [string]$task.GetSecurityDescriptor(7) -cne [string]$record.sddl){throw 'REMOVAL_TASK_RESTORE_CONFLICT'}
+                    $current=Join-Path (Split-Path -Parent (Split-Path -Parent $Evidence)) 'current'
+                    $desired=([bool]$record.enabled -and -not(Test-Path -LiteralPath $current))
+                    if([bool]$task.Enabled -ne $desired){$task.Enabled=$desired}
+                    if([bool]$task.Enabled -ne $desired){throw 'REMOVAL_TASK_RESTORE_UNPROVEN'}
+                    $expectedNode.InnerText=([string]$desired).ToLowerInvariant()
+                    $actual.LoadXml([string]$task.Xml)
+                    if($actual.OuterXml -cne $expected.OuterXml -or [string]$task.GetSecurityDescriptor(7) -cne [string]$record.sddl){throw 'REMOVAL_TASK_RESTORE_UNPROVEN'}
+                }else{
+                    if($null -eq $task){
+                        [void]$folder.RegisterTask([string]$record.name,[string]$record.xml,6,$null,$null,0,[string]$record.sddl)
+                        $task=$folder.GetTask([string]$record.name)
+                    }
+                    if([string]$task.Xml -cne [string]$record.xml -or [string]$task.GetSecurityDescriptor(7) -cne [string]$record.sddl){throw 'REMOVAL_TASK_RESTORE_UNPROVEN'}
+                }
                 $result.tasks+=@([ordered]@{name=[string]$record.name;state='RESTORED'})
             } catch { $failed=$true;$result.tasks+=@([ordered]@{name=[string]$record.name;state='UNPROVEN'}) }
         }

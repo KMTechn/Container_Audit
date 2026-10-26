@@ -2316,14 +2316,20 @@ function Remove-ContainerScheduledTasks($Folder, [string]$EvidenceRoot, [string]
         try { $task = $Folder.GetTask($name) }
         catch { $failure=$_.Exception; while ($null -ne $failure.InnerException) { $failure=$failure.InnerException }; if ($failure.HResult -ne -2147024894) { throw } }
         if ($null -ne $task) {
-            $transaction=Get-Variable -Name removalPreimage -ValueOnly -ErrorAction SilentlyContinue
-            if($null -ne $transaction){[void]$transaction.tasks.Add(@{name=$name;xml=[string]$task.Xml;sddl=[string]$task.GetSecurityDescriptor(7);legacy=($name -ieq 'direct-sync-relay-container-audit');enabled=$task.Enabled})}
-            Write-ContainerStartupUpdateRecord -Path (Join-Path $EvidenceRoot ($name + '.json')) -Payload @{
-                name=$name; xml=$task.Xml; sddl=$task.GetSecurityDescriptor(7)
-            }
-            if($name -ieq 'direct-sync-relay-container-audit'){
+            $legacy=($name -ieq 'direct-sync-relay-container-audit')
+            if($legacy){
                 $identity=Get-BootstrapOfficialLegacyRelayIdentity ([pscustomobject]@{TaskName=$name;TaskPath='\'}) ([string]$task.Xml)
                 if(-not $identity.matched){throw 'REMOVAL_TASK_IDENTITY_UNKNOWN'}
+            }
+            $enabled=[bool]$task.Enabled
+            $changed=(-not $legacy -or $enabled)
+            $transaction=Get-Variable -Name removalPreimage -ValueOnly -ErrorAction SilentlyContinue
+            if($null -ne $transaction -and $changed){[void]$transaction.tasks.Add(@{name=$name;xml=[string]$task.Xml;sddl=[string]$task.GetSecurityDescriptor(7);legacy=($name -ieq 'direct-sync-relay-container-audit');enabled=$task.Enabled})}
+            Write-ContainerStartupUpdateRecord -Path (Join-Path $EvidenceRoot ($name + '.json')) -Payload @{
+                name=$name; xml=$task.Xml; sddl=$task.GetSecurityDescriptor(7); enabled=$enabled; changed=$changed
+            }
+            if($legacy){
+                if(-not $changed){continue}
                 # Preserve credential material and the sealed XML preimage.
                 $task.Enabled=$false
                 $task.Stop(0)
