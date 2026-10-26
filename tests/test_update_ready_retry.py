@@ -390,3 +390,35 @@ def test_the_real_generic_helper_stdout_keeps_an_unknown_preparation_retry(tmp_p
     assert not updates.prepared_pending(case.control, case.policy, case.state())
     case.clock[0] = 900
     assert updates.prepared_pending(case.control, case.policy, case.state())
+
+
+
+def test_a_new_day_budget_takes_precedence_over_a_recent_attempt_interval(tmp_path, monkeypatch):
+    case = _preparation_case(tmp_path, monkeypatch, TimeoutError())
+    last = at(24 - 1 / 60)
+    state = {"schema": updates.SCHEMA, "phase": "DEFERRED", "reason_code": "UPDATE_PREPARATION_FAILED",
+             "deferred_at": last, "retry_shas": {NEW: {"attempts": 3, "first_at": at(0), "last_at": last}}}
+    case.files[case.control / "transition.json"] = state
+    case.clock[0] = 24 * 3600 - 1
+    assert not updates.prepared_pending(case.control, case.policy, state)
+    case.clock[0] = 24 * 3600
+    assert updates.prepared_pending(case.control, case.policy, state)
+    assert case.run() == 0
+    assert case.state().get("failed_shas", []) == []
+    assert case.state()["retry_shas"][NEW] == {"attempts": 1, "first_at": at(24), "last_at": at(24)}
+
+
+
+def test_an_inherited_ready_timeout_records_a_chance_without_permanent_rejection(world, monkeypatch, tmp_path):
+    w = world
+    pend_candidate(w, monkeypatch, tmp_path)
+    pending = updates.apply_transition(w.state(), writers_absent=True, packet_verified=True,
+                                       durable_prepared=True, now=w.now())
+    w.files[w.control / "transition.json"] = pending
+    w.files[w.control / "active.json"] = {"schema": updates.SCHEMA, "sha": w.candidate}
+    w.clock += 600
+    assert w.system() == 0
+    assert w.state()["phase"] == "ROLLED_BACK" and w.active() == w.previous
+    assert w.state()["failure_decision"]
+    assert w.state()["retry_shas"][w.candidate]["attempts"] == 1
+    assert w.state()["failed_shas"] == []

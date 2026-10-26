@@ -2414,8 +2414,12 @@ def _apply_prepared_once(control: Path) -> int:
         else:
             if state["phase"] != "APPLIED_PENDING_READY":
                 raise ValueError("rollback requires a pending trial")
-            # An inherited window supplies no supervised failure evidence.
+            # Keep inherited uncertainty for the generation decision. An elapsed
+            # READY window still consumes the same bounded retry chance.
             state = {**state, "phase": "UNKNOWN"}
+            if not candidate_exited:
+                state["retry_shas"], _ = record_retry_chance(
+                    state, state["candidate_sha"], now=now_utc())
         state = {**state, "normal_stop_started_at": state.get("normal_stop_started_at") or now_utc()}
         write_json_durable(control / "transition.json", state)
     remaining = 60 - (_utc(now_utc()) - _utc(state["normal_stop_started_at"])).total_seconds()
