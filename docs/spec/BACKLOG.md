@@ -1,3 +1,5 @@
+- 10/26 sub-641: 설치기의 사용자 relay 정상 정지 기다림을 15초에서 `RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS + 30`초(현재 150초)로 맞췄다. 고정 대기 안내를 표시하고, 부재 미증명 때 기존 실패와 강제 종료 0을 유지한다. 선언 재생성·RED/GREEN·직접 호출자 바탕 대조는 `work/program/w9firstupd/sub-641/RESULT.md`에 기록한다. 독립 검토는 레인이 붙이며 실제 배포본의 같은 장면도 확인한다.
+
 ### retained 후보와 다음 업데이트 요청 (sub-555)
 
 retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요청을 한 번 수행하고 journal을 다시 읽는다. 기존 writer가 있으면 SYSTEM의 유예를 따른다. 일반 복귀는 요청한 GUI/relay 역할을 보존한다. 늦은 READY 확정은 현재 기록에서 같은 전환의 timeout만 식별할 수 없어 닫아 둔다(실패 사유는 세대 code로 덮이고 failed_shas는 sha만 보존). 새 기록 형식·사유 값·phase·대기창을 만들지 않는다.

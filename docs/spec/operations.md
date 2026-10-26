@@ -1899,3 +1899,9 @@ run_app에는 셸 기본값과 같은 data/webview2를 udf로 명시한다. EBWe
 
 연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+480초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.
 relay가 direct-sync 자식을 기다리는 한도(RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS)를 45초에서 120초로 넓혔다(느린 무선 노트북의 정상 바퀴가 41.9초까지 걸려 시간 초과 UNKNOWN이 났다). 자식 대기 중에는 probe-only 자식 발사기가 writer admission을 내려놓고, relay는 화면 앱과 다른 프로세스이므로 화면 쓰기·스캔 입력은 기다리지 않는다. 시간 초과 때 subprocess.run이 자식을 끝내고 UNKNOWN 뒤 30초 쉬고 다시 도는 동작은 그대로다. 첫 바퀴가 끝나야 relay 상태가 RUNNING이 되므로 READY 240초(상한 480) 안의 여유는 준비 시간 + 120초로 본다.
+
+### 설치 밤 relay 정상 정지 기다림 (sub-641)
+
+설치기는 relay가 진행 중인 서버 전송을 끝내도록 `user_relay.RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS + 30`초 기다린다. 현재 값은 120 + 30 = 150초(최대 2분 반)다. 기다리기 직전에 「작업 앱이 서버 보내기를 마치기를 기다리는 중」을 한 줄 표시한다. 부재를 확인하지 못하면 기존 실패로 설치/되돌림을 중단하며, 이 정지 요청은 relay나 전송 자식을 강제로 끝내지 않는다. 정지 요청의 부재 확인 뒤 인터프리터 종료를 확인하는 기존 후속 대기는 별도다.
+
+옛 공개 앱의 예약 작업 relay는 이 사용자 relay 정지와 다른 기존 경로로 처리한다. 자동 첫 업데이트는 설치된 N 판의 고정 적용기에서 살아 있는 writer를 보류하고 이 설치기 정지 요청을 부르지 않는다. 새 꾸러미로 수동 재설치할 때는 N+1 꾸러미의 설치기와 Python 상수를 사용하므로, 11/15 꾸러미 검증에도 15초를 넘겨 전송한 뒤 정상 종료하는 같은 RED/GREEN 장면을 포함한다.
