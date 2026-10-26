@@ -1028,3 +1028,5 @@ P3 한계(ANSWER-37, 10/26 레인 판정): 첫 품목표의 40초 예산은 돌�
 - 제거가 뒤 단계에서 실패하면 제거 전 내용 소유 코드·control·바로가기를 원위치로 복원하고 실패를 반환한다. 복원도 실패하면 removal-evidence/<attempt>/rollback.json에 설치 손상을 남기고 승인 새 판 재설치를 안내한다. 자료·기존 evidence는 보존하며, 옛 제거 잔재에 대한 설치·U/stop/소스 증명 거절은 유지한다. current 없음+policy 잔재의 새 복구는 이번 범위 밖이며 PC를 멈추고 자료·증거를 보존해 별도 지원 절차를 따른다(sub-681, 레인 ANSWER-3).
 - w9firstupdsub633 / relay 자식 대기 45 → 120 초: LM1 밤 창 실측으로 확인 예정(RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS · 포장 user_relay.run_session_direct_sync_once 기본값 · 이적 _runtime_cycle 호출).
 - w9firstupdsub652 / 이적 123: 공용 `data_generation` 표지 바꿔치기가 잠김(오류 5·32)이면 1초(50ms 간격) 다시 시도하도록 Python·PowerShell 모두 고쳤다. 공용 판 표지 `0.3.8+w9.1`. 정본 `kmtech_shared` 반영과 정본 대조 시험의 의도한 차이 해소는 후속.
+
+- w9firstupdsub661: 웹 셸 scan.js는 핀 블롭 `d390424bbfa0255f7c271aec7491e6f4690cd6dd`를 바이트 그대로 사용한다. 스캔 받이의 Ctrl+]→GS(0x1D), Ctrl+^→RS(0x1E) 및 직접 온 제어 바이트를 보존하고 일반 폼 입력은 기존 동작을 유지한다. 이적 판독에 GS/RS 날짜 해석 규칙은 없으며 기존 PHS2 판독을 유지한다. Node VM과 오프라인 판독의 좁은 계약 시험을 사용하며 실제 창·스캐너·배포본 기동은 이번 범위 밖이다.

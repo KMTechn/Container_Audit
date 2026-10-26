@@ -978,3 +978,5 @@ producer 업로드와 행별 runtime lease 준비의 JSON HTTP 401 + 오류 코�
 유효한 응답 HTTP `Date`를 읽으면 기존 업로드 상태 JSON의 선택 칸 `clock_skew={pc_time_utc,server_time_utc,offset_seconds}`에 초 단위 `PC UTC − 서버 UTC`를 남긴다. Date가 없거나 해석되지 않으면 이 칸을 쓰지 않는다. 서명 시각이나 시스템 시계를 자동 보정하지 않는다. runtime 상태의 선택 칸 `clock_warning={status_code:401,error_code:"stale_timestamp",clock_skew?:…}`은 대기·idle·재시작 동안 유지되고 다음 업로드 성공 때 제거된다. Date가 없는 새 stale 응답은 이전 시각 조각을 재사용하지 않는다.
 
 두 화면의 노랑 안내는 스캔·작업을 막거나 확인 단추·오류음을 만들지 않는다. 큰 줄은 「이 PC 시계가 회사 서버와 5분 넘게 달라 기록을 보내지 못하고 있습니다 — 현장 관리자에게 알리세요」, 둘째 줄은 「찍은 기록은 이 PC에 그대로 있고, 시계를 맞추면 저절로 보내집니다」다. Date를 알면 같은 PC 표시 시간대의 「 · 이 PC HH:MM · 회사 서버 HH:MM」을 덧붙인다. 기존 품목 안내도 보존한다.
+
+- w9firstupdsub661: 웹 셸 scan.js는 핀 블롭 `d390424bbfa0255f7c271aec7491e6f4690cd6dd`를 바이트 그대로 사용한다. 스캔 받이의 Ctrl+]→GS(0x1D), Ctrl+^→RS(0x1E) 및 직접 온 제어 바이트를 보존하고 일반 폼 입력은 기존 동작을 유지한다. 이적 판독에 GS/RS 날짜 해석 규칙은 없으며 기존 PHS2 판독을 유지한다. Node VM과 오프라인 판독의 좁은 계약 시험을 사용하며 실제 창·스캐너·배포본 기동은 이번 범위 밖이다.

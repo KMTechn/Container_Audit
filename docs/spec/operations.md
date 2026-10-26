@@ -1954,3 +1954,5 @@ relay가 direct-sync 자식을 기다리는 한도(RELAY_DIRECT_SYNC_PROCESS_TIM
 ### relay 정지 및 설치 대기 상한 (sub-690)
 
 10/27 sub-690: 사용자 제거·교체 봉쇄·후보 정상 종료는 relay 자식 한도+30초(현재150초)를 공유하고, 후보 종료의 원 normal_stop_started_at과 감독 창도 같은 한도에 묶는다. 승인된 설치 대기는120초(relay 정지·봉쇄150초), 초과 시 기존 실패/UNKNOWN과 강제 종료0을 유지한다. 안전한 호출 경로에는 event/elapsed_ms/status를 기록한다. CA 제거·업데이트의 PS5.1 병합 stderr 경로와 canonical의 추가 journal 줄은 생략하여 기존 설치 감사의 실패 판정·공간 한도를 보존한다.
+
+- w9firstupdsub661: 웹 셸 scan.js는 핀 블롭 `d390424bbfa0255f7c271aec7491e6f4690cd6dd`를 바이트 그대로 사용한다. 스캔 받이의 Ctrl+]→GS(0x1D), Ctrl+^→RS(0x1E) 및 직접 온 제어 바이트를 보존하고 일반 폼 입력은 기존 동작을 유지한다. 이적 판독에 GS/RS 날짜 해석 규칙은 없으며 기존 PHS2 판독을 유지한다. Node VM과 오프라인 판독의 좁은 계약 시험을 사용하며 실제 창·스캐너·배포본 기동은 이번 범위 밖이다.
