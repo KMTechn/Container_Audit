@@ -975,3 +975,4 @@ sub-298 소스 구현: 최초 격리 journal·원 작업자·현품표·격리 �
 - P3(후보·제품 변경 0): 공개 encoder 미분류 문자열 칸의 비밀은 최종 guard 로 fail-closed(감사 저장 거절) — canonical 생산자 칸 census 는 11/1 뒤.
 
 - P3(11/15 · 10/23 w9firstupd): 관리자 `--request-app-stop`에서 `--direct-sync-root`가 `--data-root` 기준 `direct_sync`와 다르면 거절(지금은 표지를 감시 밖에 써서 150초 UNKNOWN). 자동 호출자 0, 수동 SSH 절차만(operations.md 「관리자 정상 멈춤 요청」).
+화면 셸 기준판: frame.css 만 웹 00e66d79(menu label one flow · sha256 97c47d9b…) 바이트 · 나머지 셸 파일은 d8f82fa4 · ui manifest commit 은 셸 기준판 d8f82fa4 를 뜻함.
