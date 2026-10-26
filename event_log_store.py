@@ -32,7 +32,7 @@ class _ProjectionPending(RuntimeError):
 class EventLogOutbox:
     """Keep original payloads until their idempotent CSV projection is durable."""
 
-    def __init__(self, directory: str | Path):
+    def __init__(self, directory: str | Path, *, read_retry=None):
         self.directory = Path(directory)
         self._lock = threading.RLock()
         self._projection_condition = threading.Condition(self._lock)
@@ -42,7 +42,9 @@ class EventLogOutbox:
         self._staged_paths: dict[str, Path] = {}
         for path in self.directory.glob('*.json'):
             try:
-                encoded = json.dumps(json.loads(path.read_text(encoding='utf-8')), sort_keys=True)
+                read = lambda: path.read_text(encoding='utf-8')
+                raw = read() if read_retry is None else read_retry(read)
+                encoded = json.dumps(json.loads(raw), sort_keys=True)
                 self._staged_payloads.add(encoded)
                 self._staged_paths[encoded] = path
             except FileNotFoundError:

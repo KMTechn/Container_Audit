@@ -290,14 +290,14 @@ def test_real_constructor_does_not_start_any_worker_by_itself(tmp_path, monkeypa
     monkeypatch.setattr(ca, "fit_restored_window_to_work_area", lambda root: None)
     monkeypatch.setattr(ca.tk, "BooleanVar", lambda **kwargs: SimpleNamespace(get=lambda: False))
     from tests.test_w9scanonly_workflow import OfflineSealClient, _resolved
-    monkeypatch.setattr(ca, "container_startup_logistics_client", lambda: OfflineSealClient(_resolved(2)))
+    monkeypatch.setattr(ca, "container_startup_logistics_client", lambda *, read_retry=None: OfflineSealClient(_resolved(2)))
     monkeypatch.setattr(ca, "start_direct_sync_auto_bootstrap", lambda **kwargs: None)
     setup = ContainerAudit._setup_paths_and_dirs
     def owned_paths(app):
         setup(app)
         _registry(Path(app.config_folder) / app.WORKERS_FILE)
     monkeypatch.setattr(ContainerAudit, "_setup_paths_and_dirs", owned_paths)
-    monkeypatch.setattr(ContainerAudit, "load_items", lambda self: [
+    monkeypatch.setattr(ContainerAudit, "load_items", lambda self, *, read_retry=None: [
         {"Item Code": ITEM, "Item Name": "fixture item", "Spec": "fixture spec"},
     ])
     screen = {"value": "selection"}

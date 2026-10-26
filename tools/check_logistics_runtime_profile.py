@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
             with writer_admission("logistics_profile_install"):
                 storage = build_container_audit_storage_paths(application_path=str(REPO_ROOT))
                 record_before_owner_paths(storage.data_root, file_paths=(args.profile_path,))
-        profile = load_logistics_runtime_profile(
+        profile = load_logistics_runtime_profile(read_retry=None,
             required=not args.optional,
             profile_path=args.profile_path,
         )
