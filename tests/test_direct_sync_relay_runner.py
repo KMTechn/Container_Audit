@@ -1950,3 +1950,108 @@ def test_runner_oversized_csv_cell_is_a_file_error_and_later_files_still_enqueue
     assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"][RELAY_STATUS_PENDING] == 1
     assert bad.read_bytes() == bad_bytes
 
+
+def _real_failure_round(tmp_path, capsys, name):
+    source = write_container_csv(tmp_path / "sync", name=name)
+    source.write_bytes(b"wrong,header" + bytes([10]) + b"1,2" + bytes([10]))
+    args = runner_args(tmp_path, scan_dir=source.parent)
+    main(args)
+    capsys.readouterr()
+    count, errors = _scan_error_count(tmp_path)
+    assert count == 1 and errors[0]["error_code"] == "source_csv_header_invalid"
+    return source, args, errors[0]
+
+
+def _clear_log_events(tmp_path):
+    log = tmp_path / "logs" / "relay.jsonl"
+    if not log.exists():
+        return []
+    rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [row for row in rows if row.get("event") == "source_scan_failure_cleared"]
+
+
+def _ledger_snapshot(tmp_path):
+    conn = sqlite3.connect(str(tmp_path / "relay.sqlite3"))
+    try:
+        state = conn.execute(
+            "SELECT source_file_path, sent_byte_count, sent_prefix_sha256 FROM direct_sync_source_scan_state ORDER BY 1").fetchall()
+        batches = conn.execute(
+            "SELECT relay_id, status, relative_path FROM direct_sync_relay_batches ORDER BY 1").fetchall()
+        return state, batches
+    finally:
+        conn.close()
+
+
+def test_runner_logs_one_line_when_a_vanished_original_failure_entry_is_cleared(tmp_path, capsys):
+    source, args, failure = _real_failure_round(tmp_path, capsys, "이적작업이벤트로그_logv_20260622.csv")
+    source.unlink()
+    main(args)
+    capsys.readouterr()
+    assert _scan_error_count(tmp_path) == (0, [])
+    events = _clear_log_events(tmp_path)
+    assert len(events) == 1
+    assert events[0]["source_name"] == source.name
+    assert events[0]["first_failed_at"] == failure["first_failed_at"]
+    assert events[0]["error_code"] == "source_csv_header_invalid"
+    assert events[0]["reason"] == "vanished"
+    assert str(source.parent) not in json.dumps(events[0], ensure_ascii=False)
+
+
+def test_runner_logs_no_new_bytes_reason_when_a_fixed_original_failure_entry_is_cleared(tmp_path, capsys):
+    source, args, failure = _real_failure_round(tmp_path, capsys, "이적작업이벤트로그_logn_20260622.csv")
+    fixed = write_container_csv(tmp_path / "other", name="fixed.csv").read_bytes()
+    source.write_bytes(fixed)
+    runner_module._record_source_sent_byte_count(
+        tmp_path / "relay.sqlite3", source, len(fixed), hashlib.sha256(fixed).hexdigest())
+    main(args)
+    capsys.readouterr()
+    assert _scan_error_count(tmp_path) == (0, [])
+    events = _clear_log_events(tmp_path)
+    assert [event["reason"] for event in events] == ["no_new_bytes"]
+    assert events[0]["source_name"] == source.name
+
+
+def test_runner_failure_entry_stays_when_the_vanished_check_is_not_a_plain_missing_error(tmp_path, capsys, monkeypatch):
+    source, args, failure = _real_failure_round(tmp_path, capsys, "이적작업이벤트로그_perm_20260622.csv")
+    source.rename(source.with_name("rotated.txt"))
+    real_lstat = os.lstat
+
+    def lstat(path, *a, **k):
+        if os.fspath(path) == str(source):
+            raise PermissionError(errno.EACCES, "test lstat denied")
+        return real_lstat(path, *a, **k)
+
+    monkeypatch.setattr(runner_module.os, "lstat", lstat)
+    main(args)
+    capsys.readouterr()
+    count, errors = _scan_error_count(tmp_path)
+    assert count == 1 and errors[0]["first_failed_at"] == failure["first_failed_at"]
+    assert _clear_log_events(tmp_path) == []
+
+
+def test_runner_clearing_a_failure_entry_leaves_offsets_and_queue_rows_unchanged(tmp_path, capsys):
+    source, args, failure = _real_failure_round(tmp_path, capsys, "이적작업이벤트로그_ledger_20260622.csv")
+    other = write_container_csv(source.parent, name="이적작업이벤트로그_other_20260622.csv")
+    main(args)
+    capsys.readouterr()
+    before = _ledger_snapshot(tmp_path)
+    assert before[1]
+    source.unlink()
+    main(args)
+    capsys.readouterr()
+    assert _scan_error_count(tmp_path) == (0, [])
+    assert _ledger_snapshot(tmp_path) == before
+    assert other.exists()
+
+
+def test_runner_failure_entry_stays_when_the_original_prefix_changed_after_the_sent_offset(tmp_path, capsys):
+    source, args, failure = _real_failure_round(tmp_path, capsys, "이적작업이벤트로그_prefix_20260622.csv")
+    runner_module._record_source_sent_byte_count(
+        tmp_path / "relay.sqlite3", source, source.stat().st_size, hashlib.sha256(b"other prefix").hexdigest())
+    main(args)
+    capsys.readouterr()
+    count, errors = _scan_error_count(tmp_path)
+    assert count == 1
+    assert errors[0]["first_failed_at"] == failure["first_failed_at"]
+    assert errors[0]["error_code"] == "source_csv_header_invalid"
+    assert _clear_log_events(tmp_path) == []
