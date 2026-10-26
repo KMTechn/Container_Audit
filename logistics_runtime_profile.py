@@ -11,6 +11,7 @@ import re
 import stat
 import sys
 import time
+import threading
 from ctypes import wintypes
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,19 +26,42 @@ class StartupReadRetry:
 
     def __init__(self):
         self.remaining = 3
+        self._lock = threading.Lock()
+
+    def finish(self):
+        with self._lock:
+            self.remaining = 0
 
     def __call__(self, read):
         while True:
             try:
                 return read()
             except OSError as exc:
-                if self.remaining == 0 or not (
-                    isinstance(exc, PermissionError)
-                    or getattr(exc, 'winerror', None) in (5, 32, 33)
-                ):
-                    raise
-                self.remaining -= 1
+                with self._lock:
+                    if self.remaining == 0 or not (
+                        isinstance(exc, PermissionError)
+                        or getattr(exc, 'winerror', None) in (5, 32, 33)
+                    ):
+                        raise
+                    self.remaining -= 1
                 time.sleep(1)
+
+
+_startup_read_retry = StartupReadRetry()
+
+
+def startup_read_retry():
+    """Return this process's shared startup budget, including before __init__."""
+    return _startup_read_retry
+
+
+def finish_startup_read_retry():
+    """Close both default and already-injected readers before business work."""
+    _startup_read_retry.finish()
+
+
+def _default_profile_read_retry(read):
+    return _startup_read_retry(read)
 
 
 PROFILE_CONTRACT_VERSION = "km-logistics-runtime-profile-v1"
@@ -679,7 +703,7 @@ def assert_path_has_no_reparse_components(
     return path
 
 
-def _read_profile(path: Path, *, read_retry=None) -> dict[str, Any]:
+def _read_profile(path: Path, *, read_retry=_default_profile_read_retry) -> dict[str, Any]:
     def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for key, value in pairs:
@@ -778,7 +802,7 @@ def load_logistics_runtime_profile(
     *,
     environ: Mapping[str, str] | None = None,
     decryptor: Callable[[bytes], str] | None = None,
-    read_retry=None,
+    read_retry=_default_profile_read_retry,
 ) -> LogisticsRuntimeProfile | None:
     values = _runtime_environment(environ)
     if (
@@ -796,7 +820,7 @@ def load_logistics_runtime_profile(
         return None
     from data_generation_guard import probe_before_owner_paths
     probe_before_owner_paths(path.parent, file_paths=(path,))
-    profile = _read_profile(path) if read_retry is None else _read_profile(path, read_retry=read_retry)
+    profile = _read_profile(path, read_retry=read_retry)
     if "bearer_token" in profile:
         raise LogisticsRuntimeConfigurationError(
             "plaintext bearer_token is forbidden in the machine profile"

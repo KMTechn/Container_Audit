@@ -446,7 +446,7 @@ def _rotate_existing_profile_token(
             raise RuntimeError(
                 "runtime profile changed during credential rotation"
             )
-        readback = load_logistics_runtime_profile(
+        readback = load_logistics_runtime_profile(read_retry=None,
             required=True,
             profile_path=target,
             decryptor=decryptor,
@@ -459,7 +459,7 @@ def _rotate_existing_profile_token(
         if replaced:
             try:
                 _atomic_write(secret_path, original_secret)
-                restored = load_logistics_runtime_profile(
+                restored = load_logistics_runtime_profile(read_retry=None,
                     required=True,
                     profile_path=target,
                     decryptor=decryptor,
@@ -584,7 +584,7 @@ def install_runtime_profile(
             ),
         )
         created.append(target)
-        readback = load_logistics_runtime_profile(
+        readback = load_logistics_runtime_profile(read_retry=None,
             required=True,
             profile_path=target,
             decryptor=decryptor,
@@ -627,7 +627,7 @@ def install_tls_ca_bundle_for_existing_profile(
     decryptor = (
         unprotect_current_user_secret if selected_scope == "current_user" else None
     )
-    existing = load_logistics_runtime_profile(
+    existing = load_logistics_runtime_profile(read_retry=None,
         required=True,
         profile_path=target,
         decryptor=decryptor,
@@ -680,7 +680,7 @@ def install_tls_ca_bundle_for_existing_profile(
         if not ca_existed:
             _atomic_write(tls_ca_bundle.target_path, tls_ca_bundle.content)
         _atomic_write(target, upgraded_profile)
-        readback = load_logistics_runtime_profile(
+        readback = load_logistics_runtime_profile(read_retry=None,
             required=True,
             profile_path=target,
             decryptor=decryptor,
@@ -834,7 +834,7 @@ def ensure_runtime_profile_from_enrollment_bundle(
             tls_ca_bundle_path=str(tls_ca_bundle.target_path),
         )
     if target.exists():
-        existing = load_logistics_runtime_profile(
+        existing = load_logistics_runtime_profile(read_retry=None,
             required=True,
             profile_path=target,
             decryptor=(

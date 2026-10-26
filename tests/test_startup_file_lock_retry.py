@@ -12,6 +12,12 @@ import legacy_state_migration as migration
 import event_log_store
 
 
+@pytest.fixture(autouse=True)
+def fresh_startup_process_budget(monkeypatch):
+    import logistics_runtime_profile as profiles
+    monkeypatch.setattr(profiles, '_startup_read_retry', profiles.StartupReadRetry(), raising=False)
+
+
 def locked(kind):
     if kind == 'permission':
         return PermissionError('locked')
@@ -20,8 +26,9 @@ def locked(kind):
     return error
 
 
+@pytest.mark.parametrize('preconstructor', [False, True])
 @pytest.mark.parametrize('release', [True, False])
-def test_constructor_marker_read_shares_the_profile_startup_budget(monkeypatch, tmp_path, release):
+def test_constructor_marker_read_shares_the_profile_startup_budget(monkeypatch, tmp_path, release, preconstructor):
     import auto_update
     import logistics_runtime_profile as profiles
 
@@ -36,7 +43,7 @@ def test_constructor_marker_read_shares_the_profile_startup_budget(monkeypatch, 
     marker.write_text(payload, encoding='utf-8')
     original_read = Path.read_text
     original_bytes = Path.read_bytes
-    profile_reads = Mock(side_effect=[locked(32), locked(32), b'{}'])
+    profile_reads = Mock(side_effect=[locked(32), locked(32), b'{}', b'{}'])
     marker_reads = Mock(side_effect=([locked(32), payload] if release else locked(32)))
     sleeps = Mock()
 
@@ -69,11 +76,13 @@ def test_constructor_marker_read_shares_the_profile_startup_budget(monkeypatch, 
     monkeypatch.setattr(app_module, 'build_container_audit_storage_paths', lambda **kwargs: paths)
     monkeypatch.setattr(app_module, 'ensure_container_audit_storage_dirs', lambda paths: None)
     monkeypatch.setattr(app_module, 'OperationLeaseStore', stores)
+    if preconstructor:
+        assert profiles._read_profile(profile_path) == {}
     app = app_module.ContainerAudit.__new__(app_module.ContainerAudit)
     with pytest.raises(StartupReachedStores if release else ValueError):
         app_module.ContainerAudit.__init__(app)
     assert sleeps.call_args_list == [((1,),)] * 3
-    assert profile_reads.call_count == 3
+    assert profile_reads.call_count == (4 if preconstructor else 3)
     assert marker_reads.call_count == 2
     assert original_read(marker, encoding='utf-8') == payload
     if release:

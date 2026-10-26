@@ -109,6 +109,8 @@ from item_catalog_sync import (
 from legacy_state_migration import migrate_legacy_code_root_state
 from logistics_runtime_profile import (
     StartupReadRetry,
+    startup_read_retry,
+    finish_startup_read_retry,
     PROFILE_PATH_ENV as LOGISTICS_RUNTIME_PROFILE_PATH_ENV,
     app_profile_env_value,
     REQUIRED_ENV as LOGISTICS_RUNTIME_REQUIRED_ENV,
@@ -1101,7 +1103,7 @@ class ContainerAudit:
         # Validate the protected local profile before Tcl, but defer network
         # readiness to the durable operation/replay path so recovery can open
         # during a server outage.
-        self._startup_read_retry = StartupReadRetry()
+        self._startup_read_retry = startup_read_retry()
         startup_logistics_client = container_startup_logistics_client(read_retry=self._startup_read_retry)
         startup_geometry = os.getenv("CONTAINER_AUDIT_STARTUP_GEOMETRY", "").strip()
         self.legacy_label_transition = legacy_label_transition_enabled()
@@ -1368,6 +1370,7 @@ class ContainerAudit:
         )
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self._start_app_stop_poll()
+        finish_startup_read_retry()
         # No automatic start: every launch waits on the worker selection screen.
 
     ####################################################################
@@ -24181,6 +24184,7 @@ def _prepare_gui_startup(*, data_root=None):
         start_stop_poll = getattr(app, "_start_app_stop_poll", None)
         if callable(start_stop_poll):
             start_stop_poll()
+        finish_startup_read_retry()
         startup_complete = True
         return app, instance_lease
     finally:
