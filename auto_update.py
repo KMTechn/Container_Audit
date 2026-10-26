@@ -2684,7 +2684,7 @@ def prepared_pending(control: Path, policy: Mapping[str, Any], state: Mapping[st
         return True
     active = read_json(control / "active.json")
     return (sha != active["sha"] and sha not in (state or {}).get("failed_shas", [])
-            and sha != (state or {}).get("failed_prepared_sha") and _preparation_retry_due(state, sha))
+            and _preparation_retry_due(state, sha))
 
 
 def prepare_feed_packet(app_root: Path) -> dict[str, Any]:

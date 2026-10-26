@@ -118,3 +118,24 @@ def test_packet_hash_rejection_carries_identity_only_after_signature(tmp_path, m
     with pytest.raises(ValueError) as caught:
         updates.verify_prepared_packet(tmp_path, key_config="unused", current_version="1.0.0", channel="stable")
     assert getattr(caught.value, "_preparation_signed_sha", None) == (SIGNED if signature_valid else None)
+
+
+
+@pytest.mark.parametrize("origin", ["new", "legacy"])
+@pytest.mark.parametrize("marker_changed", [False, True])
+def test_unsigned_saved_sha_does_not_reject_a_replaced_marker(tmp_path, monkeypatch, origin, marker_changed):
+    import copy
+    case = _preparation_case(tmp_path, monkeypatch, updates._preparation_rejection("signature rejected"))
+    if origin == "new":
+        assert case.run() == 0
+    else:
+        case.files[case.control / "transition.json"] = {
+            "schema": updates.SCHEMA, "phase": "DEFERRED", "reason_code": "UPDATE_PREPARATION_FAILED",
+            "failed_prepared_sha": NEW, "failed_prepared_marker_sha256": "c" * 64, "failed_shas": []}
+    state = case.state()
+    before = copy.deepcopy(state)
+    monkeypatch.setattr(updates, "prepared_failure_identity", lambda *a: ("d" if marker_changed else "c") * 64)
+    assert updates.prepared_pending(case.control, case.policy, state) is marker_changed
+    assert NEW not in state.get("failed_shas", [])
+    assert state["failed_prepared_sha"] == NEW  # Preserve the audit field, including old records.
+    assert state == before

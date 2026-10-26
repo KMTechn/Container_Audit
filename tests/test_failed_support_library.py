@@ -77,7 +77,8 @@ try {
 @pytest.mark.parametrize("case", ["allow", "code", "writer", "generation", "fence", "prepared",
                                   "self", "self_hash", "self_thread", "other_fence", "ordinary", "retry_wait", "retry_due", "retry_exhausted",
                                   "retry_expired", "retry_bad_count", "retry_bad_time", "retry_future",
-                                  "retry_pending", "retry_pending_expired", "retry_pending_bad_time"])
+                                  "retry_pending", "retry_pending_expired", "retry_pending_bad_time", "marker_new_same", "marker_new_changed",
+                                  "marker_old_same", "marker_old_changed"])
 def test_failed_library_checks_proofs_and_same_thread_identity(tmp_path, monkeypatch, engine, case):
     if not shutil.which(engine):
         pytest.skip("engine unavailable")
@@ -129,6 +130,21 @@ def test_failed_library_checks_proofs_and_same_thread_identity(tmp_path, monkeyp
                 deferred_at="invalid" if case == "retry_pending_bad_time" else
                     (now - timedelta(seconds=1800 if case == "retry_pending_expired" else 30)).isoformat())
         (staging / "prepared.json").write_text(json.dumps(dict(source_commit="c" * 40)), encoding="utf-8")
+    if case.startswith("marker_"):
+        old_marker = json.dumps({"source_commit": "c" * 40, "packet_sha256": "1" * 64}).encode()
+        marker = old_marker if case.endswith("_same") else json.dumps({
+            "source_commit": "c" * 40, "packet_sha256": "2" * 64}).encode()
+        (staging / "prepared.json").write_bytes(marker)
+        if case.startswith("marker_new"):
+            from tests.test_update_ready_retry import _preparation_case
+            with monkeypatch.context() as patch:
+                origin = _preparation_case(tmp_path / "new-origin", patch, update._preparation_rejection("signature rejected"))
+                origin.files[Path(origin.policy["staging_root"]) / "prepared.json"] = {"source_commit": "c" * 40}
+                assert origin.run() == 0
+                state = origin.state()
+            state["phase"] = "FAILED"
+        state.update(reason_code="UPDATE_PREPARATION_FAILED", failed_prepared_sha="c" * 40,
+                     failed_prepared_marker_sha256=hashlib.sha256(old_marker).hexdigest(), failed_shas=[])
     for name, value in (("policy", policy), ("active", dict(schema=update.SCHEMA, sha=active)), ("transition", state)):
         (control / (name + ".json")).write_text(json.dumps(value), encoding="utf-8")
     marker = local / "KMTech/ContainerAudit/data-generation.json"
@@ -156,9 +172,9 @@ def test_failed_library_checks_proofs_and_same_thread_identity(tmp_path, monkeyp
     assert result.returncode == 0
     decision = json.loads(result.stdout)
     (tmp_path / "library-diagnostic.json").write_text(json.dumps(decision), encoding="utf-8")
-    expected = case in {"allow", "self", "retry_wait", "retry_exhausted", "retry_pending", "retry_pending_bad_time", "retry_exhausted_bad_time"}
+    expected = case in {"allow", "self", "retry_wait", "retry_exhausted", "retry_pending", "retry_pending_bad_time", "retry_exhausted_bad_time", "marker_new_same", "marker_old_same"}
     assert decision["allowed"] == expected
-    if case.startswith("retry_"):
+    if case.startswith(("retry_", "marker_")):
         assert (not update.prepared_pending(control, policy, state)) == expected
     assert all(path.read_bytes() == raw for path, raw in before.items())
 

@@ -1,3 +1,5 @@
+옛 기록을 포함해 failed_prepared_sha는 감사로 보존하며 SHA 자체의 준비 거절 근거로 쓰지 않는다. 같은 실패 표지 지문과 서명된 failed_shas는 계속 막고, 지문이 바뀐 준비물은 전체 서명·해시·검사를 다시 거친다(sub-695 ANSWER-3).
+
 준비 실패의 영구 목록에는 서명 검증을 통과한 대상 SHA만 넣는다. 서명 실패나 표지 불일치는 서명되지 않은 표지 SHA를 영구 거절하지 않으며, 설치된 판 manifest를 읽지 못하면 모름으로 다시 기회를 준다. 고정 helper의 generic stdout 실패도 모름으로 취급한다(sub-695). failed-support 복구의 PowerShell 준비 대기 판정은 Python과 같은 900초·3회·24시간 기록을 따른다.
 
 업데이트 bootstrap의 적용 요청 실패 등에서 start_current의 일반 복구 증명이 거절되면 진행 안내·20으로 끝낸다(sub-692). 기존 상주 relay/gui 재사용 경계와 active SHA·작업자·일반 권한·역할 검사를 유지하며 sub-659의 다시 기회 기록·간격·예산을 바꾸지 않는다.

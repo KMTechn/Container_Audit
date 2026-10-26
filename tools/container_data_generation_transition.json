@@ -178,7 +178,7 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "e908d83e1287db6c0bc539c75b927e9b18d50b591f2be1b330b33bb32436886a"
+      "after": "0befa14956cabe0836096124f5ec69323738d3b3f4f816facc394700467929ee"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -4508,12 +4508,12 @@
     {
       "path": "tools/bootstrap_integrity.ps1",
       "before": "01919751911b37dea315a412585c85ec397e479ca02df36554ca7309a27fa9ba",
-      "after": "a5df36eebd04232af6b70d9b8d78f1afd42d618f36c5a33344f6a682ed935940"
+      "after": "da739d1307d4695fea57fb32e84dfabd1de0711293a508186e5ac9272ce7413f"
     },
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "ff2adea1b39ac50e5d8fafc5bc92572baefd8789c6934c719563757aa2520bd1"
+      "after": "6da39ccb93c690f66548d1039871bef569e01f62b74a0297145b5d8ae780e764"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4540,7 +4540,7 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "e908d83e1287db6c0bc539c75b927e9b18d50b591f2be1b330b33bb32436886a"
+      "after": "0befa14956cabe0836096124f5ec69323738d3b3f4f816facc394700467929ee"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -4645,7 +4645,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "ff2adea1b39ac50e5d8fafc5bc92572baefd8789c6934c719563757aa2520bd1"
+      "after": "6da39ccb93c690f66548d1039871bef569e01f62b74a0297145b5d8ae780e764"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",

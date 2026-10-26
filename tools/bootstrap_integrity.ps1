@@ -4129,7 +4129,7 @@ function Assert-BootstrapFailedSupportState([string]$Root,$Policy,$State,[string
                 $pending=Read-BootstrapLifecycleJson $prepared
                 $sha=$pending['source_commit'];$activeSha=Split-Path -Leaf $ActiveRoot
                 if($sha -isnot [string] -or $sha -cnotmatch '^[0-9a-f]{40}$' -or
-                    ($sha -cne $activeSha -and $sha -cnotin @($State['failed_shas']) -and $sha -cne $State['failed_prepared_sha'] -and
+                    ($sha -cne $activeSha -and $sha -cnotin @($State['failed_shas']) -and
                         (Test-BootstrapPreparationRetryDue $State $sha))){throw 'failed_support_prepared_pending'}
             }
         }
