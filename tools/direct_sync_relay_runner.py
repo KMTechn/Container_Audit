@@ -446,7 +446,9 @@ def _missing_terminal_can_reenter(row: sqlite3.Row) -> bool:
 
 def _original_delta_content(source_file: Path, start_byte: int, end_byte: int) -> bytes | None:
     before = _source_scan_signature(source_file)
-    if _has_active_source_writer_lock(source_file) or source_file.stat().st_size < end_byte:
+    if _has_active_source_writer_lock(source_file):
+        raise _SourceSnapshotChanged()
+    if source_file.stat().st_size < end_byte:
         return None
     with source_file.open("rb") as handle:
         header = handle.readline()

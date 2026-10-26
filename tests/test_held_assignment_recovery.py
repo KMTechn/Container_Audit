@@ -420,6 +420,58 @@ def test_append_during_recovery_waits_for_next_scan_without_operator_review(tmp_
     assert server.source_calls[-1]['idempotency_key'] == wire['idempotency_key']
 
 
+@pytest.mark.parametrize('administrator', [False, True])
+@pytest.mark.parametrize('direct', [False, True])
+def test_writer_lock_during_recovery_defers_without_review(tmp_path, monkeypatch, administrator, direct):
+    database, config, source, server, held, wire, body = _seed(tmp_path, monkeypatch, direct=direct)
+    lock = runner._source_writer_lock_path(source)
+    lock.touch()
+    before = dict(_row(database))
+    assert runner._repair_held_assignments_before_scan(config, source, administrator=administrator) == []
+    assert dict(_authority_row(database)) == held
+    assert dict(_row(database)) == before
+    assert not Path(before['spooled_file_path']).exists()
+    assert len(server.source_calls) == 1
+    lock.unlink()
+    assert runner._repair_held_assignments_before_scan(config, source) == ['original']
+    _, recovered = _data_path_cycle(database, server, 3, tmp_path)
+    assert recovered.success is True
+    assert Path(_row(database)['spooled_file_path']).read_bytes() == body
+    assert server.source_calls[-1]['idempotency_key'] == wire['idempotency_key']
+    assert _authority_row(database)['assigned_relay_id'] is None
+
+
+@pytest.mark.parametrize('single', [False, True])
+@pytest.mark.parametrize('direct', [False, True])
+def test_cli_writer_lock_just_before_recovery_retries_next_scan(tmp_path, monkeypatch, capsys, single, direct):
+    database, config, source, server, held, wire, body = _seed(tmp_path, monkeypatch, direct=direct)
+    original_read = runner._original_delta_content
+    lock = runner._source_writer_lock_path(source)
+    def lock_before_validation(*args):
+        lock.touch()
+        return original_read(*args)
+    monkeypatch.setattr(runner, '_original_delta_content', lock_before_validation)
+    assert _run_cli(tmp_path, monkeypatch, source, server, wire, single=single, drain=True) == 2
+    capsys.readouterr()
+    authority = _authority_row(database)
+    for field in ('status', 'assigned_relay_id', 'next_request_token', 'next_request_sequence'):
+        assert authority[field] == held[field]
+    assert _row(database)['status'] == push.RELAY_STATUS_FAILED_PERMANENT
+    assert json.loads(_row(database)['metadata_json']) == wire
+    assert len(server.source_calls) == 1
+    monkeypatch.setattr(runner, '_original_delta_content', original_read)
+    lock.unlink()
+    assert _run_cli(tmp_path, monkeypatch, source, server, wire, drain=True) == 0
+    capsys.readouterr()
+    assert _row(database)['status'] == push.RELAY_STATUS_ACKED
+    assert _authority_row(database)['assigned_relay_id'] is None
+    assert Path(_row(database)['spooled_file_path']).read_bytes() == body
+    assert server.source_calls[-1]['idempotency_key'] == wire['idempotency_key']
+    public = json.loads(runtime._upload_block_status_path().read_text(encoding='utf-8'))
+    assert public['install_review'] is False
+    assert public['blocked_files'] == public['blocked_records'] == 0
+
+
 def test_single_source_with_unproven_original_keeps_only_the_bound_row(tmp_path, monkeypatch, capsys):
     database, config, source, server, held, wire, body = _seed(tmp_path, monkeypatch)
     source.unlink()
