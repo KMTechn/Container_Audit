@@ -896,7 +896,7 @@ class TransferSealStore:
         )
         terminal_client_error = (
             400 <= error.status_code < 500
-            and error.status_code != 404
+            and error.status_code not in {404, 408, 429}
             and (
                 not error.retryable
                 or error.code == "OPERATION_LEASE_MACHINE_SCOPE_FORBIDDEN"
@@ -916,6 +916,9 @@ class TransferSealStore:
                 error.code.upper() in operator_review_codes
                 or terminal_cas_conflict
                 or terminal_client_error
+                or (error.committed is True and (
+                    error.status_code in {408, 429} or 500 <= error.status_code < 600
+                ))
                 or local_contract_error
                 or operation_lease_contract_error
             )
