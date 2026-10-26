@@ -4485,7 +4485,7 @@ function Restore-CanonicalRemovalScheduledTasks([string]$Evidence) {
                 $legacy=([string]$record.name -ieq 'direct-sync-relay-container-audit')
                 if($legacy -and ($record.enabled -isnot [bool] -or $record.changed -isnot [bool])){throw 'REMOVAL_TASK_RESTORE_UNPROVEN'}
                 if($null -ne $record.PSObject.Properties['changed'] -and -not [bool]$record.changed){
-                    $result.tasks+=@([ordered]@{name=[string]$record.name;state='UNCHANGED'})
+                    $result.tasks+=@([ordered]@{name=[string]$record.name;state='RESTORED'})
                     continue
                 }
                 $task=$null

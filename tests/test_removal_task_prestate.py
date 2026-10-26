@@ -42,7 +42,7 @@ if($env:CA_TASK_CASE -ceq 'old'){$record.Remove('enabled');$record.Remove('chang
 if($env:CA_TASK_CASE -ceq 'foreign'){$record.sddl='other-sddl'}
 [IO.File]::WriteAllText((Join-Path $evidence 'direct-sync-relay-container-audit.json'),($record|ConvertTo-Json))
 $result=Restore-CanonicalRemovalScheduledTasks $evidence
-[IO.File]::WriteAllText((Join-Path $env:CA_CONTRACT_ROOT 'result.json'),(@{enabled=$task.Enabled;writes=$task.Writes;status=$result.status}|ConvertTo-Json))
+[IO.File]::WriteAllText((Join-Path $env:CA_CONTRACT_ROOT 'result.json'),(@{enabled=$task.Enabled;writes=$task.Writes;status=$result.status;states=@($result.tasks|ForEach-Object {$_.state})}|ConvertTo-Json))
 '''
 
 
@@ -59,3 +59,4 @@ def test_task_compensation_preserves_the_removal_prestate(tmp_path, engine, case
     assert actual['enabled'] is (case == 'enabled')
     assert actual['writes'] == (1 if case in ('enabled', 'readback') else 0)
     assert actual['status'] == ('PARTIAL' if case in ('old', 'foreign', 'readback') else 'RESTORED')
+    assert set(actual['states']) <= {'RESTORED', 'UNPROVEN'}
