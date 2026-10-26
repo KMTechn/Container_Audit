@@ -1056,7 +1056,7 @@ def test_upload_refuses_unreadable_source_file_after_plan(tmp_path):
     assert session.calls == []
     assert result.success is False
     assert result.committed is False
-    assert result.retryable is False
+    assert result.retryable is True
     assert result.status_code == 0
     assert result.error_code == "source_file_unreadable"
     assert "FileNotFoundError" in result.error_message
@@ -2919,7 +2919,7 @@ def test_drain_treats_string_retryable_false_as_failed_permanent(tmp_path):
 
 
 @pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
-def test_drain_missing_spooled_file_marks_failed_permanent_without_posting(tmp_path):
+def test_drain_missing_spooled_file_retries_without_posting(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
     credentials = make_credentials()
@@ -2951,7 +2951,7 @@ def test_drain_missing_spooled_file_marks_failed_permanent_without_posting(tmp_p
             "SELECT status, last_error_code, last_error_message, receipt_json FROM direct_sync_relay_batches WHERE relay_id = ?",
             (row.relay_id,),
         ).fetchone()
-    assert current["status"] == RELAY_STATUS_FAILED_PERMANENT
+    assert current["status"] == RELAY_STATUS_RETRY_WAIT
     assert current["last_error_code"] == "spooled_file_missing"
     assert "spooled file cannot be read" in current["last_error_message"]
     assert json.loads(current["receipt_json"]) == {"client_batch_id": row.relay_id}
