@@ -15,6 +15,8 @@ retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요
 
 읽기 전용 process Observe는 writer admission 밖에서 실행해 trial GUI/onboarding·relay가 입장할 수 있게 한다. Authority·Apply·Verify 등 기존 fixed helper의 쓰기/검증 경로는 writer admission 안에 유지한다. PowerShell Observe의 기존 실행 상한은 이번에 변경하지 않는다.
 
+- v2.0.122: 재서명 판 번호 올림 — 코디 판정 10/26 13:12 · 바이트가 다르면 번호도 다르게.
+
 v2.0.121 다시 설치 때(current 교체 길) 고침: SYSTEM의 후보·되돌림 READY 확인은 최초 journal 획득을 포함해 원래 내구 시각에 묶인 240초 창 안에서만 업데이트 잠금 획득 busy를 다시 기다린다. 잠금 전 판독은 대기 상한에만 쓰고, 획득 뒤 journal과 확인 증명을 다시 검사한다. abandoned·다른 오류·잠금 획득 뒤 본문 오류·마감 뒤 busy는 기존 거절을 유지한다. native 5초 대기와 정상 시작 증명은 그대로다. 고침 가지 검증은 `work/program/w9firstupd/sub-553/RESULT.md`에 기록하며 공식 빌드·현장 적용은 별도 지시 대상이다.
 
 - v2.0.120: 정상 닫기의 끝 정리는 생성 시 명시 등록한 자료 일꾼만 기다린다. 화면·Tk 모두 화면 껍질·라이브러리·native Dummy·모르는 스레드는 대기하지 않는다. 자료 쓰기·60초 상한·종료 지연 표지와 다음 시작 복구는 유지한다. 집중 검증 근거는 `work/program/w9firstupd/sub-502/RESULT.md`이며 ZIP 빌드·실제 화면 검증은 후속 단계다.
