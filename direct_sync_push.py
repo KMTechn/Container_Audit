@@ -3348,7 +3348,8 @@ def drain_one_relay_batch(
             runtime_authority_action=(
                 "preserve" if runtime_binding_carried and not source_post_started
                 and result.error_code == "source_file_unreadable"
-                else "release" if result._runtime_token_unconsumed or (
+                else ("release" if any(name in row.metadata for name in RUNTIME_METADATA_FIELDS) else "")
+                if result._runtime_token_unconsumed or (
                     not source_post_started and result.error_code == "source_file_unreadable"
                 ) else "operator_review"
             ),
