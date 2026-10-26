@@ -761,7 +761,11 @@ class LogisticsTransferClient:
         except TransferSealError as exc:
             if exc.committed is not True:
                 raise
-            recovered = self.get_receipt(scope_id, idempotency_key)
+            try:
+                recovered = self.get_receipt(scope_id, idempotency_key)
+            except Exception as lookup_error:
+                # A failed read cannot undo the POST's committed evidence.
+                raise exc from lookup_error
             if recovered is not None:
                 return recovered
             raise

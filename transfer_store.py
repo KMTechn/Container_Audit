@@ -916,7 +916,9 @@ class TransferSealStore:
                 error.code.upper() in operator_review_codes
                 or terminal_cas_conflict
                 or terminal_client_error
-                or (error.status_code in {408, 429} and error.committed is True)
+                or (error.committed is True and (
+                    error.status_code in {408, 429} or 500 <= error.status_code < 600
+                ))
                 or local_contract_error
                 or operation_lease_contract_error
             )

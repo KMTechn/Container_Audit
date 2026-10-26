@@ -90,7 +90,7 @@ def test_committed_seal_429_recovers_receipt_without_resubmitting(tmp_path):
     assert store.pending_ids() == []
 
 
-@pytest.mark.parametrize("status_code", [408, 429])
+@pytest.mark.parametrize("status_code", [408, 429, 503])
 @pytest.mark.parametrize("retryable", [None, False, True], ids=["absent", "false", "true"])
 def test_committed_transient_without_receipt_stays_review(tmp_path, status_code, retryable):
     server = _LogisticsServer()
@@ -119,6 +119,51 @@ def test_committed_transient_without_receipt_stays_review(tmp_path, status_code,
     assert len([call for call in session.calls if call["method"] == "POST"]) == 1
     assert len([call for call in session.calls if "/receipts/" in call["url"]]) == 1
     assert store.pending_ids() == []
+    for field in ("command_json", "idempotency_key", "local_completion_id", "scanned_barcodes_json"):
+        assert after[field] == before[field]
+
+
+@pytest.mark.parametrize("post_status", [408, 429, 503])
+@pytest.mark.parametrize("lookup_failure", [408, 429, 503, "non-json", "transport"])
+def test_committed_seal_preserves_post_error_when_receipt_lookup_fails(
+    tmp_path, post_status, lookup_failure,
+):
+    import requests
+
+    server = _LogisticsServer()
+
+    def respond(call):
+        if call["method"] == "POST":
+            return FakeResponse(post_status, {
+                "ok": False, "committed": True, "error": {"code": "SERVER_BUSY"},
+            })
+        if "/receipts/" in call["url"]:
+            if lookup_failure == "transport":
+                raise requests.ConnectionError("synthetic receipt connection failure")
+            if lookup_failure == "non-json":
+                response = FakeResponse(503, {})
+                response.json = Mock(side_effect=ValueError("synthetic non-JSON receipt"))
+                return response
+            return FakeResponse(lookup_failure, {
+                "ok": False, "error": {"code": "RECEIPT_UNAVAILABLE"},
+            })
+        return server(call)
+
+    client, session = _client(respond)
+    store = TransferSealStore(tmp_path / "committed-lookup.db")
+    coordinator = TransferSealCoordinator(store, client)
+    prepared = _prepare(coordinator, require_completion_checkpoint=True)
+    coordinator.confirm_completion_checkpoint(prepared.intent_id)
+
+    assert coordinator.attempt(prepared.intent_id).status == "OPERATOR_REVIEW"
+    before = dict(store.load(prepared.intent_id))
+    coordinator.drain_pending_through(prepared.intent_id)
+    after = dict(store.load(prepared.intent_id))
+    assert after["status"] == "OPERATOR_REVIEW"
+    assert after["last_error_code"] == "SERVER_BUSY"
+    assert store.pending_ids() == []
+    assert len([call for call in session.calls if call["method"] == "POST"]) == 1
+    assert len([call for call in session.calls if "/receipts/" in call["url"]]) == 1
     for field in ("command_json", "idempotency_key", "local_completion_id", "scanned_barcodes_json"):
         assert after[field] == before[field]
 
