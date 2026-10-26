@@ -1967,7 +1967,7 @@ def _clear_log_events(tmp_path):
     if not log.exists():
         return []
     rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
-    return [row for row in rows if row.get("event") == "source_scan_failure_cleared"]
+    return [row for row in rows if row.get("status") == "source_scan_failure_cleared"]
 
 
 def _ledger_snapshot(tmp_path):
@@ -1990,11 +1990,10 @@ def test_runner_logs_one_line_when_a_vanished_original_failure_entry_is_cleared(
     assert _scan_error_count(tmp_path) == (0, [])
     events = _clear_log_events(tmp_path)
     assert len(events) == 1
-    assert events[0]["source_name"] == source.name
-    assert events[0]["first_failed_at"] == failure["first_failed_at"]
     assert events[0]["error_code"] == "source_csv_header_invalid"
-    assert events[0]["reason"] == "vanished"
-    assert str(source.parent) not in json.dumps(events[0], ensure_ascii=False)
+    assert events[0]["reason_code"] == "vanished"
+    text = json.dumps(events[0], ensure_ascii=False)
+    assert str(source.parent) not in text and source.name not in text
 
 
 def test_runner_logs_no_new_bytes_reason_when_a_fixed_original_failure_entry_is_cleared(tmp_path, capsys):
@@ -2007,8 +2006,8 @@ def test_runner_logs_no_new_bytes_reason_when_a_fixed_original_failure_entry_is_
     capsys.readouterr()
     assert _scan_error_count(tmp_path) == (0, [])
     events = _clear_log_events(tmp_path)
-    assert [event["reason"] for event in events] == ["no_new_bytes"]
-    assert events[0]["source_name"] == source.name
+    assert [event["reason_code"] for event in events] == ["no_new_bytes"]
+    assert events[0]["error_code"] == "source_csv_header_invalid"
 
 
 def test_runner_failure_entry_stays_when_the_vanished_check_is_not_a_plain_missing_error(tmp_path, capsys, monkeypatch):

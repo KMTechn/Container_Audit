@@ -887,7 +887,8 @@ def record_source_scan_failure(config: DirectSyncRuntimeConfig, *, source_key: s
 @writer_sink("direct_sync_scan_result")
 def clear_source_scan_failure(config: DirectSyncRuntimeConfig, *, source_key: str, reason: str = "") -> None:
     # No schema creation is needed for a source that never failed.
-    # A reason (vanished / no_new_bytes) also leaves one log line with the name, first time and code.
+    # A reason (vanished / no_new_bytes) also leaves one log line. The relay log keeps only the
+    # public support fields (status, reason_code, error_code), so no name, path or time is written.
     cleared = None
     conn = sqlite3.connect(str(config.db_path))
     try:
@@ -903,7 +904,7 @@ def clear_source_scan_failure(config: DirectSyncRuntimeConfig, *, source_key: st
         conn.close()
     if cleared:
         _append_runtime_event(config, "source_scan_failure_cleared", {
-            "source_name": cleared[0], "first_failed_at": cleared[1], "error_code": cleared[2], "reason": reason,
+            "status": "source_scan_failure_cleared", "reason_code": reason, "error_code": cleared[2],
         })
 
 
