@@ -6,6 +6,10 @@
 
 # 이적 목표 명세 (Container_Audit)
 
+감사 CSV 쓰기 실패 뒤 기존 outbox JSON이 사라지면 checkpoint 원문으로 사본을 다시 만들고, 같은 flush에서 CSV의 내구 투영이 확인된 감사만 checkpoint에서 지운다(sub-694). 저장 재시도 안내와 스캔·완료·수량의 기존 계약을 유지한다.
+
+checkpoint 없는 일반 감사행의 미확정 outbox 사본이 사라져도 메모리에 남은 원행을 기존 outbox에 다시 저장하고 멱등 CSV 쓰기로 한 번만 투영한다. 재저장 실패에는 원행과 기존 로그 저장 실패 안내를 유지하며 업무를 계속한다(sub-698).
+
 ### retained 후보와 다음 업데이트 요청 (sub-555)
 
 retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요청을 한 번 수행하고 journal을 다시 읽는다. 기존 writer가 있으면 SYSTEM의 유예를 따른다. 일반 복귀는 요청한 GUI/relay 역할을 보존한다. 늦은 READY 확정은 현재 기록에서 같은 전환의 timeout만 식별할 수 없어 닫아 둔다(실패 사유는 세대 code로 덮이고 failed_shas는 sha만 보존). 새 기록 형식·사유 값·phase·대기창을 만들지 않는다.

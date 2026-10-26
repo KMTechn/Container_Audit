@@ -78,8 +78,17 @@ class EventLogOutbox:
             while self._unstaged:
                 encoded = json.dumps(self._unstaged[0], sort_keys=True)
                 if encoded in self._staged_payloads:
-                    self._unstaged.popleft()
-                    continue
+                    staged_path = self._staged_paths.get(encoded)
+                    if staged_path is not None:
+                        try:
+                            staged_path.stat()
+                        except FileNotFoundError:
+                            pass  # A removed retry copy is no longer durable.
+                        else:
+                            self._unstaged.popleft()
+                            continue
+                    self._staged_payloads.discard(encoded)
+                    self._staged_paths.pop(encoded, None)
                 self._sequence = max(self._sequence + 1, time.time_ns())
                 path = self.directory / f"{self._sequence:020d}-{uuid.uuid4().hex}.json"
                 atomic_write_json(path, self._unstaged[0])
@@ -99,6 +108,16 @@ class EventLogOutbox:
             if self.has_unstaged:
                 return projected
         else:
+            with self._lock:
+                for encoded, staged_path in tuple(self._staged_paths.items()):
+                    try:
+                        staged_path.stat()
+                    except FileNotFoundError:
+                        # Ordinary rows have no checkpoint. Keep their original
+                        # payload queued until the existing outbox is durable again.
+                        self._unstaged.append(json.loads(encoded))
+                        self._staged_payloads.discard(encoded)
+                        self._staged_paths.pop(encoded, None)
             self._persist_unstaged()
         paths = sorted(self.directory.glob("*.json"))
         if through is not None and through not in paths:

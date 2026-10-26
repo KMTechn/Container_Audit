@@ -287,6 +287,27 @@ def test_historical_short_cancellation_checkpoint_replays_original_audit_once(
     assert windows == []
 
 
+def _saved_business_bytes(root):
+    result = {}
+    for path in root.rglob('*'):
+        if not path.is_file() or path.is_symlink() or path.name.endswith('-shm'):
+            continue
+        contents = path.read_bytes()
+        if path.name.endswith('-wal') and not contents:
+            continue  # Missing and empty WAL files carry the same business bytes.
+        result[path.relative_to(root)] = contents
+    return result
+
+
+def test_saved_bytes_comparison_rejects_nonempty_wal_change(tmp_path):
+    wal = tmp_path / 'transfer-seal.db-wal'
+    wal.write_bytes(b'original nonempty WAL')
+    before = _saved_business_bytes(tmp_path)
+    wal.write_bytes(b'changed nonempty WAL')
+    with pytest.raises(AssertionError):
+        assert _saved_business_bytes(tmp_path) == before
+
+
 def test_confirmed_partial_submission_cannot_be_undone_or_change_saved_bytes(flow, windows):
     app = _active(flow)
     app._process_barcode_logic(ITEM + '-SERIAL-001')
@@ -299,10 +320,7 @@ def test_confirmed_partial_submission_cannot_be_undone_or_change_saved_bytes(flo
     stop_writer(app)
 
     def saved_bytes():
-        root = Path(app.save_folder)
-        return {path.relative_to(root): path.read_bytes()
-                for path in root.rglob("*")
-                if path.is_file() and not path.is_symlink()}
+        return _saved_business_bytes(Path(app.save_folder))
 
     before = saved_bytes()
     assert before and any(path.suffix.lower() == ".csv" for path in before)

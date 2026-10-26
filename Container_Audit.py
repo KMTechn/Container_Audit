@@ -4268,7 +4268,7 @@ class ContainerAudit:
         return staged
 
     @writer_sink('gui_tray_state_save')
-    def _clear_projected_checkpoint_audits(self, staged) -> None:
+    def _clear_projected_checkpoint_audits(self, staged, projected_rows=None) -> None:
         lock = getattr(self, '_tray_state_persist_lock', None)
         if lock is None:
             lock = self._tray_state_persist_lock = threading.RLock()
@@ -4287,6 +4287,16 @@ class ContainerAudit:
                     # A newer save owns its added rows; never overwrite it.
                     if not projected or source.get('pending_audit_events') != projected:
                         continue
+                    for event in projected:
+                        target = self._completion_projection_log_path(event['log_file_name'])
+                        if event['local_only']:
+                            target = local_only_event_log_path(
+                                target, local_events_dir=getattr(self, 'local_events_folder', ''))
+                        entry = event['log_entry']
+                        key = (str(target), entry['event'],
+                               json.loads(entry['details'])['idempotency_key'])
+                        if key not in (projected_rows or {}):
+                            raise OSError('checkpoint audit CSV projection is not acknowledged')
                     source.pop('pending_audit_events')
                     events.extend(projected)
                 if not events:
@@ -18075,10 +18085,10 @@ class ContainerAudit:
                 return True
             staged = self._recover_checkpoint_audit_events() if getattr(self, 'save_folder', '') else []
             store = store or self._event_log_outbox(str(getattr(self, 'log_file_path', '') or ''))
-            store.drain(should_stop=should_stop)
+            projected = store.drain(should_stop=should_stop)
             if store.has_unstaged or next(store.directory.glob('*.json'), None) is not None:
                 return False  # Keep checkpoint originals while projection is pending.
-            self._clear_projected_checkpoint_audits(staged)
+            self._clear_projected_checkpoint_audits(staged, projected)
         except Exception as exc:
             message = f"로그 파일 쓰기 오류: {exc.__class__.__name__}"
             if message != getattr(self, "last_log_write_error", None):
