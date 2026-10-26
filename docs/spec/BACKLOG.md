@@ -985,3 +985,4 @@ sub-298 소스 구현: 최초 격리 journal·원 작업자·현품표·격리 �
 연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+480초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.
 
 P3 한계(ANSWER-37, 10/26 레인 판정): 첫 품목표의 40초 예산은 돌려받은 조각 경계에서만 확인한다. 읽기 간격 10초 안으로 아주 느리게 연속 수신하면 전체 종료는 더 늦을 수 있다. 현재 협조 중단을 유지하고 raw read·decoder 내부 검사나 새 타이머·소켓 장치를 더하지 않는다. 원인 probe는 sub-555/closing36에 보존한다.
+- w9firstupdsub652 / 이적 123: 공용 `data_generation` 표지 바꿔치기가 잠김(오류 5·32)이면 1초(50ms 간격) 다시 시도하도록 Python·PowerShell 모두 고쳤다. 공용 판 표지 `0.3.8+w9.1`. 정본 `kmtech_shared` 반영과 정본 대조 시험의 의도한 차이 해소는 후속.

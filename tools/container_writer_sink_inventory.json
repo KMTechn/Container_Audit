@@ -4339,11 +4339,17 @@
       ],
       "file": "kmtech_shared/data_generation.py",
       "kind": "function",
-      "line": 173,
+      "line": 175,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 215,
+          "line": 218,
+          "operation": "os.replace",
+          "writer_admission_sources": []
+        },
+        {
+          "category": "filesystem",
+          "line": 224,
           "operation": "os.replace",
           "writer_admission_sources": []
         }
@@ -10860,7 +10866,7 @@
       "tools.register_container_audit_worker_pc"
     ]
   },
-  "inventory_sha256": "e7a5bffcd8b49fa2744f0509ee2ce43c729a238acc12003c847a5be7da9ce68d",
+  "inventory_sha256": "f6b2e75ceb6168bfe880ec10ecf6cb1bc212a33ead4e0667f5b1062bea84af0c",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
