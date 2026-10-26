@@ -15,6 +15,7 @@ import direct_sync_runtime as runtime
 import test_direct_sync_relay_runner as helpers
 from tools import direct_sync_relay_runner as runner
 from tests.test_spool_loss_classification import _REAL_MODE, _REAL_PREPARE
+from tests.test_held_assignment_recovery import isolated_release_identity
 from tests.test_producer_runtime_client import (
     _DataPathServer, _authority_row, _credentials, _data_path_cycle, _make_pending_relay,
 )
@@ -259,6 +260,33 @@ def test_received_or_invalid_receipt_never_reenters_automatically(
     assert not Path(before['source_file_path']).exists()
 
 
+def _child_release_identity_setup():
+    # Match the parent fixture in real subprocesses without changing owner guards.
+    return (
+        'import os\n'
+        'os.environ["CONTAINER_AUDIT_DATA_ROOT"] = str(Path(__file__).parent / "child-data")\n'
+        'os.environ["CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH"] = str(Path(__file__).parent / "child-profile.json")\n'
+        'import data_generation_guard as generation\n'
+        'from tools.check_release_version import read_current_version\n'
+        'version = read_current_version(Path(runner.__file__).resolve().parents[1] / "Container_Audit.py")\n'
+        'generation._portable_runtime_release = lambda **kw: {\n'
+        '    "version": version, "build_id": "a" * 40,\n'
+        '    "data_compatible_min_version": version, "compatibility_verified": False}\n'
+    )
+
+
+def _isolated_relay_child(tmp_path):
+    child = tmp_path / 'isolated_relay.py'
+    child.write_text(
+        'import runpy\nfrom pathlib import Path\n'
+        'from tools import direct_sync_relay_runner as runner\n'
+        + _child_release_identity_setup()
+        + 'runpy.run_path(str(Path(runner.__file__)), run_name="__main__")\n',
+        encoding='utf-8',
+    )
+    return child
+
+
 @pytest.mark.parametrize('stop_after', ['source_file_path', 'spooled_file_path'])
 def test_process_death_after_copy_publication_rolls_back_and_the_next_process_recovers(
     tmp_path, capsys, monkeypatch, stop_after
@@ -269,7 +297,8 @@ def test_process_death_after_copy_publication_rolls_back_and_the_next_process_re
         'import os, sys\n'
         'from pathlib import Path\n'
         'from tools import direct_sync_relay_runner as runner\n'
-        'target = Path(sys.argv[1])\n'
+        + _child_release_identity_setup()
+        + 'target = Path(sys.argv[1])\n'
         'link = os.link\n'
         'def interrupted(source, destination, *args, **kwargs):\n'
         '    link(source, destination, *args, **kwargs)\n'
@@ -284,7 +313,7 @@ def test_process_death_after_copy_publication_rolls_back_and_the_next_process_re
     interrupted = dict(helpers.relay_rows(tmp_path / 'relay.sqlite3')[0])
     assert interrupted == before
     assert Path(before[stop_after]).read_bytes() == payload
-    resumed = subprocess.run([sys.executable, '-B', str(Path(runner.__file__)), *args],
+    resumed = subprocess.run([sys.executable, '-B', str(_isolated_relay_child(tmp_path)), *args],
                              capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
     assert resumed.returncode == 0
     after = helpers.relay_rows(tmp_path / 'relay.sqlite3')[0]
@@ -298,8 +327,9 @@ def test_process_death_after_copy_publication_rolls_back_and_the_next_process_re
 
 def test_two_processes_repair_one_terminal_identity_once(tmp_path, capsys, monkeypatch):
     _source, args, before, payload = _missing_terminal(tmp_path, capsys, monkeypatch)
+    child = _isolated_relay_child(tmp_path)
     def scan():
-        return subprocess.run([sys.executable, '-B', str(Path(runner.__file__)), *args],
+        return subprocess.run([sys.executable, '-B', str(child), *args],
                               capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
     with ThreadPoolExecutor(max_workers=2) as pool:
         runs = list(pool.map(lambda _index: scan(), range(2)))
