@@ -15210,16 +15210,24 @@ class ContainerAudit:
         return None
 
     def _on_scan_entry_escape_during_notice(self, event=None):
-        if self._notice_blocks_scan():
+        notice = getattr(self._warning_state_presenter().state, "active_notice", None)
+        if (self._notice_blocks_scan() or (
+            notice is not None and notice.code == "transfer.post_review_required"
+        )) and not self._operator_review_blocks_mutation():
             self._acknowledge_active_notice()
             return "break"
         return None
 
     def _show_scan_refusal(self, text: str) -> None:
-        """Put the refusal text under the band that stays (status messages are dropped there)."""
-        self._scan_refusal_visible = True
-        self._scan_refusal_text = str(text or "")
-        self._scan_refusal_serial = int(getattr(self, "_scan_refusal_serial", 0)) + 1
+        """Put refusal or stop guidance under the band that stays."""
+        notice = self._warning_state_presenter().state.active_notice
+        if notice is not None and notice.code == "transfer.post_review_required":
+            # This display-only text must not turn a successful web scan into a refusal.
+            self._post_review_status_message = (notice, str(text or ""))
+        else:
+            self._scan_refusal_visible = True
+            self._scan_refusal_text = str(text or "")
+            self._scan_refusal_serial = int(getattr(self, "_scan_refusal_serial", 0)) + 1
         try:
             self._render_warning_state()
         except (AttributeError, tk.TclError):
@@ -15241,13 +15249,18 @@ class ContainerAudit:
     def _refuse_entry_scan(self, message: str) -> None:
         self._start_warning_beep()
         try:
-            blocking = self._warning_state_presenter().state.is_blocking
+            state = self._warning_state_presenter().state
+            blocking = state.is_blocking
+            review_band = (
+                state.active_notice is not None
+                and state.active_notice.code == "transfer.post_review_required"
+            )
         except (AttributeError, TypeError):
-            blocking = False
-        if blocking:
+            blocking = review_band = False
+        if blocking or review_band:
             self._show_scan_refusal(message)
         if not blocking and getattr(self, "_notice_scan_injected", False):
-            # Collected-characters path with no visible band text: still "not taken".
+            # Collected-character refusals retain their existing unaccepted marker.
             self._mark_scan_unaccepted(message)
             return
         self.show_status_message(message, self.COLOR_DANGER, duration=0)
@@ -15435,7 +15448,10 @@ class ContainerAudit:
         if raw_barcode and getattr(self, "_progress_visible", False):
             self._hide_logistics_progress(raw_barcode)
         if not raw_barcode:
-            if (self._warning_state_presenter().state.is_blocking
+            state = self._warning_state_presenter().state
+            notice = getattr(state, "active_notice", None)
+            if ((state.is_blocking or (notice is not None
+                    and notice.code == "transfer.post_review_required"))
                 and not self._operator_review_blocks_mutation()
                 and not getattr(self, "_inline_scan_choices", None)):
                 self._acknowledge_active_notice()
@@ -17029,6 +17045,11 @@ class ContainerAudit:
             status_widget['text'] = "작업 중"; status_widget['foreground'] = self.COLOR_SUCCESS
 
     def _start_warning_beep(self):
+        # A later warning takes ownership of an already playing loop.
+        if getattr(self, "_post_review_warning_beep", False):
+            notice = self._warning_state_presenter().state.active_notice
+            if notice is None or notice.code != "transfer.post_review_required":
+                self._post_review_warning_beep = False
         if getattr(self, "_warning_beep_active", False):
             return
         self._warning_beep_active = True
@@ -17040,6 +17061,7 @@ class ContainerAudit:
                 record_audio_failure("AUDIO_PLAY_FAILED")
 
     def _stop_warning_beep(self):
+        self._post_review_warning_beep = False
         self._warning_beep_active = False
         if getattr(self, "error_sound", None):
             try:
@@ -17092,6 +17114,11 @@ class ContainerAudit:
         if notice is None and state.completion is not None and state.completion.blocks_completion:
             notice = notice_for_completion(state.completion)
 
+        if getattr(self, "_post_review_warning_beep", False) and (
+            notice is None or notice.code != "transfer.post_review_required"
+        ):
+            self._stop_warning_beep()
+
         if notice is None:
             title = "스캐너 준비"
             if getattr(getattr(self, "current_tray", None), "master_label_code", ""):
@@ -17131,6 +17158,12 @@ class ContainerAudit:
             self._notice_scan_buffer = ""
         elif getattr(self, "_scan_refusal_visible", False):
             message = f"{message}\n{getattr(self, '_scan_refusal_text', '') or NOTICE_SCAN_REFUSAL_TEXT}"
+        review_status = getattr(self, "_post_review_status_message", None)
+        if review_status is not None:
+            if notice is not None and notice is review_status[0]:
+                message = f"{message}\n{review_status[1]}"
+            else:
+                self._post_review_status_message = None
         if getattr(self, "_deferred_app_stop_request", None) and _APP_STOP_DEFERRED_MESSAGE not in message:
             message += "\n" + _APP_STOP_DEFERRED_MESSAGE
 
@@ -17179,11 +17212,18 @@ class ContainerAudit:
                         activebackground=title_color,
                         activeforeground="white",
                     )
-                elif active_notice is not None and active_notice.blocking:
+                elif active_notice is not None and (
+                    active_notice.blocking or active_notice.code == "transfer.post_review_required"
+                ):
                     acknowledge_button.grid()
                     acknowledge_button.configure(
                         text="확인",
-                        state=tk.NORMAL,
+                        state=(
+                            tk.DISABLED
+                            if active_notice.code == "transfer.post_review_required"
+                            and self._operator_review_blocks_mutation()
+                            else tk.NORMAL
+                        ),
                         bg=title_color,
                         fg="white",
                         activebackground=title_color,
@@ -17377,6 +17417,13 @@ class ContainerAudit:
             self._retry_precommand_operator_review_completion()
             return
         presenter = self._warning_state_presenter()
+        notice = presenter.state.active_notice
+        if (
+            notice is not None
+            and notice.code == "transfer.post_review_required"
+            and self._operator_review_blocks_mutation()
+        ):
+            return
         presenter.acknowledge()
         self._scan_refusal_visible = False
         self._notice_scan_buffer = ""
@@ -20198,7 +20245,7 @@ class ContainerAudit:
                 '트레이 완료는 이 PC에 저장했지만 회사 서버 반영은 확인이 필요합니다\n현장 관리자에게 알리세요\n자세히: 관리자에게 알린 뒤 확인 단추를 누르세요.'
             ),
             severity=NoticeSeverity.WARNING,
-            blocking=True,
+            blocking=False,
         )
         presented = self._warning_state_presenter().present(notice)
         if presented:
@@ -20214,6 +20261,7 @@ class ContainerAudit:
                     self._presented_post_review_case_ids = case_ids
                 case_ids.add(normalized_case_id)
             self._start_warning_beep()
+            self._post_review_warning_beep = True
         self._render_warning_state()
         self._update_action_button_states()
         return presented
@@ -21263,7 +21311,13 @@ class ContainerAudit:
         self._cancel_status_message_timer()
         generation = self._status_message_generation
 
+        active = self._warning_state_presenter().state.active_notice
         severity = self._notice_severity_for_color(color)
+        if active is not None and active.code == "transfer.post_review_required":
+            if severity is NoticeSeverity.ERROR or duration == 0:
+                self._show_scan_refusal(message)
+            return
+
         title_by_severity = {
             NoticeSeverity.INFO: "안내",
             NoticeSeverity.SUCCESS: "처리 완료",
@@ -21301,7 +21355,10 @@ class ContainerAudit:
         if generation is not None and generation != getattr(self, "_status_message_generation", 0):
             return
         self.status_message_job = None
-        self._warning_state_presenter().clear()
+        presenter = self._warning_state_presenter()
+        active = presenter.state.active_notice
+        if active is None or active.code != "transfer.post_review_required":
+            presenter.clear()
         self._render_warning_state()
         if (
             not self._warning_state_presenter().state.is_blocking

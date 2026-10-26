@@ -430,7 +430,7 @@ def test_server_conflict_after_local_link_does_not_roll_back_completion(tmp_path
     assert app.warning_presenter.state.active_notice.code == (
         "transfer.post_review_required"
     )
-    assert app.warning_presenter.state.is_blocking is True
+    assert app.warning_presenter.state.is_blocking is False
     worker_copy = app.warning_presenter.state.active_notice.message
     assert "관리자" in worker_copy
     assert "OPERATOR_REVIEW" not in worker_copy
@@ -487,7 +487,7 @@ def test_restart_terminal_conflict_sets_safe_review_refresh_without_raw_console(
     assert app._post_review_refresh_required is True
 
 
-def test_restart_review_refresh_surfaces_only_worker_safe_blocking_guidance():
+def test_restart_review_refresh_surfaces_only_worker_safe_nonblocking_guidance():
     class Store:
         @staticmethod
         def post_review_cases():
@@ -521,7 +521,7 @@ def test_restart_review_refresh_surfaces_only_worker_safe_blocking_guidance():
 
     notice = app.warning_presenter.state.active_notice
     assert notice.code == "transfer.post_review_required"
-    assert notice.blocking is True
+    assert notice.blocking is False
     assert "관리자" in notice.message
     assert "MEMBERSHIP_CONFLICT" not in notice.message
     assert "intent-raw-123" not in notice.message
