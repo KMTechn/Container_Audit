@@ -18750,7 +18750,7 @@ class ContainerAudit:
             frame.grid_remove()
 
     def _apply_catalog_notice_layout(self) -> None:
-        ContainerAudit._apply_relay_warning_layout(self)
+        self._apply_relay_warning_layout()
         frame = getattr(self, "catalog_notice_frame", None)
         if frame is None:
             return

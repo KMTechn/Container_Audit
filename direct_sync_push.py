@@ -2372,6 +2372,7 @@ def claim_next_relay_batch(
 ) -> RelayQueueRow | None:
     init_relay_queue_schema(db_path)
     now = now or utc_now_text()
+    observed_pc_utc = utc_now_text()
     reset_stale_relay_leases(db_path=db_path, now=now)
     lease_expires_at = (
         datetime.fromisoformat(now.replace("Z", "+00:00")) + timedelta(seconds=lease_seconds)
@@ -2390,7 +2391,7 @@ def claim_next_relay_batch(
             ORDER BY created_at, relay_id
             LIMIT 1
             """,
-            (RELAY_STATUS_PENDING, RELAY_STATUS_RETRY_WAIT, now, RELAY_STATUS_RETRY_WAIT, now),
+            (RELAY_STATUS_PENDING, RELAY_STATUS_RETRY_WAIT, now, RELAY_STATUS_RETRY_WAIT, observed_pc_utc),
         ).fetchone()
         if row is None:
             conn.rollback()
@@ -2444,6 +2445,7 @@ def claim_relay_batch_by_id(
         return None
     init_relay_queue_schema(db_path)
     now = now or utc_now_text()
+    observed_pc_utc = utc_now_text()
     reset_stale_relay_leases(db_path=db_path, now=now)
     lease_expires_at = (
         datetime.fromisoformat(now.replace("Z", "+00:00")) + timedelta(seconds=lease_seconds)
@@ -2462,7 +2464,7 @@ def claim_relay_batch_by_id(
                        AND julianday(?) < julianday(updated_at)))
             LIMIT 1
             """,
-            (relay_id, RELAY_STATUS_PENDING, RELAY_STATUS_RETRY_WAIT, now, RELAY_STATUS_RETRY_WAIT, now),
+            (relay_id, RELAY_STATUS_PENDING, RELAY_STATUS_RETRY_WAIT, now, RELAY_STATUS_RETRY_WAIT, observed_pc_utc),
         ).fetchone()
         if row is None:
             conn.rollback()
