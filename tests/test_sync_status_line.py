@@ -58,10 +58,10 @@ def test_five_footer_states_have_approved_text_and_colors(
     assert "\n" not in options["text"] and "…" not in options["text"]
     assert "마지막 성공 전송 없음" not in options["text"]
     assert options["fg"] == {
-        "review": app.COLOR_DANGER, "disconnected": app.COLOR_IDLE_TEXT,
+        "review": app.COLOR_IDLE_TEXT, "disconnected": app.COLOR_IDLE_TEXT,
         "delayed": app.COLOR_IDLE_TEXT, "neutral": app.COLOR_TEXT_SUBTLE,
     }[tone]
-    assert options["bg"] == (app.COLOR_IDLE_BG if tone == "disconnected" else app.COLOR_SIDEBAR_BG)
+    assert options["bg"] == (app.COLOR_IDLE_BG if tone in {"review", "disconnected"} else app.COLOR_SIDEBAR_BG)
     assert ("bold" in options["font"]) is (tone == "review")
 
 

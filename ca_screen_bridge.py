@@ -128,6 +128,7 @@ def _conn(app: Any) -> Tuple[Dict[str, Any], Dict[str, int]]:
         not health.read_failed or isinstance(_attr(app, "_direct_sync_last_read_health"), ca.RelayHealth))
     pending = (health.pending_count + int(_attr(app, "_pending_seal_intent_count") or 0)) if known else 0
     review = (health.failed_permanent_count + health.operator_review_count) if known else 0
+    show_review = review and not ca.relay_send_warning_model(health)
     client = _attr(_attr(app, "transfer_seal_coordinator"), "client")
     connection = _attr(client, "connection_state", "unknown")
     delayed = False
@@ -137,7 +138,7 @@ def _conn(app: Any) -> Tuple[Dict[str, Any], Dict[str, int]]:
             delayed = (datetime.datetime.now().astimezone() - oldest).total_seconds() > 600
         except (ValueError, AttributeError, TypeError):
             pass
-    if review:
+    if show_review:
         state = "review"
     elif connection == "disconnected":
         state = "offline"
@@ -207,7 +208,8 @@ def _alerts(app: Any, presenter_state: Any, notes: List[Dict[str, Any]], now: da
     for note in notes[-1:]:  # 처리 층 알림(지금 messagebox 자리) — 가장 최근 하나, 「확인」 으로 닫음
         alerts.append({"kind": note["kind"], "text": note["text"],
                        "choices": [{"id": "note_ok", "text": "확인", "go": "command:choose:note_ok", "default": True}]})
-    return alerts[:4]
+    sending = ca.relay_send_warning_model(_attr(app, "_direct_sync_health"))
+    return ([sending] if sending else []) + alerts[:4]
 
 
 def _list(tray: Any, now: datetime.datetime) -> List[Dict[str, Any]]:

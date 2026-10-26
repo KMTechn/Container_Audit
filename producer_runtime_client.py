@@ -92,6 +92,26 @@ class RuntimePreparation:
     error_code: str = ""
     error_message: str = ""
     receipt: Dict[str, Any] = field(default_factory=dict)
+    clock_skew: Dict[str, Any] = field(default_factory=dict)
+
+
+def clock_skew_from_response(response: Any) -> Dict[str, Any]:
+    """Observe PC minus HTTP Date in seconds; never adjust signed requests."""
+    headers = getattr(response, "headers", {}) or {}
+    try:
+        value = next((value for name, value in headers.items() if str(name).lower() == "date"), "")
+        server = parsedate_to_datetime(str(value))
+        if server.tzinfo is None:
+            return {}
+        server = server.astimezone(timezone.utc)
+        pc = datetime.now(timezone.utc).replace(microsecond=0)
+        return {
+            "pc_time_utc": pc.isoformat().replace("+00:00", "Z"),
+            "server_time_utc": server.isoformat().replace("+00:00", "Z"),
+            "offset_seconds": int((pc - server).total_seconds()),
+        }
+    except (AttributeError, TypeError, ValueError, IndexError, OverflowError):
+        return {}
 
 
 def client_runtime_lease_mode(credentials: Any) -> str:
@@ -217,12 +237,16 @@ def _retry_after(value: Any) -> int | None:
     return _shared_runtime._retry_after(value)
 
 
-def _response_payload(response: Any) -> Dict[str, Any]:
+def _response_payload_with_validity(response: Any) -> tuple[Dict[str, Any], bool]:
     try:
         value = response.json()
     except Exception:
-        return {}
-    return dict(value) if isinstance(value, Mapping) else {}
+        return {}, False
+    return (dict(value), True) if isinstance(value, Mapping) else ({}, False)
+
+
+def _response_payload(response: Any) -> Dict[str, Any]:
+    return _response_payload_with_validity(response)[0]
 
 
 @writer_sink("runtime_lease_network", probe_only=True)
@@ -285,7 +309,7 @@ def _post_lease_request(
             error_message=f"runtime lease transport error: {exc.__class__.__name__}",
         )
     status_code = int(getattr(response, "status_code", 0) or 0)
-    payload = _response_payload(response)
+    payload, payload_is_valid_json = _response_payload_with_validity(response)
     sensitive_values = (
         request_value.get("runtime_request_token"),
         credentials.secret,
@@ -309,8 +333,12 @@ def _post_lease_request(
     code = str(error.get("code") or "runtime_lease_request_failed")
     message = str(error.get("message") or f"runtime lease request failed with HTTP {status_code}")
     message = str(_redact_known_values(message, sensitive_values))[:500]
-    retryable = payload.get("retryable") is True or status_code in {408, 429, 500, 502, 503, 504}
-    operator_review = code in OPERATOR_REVIEW_CODES or bool(payload.get("operator_review"))
+    clock_stale = status_code == 401 and code == "stale_timestamp"
+    unconfirmed_rejection = (payload_is_valid_json and 400 <= status_code <= 499
+                             and status_code != 401 and "committed" not in payload)
+    retryable = (clock_stale or unconfirmed_rejection or (not payload_is_valid_json and 400 <= status_code <= 599)
+                 or payload.get("retryable") is True or (status_code in {408, 429} or 500 <= status_code <= 599))
+    operator_review = not (clock_stale or unconfirmed_rejection) and (code in OPERATOR_REVIEW_CODES or bool(payload.get("operator_review")))
     return None, RuntimePreparation(
         status_code=status_code,
         retryable=retryable and not operator_review,
@@ -318,7 +346,8 @@ def _post_lease_request(
         retry_after_seconds=retry_after if retryable and not operator_review else None,
         error_code=code,
         error_message=message,
-        receipt=safe_payload,
+        receipt={} if unconfirmed_rejection else safe_payload,
+        clock_skew=clock_skew_from_response(response) if clock_stale else {},
     )
 
 

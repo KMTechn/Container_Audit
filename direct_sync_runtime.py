@@ -8,6 +8,7 @@ from functools import wraps
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -49,14 +50,16 @@ from direct_sync_push import (
     utc_now_text,
     validate_endpoint_url,
 )
-from direct_sync_operator import read_operator_pause
+from direct_sync_operator import read_operator_pause, read_runtime_status
 from producer_runtime_client import ensure_runtime_authority
 from storage_policy import current_user_data_home, is_legacy_syncthing_path
+from storage_policy import build_container_audit_storage_paths
 from writer_session_fence import writer_admission, writer_sink
 from storage_policy import ensure_user_runtime_directory
 
 
 DEFAULT_WORKER_ID = "direct-sync-relay-container-audit"
+logger = logging.getLogger(__name__)
 PRODUCTION_PROFILE_ENV_NAMES = ("APP_ENV", "ENV", "CONTAINER_AUDIT_PRODUCTION", "DIRECT_SYNC_PRODUCTION")
 SECRET_REF_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 WINCRED_TARGET_PREFIX = "KMTech.DirectSync."
@@ -790,6 +793,7 @@ def _result_summary(result: UploadResult | None, queue: Mapping[str, Any] | None
         "error_code": result.error_code,
         "relay_id": relay_id,
         "upload_status_path": result.status_path,
+        **({"clock_skew": result.clock_skew} if result.clock_skew else {}),
     }
     if producer_client_batch_id and producer_client_batch_id != relay_id:
         summary["producer_client_batch_id"] = producer_client_batch_id
@@ -926,6 +930,39 @@ def _write_runtime_payload(config: DirectSyncRuntimeConfig, payload: dict[str, A
             failures = _read_source_scan_failures(config.db_path)
             payload["scan_file_errors"] = failures
             payload["scan_file_error_count"] = len(failures)
+        last_result = payload.get("last_result") or {}
+        runtime_lease = payload.get("runtime_lease") or {}
+        previous = read_runtime_status(config.runtime_status_path).get("payload") or {}
+        for name in ("scan_terminal_blocked_count", "scan_terminal_blocked_record_count"):
+            if name not in payload:
+                if name in last_result:
+                    payload[name] = last_result[name]
+                elif name in previous:
+                    payload[name] = previous[name]
+        blocked_count = payload.get("scan_terminal_blocked_count")
+        if isinstance(blocked_count, int) and not isinstance(blocked_count, bool):
+            if blocked_count > 0:
+                previous_count = previous.get("scan_terminal_blocked_count")
+                previous_since = previous.get("scan_terminal_blocked_since_utc")
+                payload["scan_terminal_blocked_since_utc"] = (
+                    previous_since if isinstance(previous_count, int) and previous_count > 0
+                    and isinstance(previous_since, str) and previous_since else utc_now_text()
+                )
+            else:
+                payload.pop("scan_terminal_blocked_since_utc", None)
+        clock_failure = next((value for value in (last_result, runtime_lease)
+                              if value.get("status_code") == 401
+                              and value.get("error_code") == "stale_timestamp"), None)
+        if clock_failure is not None:
+            payload["clock_warning"] = {
+                "status_code": 401, "error_code": "stale_timestamp",
+                **({"clock_skew": clock_failure["clock_skew"]} if clock_failure.get("clock_skew") else {}),
+            }
+        elif last_result.get("success"):
+            payload.pop("clock_warning", None)
+        else:
+            if isinstance(previous.get("clock_warning"), Mapping):
+                payload["clock_warning"] = dict(previous["clock_warning"])
         payload["runtime_status_write_status"] = "PASS"
         payload.pop("runtime_status_write_error_code", None)
         payload.pop("runtime_status_write_error_message", None)
@@ -965,6 +1002,73 @@ def _append_runtime_event(
     return True, ""
 
 
+def _upload_block_status_path() -> Path:
+    paths = build_container_audit_storage_paths(application_path=str(Path(__file__).resolve().parent))
+    return paths.data_root / "upload_block_status.json"
+
+
+def _observer_count(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _observer_utc(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        return None
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return value
+
+
+@writer_sink("direct_sync_upload_block_status")
+def _write_upload_block_status(status: Mapping[str, Any], *, force: bool) -> None:
+    path = _upload_block_status_path()
+    try:
+        previous = load_json_no_duplicate_keys(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except (OSError, ValueError):
+        previous = {}
+    if not isinstance(previous, dict) or previous.get("schema") != 1 or previous.get("app") != "CA":
+        previous = {}
+    blocked_files = _observer_count(status.get("scan_terminal_blocked_count"))
+    if blocked_files is None:
+        blocked_files = _observer_count(previous.get("blocked_files")) or 0
+    blocked_records = _observer_count(
+        status["scan_terminal_blocked_record_count"] if "scan_terminal_blocked_record_count" in status
+        else previous.get("blocked_records")
+    ) if blocked_files else 0
+    install_review = previous.get("install_review") is True
+    runtime_lease = status.get("runtime_lease")
+    if isinstance(runtime_lease, Mapping):
+        if runtime_lease.get("status") == "operator_review":
+            install_review = True
+        elif runtime_lease.get("status") == "ACTIVE" and runtime_lease.get("server_grant_accepted") is True:
+            install_review = False
+    last_result = status.get('last_result')
+    if (status.get('status') == 'acked' and isinstance(last_result, Mapping)
+            and last_result.get('success') is True):
+        install_review = False
+    now = utc_now_text()
+    since = None
+    if blocked_files or install_review:
+        since = (_observer_utc(previous.get("since"))
+                 or (_observer_utc(status.get("scan_terminal_blocked_since_utc")) if blocked_files else None)
+                 or now)
+    record = {"schema": 1, "app": "CA", "blocked_files": blocked_files,
+              "blocked_records": blocked_records, "install_review": install_review,
+              "since": since, "updated": now}
+    if force or set(previous) != set(record) or any(previous.get(name) != value
+                                                     for name, value in record.items() if name != "updated"):
+        _write_json_atomic(path, record)
+
+
+def _publish_upload_block_status(status: Mapping[str, Any], *, force: bool) -> None:
+    try:
+        _write_upload_block_status(status, force=force)
+    except Exception as exc:
+        logger.warning("upload_block_status_write_failed (%s)", type(exc).__name__)
+
+
 def _append_runtime_event_with_status(
     config: DirectSyncRuntimeConfig,
     event: str,
@@ -978,6 +1082,7 @@ def _append_runtime_event_with_status(
             return {**status, "superseded": True}
         status_identity = status.get("source_identity") if isinstance(status.get("source_identity"), Mapping) else None
         ok, error_message = _append_runtime_event(config, event, log_payload or status, source_identity=status_identity)
+    _publish_upload_block_status(status, force=event.startswith("relay_"))
     if ok:
         return status
     status["runtime_log_write_status"] = "FAIL"
@@ -1148,6 +1253,7 @@ def record_scan_status(
     scan_attempted_count: int,
     scan_failed_source_file: str = "",
     scan_terminal_blocked_count: int = 0,
+    scan_terminal_blocked_record_count: int | None = None,
     scan_terminal_blocked_source_files: list[str] | None = None,
 ) -> dict[str, Any]:
     queue = _safe_relay_queue_status(config.db_path)
@@ -1158,6 +1264,7 @@ def record_scan_status(
         "scan_attempted_count": int(scan_attempted_count),
         "scan_failed_source_file": scan_failed_source_file,
         "scan_terminal_blocked_count": int(scan_terminal_blocked_count),
+        "scan_terminal_blocked_record_count": scan_terminal_blocked_record_count,
     }
     if terminal_blocked_files:
         last_result["scan_terminal_blocked_source_files"] = terminal_blocked_files
@@ -1169,6 +1276,7 @@ def record_scan_status(
         last_result=last_result,
     )
     payload["scan_terminal_blocked_count"] = int(scan_terminal_blocked_count)
+    payload["scan_terminal_blocked_record_count"] = scan_terminal_blocked_record_count
     if terminal_blocked_files:
         payload["scan_terminal_blocked_source_files"] = terminal_blocked_files
     payload = _write_runtime_payload(config, payload)
@@ -1184,6 +1292,7 @@ def record_scan_result_status(
     scan_attempted_count: int,
     scan_failed_source_file: str = "",
     scan_terminal_blocked_count: int = 0,
+    scan_terminal_blocked_record_count: int | None = None,
     scan_terminal_blocked_source_files: list[str] | None = None,
 ) -> dict[str, Any]:
     terminal_blocked_files = list(scan_terminal_blocked_source_files or [])
@@ -1191,6 +1300,7 @@ def record_scan_result_status(
     payload["scan_enqueued_count"] = int(scan_enqueued_count)
     payload["scan_attempted_count"] = int(scan_attempted_count)
     payload["scan_terminal_blocked_count"] = int(scan_terminal_blocked_count)
+    payload["scan_terminal_blocked_record_count"] = scan_terminal_blocked_record_count
     if terminal_blocked_files:
         payload["scan_terminal_blocked_source_files"] = terminal_blocked_files
     if scan_failed_source_file:
@@ -1221,6 +1331,7 @@ def record_scan_drain_status(
     scan_attempted_count: int,
     scan_failed_source_file: str = "",
     scan_terminal_blocked_count: int = 0,
+    scan_terminal_blocked_record_count: int | None = None,
     scan_terminal_blocked_source_files: list[str] | None = None,
 ) -> dict[str, Any]:
     terminal_blocked_files = list(scan_terminal_blocked_source_files or [])
@@ -1229,6 +1340,7 @@ def record_scan_drain_status(
     payload["scan_enqueued_count"] = int(scan_enqueued_count)
     payload["scan_attempted_count"] = int(scan_attempted_count)
     payload["scan_terminal_blocked_count"] = int(scan_terminal_blocked_count)
+    payload["scan_terminal_blocked_record_count"] = scan_terminal_blocked_record_count
     if terminal_blocked_files:
         payload["scan_terminal_blocked_source_files"] = terminal_blocked_files
     if scan_failed_source_file:
@@ -1313,6 +1425,11 @@ def run_relay_once(
             now=cycle_now,
         )
         runtime_lease = dict(runtime_preparation.receipt or {})
+        if runtime_preparation.status_code == 401 and runtime_preparation.error_code == "stale_timestamp":
+            runtime_lease = {
+                "status_code": 401, "error_code": "stale_timestamp",
+                **({"clock_skew": runtime_preparation.clock_skew} if runtime_preparation.clock_skew else {}),
+            }
         if runtime_preparation.operator_review:
             # Not recovered automatically (live clone, stale token, bound row):
             # the operator card asks for an administrator instead of a resume.

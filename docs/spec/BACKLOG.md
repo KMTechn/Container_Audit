@@ -5,6 +5,8 @@
 - 10/26 sub-590fix: 독립 검토 sub-590rev P2-1(사라진·보낼 것 없는 원본의 실패 항목 정리)·P2-2(csv.Error → source_csv_content_invalid)를 닫았다. 11/15 후보: P2-3 공용 부모 쓰기 거부가 원본별 mkdir 로 나타나면 모든 원본이 source_delta_write_failed 로 기록돼 개수로만 보인다(전역 중단 아님). P2-4 drain 뒤 오프셋 기록 구간의 SourceFileInputError 는 예전 크래시와 결과가 같아 표시 코드만 다르다(근거: work/program/w9firstupd/sub-590fix/RESULT.md).
 - 10/26 sub-590: relay의 한 CSV 오류가 뒤 파일과 drain을 막던 길을 파일별 재시도로 분리했다. 원본·오프셋·source_file_id+SHA256 멱등 키는 유지하고, 오류 목록·최초 시각을 큐 DB에 보존해 기존 Tk·기본 웹 상태 줄에 알린다. 전역 오류 중단·독립 검토·서명 판 통합 경계는 유지한다(검증 근거: work/program/w9firstupd/sub-590/RESULT.md).
 
+- w9firstupdsub697: spool·delta 동시 소실은 같은 원본 범위/hash에서 같은 행으로 복구하고, spooled_file_missing terminal의 제한된 재진입·부분 복구 뒤 재시작·기존 배정을 보존한다. 원본 불일치·소실은 K/N·띠로 알리며 다른 원본 전송을 계속한다.
+- w9firstupdsub693: spool 소실·잠금 외 I/O 오류는 기존 terminal·K/N·띠로 격리하고 잠금만 재시도한다. ACK 유실 가능 행의 배정·runtime 다섯 칸과 같은 원본 앞 구간을 보존하며, 포장 24 h 뒤 다른 새 enqueue 지속을 검증한다.
 ### retained 후보와 다음 업데이트 요청 (sub-555)
 
 retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요청을 한 번 수행하고 journal을 다시 읽는다. 기존 writer가 있으면 SYSTEM의 유예를 따른다. 일반 복귀는 요청한 GUI/relay 역할을 보존한다. 늦은 READY 확정은 현재 기록에서 같은 전환의 timeout만 식별할 수 없어 닫아 둔다(실패 사유는 세대 code로 덮이고 failed_shas는 sha만 보존). 새 기록 형식·사유 값·phase·대기창을 만들지 않는다.
@@ -994,3 +996,16 @@ sub-298 소스 구현: 최초 격리 journal·원 작업자·현품표·격리 �
 
 P3 한계(ANSWER-37, 10/26 레인 판정): 첫 품목표의 40초 예산은 돌려받은 조각 경계에서만 확인한다. 읽기 간격 10초 안으로 아주 느리게 연속 수신하면 전체 종료는 더 늦을 수 있다. 현재 협조 중단을 유지하고 raw read·decoder 내부 검사나 새 타이머·소켓 장치를 더하지 않는다. 원인 probe는 sub-555/closing36에 보존한다.
 - 10/26 sub-692: 적용 요청 실패에서 start_current 일반 복구 거절의 ValueError 전파를 안내·20으로 고침. 기존 재사용 증명·다시 기회는 유지. RED→GREEN 및 정본 선언 근거는 work/program/w9firstupd/sub-692/RESULT.md.
+### 서버 시각 401 stale_timestamp (sub-635 · P1)
+
+16:1x–17:4x 추가 고침: 전송 전 로컬 OSError·spool 읽기 잠김, 비JSON400–599, committed 칸 없는 JSON4xx(401 제외)의 자동 재시도를 포함한다. 불완전 응답의 runtime 검토 표지는 무시하고 실제 committed/receipt·명시적 거절 보호는 유지한다. 확실한 미커밋/전송 전 로컬 실패만 runtime 배정을 풀어 TTL 뒤 새 lease를 받고 모호한 전송은 보존한다. 시계 뒤로 수정 뒤 stale 행 재선택을 포함한다. 공용 blocked K/N은 ANSWER-8대로 terminal 원본 범위만 유지한다. 새 전송 모드·runtime 끄기·숫자 상한은 없다.
+
+레인 15:39 추가 범위: 최초 terminal 막힘 UTC를 보존하고 앱 뿌리에 공용 일곱 칸 `upload_block_status.json`을 원자 기록한다. K/N(null 허용), 선행 lease 설치 검토, 연속 구간 since와 relay 갱신 updated만 제공한다. 중계 호스트와 서버의 현장 관리자 알림은 해당 담당 몫이며 앱 직접 알림은 구현하지 않는다.
+
+- 11/15 후보: 실제 terminal 앞 구간이 있는 원본에서 새 기록을 별도 파일로 자동 전환하는 길은 별도 설계 대상이다. 이번에는 구현하지 않으며 기존 원본/앞 구간 계약을 유지한다.
+
+레인 15:0x–15:2x 덧 반영: 미커밋 망 오류·timeout·408/429/모든 5xx의 terminal 전환도 방지한다. N=첫 terminal delta 시작부터 안정 EOF까지 CSV 기록 수, K=원본 파일 수로 분리하고, 미확인·다음 스캔까지 보존·시계/막힘/10분 대기 우선순위를 반영한다. 보내기 한 칸+기존 네 칸 계약5, 기존 검토 안내 숨김/노랑 fallback, 정본 exporter 함수/check의 UI manifest 재계산을 포함한다. 자동 끄기 마감 입력이 없어 진한 노랑·새 종료 예약은 구현0(ANSWER-3); 텔레그램 송신도 구현0이다. 보호된 앞 구간을 건너뛰는 변경은 없다. 검증의 위험 노드는 레인 지시대로 미검증으로 남기며 안전 분류 표·바탕 대조를 결과에 연결한다.
+
+업로드·행별 lease 준비의 stale 401을 기존 retry_wait로 보존하고 시계 수정 뒤 자동 회복하게 고친다. 기존 runtime/upload JSON의 선택 시각 관측과 두 화면의 비차단 노랑 안내를 연결한다. 다른 401은 유지한다. 대상은 화요일 밤 v2.0.123 재서명이며 월요일 밤 122에는 포함하지 않는다. 옛 terminal 행 되살리기는 레인 10/26 14:38 덧지시로 구현 0·QUESTION 0이고 사실은 work/program/w9firstupd/sub-635/FACTS.md에 남긴다. RED/GREEN·직접 호출자 팩·바탕 대조·선언 check 결과는 같은 폴더 RESULT.md가 정본이다. 실제 화면·배포본·현장 PC의 시계 수정 회차는 이번 headless 소스 검증으로 단정하지 않는다.
+
+11/15 서버 후속: producer receipt 조회 API는 이번에 추가하지 않는다. sub-700은 sub-697 재구성 한 벌과 동일 키 재전송으로 보류 배정을 회복하며, 원본 소실·변경의 전용 검토는 기존 단건 모드에서만 재개한다. retry-dead가 spool 소실 시 BLOCKED인 포기 출구는 별도 후속으로 남긴다. CA 24 h 나이 조건은 경고뿐이다. 원본 직접 행과 다른 대기 범위의 겹침은 배정 보존 전용 검토로 멈추며, 겹친 행 정리는 11/15 판단으로 남긴다(ANSWER-7).

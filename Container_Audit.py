@@ -70,6 +70,8 @@ from direct_sync_health import (
     read_relay_health,
     relay_health_card_model,
     relay_health_detail_model,
+    relay_clock_warning_model,
+    relay_send_warning_model,
 )
 from container_admin_pin import (
     AdminPinClient, AdminPinError, AdminPinIntentStore,
@@ -12324,8 +12326,22 @@ class ContainerAudit:
         self._center_hero_frame = hero_frame
         hero_frame.grid(row=0, column=0, sticky='ew', pady=(10, 20))
         hero_frame.grid_columnconfigure(0, weight=1)
+        self.relay_notice_frame = ttk.Frame(hero_frame, style='RelayAttention.TFrame')
+        self.relay_notice_frame.grid(row=0, column=0, sticky='ew', pady=(0, 10))
+        self.relay_notice_frame.grid_columnconfigure(0, weight=1)
+        self.relay_notice_label = ttk.Label(
+            self.relay_notice_frame, style='RelayAttention.Value.TLabel', anchor='w', justify='left',
+        )
+        self.relay_notice_label.grid(row=0, column=0, sticky='ew', padx=8, pady=(6, 0))
+        self.relay_notice_details_label = ttk.Label(
+            self.relay_notice_frame, style='RelayAttention.Subtle.TLabel', anchor='w', justify='left',
+        )
+        self.relay_notice_details_label.grid(row=1, column=0, sticky='ew', padx=8, pady=(0, 6))
+        self._bind_label_to_container_width(self.relay_notice_label, hero_frame, padding=24)
+        self._bind_label_to_container_width(self.relay_notice_details_label, hero_frame, padding=24)
+        self.relay_notice_frame.grid_remove()
         self.stage_label = ttk.Label(hero_frame, text="1 / 2 · 현품표 스캔", style='Stage.TLabel', anchor='center')
-        self.stage_label.grid(row=0, column=0, sticky='ew', pady=(0, 4))
+        self.stage_label.grid(row=1, column=0, sticky='ew', pady=(0, 4))
         self.current_item_label = ttk.Label(
             hero_frame,
             text="",
@@ -12333,7 +12349,7 @@ class ContainerAudit:
             justify='center',
             anchor='center',
         )
-        self.current_item_label.grid(row=1, column=0, sticky='ew')
+        self.current_item_label.grid(row=2, column=0, sticky='ew')
         self._bind_label_to_container_width(self.current_item_label, hero_frame, padding=60, min_wraplength=240)
         self.main_count_label = ttk.Label(parent_frame, text=f"0 / {self.TRAY_SIZE}", style='MainCounter.TLabel', anchor='center')
         self.main_count_label.grid(row=1, column=0, sticky='ew', pady=(10, 20))
@@ -18589,6 +18605,10 @@ class ContainerAudit:
                 observed_at=health.observed_at,
                 error_code=health.error_code,
                 scan_file_error_count=previous_health.scan_file_error_count,
+                clock_warning=previous_health.clock_warning,
+                scan_terminal_blocked_count=previous_health.scan_terminal_blocked_count,
+                scan_terminal_blocked_record_count=previous_health.scan_terminal_blocked_record_count,
+                scan_terminal_blocked_since_utc=previous_health.scan_terminal_blocked_since_utc,
             )
         elif not read_failed:
             self._direct_sync_last_read_health = health
@@ -18604,6 +18624,10 @@ class ContainerAudit:
                 observed_at=health.observed_at,
                 error_code=health.error_code if read_failed else wake_error,
                 scan_file_error_count=health.scan_file_error_count,
+                clock_warning=health.clock_warning,
+                scan_terminal_blocked_count=health.scan_terminal_blocked_count,
+                scan_terminal_blocked_record_count=health.scan_terminal_blocked_record_count,
+                scan_terminal_blocked_since_utc=health.scan_terminal_blocked_since_utc,
             )
         self._direct_sync_health = health
         self._render_direct_sync_status_line()
@@ -18623,6 +18647,8 @@ class ContainerAudit:
             if known_counts else None
         )
         review = health.failed_permanent_count + health.operator_review_count if known_counts else 0
+        if relay_send_warning_model(health):
+            review = 0
         client = getattr(getattr(self, "transfer_seal_coordinator", None), "client", None)
         connection = getattr(client, "connection_state", "unknown")
         now = datetime.datetime.now().astimezone()
@@ -18639,7 +18665,7 @@ class ContainerAudit:
             if pending is not None:
                 long_text += f" · 보낼 것 {pending}건"
             short_text = f"관리자 확인 {review}건"
-            foreground, weight = self.COLOR_DANGER, 'bold'
+            foreground, background, weight = self.COLOR_IDLE_TEXT, self.COLOR_IDLE_BG, 'bold'
         elif connection == "disconnected":
             long_text = "회사 서버 연결 안 됨 · 이 PC에 저장 중"
             short_text = "연결 안 됨"
@@ -18717,7 +18743,20 @@ class ContainerAudit:
             )
         return catalog_notice
 
+    def _apply_relay_warning_layout(self) -> None:
+        frame = getattr(self, "relay_notice_frame", None)
+        if frame is None:
+            return
+        warning = relay_send_warning_model(getattr(self, "_direct_sync_health", None))
+        if warning:
+            self.relay_notice_label.configure(text=warning["text"])
+            self.relay_notice_details_label.configure(text=warning["tail"])
+            frame.grid()
+        else:
+            frame.grid_remove()
+
     def _apply_catalog_notice_layout(self) -> None:
+        self._apply_relay_warning_layout()
         frame = getattr(self, "catalog_notice_frame", None)
         if frame is None:
             return

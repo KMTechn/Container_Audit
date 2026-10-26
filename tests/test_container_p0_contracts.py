@@ -3214,7 +3214,7 @@ def test_direct_sync_health_poll_skips_busy_lane_and_stale_result():
     assert app._direct_sync_health is current
 
 
-def test_direct_sync_footer_keeps_checking_neutral_and_counted_review_red():
+def test_direct_sync_footer_keeps_checking_neutral_and_counted_review_amber():
     health_module = importlib.import_module("direct_sync_health")
     from tests.test_work_details_visibility import install_sync_display
     app = ContainerAudit.__new__(ContainerAudit)
@@ -3234,9 +3234,18 @@ def test_direct_sync_footer_keeps_checking_neutral_and_counted_review_red():
     assert app.direct_sync_status_label.options["text"] == "첫 이적 때 확인"
 
     app._apply_direct_sync_health(review)
-    assert app.direct_sync_status_label.options["fg"] == app.COLOR_DANGER
+    assert app.direct_sync_status_label.options["fg"] == app.COLOR_IDLE_TEXT
+    assert app.direct_sync_status_label.options["bg"] == app.COLOR_IDLE_BG
     assert app.direct_sync_status_label.options["text"] == "관리자 확인 2건"
     assert app._direct_sync_health.pending_count == 3
+
+    clock_review = health_module.RelayHealth(
+        "review", 3, 1, 1, "2026-09-01T01:00:00+00:00", "", "",
+        clock_warning={"status_code": 401, "error_code": "stale_timestamp"},
+    )
+    app._apply_direct_sync_health(clock_review)
+    assert "관리자 확인" not in app.direct_sync_status_label.options["text"]
+    assert (app._direct_sync_health.failed_permanent_count, app._direct_sync_health.operator_review_count) == (1, 1)
 
     # An unreadable queue with no counted rows must never look like success.
     blocked = health_module.RelayHealth("blocked", 0, 0, 0, "", "", "", "queue_unreadable")

@@ -2919,7 +2919,7 @@ def test_drain_treats_string_retryable_false_as_failed_permanent(tmp_path):
 
 
 @pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
-def test_drain_missing_spooled_file_marks_failed_permanent_without_posting(tmp_path):
+def test_drain_missing_spooled_file_closes_without_posting(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
     credentials = make_credentials()
