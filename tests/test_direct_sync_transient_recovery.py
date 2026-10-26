@@ -95,7 +95,7 @@ def test_terminal_file_count_survives_non_scan_cycle_then_scan_zero_clears_it(tm
     assert health.scan_terminal_blocked_count == 2
     warning = health_model.relay_blocked_files_warning_model(health)
     assert warning['kind'] == 'warn'
-    assert warning['text'] == '회사 서버가 받지 않은 기록이 있어 그 뒤 기록 7건을 보내지 못하고 있습니다 — 현장 관리자에게 알리세요'
+    assert warning['text'] == '회사 서버가 받지 않은 기록이 있어 기록 7건을 보내지 못하고 있습니다 — 현장 관리자에게 알리세요'
     assert warning['tail'].endswith('막힌 기록 파일 2개')
     runtime._write_runtime_status(config, status='idle', queue=status['queue'], disk={})
     reread = health_model.read_relay_health(db_path=config.db_path,
@@ -212,7 +212,7 @@ def test_blocked_then_plain_delayed_send_band_priority():
                            operator_review_count=0, last_acked_at='', oldest_pending_at='2000-01-01T00:00:00Z',
                            observed_at='', scan_terminal_blocked_count=2,
                            scan_terminal_blocked_record_count=7)
-    assert '그 뒤 기록 7건' in health_model.relay_send_warning_model(health)['text']
+    assert '기록 7건' in health_model.relay_send_warning_model(health)['text']
     delayed = replace(health, scan_terminal_blocked_count=0, scan_terminal_blocked_record_count=0)
     assert health_model.relay_send_warning_model(delayed)['text'] == '회사 서버로 기록을 보내지 못하고 있습니다 — 현장 관리자에게 알리세요'
 

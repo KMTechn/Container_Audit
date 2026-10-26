@@ -168,7 +168,7 @@ def relay_blocked_files_warning_model(health: RelayHealth | None) -> dict[str, s
     quantity = f" {records}건" if records is not None else ""
     return {
         "kind": "warn",
-        "text": f"회사 서버가 받지 않은 기록이 있어 그 뒤 기록{quantity}을 보내지 못하고 있습니다 — 현장 관리자에게 알리세요",
+        "text": f"회사 서버가 받지 않은 기록이 있어 기록{quantity}을 보내지 못하고 있습니다 — 현장 관리자에게 알리세요",
         "tail": f"찍은 기록은 이 PC에 그대로 있습니다 · 막힌 기록 파일 {health.scan_terminal_blocked_count}개",
     }
 
