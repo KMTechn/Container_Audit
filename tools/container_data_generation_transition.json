@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "e7a5bffcd8b49fa2744f0509ee2ce43c729a238acc12003c847a5be7da9ce68d",
+  "after_inventory_sha256": "2d1be36320a78034c46b76dcec6cfaf71da91186f21406b280858b8eff43d368",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -1403,7 +1403,7 @@
     {
       "path": "app/user_relay.py",
       "before": "3d9be9672556e284cfd62d7bfa28c1bcbd8c90688a9f13bc08c5894bfd1750fd",
-      "after": "e5ce2f265c493c846d32550c3af73c95de6caa96c5f779ce7ff350e72491185a"
+      "after": "8c358c0686e6c17bb29eaac1d3b5405fde39d3bea266b1b2386d5e47c325dd6e"
     },
     {
       "path": "app/vendor/__init__.py",
@@ -1463,7 +1463,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "627b2758c6106fc08aacb93e67926e2761bee3aa5e137e6d19bc9e96c3cf5532"
+      "after": "e67f32b272cbc363e3fe7d561d8f7306920352b243c90f1e71374fd482e0010f"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4513,7 +4513,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "e1da6359e67990e229ee9486d6da6f964ae47a50d9903236908cb3b82154ff85"
+      "after": "d7abed0a447b14f2ec246efaad2eab465be77062b86581ad2cf000b615b1360a"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4523,12 +4523,12 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "9b07f21a8200f5e13a379b429b0d388413986507a84139766c2f3ed7394ac020"
+      "after": "2dd962a6c34751b85ab110a70a80ad44b1842330b807b083999087beb3bd61dc"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "5ea2e95c4aa180f2781ba0ee2d5f36b8316c816e570580d5d657f4d46b927ab4"
+      "after": "d1d08c2b896fed1b156f94198e0cd7674d7b39bf282a52493cca04e635a3e608"
     }
   ],
   "source_replacements": [
@@ -4645,7 +4645,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "e1da6359e67990e229ee9486d6da6f964ae47a50d9903236908cb3b82154ff85"
+      "after": "d7abed0a447b14f2ec246efaad2eab465be77062b86581ad2cf000b615b1360a"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4690,12 +4690,12 @@
     {
       "path": "user_relay.py",
       "before": "3d9be9672556e284cfd62d7bfa28c1bcbd8c90688a9f13bc08c5894bfd1750fd",
-      "after": "e5ce2f265c493c846d32550c3af73c95de6caa96c5f779ce7ff350e72491185a"
+      "after": "8c358c0686e6c17bb29eaac1d3b5405fde39d3bea266b1b2386d5e47c325dd6e"
     },
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "627b2758c6106fc08aacb93e67926e2761bee3aa5e137e6d19bc9e96c3cf5532"
+      "after": "e67f32b272cbc363e3fe7d561d8f7306920352b243c90f1e71374fd482e0010f"
     }
   ],
   "hash_provenance": {

@@ -222,7 +222,7 @@
     {
       "caller": "user_relay._write_json_atomic",
       "category": "filesystem",
-      "line": 65,
+      "line": 66,
       "operation": "atomic_replace.atomic_replace",
       "writer_admission_sources": []
     }
@@ -9209,30 +9209,30 @@
       ],
       "file": "user_relay.py",
       "kind": "function",
-      "line": 53,
+      "line": 54,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 61,
+          "line": 62,
           "operation": "temporary.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 65,
+          "line": 66,
           "operation": "atomic_replace.atomic_replace",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 67,
+          "line": 68,
           "operation": "temporary.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 58,
+          "line": 59,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -9267,17 +9267,17 @@
       "direct_callers": [],
       "file": "user_relay.py",
       "kind": "function",
-      "line": 170,
+      "line": 171,
       "mutation_sites": [
         {
           "category": "registry",
-          "line": 175,
+          "line": 176,
           "operation": "winreg.CreateKeyEx",
           "writer_admission_sources": []
         },
         {
           "category": "registry",
-          "line": 181,
+          "line": 182,
           "operation": "winreg.SetValueEx",
           "writer_admission_sources": []
         }
@@ -9298,11 +9298,11 @@
       "direct_callers": [],
       "file": "user_relay.py",
       "kind": "function",
-      "line": 205,
+      "line": 206,
       "mutation_sites": [
         {
           "category": "registry",
-          "line": 217,
+          "line": 218,
           "operation": "winreg.DeleteValue",
           "writer_admission_sources": []
         }
@@ -9323,12 +9323,12 @@
       "direct_callers": [],
       "file": "user_relay.py",
       "kind": "function",
-      "line": 266,
+      "line": 267,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 287,
+          "line": 288,
           "operation": "subprocess.Popen",
           "writer_admission_sources": []
         }
@@ -9365,12 +9365,12 @@
       ],
       "file": "user_relay.py",
       "kind": "function",
-      "line": 676,
+      "line": 677,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 700,
+          "line": 701,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -9423,12 +9423,12 @@
       ],
       "file": "user_relay.py",
       "kind": "function",
-      "line": 812,
+      "line": 813,
       "mutation_sites": [
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 931,
+          "line": 932,
           "operation": "path.mkdir",
           "writer_admission_sources": [
             "persistent_relay_status"
@@ -9437,7 +9437,7 @@
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 932,
+          "line": 933,
           "operation": "path.mkdir",
           "writer_admission_sources": [
             "persistent_relay_status"
@@ -10035,7 +10035,7 @@
       "argument_ast_sha256": "d8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81",
       "caller": "user_relay._write_json_atomic",
       "classification": "decorator",
-      "line": 58,
+      "line": 59,
       "probe_only": false,
       "report_only": false,
       "source": "persistent_relay_status",
@@ -10045,7 +10045,7 @@
       "argument_ast_sha256": "c1eed8eb9116f4c6c08f59df6c9e52f9df16e0befeda2b2646e2c7453ebbebc3",
       "caller": "user_relay.main",
       "classification": "writer_admission",
-      "line": 931,
+      "line": 932,
       "probe_only": true,
       "report_only": false,
       "source": "persistent_relay_status",
@@ -10057,7 +10057,7 @@
       "argument_ast_sha256": "773e572279ed42d5919b32486aa595bd2d6024a711e73dfc863581f28ecbda6a",
       "caller": "user_relay.main",
       "classification": "writer_admission",
-      "line": 932,
+      "line": 933,
       "probe_only": true,
       "report_only": false,
       "source": "persistent_relay_status",
@@ -10860,7 +10860,7 @@
       "tools.register_container_audit_worker_pc"
     ]
   },
-  "inventory_sha256": "e7a5bffcd8b49fa2744f0509ee2ce43c729a238acc12003c847a5be7da9ce68d",
+  "inventory_sha256": "2d1be36320a78034c46b76dcec6cfaf71da91186f21406b280858b8eff43d368",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -26085,7 +26085,7 @@
       "direct_mutation_site_count": 1,
       "file": "user_relay.py",
       "function": "user_relay.start_user_relay_process",
-      "line": 266,
+      "line": 267,
       "marker_kind": "decorator",
       "source": "persistent_relay_process_start"
     },
@@ -26093,7 +26093,7 @@
       "direct_mutation_site_count": 1,
       "file": "user_relay.py",
       "function": "user_relay._registry_delete",
-      "line": 205,
+      "line": 206,
       "marker_kind": "decorator",
       "source": "persistent_relay_registry"
     },
@@ -26101,7 +26101,7 @@
       "direct_mutation_site_count": 2,
       "file": "user_relay.py",
       "function": "user_relay._registry_set",
-      "line": 170,
+      "line": 171,
       "marker_kind": "decorator",
       "source": "persistent_relay_registry"
     },
@@ -26117,7 +26117,7 @@
       "direct_mutation_site_count": 4,
       "file": "user_relay.py",
       "function": "user_relay._write_json_atomic",
-      "line": 53,
+      "line": 54,
       "marker_kind": "decorator",
       "source": "persistent_relay_status"
     },
@@ -26125,7 +26125,7 @@
       "direct_mutation_site_count": 0,
       "file": "user_relay.py",
       "function": "user_relay.consume_app_stop_request",
-      "line": 117,
+      "line": 118,
       "marker_kind": "decorator",
       "source": "persistent_relay_status"
     },
@@ -26133,7 +26133,7 @@
       "direct_mutation_site_count": 2,
       "file": "user_relay.py",
       "function": "user_relay.main",
-      "line": 812,
+      "line": 813,
       "marker_kind": "decorator",
       "source": "persistent_relay_status"
     },
@@ -26141,7 +26141,7 @@
       "direct_mutation_site_count": 1,
       "file": "user_relay.py",
       "function": "user_relay.native_app_process_snapshot",
-      "line": 676,
+      "line": 677,
       "marker_kind": "decorator",
       "source": "persistent_relay_status"
     },
@@ -27197,7 +27197,7 @@
       "direct_mutation_site_count": 0,
       "file": "user_relay.py",
       "function": "user_relay.install_user_relay_autostart",
-      "line": 223,
+      "line": 224,
       "marker_kind": "decorator",
       "source": "user_relay_autostart_install"
     },
@@ -27205,7 +27205,7 @@
       "direct_mutation_site_count": 0,
       "file": "user_relay.py",
       "function": "user_relay.remove_user_relay_autostart",
-      "line": 248,
+      "line": 249,
       "marker_kind": "decorator",
       "source": "user_relay_autostart_remove"
     },
