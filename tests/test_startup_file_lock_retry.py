@@ -20,6 +20,67 @@ def locked(kind):
     return error
 
 
+@pytest.mark.parametrize('release', [True, False])
+def test_constructor_marker_read_shares_the_profile_startup_budget(monkeypatch, tmp_path, release):
+    import auto_update
+    import logistics_runtime_profile as profiles
+
+    class StartupReachedStores(Exception):
+        pass
+
+    profile_path = tmp_path / 'profile.json'
+    config = tmp_path / 'config'
+    config.mkdir()
+    marker = config / migration.MIGRATION_MARKER_NAME
+    payload = json.dumps({'schema_version': migration.MIGRATION_SCHEMA, 'status': 'PASS'})
+    marker.write_text(payload, encoding='utf-8')
+    original_read = Path.read_text
+    original_bytes = Path.read_bytes
+    profile_reads = Mock(side_effect=[locked(32), locked(32), b'{}'])
+    marker_reads = Mock(side_effect=([locked(32), payload] if release else locked(32)))
+    sleeps = Mock()
+
+    def read_bytes(path):
+        return profile_reads() if path == profile_path else original_bytes(path)
+
+    def read_text(path, *args, **kwargs):
+        return marker_reads() if path == marker else original_read(path, *args, **kwargs)
+
+    def client(*, probe_required, read_retry):
+        assert probe_required is False
+        assert profiles._read_profile(profile_path, read_retry=read_retry) == {}
+        return None
+
+    def stores(*args, **kwargs):
+        raise StartupReachedStores
+
+    paths = SimpleNamespace(data_root=tmp_path, events_dir=tmp_path / 'events',
+                            local_events_dir=tmp_path / 'local', direct_sync_root=tmp_path / 'sync',
+                            config_dir=config, parked_trays_dir=tmp_path / 'parked')
+    monkeypatch.setattr(Path, 'read_bytes', read_bytes)
+    monkeypatch.setattr(Path, 'read_text', read_text)
+    monkeypatch.setattr(app_module.time, 'sleep', sleeps)
+    monkeypatch.setattr(app_module, '_current_user_logistics_profile_path', lambda: '')
+    monkeypatch.setattr(app_module, 'logistics_transfer_client_from_env', client)
+    monkeypatch.setattr(app_module, 'legacy_label_transition_enabled', lambda: False)
+    monkeypatch.setattr(app_module.tk, 'Tk', Mock(return_value=Mock()))
+    monkeypatch.setattr(auto_update, 'trial_context', lambda path: None)
+    monkeypatch.setattr(app_module, 'fit_restored_window_to_work_area', Mock())
+    monkeypatch.setattr(app_module, 'build_container_audit_storage_paths', lambda **kwargs: paths)
+    monkeypatch.setattr(app_module, 'ensure_container_audit_storage_dirs', lambda paths: None)
+    monkeypatch.setattr(app_module, 'OperationLeaseStore', stores)
+    app = app_module.ContainerAudit.__new__(app_module.ContainerAudit)
+    with pytest.raises(StartupReachedStores if release else ValueError):
+        app_module.ContainerAudit.__init__(app)
+    assert sleeps.call_args_list == [((1,),)] * 3
+    assert profile_reads.call_count == 3
+    assert marker_reads.call_count == 2
+    assert original_read(marker, encoding='utf-8') == payload
+    if release:
+        assert app.legacy_state_migration['status'] == 'REUSED'
+        assert app._startup_read_retry.remaining == 0
+
+
 @pytest.mark.parametrize('kind', ['permission', 5, 32, 33])
 @pytest.mark.parametrize('release', [True, False])
 def test_items_retry_only_file_locks(monkeypatch, kind, release):
