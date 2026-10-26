@@ -23,6 +23,70 @@
    "sheet"
   ],
   "properties": {
+   "recovery_notice": {"type": "object", "additionalProperties": false, "required": ["restored"], "properties": {"restored": {"type": "boolean"}}, "description": "선택 칸 — 닫지 못한 지난 작업 세션을 이번 실행에서 되살렸는지. pending 칸 없음"},
+   "text_size_hint": {"type": ["string", "null"], "enum": ["large", null], "description": "선택 칸 — 옛 LARGE_FONT_MODE 이관 힌트. 저장된 글자 값이 없거나 단계 밖일 때만 large를 크게로 저장; 유효한 기존 선택은 보존"},
+   "practice": {"type": "boolean", "description": "선택 칸 — true일 때만 연습용 PC 띠. 키트의 PRACTICE-PC.json 표시를 앱이 읽어 채움"},
+   "notices": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+       "items",
+       "pending_ack"
+     ],
+     "properties": {
+       "items": {
+         "type": "array",
+         "maxItems": 20,
+         "items": {
+           "type": "object",
+           "additionalProperties": false,
+           "required": [
+             "id",
+             "title",
+             "body",
+             "weight",
+             "sent_at",
+             "end_at"
+           ],
+           "properties": {
+             "id": {
+               "type": "string"
+             },
+             "title": {
+               "type": "string",
+               "minLength": 1,
+               "maxLength": 30
+             },
+             "body": {
+               "type": "string",
+               "minLength": 0,
+               "maxLength": 300
+             },
+             "weight": {
+               "enum": [
+                 "normal",
+                 "important"
+               ]
+             },
+             "sent_at": {
+               "type": "string",
+               "description": "ISO-8601 날짜시각, 시간대 있음·없음 모두 허용"
+             },
+             "end_at": {
+               "type": "string",
+               "description": "ISO-8601 날짜시각, 시간대 있음·없음 모두 허용"
+             }
+           }
+         }
+       },
+       "pending_ack": {
+         "type": "array",
+         "items": {
+           "type": "string"
+         }
+       }
+     }
+   },
    "app": {
     "const": "ca"
    },
@@ -1163,32 +1227,32 @@
   "additionalProperties": false
  },
  "calls": {
- "scan_blocked": {
-  "args": [
-   {
-    "type": "object",
-    "required": [
-     "reason",
-     "n_keys"
-    ],
-    "properties": {
-     "reason": {
-      "enum": [
-       "sheet",
-       "field"
-      ]
+     "scan_blocked": {
+       "args": [
+         {
+           "type": "object",
+           "required": [
+             "reason",
+             "n_keys"
+           ],
+           "properties": {
+             "reason": {
+               "enum": [
+                 "sheet",
+                 "field"
+               ]
+             },
+             "n_keys": {
+               "type": "integer",
+               "minimum": 0
+             }
+           },
+           "additionalProperties": false
+         }
+       ],
+       "reply": "{ok:boolean}",
+       "does": "입력 칸에서 막은 스캔의 오류음만 셸에 한 번 요청; reason=sheet|field, 글자·칸 값 0, 처리기 호출 0, 응답을 기다리지 않고 실패·모르는 명령은 안내·재시도 없이 무시 (셸 v3.16.6)"
      },
-     "n_keys": {
-      "type": "integer",
-      "minimum": 0
-     }
-    },
-    "additionalProperties": false
-   }
-  ],
-  "reply": "{ok:boolean}",
-  "does": "입력 칸에서 막은 스캔의 오류음만 셸에 한 번 요청; reason=sheet|field, 글자·칸 값 0, 처리기 호출 0, 응답을 기다리지 않고 실패·모르는 명령은 안내·재시도 없이 무시 (셸 v3.16.3.1·v3.16.6 부터)"
- },
   "state": {
    "args": {},
    "reply": "state",
@@ -1203,6 +1267,54 @@
    "does": "intake_scan(raw) 문 하나(CA-STATE §3) — 화면 판정 0, 빈 Enter · 띠 선택 중 · 경고 중에도 그대로 보냄"
   },
   "command": {
+   "ack_notice": {
+     "args": {
+       "type": "object",
+       "required": [
+         "id"
+       ],
+       "additionalProperties": false,
+       "properties": {
+         "id": {
+           "type": "string"
+         }
+       }
+     },
+     "result_schema": {
+       "type": "object",
+       "required": [
+         "ok"
+       ],
+       "properties": {
+         "ok": {
+           "type": "boolean"
+         },
+         "queued": {
+           "type": "boolean",
+           "description": "true이면 응답은 접수이고 완료는 state.notices.pending_ack에서 해당 id가 빠진 상태로 알림"
+         },
+         "state": {
+           "type": "object"
+         }
+       }
+     },
+     "does": "중요 공지 확인 — 내구 저장·보내기는 처리 층이 맡음"
+   },
+   "open_notice": {
+     "args": {
+       "type": "object",
+       "required": [
+         "id"
+       ],
+       "additionalProperties": false,
+       "properties": {
+         "id": {
+           "type": "string"
+         }
+       }
+     },
+     "does": "전문 보기 누름 알림 — 화면은 가진 공지로 바로 열고 응답을 기다리지 않음"
+   },
    "ack": {
     "args": {},
     "does": "Esc · 확인 단추 — 한 단계 안 화면(진행 현황 · 보류 · F8)이면 작업 화면으로, 작업 화면이면 막는 알림 확인(_acknowledge_active_notice CA:16508)"

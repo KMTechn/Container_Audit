@@ -1030,3 +1030,4 @@ P3 한계(ANSWER-37, 10/26 레인 판정): 첫 품목표의 40초 예산은 돌�
 - w9firstupdsub652 / 이적 123: 공용 `data_generation` 표지 바꿔치기가 잠김(오류 5·32)이면 1초(50ms 간격) 다시 시도하도록 Python·PowerShell 모두 고쳤다. 공용 판 표지 `0.3.8+w9.1`. 정본 `kmtech_shared` 반영과 정본 대조 시험의 의도한 차이 해소는 후속.
 
 - w9firstupdsub661: 웹 셸 scan.js는 핀 블롭 `d390424bbfa0255f7c271aec7491e6f4690cd6dd`를 바이트 그대로 사용한다. 스캔 받이의 Ctrl+]→GS(0x1D), Ctrl+^→RS(0x1E) 및 직접 온 제어 바이트를 보존하고 일반 폼 입력은 기존 동작을 유지한다. 이적 판독에 GS/RS 날짜 해석 규칙은 없으며 기존 PHS2 판독을 유지한다. Node VM과 오프라인 판독의 좁은 계약 시험을 사용하며 실제 창·스캐너·배포본 기동은 이번 범위 밖이다.
+화면 셸 기준판: frame.css 만 웹 00e66d79(menu label one flow · sha256 97c47d9b…) 바이트 · 나머지 셸 파일은 d8f82fa4 · ui manifest commit 은 셸 기준판 d8f82fa4 를 뜻함.

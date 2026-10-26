@@ -88,7 +88,7 @@
 .ca-row--new .ca-row__code { color: var(--pri-deep); }
 .ca-row--swap, .ca-row--swapped { background: var(--amber-soft); color: var(--amber-text); }
 .ca-row--swap .ca-row__code { text-decoration: line-through; }
-.ca-row--dup { background: var(--red-soft); color: var(--red-text); }
+.ca-row--dup { background: var(--amber-soft); color: var(--amber-text); }
 .ca-row--held { background: var(--tint); }
 .ca-list__empty { padding: 16px 18px; border-top: 1px solid var(--line); color: var(--ink-2); font-size: var(--s3); }
 .ca-list__more { min-height: 1.6em; padding: 8px 18px 0; border-top: 1px solid var(--line); font-size: var(--s2); color: var(--ink-2); }
@@ -170,9 +170,11 @@
 .ca-register__same { font-size: var(--s3); font-weight: 600; color: var(--amber-text); }
 .ca-register__cands { display: flex; flex-wrap: wrap; gap: 8px; }
 .ca-register__cands .act { height: 44px; }
-.ca-start__error { padding: 10px 12px; border-radius: var(--r-card); background: var(--red-soft); color: var(--red-text); font-size: var(--s3); font-weight: 600; }
+.ca-start__error { padding: 10px 12px; border-radius: var(--r-card); background: var(--amber-soft); color: var(--amber-text); font-size: var(--s3); font-weight: 600; }
 
 @media (min-width: 601px) {
+  /* Without a tag the header hint folds instead of being cut off; the count card keeps the same guidance. */
+  .top--compact .ca-tag-hint { display: none; }
   .ca-count { padding: 12px 16px; gap: 6px; }
   .ca-count__fig { gap: 6px; }
   .result.ca-result { padding: 12px 16px; gap: 10px; }
@@ -253,6 +255,13 @@
   .ca-today__supply .text-join, .ca-today .today-timeline > summary .text-join { white-space: normal; }
 }
 .ca-separator--wrapped { display: none; }
+/* CA2에서 확인한 두 장면만 손질한다. 다른 크기의 배치는 유지한다. */
+@media (width: 1270px) and (height: 730px) {
+  :root[data-text-level="1"] .next { column-gap: 12px; }
+}
+@media (width: 1280px) and (height: 945px) {
+  :root[data-text-level="3"] .band__text.ca-separator-flow { align-items: baseline; }
+}
 .ca-separator-flow { display: flex; flex-wrap: wrap; column-gap: .25em; }
 .ca-separator-phrase { max-width: 100%; }
 @media (min-width: 601px) and (max-width: 1365px), (min-width: 1900px) {
@@ -303,13 +312,6 @@
   :root[data-text-level] .work { padding-top: 0; padding-bottom: 2px; row-gap: 0; }
   :root:is([data-text-level="2"], [data-text-level="3"]) .ca-count { position: relative; padding-top: 0; padding-bottom: 0; }
   :root:is([data-text-level="2"], [data-text-level="3"]) .ca-bar { position: absolute; bottom: 2px; left: 2px; right: 2px; height: 8px; }
-  :root[data-text-level="3"] .top { flex-wrap: wrap; gap: 0 16px; padding-block: 0; line-height: 1.2; }
-  :root[data-text-level="3"] .top__who, :root[data-text-level="3"] .top__nav { flex-wrap: wrap; }
-  :root[data-text-level="3"] .top .link { min-height: 44px; height: auto; padding-block: 0; line-height: 1.2; }
-  /* 같이 채우기 큰 글자는 다음 할 일을 넓혀 수 카드와 막대의 세로 자리를 확보한다. */
-  :root[data-text-level="3"] .work--side-list:has([data-cofill]:not([hidden])) { grid-template-areas: "next next next" "result result list" "count count list" "actions actions actions"; }
-  :root[data-text-level="3"] .work--side-list:has([data-cofill]:not([hidden])) .ca-count { grid-template-rows: auto auto auto 10px; }
-  :root[data-text-level="3"] .work--side-list:has([data-cofill]:not([hidden])) .ca-bar { position: static; }
 }
 
 .work > .result small.ca-separator-flow { display: flex; flex-wrap: wrap; }
@@ -332,7 +334,20 @@
 
 @media (min-width: 601px) and (max-width: 1365px) and (min-height: 800px) {
   :root[data-text-level] .work { padding-bottom: 0; }
-  :root[data-text-level="3"] .top__who { gap: 0 16px; }
+  :root[data-text-level="3"] .top__who { gap: 16px; }
+  :root[data-text-level="3"] .top { gap: 16px; }
+  :root[data-text-level="3"] .top { display: grid; grid-template-columns: max-content max-content minmax(0, 1fr) max-content; grid-template-rows: auto auto; padding-block: 0; }
+  :root[data-text-level="3"] .top__who { display: contents; }
+  :root[data-text-level="3"] .top__app { grid-column: 1; grid-row: 1 / span 2; }
+  :root[data-text-level="3"] .top__worker { grid-column: 2; grid-row: 1; }
+  :root[data-text-level="3"] [data-text-size] { grid-column: 3; grid-row: 1; justify-self: start; }
+  :root[data-text-level="3"] [data-text-extra] { grid-column: 2; grid-row: 2; justify-self: start; }
+  :root[data-text-level="3"] [data-change] { grid-column: 3; grid-row: 2; justify-self: start; }
+  :root[data-text-level="3"] .top__tag { grid-column: 4; grid-row: 1; }
+  :root[data-text-level="3"] .top__nav { grid-column: 4; grid-row: 2; justify-self: end; }
+  :root[data-text-level="3"] .top { line-height: 1.2; }
+  :root[data-text-level="3"] .top .link { min-height: 44px; height: auto; padding-block: 0; line-height: 1.2; }
+  :root[data-text-level="3"] .top { row-gap: 0; }
   .top__nav { gap: 16px; }
 }
 
@@ -340,4 +355,53 @@
 
 @media (min-width: 601px) and (max-width: 1365px) and (min-height: 800px) {
   :root[data-text-level="0"] .ca-list { padding-block: 0; }
+}
+
+@media (min-width: 601px) {
+  :root[data-text-level] body:has([data-offline-band], [data-practice-band], [data-recovery-band]) .work--side-list:has(> .ca-count.area-count):has(> .ca-result.area-result) {
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.4fr);
+    grid-template-rows: auto max-content minmax(0, 1fr) auto;
+    grid-template-areas: "count next" "count result" "count list" "actions actions";
+  }
+  :root[data-text-level] body:has([data-offline-band], [data-practice-band], [data-recovery-band]) .work > .result { container-type: normal; flex-direction: row; }
+  :root[data-text-level] body:has([data-offline-band], [data-practice-band], [data-recovery-band]) .ca-list { min-height: 0; padding-block: 0; }
+  :root[data-text-level] body:has([data-offline-band], [data-practice-band], [data-recovery-band]) .ca-count { display: grid; grid-template-columns: max-content minmax(0, 1fr); grid-template-rows: auto auto auto 10px; align-items: center; gap: 0 8px; padding: 2px 4px; }
+  :root[data-text-level] body:has([data-offline-band], [data-practice-band], [data-recovery-band]) .ca-count__fig { display: contents; }
+  :root[data-text-level] body:has([data-offline-band], [data-practice-band], [data-recovery-band]) .ca-count__n { grid-column: 1; grid-row: 1 / span 3; line-height: 1.2; margin: 0; }
+  :root[data-text-level] body:has([data-offline-band], [data-practice-band], [data-recovery-band]) .ca-count__item { grid-column: 2; grid-row: 1; align-self: end; }
+  :root[data-text-level] body:has([data-offline-band], [data-practice-band], [data-recovery-band]) .ca-cofill { grid-column: 2; grid-row: 2; }
+  :root[data-text-level] body:has([data-offline-band], [data-practice-band], [data-recovery-band]) .ca-count__left { grid-column: 2; grid-row: 3; align-self: start; }
+  :root[data-text-level] body:has([data-offline-band], [data-practice-band], [data-recovery-band]) .ca-bar { grid-column: 1 / -1; grid-row: 4; }
+}
+
+@media (min-width: 601px) {
+  :root[data-text-level] body:has([data-offline-band], [data-practice-band], [data-recovery-band]) .ca-result { padding-block: 0; }
+  :root[data-text-level] body:has([data-offline-band], [data-practice-band], [data-recovery-band]) .ca-result :is(small, .result__sound) { margin-top: 0; }
+}
+.ca-count__left[data-left], .ca-start__sub[data-roster-sub], [data-pane="progress"] > .ca-pane__foot, [data-register] > .ca-register__same { white-space: pre-line; }
+
+/* 아주 큰 글자에서도 교체 상세와 다음 동작을 첫 화면에서 읽는다. */
+@media (min-width: 601px) {
+  :root[data-text-level="3"] [data-pane="f8"] { padding: 2px 16px; gap: 2px; }
+  :root[data-text-level="3"] [data-pane="f8"] .ca-pane__head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; }
+  :root[data-text-level="3"] [data-pane="f8"] .ca-pane__head > div { display: contents; }
+  :root[data-text-level="3"] [data-pane="f8"] .ca-pane__sub { grid-column: 1 / -1; grid-row: 2; margin: 0; line-height: 1.2; }
+  :root[data-text-level="3"] .ca-f8 { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); grid-template-rows: auto minmax(0, 1fr); gap: 4px 12px; }
+  :root[data-text-level="3"] .ca-f8__steps { gap: 4px; }
+  :root[data-text-level="3"] .ca-f8__steps li { padding: 4px 6px; line-height: 1.2; }
+  :root[data-text-level="3"] .ca-f8__card { min-height: 0; padding: 8px 12px; gap: 4px; }
+  :root[data-text-level="3"] .ca-f8__card .ca-card__title,
+  :root[data-text-level="3"] .ca-f8__para,
+  :root[data-text-level="3"] .ca-f8__facts { line-height: 1.2; }
+  :root[data-text-level="3"] .ca-f8__facts { grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; }
+}
+
+@media (min-width: 601px) {
+  :root[data-text-level="3"] .ca-f8:has(.ca-f8__card--print) { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); }
+  :root[data-text-level="3"] .ca-f8:has(.ca-f8__card--print) .ca-f8__text { line-height: 1.05; }
+  :root[data-text-level="3"] .ca-f8__card--print { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); grid-template-rows: auto auto; gap: 4px 12px; padding-block: 4px; align-items: start; }
+  :root[data-text-level="3"] .ca-f8__card--print .ca-card__title { grid-column: 1; grid-row: 1; line-height: 1.15; }
+  :root[data-text-level="3"] .ca-f8__card--print .ca-f8__facts { grid-column: 1; grid-row: 2; line-height: 1.2; }
+  :root[data-text-level="3"] .ca-f8__card--print .ca-f8__para { grid-column: 2; grid-row: 1 / -1; line-height: 1.15; }
+  :root[data-text-level="3"] .ca-f8__card--print .act { grid-column: 2; grid-row: 1 / -1; align-self: end; white-space: normal; line-height: 1.15; }
 }

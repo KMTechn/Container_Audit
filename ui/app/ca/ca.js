@@ -29,7 +29,7 @@
     // 리셋은 되돌릴 수 없다 — 마우스로만(처음 초점 = 그만두기), 처리 층은 id=confirmed 가 아니면 거절
     reset: { kind: 'confirm', tag: '확인', title: '현재 작업 취소', go: '현재 작업 취소', command: 'reset:confirmed',
       note: '현재 작업 취소는 마우스로만 할 수 있습니다\n빈 Enter나 스캔은 취소 확인 창을 닫습니다' },
-    register: { kind: 'form', tag: '새 이름', title: '새 이름 등록', lead: '이름만 넣으면 명단에 바로 올라갑니다', go: '등록하고 시작',
+    register: { kind: 'form', tag: '새 이름', title: '새 작업자 등록', lead: '이름만 넣으면 명단에 바로 올라갑니다', go: '등록',
       command: 'register_worker', fields: [{ name: 'name', label: '이름', placeholder: '이름' }] },
   };
 
@@ -41,7 +41,7 @@
     target_pending: () => ['목표 수 확인 중'],
     remaining: (n) => ['남은 ', el('b', '', `${n}개`)],
     remaining_total: (n) => ['전체 남은 ', el('b', '', `${n}개`)],
-    short: (n) => ['부족 ', el('b', '', `${n}개`), '로 마감'],
+    short: (n) => ['부분 제출 완료\n수량 부족 ', el('b', '', `${n}개`), ''],
     full: () => ['완료했습니다'],
     quota: (n) => ['끊김 — 혼자 더 넣을 수 ', el('b', '', `${n}개`)],
     closed_short: (n) => ['부분 제출 · 수량 부족 ', el('b', '', `${n}개`)],
@@ -61,7 +61,7 @@
     tag.replaceChildren();
     if (!starting) {
       if (s.work.tag) tag.append('현품표 ', el('b', '', s.work.tag));
-      else tag.textContent = '현품표를 스캔하면 여기 나옵니다';
+      else tag.append(el('span', 'ca-tag-hint', '현품표를 스캔하면 여기 나옵니다'));
     }
     $('[data-legacy]').hidden = !s.legacy;
     $('[data-held]').textContent = `보류 ${s.held_count}건 · 오늘 현황`;
@@ -93,9 +93,11 @@
     AppFrame.menu($('[data-admin]'), flags.length ? Object.fromEntries(flags.map(i => [i.name, i.pin])) : null);
   }
 
-  // A normal space may wrap before the separator; each following phrase stays whole.
-  function itemDetails(parts, wholeFirst = false) {
-    return parts.flatMap((text, i) => i
+  // A normal space may wrap before the separator; each following phrase stays whole and the
+  // separator flow hides a 「·」 that wraps to a line start. Absent values are omitted.
+  function itemDetails(parts, wholeFirst = false, lead = false) {
+    const values = parts.filter(value => value != null && value !== false).map(value => String(value).trim()).filter(Boolean);
+    return values.flatMap((text, i) => i || lead
       ? [' ', el('span', 'ca-count__detail', `· ${text}`)]
       : [wholeFirst ? el('span', 'ca-count__detail', text) : text]);
   }
@@ -116,7 +118,7 @@
     card.classList.toggle('ca-count--none', !w.item);
     card.classList.toggle('ca-count--stale', !!(w.cofill && w.cofill.total_age_s > 5));
     const details = el('span', 'ca-count__meta');
-    if (w.item) details.append(...itemDetails(['', w.item.spec, w.item.code]));
+    if (w.item) details.append(...itemDetails([w.item.spec, w.item.code], false, true));
     $('[data-item]').replaceChildren(...(w.item ? [w.item.name, details] : ['품목 —']));
     renderCofill(w.cofill);
     $('[data-count]').replaceChildren(String(w.count), el('span', '', w.target ? `/ ${w.target}` : w.item ? '/ …' : '/ —'));
@@ -140,7 +142,7 @@
       const key = node.dataset.allow;
       node.disabled = !s.allow[key];
       if (key === 'exchange') node.setAttribute('aria-pressed', String(swapping));
-      if (key === 'undo') node.textContent = swapping ? '교환 취소' : '마지막 스캔 취소';
+      if (key === 'undo') node.textContent = swapping ? '교환 취소' : '직전 스캔 취소';
     }
     sheets.reset.lead = [`이 트레이에 스캔한 ${w.count}개를 지우고 현품표부터 다시 합니다. `, '되돌릴 수 없습니다.'];
   }
@@ -162,11 +164,7 @@
     const rows = [...list.querySelectorAll('.ca-row')];
     for (const li of rows) li.hidden = false;
     const more = $('[data-list-more]');
-    if (innerWidth > 600 && innerWidth < 1366 && innerHeight >= 800) {
-      // Measure the full list first; the old notice also occupied its grid gap.
-      more.textContent = '';
-      if (rows.some(li => li.getBoundingClientRect().bottom > list.getBoundingClientRect().bottom + .5)) more.textContent = '그 앞 1건';
-    }
+    more.textContent = '그 앞 1건';
     const bottom = list.getBoundingClientRect().bottom + 0.5;
     let cut = 0;
     for (const li of rows) {
@@ -285,7 +283,7 @@
     let header = $('[data-pane="start"] .app-start');
     if (!header) { header = el('div'); $('.ca-start__title').replaceWith(header); }
     AppFrame.startup(header, { name: '이적', status: '작업자를 선택하세요', busy: !r.count });
-    $('[data-roster-sub]').textContent = r.note || (r.at ? `명단 ${r.count}명 · 회사 서버에서 ${r.at} 받음 · 60초마다 새로 받음` : `명단 ${r.count}명`);
+    $('[data-roster-sub]').textContent = r.note || (r.at ? `명단 ${r.count}명 · 받은 시각 ${r.at}\n60초마다 새로 받습니다` : `명단 ${r.count}명`);
     AppFrame.workers($('[data-names]'), r.names.map(n => ({ id: n.id, label: n.label, recent: n.last, note: n.last ? '지난번' : '', go: `command:start_work:${n.id}` })));
     const error = $('[data-start-error]');
     error.hidden = !s.start_error;
