@@ -1,5 +1,7 @@
 # 이적 목표 명세 (Container_Audit)
 
+sub-720: 시작 품목표·옛 상태 이전 표지·남은 이벤트 outbox·작업 세션·프로필의 순수 읽기는 일시 잠금만 1초 간격으로 다시 읽으며 시작 전체의 대기 합계는 3초다. 업무 중 공유 helper에는 새 대기가 없고, 계속 잠김·파일 없음·손상은 기존 실패·격리·인증 구분과 원본을 보존한다.
+
 ### retained 후보와 다음 업데이트 요청 (sub-555)
 
 retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요청을 한 번 수행하고 journal을 다시 읽는다. 기존 writer가 있으면 SYSTEM의 유예를 따른다. 일반 복귀는 요청한 GUI/relay 역할을 보존한다. 늦은 READY 확정은 현재 기록에서 같은 전환의 timeout만 식별할 수 없어 닫아 둔다(실패 사유는 세대 code로 덮이고 failed_shas는 sha만 보존). 새 기록 형식·사유 값·phase·대기창을 만들지 않는다.

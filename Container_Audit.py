@@ -108,6 +108,7 @@ from item_catalog_sync import (
 )
 from legacy_state_migration import migrate_legacy_code_root_state
 from logistics_runtime_profile import (
+    StartupReadRetry,
     PROFILE_PATH_ENV as LOGISTICS_RUNTIME_PROFILE_PATH_ENV,
     app_profile_env_value,
     REQUIRED_ENV as LOGISTICS_RUNTIME_REQUIRED_ENV,
@@ -450,10 +451,11 @@ def _current_user_logistics_profile_path() -> str:
     return explicit_user_profile
 
 
-def container_startup_logistics_client():
+def container_startup_logistics_client(*, read_retry=None):
     """Load current-user credentials without making startup depend on the server."""
 
     explicit_user_profile = _current_user_logistics_profile_path()
+    retry_options = {} if read_retry is None else {'read_retry': read_retry}
     if explicit_user_profile:
         values = dict(os.environ)
         values[LOGISTICS_RUNTIME_PROFILE_PATH_ENV] = explicit_user_profile
@@ -462,8 +464,9 @@ def container_startup_logistics_client():
             probe_required=False,
             environ=values,
             profile_decryptor=unprotect_current_user_secret,
+            **retry_options,
         )
-    return logistics_transfer_client_from_env(probe_required=False)
+    return logistics_transfer_client_from_env(probe_required=False, **retry_options)
 
 # ####################################################################
 # # 자동 업데이트 기능
@@ -1098,7 +1101,8 @@ class ContainerAudit:
         # Validate the protected local profile before Tcl, but defer network
         # readiness to the durable operation/replay path so recovery can open
         # during a server outage.
-        startup_logistics_client = container_startup_logistics_client()
+        self._startup_read_retry = StartupReadRetry()
+        startup_logistics_client = container_startup_logistics_client(read_retry=self._startup_read_retry)
         startup_geometry = os.getenv("CONTAINER_AUDIT_STARTUP_GEOMETRY", "").strip()
         self.legacy_label_transition = legacy_label_transition_enabled()
         self._transfer_coordinator_ui_owner_thread_id = threading.get_ident()
@@ -1288,7 +1292,7 @@ class ContainerAudit:
         self._active_transfer_exchange_mode = False
         self._active_transfer_exchange_master_label = ""
         self._active_transfer_exchange_intent_id = ""
-        self.items_data = self.load_items()
+        self.items_data = self.load_items(read_retry=self._startup_read_retry)
         self.item_catalog = ItemCatalog(self.items_data)
         
         self.work_summary: Dict[str, Dict[str, Any]] = {}
@@ -1324,7 +1328,8 @@ class ContainerAudit:
         self.last_log_write_error: Optional[str] = None
         
         self.log_queue: queue.Queue = queue.Queue()
-        self._event_log_outbox_instance = EventLogOutbox(Path(self.save_folder) / "_event_outbox")
+        self._event_log_outbox_instance = EventLogOutbox(
+            Path(self.save_folder) / "_event_outbox", read_retry=self._startup_read_retry)
         self._event_log_notice = None
         self.log_file_path: Optional[str] = None
         self._event_log_close_requested = False
@@ -1345,7 +1350,8 @@ class ContainerAudit:
             f"_preflight_scan_hold_{self.computer_id}.json"
         )
         self._resume_storage_failure_slots()
-        self._work_session_recovery_blocked = not self._reconcile_work_session_state()
+        self._work_session_recovery_blocked = not self._reconcile_work_session_state(
+            read_retry=self._startup_read_retry)
         
         self._setup_core_ui_structure()
         self._setup_styles()
@@ -1439,6 +1445,7 @@ class ContainerAudit:
             application_path=self.application_path,
             config_dir=self.config_folder,
             parked_trays_dir=self.parked_trays_dir,
+            read_retry=getattr(self, '_startup_read_retry', None),
         )
 
     def load_app_settings(self) -> Dict[str, Any]:
@@ -1477,7 +1484,7 @@ class ContainerAudit:
         except Exception as e:
             print(f"설정 저장 오류: {e}")
 
-    def load_items(self, *, show_errors: bool = True) -> List[Dict[str, str]]:
+    def load_items(self, *, show_errors: bool = True, read_retry=None) -> List[Dict[str, str]]:
         item_path = os.environ.get(ACTIVE_PATH_ENV) or resource_path(os.path.join('assets', 'Item.csv'))
         verified_payload = get_verified_catalog_snapshot(item_path)
         if requires_verified_catalog_snapshot(item_path):
@@ -1504,9 +1511,10 @@ class ContainerAudit:
         encodings_to_try = ['utf-8-sig', 'cp949', 'euc-kr', 'utf-8']
         for encoding in encodings_to_try:
             try:
-                with open(item_path, 'r', encoding=encoding) as file:
-                    items = list(csv.DictReader(file))
-                    return items
+                def read_rows():
+                    with open(item_path, 'r', encoding=encoding) as file:
+                        return list(csv.DictReader(file))
+                return read_rows() if read_retry is None else read_retry(read_rows)
             except UnicodeDecodeError:
                 continue
             except FileNotFoundError:
@@ -4731,15 +4739,19 @@ class ContainerAudit:
             self._storage_failure_blocked = True
             return Path(save_folder) / state_file
 
-    def _load_work_session_state(self) -> Optional[Dict[str, Any]]:
+    def _load_work_session_state(self, *, read_retry=None) -> Optional[Dict[str, Any]]:
         state_path = self._work_session_state_path()
-        if state_path is None or not state_path.exists():
+        if state_path is None:
             return None
-        if state_path.stat().st_size > 64 * 1024:
-            raise WorkSessionStateError("work session state is too large")
-        with state_path.open("r", encoding="utf-8") as f_handle:
-            state = json.load(f_handle)
-        return validate_work_session_state(state)
+        def read_state():
+            if not state_path.exists():
+                return None
+            if state_path.stat().st_size > 64 * 1024:
+                raise WorkSessionStateError("work session state is too large")
+            with state_path.open("r", encoding="utf-8") as f_handle:
+                state = json.load(f_handle)
+            return validate_work_session_state(state)
+        return read_state() if read_retry is None else read_retry(read_state)
 
     @writer_sink("gui_work_session_save")
     def _save_work_session_state(self, state: Mapping[str, Any]) -> bool:
@@ -4770,7 +4782,7 @@ class ContainerAudit:
                     self._isolate_storage_failure(state_path, dict(state), "session", type(exc).__name__)
                 return False
 
-    def _reconcile_work_session_state(self) -> bool:
+    def _reconcile_work_session_state(self, *, read_retry=None) -> bool:
         if getattr(self, "_storage_failure_blocked", False):
             return False
         if self._work_session_state_path() is None:
@@ -4778,7 +4790,8 @@ class ContainerAudit:
         if getattr(self, "_storage_failure_blocked", False):
             return False
         try:
-            state = self._load_work_session_state()
+            state = (self._load_work_session_state() if read_retry is None
+                     else self._load_work_session_state(read_retry=read_retry))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, WorkSessionStateError) as exc:
             self._record_log_write_error(
                 f"작업 세션 journal 검증 오류: {exc.__class__.__name__}"

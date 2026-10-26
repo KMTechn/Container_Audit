@@ -180,6 +180,7 @@ def migrate_legacy_code_root_state(
     application_path: str | os.PathLike[str],
     config_dir: str | os.PathLike[str],
     parked_trays_dir: str | os.PathLike[str],
+    read_retry=None,
 ) -> dict[str, Any]:
     """Seed current-user state from legacy code-root files exactly once.
 
@@ -205,9 +206,11 @@ def migrate_legacy_code_root_state(
         if marker.is_symlink() or not marker.is_file():
             raise ValueError("legacy state migration marker is not a regular file")
         try:
-            if marker.stat().st_size > MAX_LEGACY_STATE_FILE_BYTES:
-                raise ValueError("legacy state migration marker size is invalid")
-            marker_payload = json.loads(marker.read_text(encoding="utf-8"))
+            def read_marker():
+                if marker.stat().st_size > MAX_LEGACY_STATE_FILE_BYTES:
+                    raise ValueError("legacy state migration marker size is invalid")
+                return json.loads(marker.read_text(encoding="utf-8"))
+            marker_payload = read_marker() if read_retry is None else read_retry(read_marker)
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError("legacy state migration marker is invalid") from exc
         if (

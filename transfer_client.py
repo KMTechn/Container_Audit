@@ -882,6 +882,7 @@ def logistics_transfer_client_from_env(
     probe_required: bool = True,
     environ: Mapping[str, str] | None = None,
     profile_decryptor: Any = None,
+    read_retry=None,
 ) -> LogisticsTransferClient | None:
     values = os.environ if environ is None else environ
     required = logistics_runtime_required(environ)
@@ -889,6 +890,7 @@ def logistics_transfer_client_from_env(
         required,
         environ=environ,
         decryptor=profile_decryptor,
+        **({} if read_retry is None else {'read_retry': read_retry}),
     )
     if profile is not None:
         client = LogisticsTransferClient(
