@@ -2510,6 +2510,7 @@ function Remove-ContainerEmptiedParents([string]$Path, [string[]]$Directories) {
 }
 
 function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [int[]]$ExcludeProcessIds = @(),[switch]$OnlyUncommittedCurrent, [object[]]$AdditionalPreimageFiles = @(), [scriptblock]$BeforeRemoval = $null, [scriptblock]$AfterRemoval = $null) {
+    $Script:ContainerRemovalLegacyRelayEnabled=$false
 
     # This preimage contains only the existing content-owned removal plan and
     # verified shortcut paths. Business roots and opaque files are never copied.
@@ -2543,6 +2544,8 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
             @($saved.files | Where-Object {$_.path.StartsWith($directoryPrefix,[StringComparison]::OrdinalIgnoreCase)}).Count -gt 0
         })+@($saved.files | ForEach-Object {Split-Path -Parent $_.path})
         foreach($path in @($directories | Sort-Object -Unique)){
+            # Common Desktop/Start Menu parents belong to other applications too.
+            if(-not(Test-SamePath $path $application) -and -not $path.StartsWith($application.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)){continue}
             Assert-ContainerRemovalBoundary $path
             if(-not(Test-Path -LiteralPath (Get-ContainerRemovalIoPath $path) -PathType Container)){continue}
             $item=Get-Item -LiteralPath (Get-ContainerRemovalIoPath $path) -Force -ErrorAction Stop
@@ -2553,6 +2556,7 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
     }
     function Restore-RemovalFilePreimage($Saved, $OriginalFailure) {
         $failures=[Collections.ArrayList]::new()
+        $restoredFiles=0
         # A success marker belongs to this attempt only when its evidence matches.
         try{
             if(Test-Path -LiteralPath $markerPath -PathType Leaf){
@@ -2591,32 +2595,56 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
                 [IO.File]::SetCreationTimeUtc($io,$file.created);[IO.File]::SetLastWriteTimeUtc($io,$file.written)
                 [IO.File]::SetAttributes($io,$file.attributes)
                 if(-not(Test-ContainerRemovalFile $file.path $file.sha256)){throw 'REMOVAL_RESTORE_READBACK_DIFFERS'}
+                $restoredFiles++
             }catch{[void]$failures.Add($_.Exception.GetType().FullName)}
         }
         foreach($task in $Saved.tasks){
             try{
-                if($task.ContainsKey('official')){
-                    Invoke-LabelOfficialLegacyTaskTransition 'Restore' $task.directory $task.official.xml_sha256
-                    continue
-                }
                 $present=$null
                 try{$present=$TaskFolder.GetTask($task.name)}catch{
                     $cause=$_.Exception;while($null -ne $cause.InnerException){$cause=$cause.InnerException}
                     if($cause.HResult -ne -2147024894){throw}
                 }
                 if($null -eq $present){
+                    if($task.legacy){throw 'REMOVAL_RESTORE_TASK_CONFLICT'}
                     [void]$TaskFolder.RegisterTask($task.name,$task.xml,6,$null,$null,0,$task.sddl)
                     $present=$TaskFolder.GetTask($task.name)
                 }elseif([string]$present.Xml -cne $task.xml -and -not $task.legacy){throw 'REMOVAL_RESTORE_TASK_CONFLICT'}
-                if($task.legacy){$present.Enabled=$task.enabled}
-                if([string]$present.Xml -cne $task.xml -or [string]$present.GetSecurityDescriptor(7) -cne $task.sddl){throw 'REMOVAL_RESTORE_TASK_READBACK_DIFFERS'}
+                if($task.legacy){
+                    $expected=[xml]::new();$expected.PreserveWhitespace=$true;$expected.LoadXml([string]$task.xml)
+                    $actual=[xml]::new();$actual.PreserveWhitespace=$true;$actual.LoadXml([string]$present.Xml)
+                    foreach($document in @($expected,$actual)){
+                        $node=$document.SelectSingleNode('/*[local-name()="Task"]/*[local-name()="Settings"]/*[local-name()="Enabled"]')
+                        if($null -ne $node){[void]$node.ParentNode.RemoveChild($node)}
+                    }
+                    if($actual.OuterXml -cne $expected.OuterXml -or [string]$present.GetSecurityDescriptor(7) -cne $task.sddl){throw 'REMOVAL_RESTORE_TASK_CONFLICT'}
+                    if([bool]$present.Enabled -eq [bool]$task.enabled){
+                        if([bool]$task.enabled -and (Test-Path -LiteralPath $current)){
+                            $Script:ContainerRemovalLegacyRelayEnabled=$true
+                            # This fixed diagnostic is captured in the parent's
+                            # existing child stdout; no public code is added.
+                            $noticeBytes=[Text.UTF8Encoding]::new($false).GetBytes('옛 relay 작업이 켜진 채 남음'+[Environment]::NewLine)
+                            $noticeStream=[Console]::OpenStandardOutput()
+                            $noticeStream.Write($noticeBytes,0,$noticeBytes.Length);$noticeStream.Flush()
+                        }
+                        continue
+                    }
+                    $desired=([bool]$task.enabled -and -not(Test-Path -LiteralPath $current))
+                    if([bool]$present.Enabled -ne $desired){$present.Enabled=$desired}
+                    if([bool]$present.Enabled -ne $desired){throw 'REMOVAL_RESTORE_TASK_READBACK_DIFFERS'}
+                    $actual.LoadXml([string]$present.Xml)
+                    $node=$actual.SelectSingleNode('/*[local-name()="Task"]/*[local-name()="Settings"]/*[local-name()="Enabled"]')
+                    if($null -ne $node){[void]$node.ParentNode.RemoveChild($node)}
+                    if($actual.OuterXml -cne $expected.OuterXml -or [string]$present.GetSecurityDescriptor(7) -cne $task.sddl){throw 'REMOVAL_RESTORE_TASK_READBACK_DIFFERS'}
+                }elseif([string]$present.Xml -cne $task.xml -or [string]$present.GetSecurityDescriptor(7) -cne $task.sddl){throw 'REMOVAL_RESTORE_TASK_READBACK_DIFFERS'}
             }catch{[void]$failures.Add($_.Exception.GetType().FullName)}
         }
         foreach($directory in @($Saved.directories | Sort-Object {$_.path.Length} -Descending)){
             try{
                 $io=Get-ContainerRemovalIoPath $directory.path
-                [IO.Directory]::SetCreationTimeUtc($io,$directory.created);[IO.Directory]::SetLastWriteTimeUtc($io,$directory.written)
-                [IO.File]::SetAttributes($io,$directory.attributes)
+                if([IO.Directory]::GetCreationTimeUtc($io) -ne $directory.created){[IO.Directory]::SetCreationTimeUtc($io,$directory.created)}
+                if([IO.Directory]::GetLastWriteTimeUtc($io) -ne $directory.written){[IO.Directory]::SetLastWriteTimeUtc($io,$directory.written)}
+                if([IO.File]::GetAttributes($io) -ne $directory.attributes){[IO.File]::SetAttributes($io,$directory.attributes)}
             }catch{[void]$failures.Add($_.Exception.GetType().FullName)}
         }
         if($failures.Count){
@@ -2627,6 +2655,7 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
             $damage.Data['removal_installation_damaged']=$true
             throw $damage
         }
+        return [int]$restoredFiles
     }
     if($OnlyUncommittedCurrent -and $null -ne $TaskFolder){throw 'TRANSACTION_REMOVAL_TASK_CENSUS_FORBIDDEN'}
     $current = Get-StrictFullPath $InstallRoot 'removal current'
@@ -2772,10 +2801,41 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
     $marker = Get-Content -LiteralPath $markerPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ([string]$marker.lifecycle_state -cne 'REMOVED') { throw 'REMOVAL_MARKER_READBACK_FAILED' }
     if($null -ne $AfterRemoval){& $AfterRemoval}
+    if($null -ne $removalPreimage){
+        $cleanupRetained=@()
+        foreach($file in $removalPreimage.files){
+            try{
+                Assert-ContainerRemovalBoundary $file.backup
+                if(-not(Test-ContainerRemovalFile $file.backup $file.sha256)){throw 'REMOVAL_PREIMAGE_DAMAGED'}
+                $backupIo=Get-ContainerRemovalIoPath $file.backup
+                $attributes=[IO.File]::GetAttributes($backupIo)
+                if($attributes -band [IO.FileAttributes]::ReadOnly){[IO.File]::SetAttributes($backupIo,($attributes -band (-bnot [IO.FileAttributes]::ReadOnly)))}
+                [IO.File]::Delete($backupIo)
+            }catch{$cleanupRetained+=[string]$file.backup}
+        }
+        $backupRoot=Join-Path $evidence '.restore-preimage'
+        try{
+            Assert-ContainerRemovalBoundary $backupRoot
+            if([IO.Directory]::GetFileSystemEntries((Get-ContainerRemovalIoPath $backupRoot)).Length -eq 0){[IO.Directory]::Delete((Get-ContainerRemovalIoPath $backupRoot),$false)}else{$cleanupRetained+=$backupRoot}
+        }catch{$cleanupRetained+=$backupRoot}
+        if($cleanupRetained.Count){
+            $remaining.retained_paths+=@($cleanupRetained | Sort-Object -Unique)
+            $marker.retained_paths=@($remaining.retained_paths)
+            try{Write-ContainerStartupUpdateRecord -Path $markerPath -Payload $marker}catch{}
+        }
+    }
     return @{status='PASS';lifecycle_state='REMOVED';evidence_root=$evidence;retained_paths=@($remaining.retained_paths)}
     } catch {
         $removalFailure=$_
-        if($null -ne $removalPreimage){Restore-RemovalFilePreimage $removalPreimage $removalFailure}
+        if($null -ne $removalPreimage){
+            $restoredFiles=Restore-RemovalFilePreimage $removalPreimage $removalFailure
+            if($Script:ContainerRemovalLegacyRelayEnabled){
+                $notice=[InvalidOperationException]::new('옛 relay 작업이 켜진 채 남음',$removalFailure.Exception)
+                $removalFailure=[Management.Automation.ErrorRecord]::new($notice,$removalFailure.FullyQualifiedErrorId,$removalFailure.CategoryInfo.Category,$removalFailure.TargetObject)
+            }
+            # Parent compensation must not replay a completed local restoration.
+            if($moveJournal){try{& $journalWrite ([ordered]@{record='RESTORED';files=[int]$restoredFiles})}catch{}}
+        }
         throw $removalFailure
     }
 }

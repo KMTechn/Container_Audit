@@ -1,5 +1,7 @@
 ### retained 후보와 다음 업데이트 요청 (sub-555)
 
+sub-711: 공개 제거는 enabled/changed snapshot으로 이번 작업 변경만 보상한다. 원래/현재 모두 켜짐인 옛 relay는 쓰기0으로 두고 기존 감사·실패 메시지에 사실을 남긴다. current의 Disabled 유지 조건은 이번에 실제로 끈 경우에만 적용한다. 자식의 ROLLBACK_FAILED와 failure_types는 같은 evidence에 합쳐 보존하고 최종 공개 실패/승인 재설치 안내로 올린다. 실행 전 journal 집합으로 이전 재개 시도를 제외하며 기계 복구의 기존 선택은 유지한다. 공용 부모 메타 쓰기와 불필요한 동일 값 쓰기를 제거하고, 성공 preimage 정리 실패는 REMOVED를 유지한 채 retained_paths에 남긴다.
+
 retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요청을 한 번 수행하고 journal을 다시 읽는다. 기존 writer가 있으면 SYSTEM의 유예를 따른다. 일반 복귀는 요청한 GUI/relay 역할을 보존한다. 늦은 READY 확정은 현재 기록에서 같은 전환의 timeout만 식별할 수 없어 닫아 둔다(실패 사유는 세대 code로 덮이고 failed_shas는 sha만 보존). 새 기록 형식·사유 값·phase·대기창을 만들지 않는다.
 
 - 10/25 sub-555: 다시 설치 때 고정 current를 교체하는 길의 READY 창을 원 applied_at·rollback_at 기준 240초 한 상수로 모았다. 감독 마감 뒤 LIVE SYSTEM이 기록 없음·PREPARED·APPLIED_PENDING_READY·ROLLBACK_PENDING·ROLLBACK_PENDING_READY에 있으면 bootstrap 원 시작+480초까지만 기다리고, update lock busy도 같은 고리로 돌아간다. UNKNOWN/ABSENT/결정 끝에는 연장0, 240/60/+15/480·relay 재시도·nonce·G·포인터/자료 의미는 유지한다. 재부팅 전후 ZIP·사슬과 원시 F는 출처별로 보존하며 수용 상태는 work/program/w9firstupd/sub-555/RESULT.md에 기록한다.

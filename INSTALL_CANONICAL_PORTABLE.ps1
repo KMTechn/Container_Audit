@@ -1308,6 +1308,16 @@ function ConvertTo-CanonicalAuditJson($Value,[switch]$PrivateDiagnostics) {
                     if($name -match '(?i)(?:^type$|exception_type$|failure_type$|_code$|_status$|_path$|_sha256$|_sha256s$|_bytes$|_count$|_hresult$|_win32_error$|^hresult$|^win32_error$|^script_line$|^script_file$)'){continue}
                     $diagnostic=$InsideDiagnostic -or $name -match '(?i)failure|message|stdout|stderr|traceback|blocked_reason|command_line|^argv$'
                     if($diagnostic -and $property.Value -is [string]){
+                        # Only the lane-approved constant survives in these existing
+                        # diagnostic slots; all other free text stays private.
+                        $relayFact='옛 relay 작업이 켜진 채 남음'
+                        $approvedFact=($name -ceq 'message' -and $property.Value -ceq $relayFact) -or
+                            ($name -ceq 'stdout' -and @($property.Value -split '\r?\n' | Where-Object {$_ -ceq $relayFact}).Count -gt 0)
+                        if($approvedFact){
+                            if($property.Value -cne $relayFact){$diagnostics.Add(@{field=$name;diagnostic=$property.Value})}
+                            $property.Value=$relayFact
+                            continue
+                        }
                         if($property.Value -and $property.Value -cne 'SUPPORT_FAILURE'){
                             $diagnostics.Add(@{field=$name;diagnostic=$property.Value})
                             $property.Value='SUPPORT_FAILURE'
@@ -4346,7 +4356,7 @@ function ConvertTo-CanonicalRemovalIoPath([string]$Path) {
     if ($native.StartsWith('\\')) { return '\\?\UNC\'+$native.Substring(2) }
     return '\\?\'+$native
 }
-function Find-CanonicalRemovalMoveJournal([string]$Application,[string]$Run) {
+function Find-CanonicalRemovalMoveJournal([string]$Application,[string]$Run,[string[]]$ExcludedJournals=@()) {
     # The helper writes removal-move-journal.jsonl inside its evidence directory; the run
     # id in the first record binds it to this transaction. Other runs' journals are ignored.
     $parent=Join-Path $Application 'removal-evidence'
@@ -4355,7 +4365,7 @@ function Find-CanonicalRemovalMoveJournal([string]$Application,[string]$Run) {
     $found=@()
     foreach ($directory in @([IO.Directory]::GetDirectories($parent))) {
         $candidate=Join-Path $directory 'removal-move-journal.jsonl'
-        if (-not [IO.File]::Exists($candidate)) { continue }
+        if (-not [IO.File]::Exists($candidate) -or $candidate -cin $ExcludedJournals) { continue }
         $reader=[IO.File]::OpenText($candidate)
         try { $first=$reader.ReadLine() } finally { $reader.Dispose() }
         $header=$null
@@ -4371,12 +4381,12 @@ function Get-CanonicalRemovalFileSha256([string]$Path) {
     try { $stream=[IO.File]::OpenRead((ConvertTo-CanonicalRemovalIoPath $Path)); return ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace('-','').ToLowerInvariant() }
     finally { if ($null -ne $stream) { $stream.Dispose() };$hasher.Dispose() }
 }
-function Restore-CanonicalRemovalFromMoveJournal([string]$Root,[string]$Run) {
+function Restore-CanonicalRemovalFromMoveJournal([string]$Root,[string]$Run,[string]$JournalPath='') {
     # Puts back exactly the files the removal helper moved into removal-evidence, from its move
     # journal. Everything is checked first (evidence bytes, no conflicting file at the old place);
     # nothing is moved when any record contradicts the disk. Returns $null when no journal exists.
     $application=Split-Path -Parent $Root
-    $journal=Find-CanonicalRemovalMoveJournal $application $Run
+    $journal=if($JournalPath){$JournalPath}else{Find-CanonicalRemovalMoveJournal $application $Run}
     if ($null -eq $journal) { return $null }
     $evidence=Split-Path -Parent $journal
     $applicationPrefix=$application.TrimEnd('\')+'\';$evidencePrefix=$evidence.TrimEnd('\')+'\'
@@ -4456,15 +4466,17 @@ function Restore-CanonicalRemovalFromMoveJournal([string]$Root,[string]$Run) {
     }
     foreach ($record in @($directories | Sort-Object { ([string]$_.path).Length } -Descending)) {
         $directoryIo=ConvertTo-CanonicalRemovalIoPath ([string]$record.path)
-        [IO.Directory]::SetCreationTimeUtc($directoryIo,[DateTime]::new([int64]$record.created_utc_ticks,[DateTimeKind]::Utc))
-        [IO.Directory]::SetLastWriteTimeUtc($directoryIo,[DateTime]::new([int64]$record.written_utc_ticks,[DateTimeKind]::Utc))
-        [IO.File]::SetAttributes($directoryIo,[IO.FileAttributes]([int]$record.attributes -band 12583))
+        if([IO.Directory]::GetCreationTimeUtc($directoryIo).Ticks -ne [int64]$record.created_utc_ticks){[IO.Directory]::SetCreationTimeUtc($directoryIo,[DateTime]::new([int64]$record.created_utc_ticks,[DateTimeKind]::Utc))}
+        if([IO.Directory]::GetLastWriteTimeUtc($directoryIo).Ticks -ne [int64]$record.written_utc_ticks){[IO.Directory]::SetLastWriteTimeUtc($directoryIo,[DateTime]::new([int64]$record.written_utc_ticks,[DateTimeKind]::Utc))}
+        $attributes=[IO.FileAttributes]([int]$record.attributes -band 12583)
+        if([IO.File]::GetAttributes($directoryIo) -ne $attributes){[IO.File]::SetAttributes($directoryIo,$attributes)}
     }
     try { [IO.File]::AppendAllText($journal,((@{record='RESTORED';files=$restore.Count}|ConvertTo-Json -Compress)+"`n"),[Text.UTF8Encoding]::new($false)) } catch {}
     return [ordered]@{status='RESTORED';files=[int]$restore.Count;directories=[int]@($directories).Count;marker_removed=$ourMarker;
         evidence_root=$evidence;journal=$journal}
 }
 function Restore-CanonicalRemovalScheduledTasks([string]$Evidence) {
+    $Script:CanonicalRemovalLegacyRelayEnabled=$false
     # A sealed task preimage is an intent, not permission to enable an old writer.
     $result=[ordered]@{status='NONE';tasks=@()}
     try {
@@ -4497,10 +4509,12 @@ function Restore-CanonicalRemovalScheduledTasks([string]$Evidence) {
                     $actual=[xml]::new();$actual.PreserveWhitespace=$true;$actual.LoadXml([string]$task.Xml)
                     $enabledNode=$actual.SelectSingleNode('/*[local-name()="Task"]/*[local-name()="Settings"]/*[local-name()="Enabled"]')
                     $expectedNode=$expected.SelectSingleNode('/*[local-name()="Task"]/*[local-name()="Settings"]/*[local-name()="Enabled"]')
-                    if($null -eq $enabledNode -or $null -eq $expectedNode){throw 'REMOVAL_TASK_RESTORE_UNPROVEN'}
-                    $enabledNode.InnerText=$expectedNode.InnerText
+                    if($null -ne $enabledNode){[void]$enabledNode.ParentNode.RemoveChild($enabledNode)}
+                    if($null -ne $expectedNode){[void]$expectedNode.ParentNode.RemoveChild($expectedNode)}
                     if($actual.OuterXml -cne $expected.OuterXml -or [string]$task.GetSecurityDescriptor(7) -cne [string]$record.sddl){throw 'REMOVAL_TASK_RESTORE_CONFLICT'}
                     if([bool]$task.Enabled -eq [bool]$record.enabled){
+                        $current=Join-Path (Split-Path -Parent (Split-Path -Parent $Evidence)) 'current'
+                        if([bool]$record.enabled -and (Test-Path -LiteralPath $current)){$Script:CanonicalRemovalLegacyRelayEnabled=$true}
                         $result.tasks+=@([ordered]@{name=[string]$record.name;state='RESTORED'})
                         continue
                     }
@@ -4508,8 +4522,9 @@ function Restore-CanonicalRemovalScheduledTasks([string]$Evidence) {
                     $desired=([bool]$record.enabled -and -not(Test-Path -LiteralPath $current))
                     if([bool]$task.Enabled -ne $desired){$task.Enabled=$desired}
                     if([bool]$task.Enabled -ne $desired){throw 'REMOVAL_TASK_RESTORE_UNPROVEN'}
-                    $expectedNode.InnerText=([string]$desired).ToLowerInvariant()
                     $actual.LoadXml([string]$task.Xml)
+                    $enabledNode=$actual.SelectSingleNode('/*[local-name()="Task"]/*[local-name()="Settings"]/*[local-name()="Enabled"]')
+                    if($null -ne $enabledNode){[void]$enabledNode.ParentNode.RemoveChild($enabledNode)}
                     if($actual.OuterXml -cne $expected.OuterXml -or [string]$task.GetSecurityDescriptor(7) -cne [string]$record.sddl){throw 'REMOVAL_TASK_RESTORE_UNPROVEN'}
                 }else{
                     if($null -eq $task){
@@ -6236,6 +6251,9 @@ $uninstallCodeStarted = $false
 $uninstallStopSha256 = ''
 $supportedRemovalProductStartedAt=$null
 $supportedRemovalArtifactPreimage=@()
+$supportedRemovalJournalsBefore=@()
+$supportedRemovalChildInvoked=$false
+$Script:CanonicalRemovalLegacyRelayEnabled=$false
 $supportedRemovalArtifactAllowedHashes=@{}
 $uninstallRecordPreimagePath = Join-Path $auditRoot "canonical-portable-$runId-integrity-preimage.json"
 $retirementResumeClaim = $null
@@ -6725,10 +6743,15 @@ $enteredPlacementTry = $true
             '-WriterFenceReplacementTransactionId',$Script:CanonicalWriterFenceTransactionId,'-WriterFenceDelegationToken',$Script:CanonicalWriterFenceDelegationToken,
             '-ElevationLogPath',$elevationLogPath)
         if($testMode){$args+='-AllowNoncanonicalLayoutForTest'}
+        $journalParent=Join-Path (Split-Path -Parent $install) 'removal-evidence'
+        if(Test-Path -LiteralPath $journalParent -PathType Container){
+            Assert-BootstrapNoReparsePoint $journalParent 'removal evidence' -PathOnly
+            $supportedRemovalJournalsBefore=@([IO.Directory]::GetDirectories($journalParent) | ForEach-Object {Join-Path $_ 'removal-move-journal.jsonl'} | Where-Object {[IO.File]::Exists($_)})
+        }
+        $supportedRemovalChildInvoked=$true
         $child=Invoke-InstallationEvidenceChild 'supported-content-removal' $winps $args
         if($child.ExitCode -ne 0){
             $audit['removal_child_failure']=Get-CanonicalRetirementChildFailure $child
-            Write-CanonicalInstallationPublicRecord -ExitCode $child.ExitCode
             throw '지원 제거를 마치지 못했습니다. 자료를 보존하고 같은 제거를 다시 실행하세요.'
         }
         $removed=Get-Content -LiteralPath (Join-Path (Split-Path -Parent $install) 'removed.json') -Raw -Encoding UTF8|ConvertFrom-Json
@@ -7444,11 +7467,45 @@ catch {
         # Compensate every independent preimage before releasing admission.
         $removalRollbackFailures=[Collections.ArrayList]::new()
         $removalRestored=$null
+        $ownedRemovalJournal=$null
         try{
-            $removalRestored=Restore-CanonicalRemovalFromMoveJournal $install $Script:CanonicalWriterFenceTransactionId
-            if($null -ne $removalRestored){
-                $taskRestore=Restore-CanonicalRemovalScheduledTasks ([string]$removalRestored.evidence_root)
-                if([string]$taskRestore.status -cnotin @('NONE','RESTORED')){throw 'REMOVAL_TASK_RESTORE_UNPROVEN'}
+            if($supportedRemovalChildInvoked){
+                $ownedRemovalJournal=Find-CanonicalRemovalMoveJournal (Split-Path -Parent $install) $Script:CanonicalWriterFenceTransactionId -ExcludedJournals $supportedRemovalJournalsBefore
+            }
+            if($ownedRemovalJournal){
+                $attemptEvidence=Split-Path -Parent $ownedRemovalJournal
+                Assert-BootstrapNoReparsePoint $attemptEvidence 'removal attempt evidence' -PathOnly
+                Assert-BootstrapNoReparsePoint $ownedRemovalJournal 'removal move journal' -PathOnly
+                if((Get-Item -LiteralPath $ownedRemovalJournal).Length -gt 67108864){throw 'MACHINE_RECOVERY_REMOVAL_JOURNAL_TOO_LARGE'}
+                $journalReader=[IO.File]::OpenText($ownedRemovalJournal)
+                try{$header=$journalReader.ReadLine() | ConvertFrom-Json}finally{$journalReader.Dispose()}
+                if([string]$header.record -cne 'HEADER' -or [string]$header.schema -cne 'container-audit-removal-move-journal-v1' -or
+                    [string]$header.run_id -cne $Script:CanonicalWriterFenceTransactionId -or
+                    -not(Same ([string]$header.application) (Split-Path -Parent $install)) -or
+                    -not(Same ([string]$header.evidence) $attemptEvidence)){throw 'MACHINE_RECOVERY_REMOVAL_JOURNAL_BINDING_DIFFERS'}
+                $damagePath=Join-Path $attemptEvidence 'rollback.json'
+                $childDamage=$null
+                if(Test-Path -LiteralPath $damagePath -PathType Leaf){
+                    Assert-BootstrapNoReparsePoint $damagePath 'removal rollback record' -PathOnly
+                    $childDamage=Get-Content -LiteralPath $damagePath -Raw -Encoding UTF8 | ConvertFrom-Json
+                }
+                if($null -ne $childDamage -and [string]$childDamage.status -ceq 'ROLLBACK_FAILED'){
+                    foreach($type in @($childDamage.failure_types)){[void]$removalRollbackFailures.Add([string]$type)}
+                    if(-not $removalRollbackFailures.Count){[void]$removalRollbackFailures.Add('System.InvalidOperationException')}
+                }else{
+                    if((Get-Item -LiteralPath $ownedRemovalJournal).Length -gt 67108864){throw 'MACHINE_RECOVERY_REMOVAL_JOURNAL_TOO_LARGE'}
+                    $localRestored=$false
+                    foreach($line in [IO.File]::ReadAllLines($ownedRemovalJournal,[Text.UTF8Encoding]::new($false))){
+                        try{$entry=$line | ConvertFrom-Json;if([string]$entry.record -ceq 'RESTORED'){$localRestored=$true}}catch{}
+                    }
+                    if($localRestored){
+                        $removalRestored=@{status='RESTORED';evidence_root=$attemptEvidence;journal=$ownedRemovalJournal}
+                    }else{
+                        $removalRestored=Restore-CanonicalRemovalFromMoveJournal $install $Script:CanonicalWriterFenceTransactionId -JournalPath $ownedRemovalJournal
+                        $taskRestore=Restore-CanonicalRemovalScheduledTasks $attemptEvidence
+                        if([string]$taskRestore.status -cnotin @('NONE','RESTORED')){throw 'REMOVAL_TASK_RESTORE_UNPROVEN'}
+                    }
+                }
             }
         }catch{[void]$removalRollbackFailures.Add($_.Exception.GetType().FullName)}
         foreach($item in $supportedRemovalArtifactPreimage){
@@ -7493,12 +7550,18 @@ catch {
                 -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId -AuthorityLease $canonicalWriterFenceAuthority)
             $canonicalWriterFenceActive=$false
         }
+        if($Script:CanonicalRemovalLegacyRelayEnabled){
+            $notice=[InvalidOperationException]::new('옛 relay 작업이 켜진 채 남음',$original.Exception)
+            $original=[Management.Automation.ErrorRecord]::new($notice,$original.FullyQualifiedErrorId,$original.CategoryInfo.Category,$original.TargetObject)
+            $audit.failure=Get-CanonicalFailureDetails $original
+            if(@($audit.failure.exception_chain).Count){$audit.failure.exception_chain[0].message='옛 relay 작업이 켜진 채 남음'}
+        }
         $audit.status='FAILED_REMOVAL_INCOMPLETE'
         $audit.rollback.applied=($null -ne $removalRestored)
         $audit.rollback.runtime_restored=($removalRollbackFailures.Count -eq 0)
         if($removalRollbackFailures.Count){
             try{
-                $ownedJournal=Find-CanonicalRemovalMoveJournal (Split-Path -Parent $install) $Script:CanonicalWriterFenceTransactionId
+                $ownedJournal=$ownedRemovalJournal
                 $failedMarkerPath=Join-Path (Split-Path -Parent $install) 'removed.json'
                 if($ownedJournal -and (Test-Path -LiteralPath $failedMarkerPath -PathType Leaf)){
                     $failedMarker=Get-Content -LiteralPath $failedMarkerPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -7508,12 +7571,13 @@ catch {
                     }
                 }
             }catch{Write-InstallationCaughtFailure $_}
-            $damageRoot=if($null -ne $removalRestored){[string]$removalRestored.evidence_root}else{Join-Path (Join-Path (Split-Path -Parent $install) 'removal-evidence') ([Guid]::NewGuid().ToString('N'))}
-            try{
-                Assert-BootstrapNoReparsePoint $damageRoot 'removal damage evidence' -PathOnly
-                [void][IO.Directory]::CreateDirectory($damageRoot)
-                Save (Join-Path $damageRoot 'rollback.json') @{status='ROLLBACK_FAILED';installation_damaged=$true;business_data_and_registration_preserved=$true;failure_types=@($removalRollbackFailures | Sort-Object -Unique)}
-            }catch{Write-InstallationCaughtFailure $_}
+            if($ownedRemovalJournal){
+                $damageRoot=Split-Path -Parent $ownedRemovalJournal
+                try{
+                    Assert-BootstrapNoReparsePoint $damageRoot 'removal damage evidence' -PathOnly
+                    Write-Utf8Json (Join-Path $damageRoot 'rollback.json') @{status='ROLLBACK_FAILED';installation_damaged=$true;business_data_and_registration_preserved=$true;failure_types=@($removalRollbackFailures | Sort-Object -Unique)}
+                }catch{Write-InstallationCaughtFailure $_}
+            }
             $original=[Management.Automation.ErrorRecord]::new([InvalidOperationException]::new('설치 손상: 자료를 보존한 상태로 승인된 새 판을 다시 설치하세요.',$original.Exception),'RemovalRollbackFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null)
             $original.Exception.Data['removal_installation_damaged']=$true
         }

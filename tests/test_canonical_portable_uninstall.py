@@ -503,6 +503,10 @@ def _setup(tmp_path, fault='', *, stock_version_identity=True, install_directory
         retired_target = "        if ($CompleteRetiredRemoval) { Set-InstallationEvidenceStage 'retirement.release_authorized' }\n        Stop-CanonicalWriterFenceRelease $releaseAuthorization"
         assert text.count(retired_target) == 1
         text = text.replace(retired_target, retired_target.replace('        Stop-CanonicalWriterFenceRelease', "        if($env:CA_UNINSTALL_INJECT -ceq '1'){throw ('FENCE_RELEASE_INJECTED_FAILURE'+$env:CUSTOM_REMOVAL_SECRET)}\n        Stop-CanonicalWriterFenceRelease"))
+    if fault == 'child_and_parent_restore_failure':
+        target = "function Restore($Before) { Save (Join-Path $env:CA_UNINSTALL_ROOT 'registry.json') $Before }"
+        assert text.count(target) == 1
+        text = text.replace(target, "function Restore($Before) { throw ([IO.IOException]::new('INJECTED_PARENT_RUN_RESTORE_FAILURE')) }")
     canonical.write_text(text, encoding='utf-8-sig')
     helper = source / 'INSTALL_THIS_PC.ps1'
     text = helper.read_text(encoding='utf-8-sig').replace('$testOverride = (', HELPER_OS + '\n$testOverride = (')
@@ -510,7 +514,7 @@ def _setup(tmp_path, fault='', *, stock_version_identity=True, install_directory
     assert text.count(preparation_exit) == 1
     text = text.replace(preparation_exit,
         "Write-Output (ConvertTo-KmtechRedactedSinkText -Text ('fixture_preparation_failure='+((Get-InstallationFailureDetails $_)|ConvertTo-Json -Depth 6 -Compress)))\n        " + preparation_exit)
-    if fault == 'partial':
+    if fault in {'partial', 'child_restore_failure', 'child_and_parent_restore_failure'}:
         target = '            Move-Item -LiteralPath (Get-ContainerRemovalIoPath $path) -Destination $destinationIo -ErrorAction Stop'
         assert text.count(target) == 1
         # Fail after a real journalled rename, inside the production preimage.
@@ -534,6 +538,14 @@ def _setup(tmp_path, fault='', *, stock_version_identity=True, install_directory
         target = "        'uninstall_status=PASS_KNOWN_FILES_REMOVED_STATE_PRESERVED'"
         assert text.count(target) == 1
         text = text.replace(target, "        if($env:CA_UNINSTALL_INJECT -ceq '1'){throw ('HELPER_AFTER_REMOVAL_INJECTED_FAILURE'+$env:CUSTOM_REMOVAL_SECRET)}\n" + target)
+    if fault in {'child_restore_failure', 'child_and_parent_restore_failure'}:
+        target = "                if(-not(Test-ContainerRemovalFile $file.backup $file.sha256)){throw 'REMOVAL_PREIMAGE_DAMAGED'}"
+        start = text.index('    function Restore-RemovalFilePreimage(')
+        end = text.index('    if($OnlyUncommittedCurrent', start)
+        rollback = text[start:end]
+        assert rollback.count(target) == 1
+        rollback = rollback.replace(target, "                throw 'INJECTED_CHILD_RESTORE_FAILURE'\n" + target)
+        text = text[:start] + rollback + text[end:]
     helper.write_text(text, encoding='utf-8-sig')
     fence = source / 'tools/container_writer_fence.ps1'
     text = fence.read_text(encoding='utf-8-sig').replace(

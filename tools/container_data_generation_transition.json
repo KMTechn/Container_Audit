@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "44ea588f8297614680dc203b87ce1a1de97e0443d0e32fc6300d83e44f91a373",
+  "after_inventory_sha256": "a4027ea4d258964e3ac65e9f4a8f1f0da741b506716e27698ed175b10108ccf3",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -178,12 +178,12 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "82440faa826bc193b669784f0a473ebb0d441100da8011e03e8c47f9ad21d5bb"
+      "after": "9d7be9e116178b87e117bb3410b1da77dc28465651910cf900a0f024d86dd230"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
       "before": "95bb11b9fb4ed0035f229d7b6c6ca2abba17760caef15837734b7a809c52fc4c",
-      "after": "05201835672c78be7e96b2f5b525fff8fd8bf0db5460da47fff869689e0b48a7"
+      "after": "24211eccdfb897936ff39987706c29815efa2fd881f892fc315a2f4388713b07"
     },
     {
       "path": "app/Container_Audit.py",
@@ -1463,7 +1463,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "3119c5f5d9781b1d787edb39de248d2cdcc5f7a13c20129227eacd284e82eeb6"
+      "after": "3a8907ce1c50f09a7ebcf7589ffaac926071a31715e9ebbe5427a441e6328543"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4513,7 +4513,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "e59388bda7e315db50014c2002b3d434e5c83f0721e5a850317c2b0d77dd6211"
+      "after": "f52b2b4a1ec3f4f00c939016715b3361fb9fd78b8bd8cc2b76309dade77e164e"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4523,12 +4523,12 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "c5e885e6c8256a7865e1aed2e7f300342ee33bce855729e7cf12aa0105ab21be"
+      "after": "437a70e211c53b1be9e219e13adeea4b3a13fc7848527b3eda683fc46e3ee19e"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "3d51108e3b853b79c539fcab1962d31e8c78fbba666bfbce10062caa71740706"
+      "after": "61727075f921fbbcd6876625dedbaf32d1bb798f104db434ca6364163cc4303f"
     }
   ],
   "source_replacements": [
@@ -4540,12 +4540,12 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "82440faa826bc193b669784f0a473ebb0d441100da8011e03e8c47f9ad21d5bb"
+      "after": "9d7be9e116178b87e117bb3410b1da77dc28465651910cf900a0f024d86dd230"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
       "before": "08f1bb2c468e24998460192d25b546788417d2ed1dd09d3e0ee601e826d9c909",
-      "after": "05201835672c78be7e96b2f5b525fff8fd8bf0db5460da47fff869689e0b48a7"
+      "after": "24211eccdfb897936ff39987706c29815efa2fd881f892fc315a2f4388713b07"
     },
     {
       "path": "container_admin_pin.py",
@@ -4645,7 +4645,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "e59388bda7e315db50014c2002b3d434e5c83f0721e5a850317c2b0d77dd6211"
+      "after": "f52b2b4a1ec3f4f00c939016715b3361fb9fd78b8bd8cc2b76309dade77e164e"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4695,7 +4695,7 @@
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "3119c5f5d9781b1d787edb39de248d2cdcc5f7a13c20129227eacd284e82eeb6"
+      "after": "3a8907ce1c50f09a7ebcf7589ffaac926071a31715e9ebbe5427a441e6328543"
     }
   ],
   "hash_provenance": {
