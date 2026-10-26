@@ -1,10 +1,47 @@
 """Exercise the ordinary installer stop boundary without starting a product."""
 from pathlib import Path
+import ast
+import hashlib
+import re
+import sys
+import types
 
 import pytest
 from tests.powershell_contracts import run_functions
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("exit_after", (20, 149, 150, 151))
+def test_installer_stop_waits_for_direct_sync_child(monkeypatch, tmp_path, exit_after):
+    source = (ROOT / "INSTALL_CANONICAL_PORTABLE.ps1").read_text(encoding="utf-8-sig")
+    function = source.split("function Stop-CanonicalInstallerRelayPreimage(", 1)[1].split("\n}", 1)[0]
+    probe = re.search(r"(?s)\$probe\s*=\s*@'\n(.*?)\n'@", function).group(1) + "\n"
+    assert hashlib.sha256(probe.encode()).hexdigest() in function
+    relay_source = ast.parse((ROOT / "user_relay.py").read_text(encoding="utf-8-sig"))
+    child_limit = next(ast.literal_eval(node.value) for node in relay_source.body
+                       if isinstance(node, ast.Assign) and any(
+                           isinstance(target, ast.Name) and target.id == "RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS"
+                           for target in node.targets))
+    calls = []
+    relay = types.ModuleType("user_relay")
+    relay.RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS = child_limit
+
+    def request_stop(state, *, timeout_seconds, request_id):
+        calls.append((state, timeout_seconds, request_id))
+        # The relay owns a live direct-sync child until this simulated exit.
+        return {"status": "ABSENT" if exit_after <= timeout_seconds else "UNKNOWN"}
+
+    relay.request_user_relay_stop = request_stop
+    monkeypatch.setitem(sys.modules, "user_relay", relay)
+    monkeypatch.setattr(sys, "path", sys.path[:])
+    monkeypatch.setattr(sys, "argv", ["-c", str(tmp_path / "packet"), str(tmp_path / "state"), "a" * 32])
+    if exit_after <= child_limit + 30:
+        exec(compile(probe, "installer-relay-stop", "exec"), {})
+    else:
+        with pytest.raises(RuntimeError, match="installer relay stop unproven"):
+            exec(compile(probe, "installer-relay-stop", "exec"), {})
+    assert calls == [(tmp_path / "state", child_limit + 30, "a" * 32)]
 
 
 @pytest.mark.parametrize("engine", ("powershell", "pwsh"))
