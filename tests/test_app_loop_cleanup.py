@@ -66,7 +66,7 @@ def _child(directory, mode):
         app.LOOP_CLEANUP_NOTICE_SECONDS = 0.2
     app._log_event("SHUTDOWN_PROBE", detail={"probe": 1}, synchronous=True)
     app._recover_checkpoint_audit_events = lambda: []
-    app._clear_projected_checkpoint_audits = lambda staged: None
+    app._clear_projected_checkpoint_audits = lambda staged, projected: None
     app.save_settings = lambda: events.append("settings")
     app._cancel_all_jobs = lambda: events.append("cancel")
     app._preserve_preflight_hold_for_close = lambda: (True, False)

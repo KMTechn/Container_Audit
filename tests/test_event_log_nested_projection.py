@@ -131,7 +131,7 @@ def test_nested_flush_keeps_checkpoint_originals_until_background_projection(tmp
     target = store.stage(app.log_file_path, entry("first"))
     cleared = []
     monkeypatch.setattr(app, "_recover_checkpoint_audit_events", lambda: ["checkpoint"])
-    monkeypatch.setattr(app, "_clear_projected_checkpoint_audits", lambda items: cleared.extend(items))
+    monkeypatch.setattr(app, "_clear_projected_checkpoint_audits", lambda items, projected: cleared.extend(items))
     with fence.writer_admission("event_outbox_project"):
         assert not app._flush_pending_event_logs()
         assert target.exists() and cleared == []

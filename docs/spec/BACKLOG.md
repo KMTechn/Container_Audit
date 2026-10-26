@@ -1,3 +1,5 @@
+- sub-694 / CA-1: CSV 실패 뒤 outbox JSON 소실 때 캐시를 무효화해 기존 사본을 재생성하고, 실제 drain의 내구 CSV 투영 확인 전에는 checkpoint 감사를 지우지 않는다. 잠김 해제 뒤 동일 행 한 번 재생 및 기존 업무 흐름을 좁은 headless 회귀로 확인한다. 실제 백신·현장 화면·배포 검증은 수행하지 않았다.
+
 ### retained 후보와 다음 업데이트 요청 (sub-555)
 
 retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요청을 한 번 수행하고 journal을 다시 읽는다. 기존 writer가 있으면 SYSTEM의 유예를 따른다. 일반 복귀는 요청한 GUI/relay 역할을 보존한다. 늦은 READY 확정은 현재 기록에서 같은 전환의 timeout만 식별할 수 없어 닫아 둔다(실패 사유는 세대 code로 덮이고 failed_shas는 sha만 보존). 새 기록 형식·사유 값·phase·대기창을 만들지 않는다.
