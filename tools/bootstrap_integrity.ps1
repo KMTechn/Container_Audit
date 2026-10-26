@@ -2983,11 +2983,11 @@ function Get-BootstrapSharedPortableLeaf([string]$Root, [string]$Leaf = 'portabl
             throw 'Shared installer input must be a file.'
         }
     }
-    $expectedManifestSha = '3ff5ea08f684f0c35e008ab1b3d816b03d69e3b6d4b72e34b70ba0db11e765a7'
+    $expectedManifestSha = '9bd1396925a03f77e95d29c5cc6143c3b020622d580399f14178c34a2cefe60b'
     if ((Get-Item -LiteralPath $lockPath).Length -gt 65536) { throw 'Shared consumer lock is oversized.' }
     $lock = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if (@($lock.PSObject.Properties.Name).Count -ne 2 -or
-        $lock.version -cne '0.3.8' -or $lock.manifest_sha256 -cne $expectedManifestSha) {
+        $lock.version -cne '0.3.8+w9.1' -or $lock.manifest_sha256 -cne $expectedManifestSha) {
         throw 'Shared consumer lock pin mismatch.'
     }
     if ((Get-FileSha256 $manifestPath) -cne $expectedManifestSha) {

@@ -14,8 +14,8 @@ import atomic_replace as publication
 
 ROOT = Path(__file__).resolve().parents[1]
 PINNED_EXCLUSIONS = {
-    "kmtech_shared/data_generation.py": ("f1bcdb6c4738a1ff90af8f52d64259cd38f88a119fbafd232dbe0dfdf065783b", "바이트 고정 정본 — 정본 주인 후속"),
-    "kmtech_shared/powershell/data_generation.ps1": ("3452a5a0bef3f3e4ebd6e28056febeea157c932b4346133b91d67fc497124056", "바이트 고정 정본 — 정본 주인 후속"),
+    "kmtech_shared/data_generation.py": ("b54cb2b7303c5376cf646a8ae8226a3069abeab7f729f598b49c769a61ae5a94", "바이트 고정 정본 — 정본 주인 후속"),
+    "kmtech_shared/powershell/data_generation.ps1": ("9e31c5aca69a410546b42d269e464b5848ef0e95f8d243010332f0458103ebf8", "바이트 고정 정본 — 정본 주인 후속"),
     "kmtech_shared/raster.py": ("17c3d10498f9f5b845858861e671fff4715820b0e48719864d8dec4b9743f244", "바이트 고정 정본 — 정본 주인 후속"),
     "kmtech_shared/diagnostic_log.py": ("085c47ad7cf42130de74240a6e3dccefc2502d844591f775d46fedaabc6ad36b", "바이트 고정 정본 — 정본 주인 후속"),
     "shell/shell_fileio.py": ("b1d993c466d1df5161330c25389c35bd295b7f02a6c566b544bdac3072968101", "바이트 고정 정본 — 정본 주인 후속"),

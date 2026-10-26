@@ -235,6 +235,8 @@ builder는 새 metadata helper 사용 전에 기존 공용 pin 검사를 끝낸�
 명시 호환으로 허용된 같은 판의 다른 build가 자료를 쓰면 marker에 새 build를 기록하고
 두 선언의 더 엄격한 하한/신뢰 교집합을 유지한다. 이전 build의 넓은 호환을 그대로
 물려주지 않는다. 같은 build와 더 높은 기존 판의 바이트 보존은 유지한다.
+
+자료 세대 표지 게시(공용 `0.3.8+w9.1`, 10/26 w9firstupdsub652): `data_generation.py`와 `data_generation.ps1`의 표지 바꿔치기가 Windows 오류 5·32(백신·색인기 등 잠금)이면 단조 시계 1.0초 안에서 50ms 간격으로 같은 임시 파일·대상을 다시 시도한다(Python `ATOMIC_REPLACE_RETRY_SECONDS`, PowerShell `Publish-KmtechDataGenerationDocument`). 다른 오류는 바로 실패하고, 계속 잠기면 마지막 원 오류를 올리며 옛 표지와 임시 정리 경로는 그대로다. 검사 앱(IW)·리워크(RW)의 같은 꼴(1초·50ms·5/32)과 맞췄다. 공용 판 표지·manifest·lock·bootstrap 핀은 `0.3.8+w9.1`로 옮겼고 정본 `kmtech_shared` 쪽 반영은 후속이다(정본 대조 시험은 의도한 차이를 보인다).
 [API·현재 한계](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/HELPER-READY.md).
 [새 기준 검증](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-219/REPORT.md).
 
