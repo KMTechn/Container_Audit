@@ -57,7 +57,63 @@ def test_cached_stage_recreates_removed_pending_copy(tmp_path):
     assert rows(Path(path)) == [original]
 
 
-def test_copy_removed_between_recovery_and_drain_keeps_checkpoint(tmp_path, monkeypatch):
+def test_missing_ordinary_scan_copy_is_rebuilt_before_csv_retry(tmp_path, monkeypatch):
+    app = _completion_app(tmp_path)
+    original = entry('ordinary-missing-copy')
+    store = app._event_log_outbox(app.log_file_path)
+    assert app._write_event_log_entry({
+        'log_file_path': app.log_file_path, 'log_entry': original,
+        'worker_record': {}, 'local_only': False,
+    }, synchronous=False) is True
+    assert app.log_queue.qsize() == 1
+    assert app.current_tray.pending_audit_events == []
+
+    def locked_csv(*args, **kwargs):
+        raise PermissionError('synthetic CSV lock')
+
+    with monkeypatch.context() as fault:
+        fault.setattr(logs, 'append_event_log_entry_idempotent', locked_csv)
+        assert app._flush_pending_event_logs() is False
+        pending, = store.directory.glob('*.json')
+        saved = pending.read_bytes()
+        pending.unlink()
+        assert app._flush_pending_event_logs() is False
+        replacement, = store.directory.glob('*.json')
+        assert json.loads(replacement.read_bytes()) == json.loads(saved)
+        assert '로그 저장 실패' in app._event_log_notice
+
+    # A second copy reappearing after quarantine still projects exactly once.
+    pending.write_bytes(saved)
+    restarted = logs.EventLogOutbox(store.directory)
+    restarted.drain()
+    store.drain()
+    assert rows(Path(app.log_file_path)) == [original]
+    assert list(store.directory.glob('*.json')) == []
+    assert app._flush_pending_event_logs() is True
+
+
+def test_missing_copy_restage_write_failure_keeps_original_for_retry(tmp_path, monkeypatch):
+    store = logs.EventLogOutbox(tmp_path / '_event_outbox')
+    path = str(tmp_path / 'events.csv')
+    original = entry('ordinary-restage-write-failure')
+    pending = store.stage(path, original)
+    pending.unlink()
+
+    def locked_outbox(*args, **kwargs):
+        raise PermissionError('synthetic outbox lock')
+
+    with monkeypatch.context() as fault:
+        fault.setattr(logs, 'atomic_write_json', locked_outbox)
+        with pytest.raises(PermissionError):
+            store.drain()
+        assert store.has_unstaged
+
+    store.drain()
+    store.drain()
+    assert rows(Path(path)) == [original]
+
+
+def test_copy_removed_between_recovery_and_drain_clears_only_after_projection(tmp_path, monkeypatch):
     app = _completion_app(tmp_path)
     original = entry('removed-before-drain')
     event = {'log_file_name': Path(app.log_file_path).name, 'local_only': False,
@@ -74,7 +130,8 @@ def test_copy_removed_between_recovery_and_drain_keeps_checkpoint(tmp_path, monk
 
     with monkeypatch.context() as fault:
         fault.setattr(store, 'drain', remove_then_drain)
-        assert app._flush_pending_event_logs() is False
-        assert json.loads(checkpoint.read_text(encoding='utf-8'))['pending_audit_events'] == [event]
+        assert app._flush_pending_event_logs() is True
+        assert rows(Path(app.log_file_path)) == [original]
+        assert json.loads(checkpoint.read_text(encoding='utf-8')).get('pending_audit_events', []) == []
     assert app._flush_pending_event_logs() is True
     assert rows(Path(app.log_file_path)) == [original]

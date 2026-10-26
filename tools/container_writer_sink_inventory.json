@@ -3743,7 +3743,7 @@
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 141,
+          "line": 151,
           "operation": "open",
           "writer_admission_sources": [
             "event_outbox_project"
@@ -3783,11 +3783,11 @@
       ],
       "file": "event_log_store.py",
       "kind": "function",
-      "line": 254,
+      "line": 264,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 257,
+          "line": 267,
           "operation": "parent.mkdir",
           "writer_admission_sources": [
             "event_interprocess_lock"
@@ -3795,7 +3795,7 @@
         },
         {
           "category": "filesystem",
-          "line": 267,
+          "line": 277,
           "operation": "os.open",
           "writer_admission_sources": [
             "event_interprocess_lock"
@@ -3803,7 +3803,7 @@
         },
         {
           "category": "filesystem",
-          "line": 279,
+          "line": 289,
           "operation": "os.unlink",
           "writer_admission_sources": [
             "event_interprocess_lock"
@@ -3811,7 +3811,7 @@
         },
         {
           "category": "filesystem",
-          "line": 289,
+          "line": 299,
           "operation": "os.write",
           "writer_admission_sources": [
             "event_interprocess_lock"
@@ -3819,7 +3819,7 @@
         },
         {
           "category": "filesystem",
-          "line": 295,
+          "line": 305,
           "operation": "os.unlink",
           "writer_admission_sources": [
             "event_interprocess_lock"
@@ -3873,11 +3873,11 @@
       ],
       "file": "event_log_store.py",
       "kind": "function",
-      "line": 317,
+      "line": 327,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 325,
+          "line": 335,
           "operation": "open",
           "writer_admission_sources": []
         }
@@ -3929,11 +3929,11 @@
       ],
       "file": "event_log_store.py",
       "kind": "function",
-      "line": 336,
+      "line": 346,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 340,
+          "line": 350,
           "operation": "open",
           "writer_admission_sources": []
         }
@@ -3984,11 +3984,11 @@
       ],
       "file": "event_log_store.py",
       "kind": "function",
-      "line": 392,
+      "line": 402,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 412,
+          "line": 422,
           "operation": "open",
           "writer_admission_sources": [
             "event_csv_idempotent_append"
@@ -4042,11 +4042,11 @@
       ],
       "file": "event_log_store.py",
       "kind": "function",
-      "line": 432,
+      "line": 442,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 508,
+          "line": 518,
           "operation": "open",
           "writer_admission_sources": []
         }
@@ -10860,7 +10860,7 @@
       "tools.register_container_audit_worker_pc"
     ]
   },
-  "inventory_sha256": "d60f1538ffc8ff82d414cdb7e5873388804703998088b2e3a9fb548cd94656a0",
+  "inventory_sha256": "38b24b686173f69b4854deef33a5dc71d3a9230e2cf2709455650b00193d409d",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -25661,7 +25661,7 @@
       "direct_mutation_site_count": 0,
       "file": "event_log_store.py",
       "function": "event_log_store.append_event_log_entry",
-      "line": 301,
+      "line": 311,
       "marker_kind": "decorator",
       "source": "event_csv_append"
     },
@@ -25669,7 +25669,7 @@
       "direct_mutation_site_count": 1,
       "file": "event_log_store.py",
       "function": "event_log_store.append_event_log_entry_idempotent",
-      "line": 432,
+      "line": 442,
       "marker_kind": "decorator",
       "source": "event_csv_idempotent_append"
     },
@@ -25677,7 +25677,7 @@
       "direct_mutation_site_count": 1,
       "file": "event_log_store.py",
       "function": "event_log_store.project_event_log_entry_durably",
-      "line": 392,
+      "line": 402,
       "marker_kind": "writer_admission",
       "source": "event_csv_idempotent_append"
     },
@@ -25685,7 +25685,7 @@
       "direct_mutation_site_count": 1,
       "file": "event_log_store.py",
       "function": "event_log_store._append_event_log_entry_unlocked",
-      "line": 317,
+      "line": 327,
       "marker_kind": "decorator",
       "source": "event_csv_unlocked_append"
     },
@@ -25693,7 +25693,7 @@
       "direct_mutation_site_count": 1,
       "file": "event_log_store.py",
       "function": "event_log_store._repair_event_log_tail_unlocked",
-      "line": 336,
+      "line": 346,
       "marker_kind": "decorator",
       "source": "event_csv_unlocked_append"
     },
@@ -25701,7 +25701,7 @@
       "direct_mutation_site_count": 5,
       "file": "event_log_store.py",
       "function": "event_log_store._interprocess_file_lock",
-      "line": 254,
+      "line": 264,
       "marker_kind": "writer_admission",
       "source": "event_interprocess_lock"
     },

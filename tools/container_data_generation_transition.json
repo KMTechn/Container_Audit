@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "d60f1538ffc8ff82d414cdb7e5873388804703998088b2e3a9fb548cd94656a0",
+  "after_inventory_sha256": "38b24b686173f69b4854deef33a5dc71d3a9230e2cf2709455650b00193d409d",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -253,7 +253,7 @@
     {
       "path": "app/event_log_store.py",
       "before": "f1c2152fd691f7e9c1a17c3f829f412e89b6989ab9d1069a3a1ed110d14be8ca",
-      "after": "0bad0f03994547766d49f5e858aa9634fe71a1d90649579360e4f96cd83bbfd4"
+      "after": "4b8220f3d179d1cdae7923cf38c3f72004e7e7a5397f938352ef8aa9b37c92a4"
     },
     {
       "path": "app/event_payloads.py",
@@ -1463,7 +1463,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "5fb331102ddda1cbc2db348ade77c5664f190d5e1ba6bd9474060560a796e4d0"
+      "after": "529fd9c9162352397a00a8e106cdccfaac3ffa8578f6c4ab5cc36b228367781d"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4513,7 +4513,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "2dfbf7b7519eb52f1c6fa975ba34dbf2698f8c02e93d1110dba2722da609af3e"
+      "after": "cfa555959b7a0785e52631b657346755fb3c6894aa657488d5c0e67a961e4a6d"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4523,12 +4523,12 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "0331a4edf9b2dfa29ce8024b44dceab5e6c2f7fc05e6ed2e91f2422a60a1b98f"
+      "after": "b531e69ac3ef49d3a806fe2915fe793219fd18376a07cb2f5e8d0b05e65434ce"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "c78842b354559de02c457082e6679b89b4361cfac6cc1ecd15b9d92cb96fe866"
+      "after": "49f0ef607576fa95a97b031c2d7eb4a18ed9efbb052091cb2df65ec2ee780bc0"
     }
   ],
   "source_replacements": [
@@ -4590,7 +4590,7 @@
     {
       "path": "event_log_store.py",
       "before": "f1c2152fd691f7e9c1a17c3f829f412e89b6989ab9d1069a3a1ed110d14be8ca",
-      "after": "0bad0f03994547766d49f5e858aa9634fe71a1d90649579360e4f96cd83bbfd4"
+      "after": "4b8220f3d179d1cdae7923cf38c3f72004e7e7a5397f938352ef8aa9b37c92a4"
     },
     {
       "path": "item_catalog_sync.py",
@@ -4645,7 +4645,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "2dfbf7b7519eb52f1c6fa975ba34dbf2698f8c02e93d1110dba2722da609af3e"
+      "after": "cfa555959b7a0785e52631b657346755fb3c6894aa657488d5c0e67a961e4a6d"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4695,7 +4695,7 @@
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "5fb331102ddda1cbc2db348ade77c5664f190d5e1ba6bd9474060560a796e4d0"
+      "after": "529fd9c9162352397a00a8e106cdccfaac3ffa8578f6c4ab5cc36b228367781d"
     }
   ],
   "hash_provenance": {
