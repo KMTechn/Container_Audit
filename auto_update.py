@@ -29,7 +29,8 @@ from storage_policy import ensure_user_runtime_directory
 
 
 SCHEMA = "container-audit-startup-update-v1"
-APPLY_PROGRESS_TIMEOUT = 60
+APPLY_PROGRESS_TIMEOUT = 120
+APPLY_REQUEST_PROGRESS_TIMEOUT = 60
 READY_WINDOW_SECONDS = 900
 # The bootstrap decision wait must outlast one whole READY window plus the
 # normal-stop and settle tail it always had (the former 480 = 240 + 240).
@@ -2993,6 +2994,13 @@ def startup_update_lock(control: Path, policy: Mapping[str, Any], *, deadline: f
                 if time.monotonic() >= min(limit, deadline if deadline is not None else limit):
                     break
                 time.sleep(min(0.1, max(0, min(limit, deadline if deadline is not None else limit) - time.monotonic())))
+        try:
+            if sys.stderr is not None and "--apply-prepared" not in sys.argv:
+                print(json.dumps({"stage": "update_lock_wait",
+                    "elapsed_ms": max(0, int((time.monotonic() - started) * 1000)),
+                    "acquired": acquired}), file=sys.stderr)
+        except Exception:
+            pass
         yield acquired
 
 
@@ -3564,7 +3572,7 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                         return start_current(control, policy, state, active, gui_arguments,
                             code=UPDATE_RELAY_STOP_REQUESTED, deadline=deadline)
                     requested_at = now_utc()
-                    progress_deadline = time.monotonic() + APPLY_PROGRESS_TIMEOUT
+                    progress_deadline = time.monotonic() + APPLY_REQUEST_PROGRESS_TIMEOUT
                     try:
                         request_apply_task(control, policy)
                     except Exception:
