@@ -1,6 +1,7 @@
 ### retained 후보와 다음 업데이트 요청 (sub-555)
 
 - 10/26 sub-684: 로컬 완료 뒤 전송/redirect 사후 검토를 재시작·snapshot에서도 blocking=False 띠로 표시해 다음 현품표·제품 스캔을 허용한다. 기존 관리자 첫 행 재시도·확인 해제와 의도 막음 6종은 유지한다. 근거 work/program/w9firstupd/sub-684/RESULT.md.
+- 10/27 sub-699: 부분 제출·다른 상태 메시지·상태 만료 뒤에도 사후 검토 띠와 확인을 유지하고, 띠 제거 시 반복음을 멈춘다. 처리 오류 중 Esc는 빈 Enter·웹 확인처럼 띠를 보존한다. 다음 제품 스캔의 띠 해제와 의도 막음은 유지한다.
 
 retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요청을 한 번 수행하고 journal을 다시 읽는다. 기존 writer가 있으면 SYSTEM의 유예를 따른다. 일반 복귀는 요청한 GUI/relay 역할을 보존한다. 늦은 READY 확정은 현재 기록에서 같은 전환의 timeout만 식별할 수 없어 닫아 둔다(실패 사유는 세대 code로 덮이고 failed_shas는 sha만 보존). 새 기록 형식·사유 값·phase·대기창을 만들지 않는다.
 

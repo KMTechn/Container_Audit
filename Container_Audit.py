@@ -15195,9 +15195,9 @@ class ContainerAudit:
 
     def _on_scan_entry_escape_during_notice(self, event=None):
         notice = getattr(self._warning_state_presenter().state, "active_notice", None)
-        if self._notice_blocks_scan() or (
+        if (self._notice_blocks_scan() or (
             notice is not None and notice.code == "transfer.post_review_required"
-        ):
+        )) and not self._operator_review_blocks_mutation():
             self._acknowledge_active_notice()
             return "break"
         return None
@@ -17019,6 +17019,11 @@ class ContainerAudit:
             status_widget['text'] = "작업 중"; status_widget['foreground'] = self.COLOR_SUCCESS
 
     def _start_warning_beep(self):
+        # A later warning takes ownership of an already playing loop.
+        if getattr(self, "_post_review_warning_beep", False):
+            notice = self._warning_state_presenter().state.active_notice
+            if notice is None or notice.code != "transfer.post_review_required":
+                self._post_review_warning_beep = False
         if getattr(self, "_warning_beep_active", False):
             return
         self._warning_beep_active = True
@@ -17030,6 +17035,7 @@ class ContainerAudit:
                 record_audio_failure("AUDIO_PLAY_FAILED")
 
     def _stop_warning_beep(self):
+        self._post_review_warning_beep = False
         self._warning_beep_active = False
         if getattr(self, "error_sound", None):
             try:
@@ -17081,6 +17087,11 @@ class ContainerAudit:
         notice = state.active_notice
         if notice is None and state.completion is not None and state.completion.blocks_completion:
             notice = notice_for_completion(state.completion)
+
+        if getattr(self, "_post_review_warning_beep", False) and (
+            notice is None or notice.code != "transfer.post_review_required"
+        ):
+            self._stop_warning_beep()
 
         if notice is None:
             title = "스캐너 준비"
@@ -20177,6 +20188,7 @@ class ContainerAudit:
                     self._presented_post_review_case_ids = case_ids
                 case_ids.add(normalized_case_id)
             self._start_warning_beep()
+            self._post_review_warning_beep = True
         self._render_warning_state()
         self._update_action_button_states()
         return presented
@@ -21226,6 +21238,10 @@ class ContainerAudit:
         self._cancel_status_message_timer()
         generation = self._status_message_generation
 
+        active = self._warning_state_presenter().state.active_notice
+        if active is not None and active.code == "transfer.post_review_required":
+            return
+
         severity = self._notice_severity_for_color(color)
         title_by_severity = {
             NoticeSeverity.INFO: "안내",
@@ -21264,7 +21280,10 @@ class ContainerAudit:
         if generation is not None and generation != getattr(self, "_status_message_generation", 0):
             return
         self.status_message_job = None
-        self._warning_state_presenter().clear()
+        presenter = self._warning_state_presenter()
+        active = presenter.state.active_notice
+        if active is None or active.code != "transfer.post_review_required":
+            presenter.clear()
         self._render_warning_state()
         if (
             not self._warning_state_presenter().state.is_blocking
