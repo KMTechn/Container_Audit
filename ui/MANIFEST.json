@@ -4,23 +4,23 @@
  "commit": "d8f82fa4bf668a99d6604093463638d86f6151f9",
  "dirty": true,
  "app": "ca",
- "parts_fingerprint": "1bb365d687d695df",
+ "parts_fingerprint": "5cc8774e738a3371",
  "files": [
   {
    "path": "app/ca/ca.css",
-   "sha256": "1be67c73064b3586d059daca4e6844c84e7975317e13a39056e99884a1fafab2",
-   "bytes": 29587,
-   "gzip": 5601
+   "sha256": "88614e5e4c77bbd57a8d153b43f40ece9045da576243caecf33318b1da343b22",
+   "bytes": 29330,
+   "gzip": 5621
   },
   {
    "path": "app/ca/ca.js",
-   "sha256": "5d78afd952dbca13ed3b89131628e68dda1de340cbfd4e34caa8892a30f2dbad",
-   "bytes": 30225,
-   "gzip": 9803
+   "sha256": "596b20d1043ec56bd2ba3846d1fcf4f0cbf65fa9fe52ecfb93819e3a43d73de1",
+   "bytes": 30430,
+   "gzip": 9870
   },
   {
    "path": "app/ca/contract.json",
-   "sha256": "d17d544626765cce93cf4947f35fcf14d73e3ed60bef6c2d387ac1388bd0f5de",
+   "sha256": "0f90dbde6ea92b31a244b0f0c846cea9ffddc910dac51bc457f17bb698476b80",
    "bytes": 34480,
    "gzip": 7254
   },
@@ -548,9 +548,9 @@
   },
   {
    "path": "app/frame.css",
-   "sha256": "97c47d9b284c9cb0edc3e1d3be9737bf3d8f83567c7f756a6752686be96dd2cd",
-   "bytes": 49033,
-   "gzip": 8393
+   "sha256": "66258f79cb65ef01cf607578cc4ceb028e019c25b9f827387137545c7ef301b2",
+   "bytes": 48998,
+   "gzip": 8390
   },
   {
    "path": "app/frame.js",
@@ -566,9 +566,9 @@
   },
   {
    "path": "app/scan.js",
-   "sha256": "aedc1197d01dd555c8fb59e680a03a787630c5eac0b2eb4c7f80f6d6efeba47c",
-   "bytes": 19363,
-   "gzip": 5941
+   "sha256": "428d39c84601eac87db9779d9992d6a868eb8ad6324f611caa214a5cefc14b57",
+   "bytes": 20309,
+   "gzip": 6120
   },
   {
    "path": "app/sheet.js",
@@ -608,9 +608,9 @@
   },
   {
    "path": "core/tokens.css",
-   "sha256": "bd8520ff68ea5e5616ab1b4916e11faf5895bc7a6bdd0498b5978b3ef70476c4",
-   "bytes": 7542,
-   "gzip": 3242
+   "sha256": "19b39bf43d0854cee10dd2a1a3f8e7a8d370e656b0b40214b884c5c11b8822e7",
+   "bytes": 7813,
+   "gzip": 3344
   }
  ]
 }

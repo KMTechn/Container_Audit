@@ -164,7 +164,9 @@
     const rows = [...list.querySelectorAll('.ca-row')];
     for (const li of rows) li.hidden = false;
     const more = $('[data-list-more]');
-    more.textContent = '그 앞 1건';
+    // Measure the full list first; the old notice also occupied its grid gap.
+    more.textContent = '';
+    if (rows.some(li => li.getBoundingClientRect().bottom > list.getBoundingClientRect().bottom + .5)) more.textContent = '그 앞 1건';
     const bottom = list.getBoundingClientRect().bottom + 0.5;
     let cut = 0;
     for (const li of rows) {
