@@ -228,6 +228,7 @@ class RelayQueueRow:
     claim_previous_status: str = ""
     claim_previous_next_attempt_at: str = ""
     metadata_error: str = ""
+    held_spool_error: str = ""
 
 
 @dataclass(frozen=True)
@@ -1441,6 +1442,10 @@ def _with_upload_status_artifact(
     )
 
 
+def _is_retryable_source_http_status(status_code: int) -> bool:
+    return status_code in {408, 429} or 500 <= status_code <= 599
+
+
 def _upload_response_result(
     plan: SourceFilePlan,
     response: Any,
@@ -1549,7 +1554,7 @@ def _upload_response_result(
         producer_error_code = "producer_committed_non_2xx"
         producer_error_message = f"producer committed upload but returned HTTP {status_code}"
     clock_stale = status_code == 401 and producer_error_code == "stale_timestamp" and not committed
-    retryable = False if committed or receipt_error_code else clock_stale or unconfirmed_rejection or payload.get("retryable") is True or (status_code in {408, 429} or 500 <= status_code <= 599)
+    retryable = False if committed or receipt_error_code else clock_stale or unconfirmed_rejection or payload.get("retryable") is True or _is_retryable_source_http_status(status_code)
     return UploadResult(
         success=success,
         status_code=status_code,
@@ -2380,6 +2385,92 @@ def reset_stale_relay_leases(
         close_sqlite_connection(conn)
 
 
+def _held_spool_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Read terminal spool losses that still own an unresolved runtime request."""
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not {'direct_sync_relay_batches', 'direct_sync_runtime_authority'} <= tables:
+        return []
+    rows = conn.execute(
+        """SELECT batch.* FROM direct_sync_relay_batches AS batch
+           JOIN direct_sync_runtime_authority AS authority
+             ON authority.assigned_relay_id = batch.relay_id
+           WHERE batch.status IN ('failed_permanent', 'pending')
+             AND batch.last_error_code IN
+                 ('spooled_file_missing', 'spooled_file_unreadable', 'source_file_unreadable')
+           ORDER BY batch.created_at, batch.relay_id"""
+    ).fetchall()
+    return [row for row in rows if all(name in _relay_metadata(row)[0] for name in RUNTIME_METADATA_FIELDS)]
+
+
+@writer_sink("relay_spool_storage")
+def _held_runtime_backlog_rows(db_path):
+    conn = _connect_relay_db_readonly(db_path)
+    if conn is None:
+        return [], []
+    try:
+        conn.execute('BEGIN')
+        held = _held_spool_rows(conn)
+        if not held:
+            return [], []
+        def scope(row):
+            return (row['endpoint_url'], row['producer_id'], row['key_id'],
+                    _relay_metadata(row)[0].get('producer_install_id'))
+        scopes = {scope(row) for row in held}
+        rows = conn.execute("SELECT * FROM direct_sync_relay_batches WHERE status IN ('pending','leased','retry_wait')").fetchall()
+        waiting = [row for row in rows if scope(row) in scopes]
+        waiting_ids = {row['relay_id'] for row in waiting}
+        return held, waiting + [row for row in held if row['relay_id'] not in waiting_ids]
+    finally:
+        close_sqlite_connection(conn)
+
+
+@writer_sink("relay_spool_storage")
+def _set_held_spool_review(conn, row):
+    """This review preserves the unresolved request; general review clears it."""
+    conn.execute("""UPDATE direct_sync_runtime_authority
+                    SET status='OPERATOR_REVIEW',last_error_code=?,updated_at=?
+                    WHERE assigned_relay_id=? AND status='ACTIVE'""",
+                 (row['last_error_code'], utc_now_text(), row['relay_id']))
+    conn.execute("UPDATE direct_sync_relay_batches SET status='failed_permanent' WHERE relay_id=? AND status IN ('pending','failed_permanent')",
+                 (row['relay_id'],))
+
+
+def _held_spool_request_matches(row, authority):
+    try:
+        metadata = _relay_metadata(row)[0]
+        return (
+            authority['assigned_relay_id'] == row['relay_id']
+            and authority['endpoint_url'] == row['endpoint_url']
+            and authority['producer_id'] == row['producer_id']
+            and authority['key_id'] == row['key_id']
+            and authority['producer_install_id'] == metadata['producer_install_id']
+            and authority['runtime_instance_id'] == metadata['runtime_instance_id']
+            and canonical_json(json.loads(authority['runtime_public_jwk_json'])) == canonical_json(metadata['runtime_public_jwk'])
+            and authority['fence'] == metadata['runtime_fence']
+            # Reserving a request moves its token/sequence into the row and
+            # clears the unassigned successor slots in the authority table.
+            and authority['next_request_token'] is None
+            and authority['next_request_sequence'] is None
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _defer_held_spool_replay(row, result, *, db_path, credentials, retry_base_seconds):
+    """Keep the original terminal cause as the durable recovery selector."""
+    delay = result.retry_after_seconds if result.retry_after_seconds is not None else _retry_after_seconds(
+        row.attempt_count, retry_base_seconds, row.relay_id)
+    due = (datetime.fromisoformat(utc_now_text().replace("Z", "+00:00")) + timedelta(seconds=delay)).isoformat().replace('+00:00', 'Z')
+    if not _set_claimed_relay_status(
+        row, db_path=db_path, status=RELAY_STATUS_PENDING,
+        receipt=result.receipt, next_attempt_at=due, error_code=row.held_spool_error,
+        error_message=result.error_message, upload_status_path=result.status_path,
+        runtime_credentials=credentials, runtime_authority_action='preserve',
+    ):
+        return _relay_status_update_conflict(row, prior_result=result)
+    return _local_relay_upload_result(row, replace(result, retryable=True, _runtime_token_unconsumed=False))
+
+
 @writer_sink("relay_batch_claim")
 def claim_next_relay_batch(
     *,
@@ -2398,7 +2489,11 @@ def claim_next_relay_batch(
     conn = _connect_relay_db(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
+        held = next((candidate for candidate in _held_spool_rows(conn)
+                     if candidate['status'] == RELAY_STATUS_PENDING
+                     and (not candidate['next_attempt_at'] or candidate['next_attempt_at'] <= now)), None)
+        held_spool_error = str(held['last_error_code']) if held is not None else ''
+        row = held if held is not None else conn.execute(
             """
             SELECT *
             FROM direct_sync_relay_batches
@@ -2442,6 +2537,7 @@ def claim_next_relay_batch(
         ).fetchone()
         return replace(
             _relay_row(claimed),
+            held_spool_error=held_spool_error,
             claim_previous_status=str(row["status"] or ""),
             claim_previous_next_attempt_at=str(row["next_attempt_at"] or ""),
         )
@@ -2471,7 +2567,11 @@ def claim_relay_batch_by_id(
     conn = _connect_relay_db(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
+        held = next((candidate for candidate in _held_spool_rows(conn)
+                     if candidate['status'] == RELAY_STATUS_PENDING
+                     and (not candidate['next_attempt_at'] or candidate['next_attempt_at'] <= now)), None)
+        held_spool_error = str(held['last_error_code']) if held is not None else ''
+        row = held if held is not None else conn.execute(
             """
             SELECT *
             FROM direct_sync_relay_batches
@@ -2515,6 +2615,7 @@ def claim_relay_batch_by_id(
         ).fetchone()
         return replace(
             _relay_row(claimed),
+            held_spool_error=held_spool_error,
             claim_previous_status=str(row["status"] or ""),
             claim_previous_next_attempt_at=str(row["next_attempt_at"] or ""),
         )
@@ -3005,6 +3106,9 @@ def drain_one_relay_batch(
         spooled_hash, spooled_bytes = _read_file_digest(Path(row.spooled_file_path))
     except OSError as exc:
         result = _spool_read_error_result(exc, relay_id=row.relay_id)
+        if row.held_spool_error:
+            return _defer_held_spool_replay(row, result, db_path=db_path, credentials=credentials,
+                                          retry_base_seconds=retry_base_seconds)
         next_attempt_at = ""
         if result.retryable:
             next_attempt_at = (
@@ -3128,6 +3232,9 @@ def drain_one_relay_batch(
             error_message=runtime_preparation.error_message,
             clock_skew=runtime_preparation.clock_skew,
         )
+        if row.held_spool_error:
+            return _defer_held_spool_replay(row, result, db_path=db_path, credentials=credentials,
+                                          retry_base_seconds=retry_base_seconds)
         if runtime_preparation.operator_review:
             target_status = RELAY_STATUS_OPERATOR_REVIEW
             next_attempt_at = ""
@@ -3195,6 +3302,9 @@ def drain_one_relay_batch(
         return _relay_status_update_conflict(row)
     except Exception as exc:
         result = _upload_exception_result(row, exc)
+        if row.held_spool_error:
+            return _defer_held_spool_replay(row, result, db_path=db_path, credentials=credentials,
+                                          retry_base_seconds=retry_base_seconds)
         if isinstance(exc, OSError) and not _SOURCE_POST_STARTED.get():
             result = replace(result, retryable=True)
         else:
@@ -3215,6 +3325,12 @@ def drain_one_relay_batch(
         _SOURCE_POST_STARTED.reset(source_post_context)
         _UPLOAD_STATUS_CHECK.reset(status_check_context)
     result = _local_relay_upload_result(row, result)
+    if row.held_spool_error and not result.success and (
+        not result.committed or result.error_code == 'producer_receipt_invalid'
+        or result.status_code == 409 or _is_retryable_source_http_status(result.status_code)
+    ):
+        return _defer_held_spool_replay(row, result, db_path=db_path, credentials=credentials,
+                                      retry_base_seconds=retry_base_seconds)
     if result._runtime_disposition == "dead_fence":
         try:
             if not _set_claimed_relay_status(
@@ -3278,7 +3394,7 @@ def drain_one_relay_batch(
         and result._runtime_token_unconsumed
         and client_runtime_lease_mode(credentials) == "enforce"
         and not (result.status_code == 401 and result.error_code == "stale_timestamp")
-        and not (result.status_code in {408, 429} or 500 <= result.status_code <= 599)
+        and not _is_retryable_source_http_status(result.status_code)
     ):
         if not _set_claimed_relay_status(
             row,

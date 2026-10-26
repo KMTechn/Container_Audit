@@ -21,7 +21,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from event_log_store import LOCK_STALE_SECONDS as EVENT_LOG_LOCK_STALE_SECONDS  # noqa: E402
-from direct_sync_push import _copy_spool_file_atomic, reset_stale_relay_leases, utc_now_text  # noqa: E402
+from direct_sync_push import (
+    _copy_spool_file_atomic, reset_stale_relay_leases, utc_now_text,
+    _held_spool_rows, _held_runtime_backlog_rows, _held_spool_request_matches, _set_held_spool_review,
+    RUNTIME_METADATA_FIELDS,
+)  # noqa: E402
 from direct_sync_runtime import (  # noqa: E402
     DirectSyncRuntimeConfig,
     prepare_credential_config,
@@ -50,6 +54,10 @@ SCAN_BLOCKED_STATUSES = {
     "blocked_disk_pressure",
     "existing_terminal_blocked",
 }
+
+
+class _SourceSnapshotChanged(Exception):
+    """Retry a moving snapshot on the next scan without declaring a mismatch."""
 
 
 class ExistingTerminalDeltaBlocked(Exception):
@@ -256,6 +264,47 @@ def _delta_content_sha256_for_range(source_file: Path, start_byte: int, end_byte
     return hashlib.sha256(delta_content).hexdigest()
 
 
+
+def _original_fingerprint_matches(row):
+    try:
+        metadata = json.loads(row['metadata_json'])
+        return (metadata['relative_path'] == row['relative_path']
+                and type(metadata['byte_length']) is int
+                and metadata['byte_length'] == row['byte_length']
+                and metadata['content_sha256'] == row['content_sha256'])
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _source_range_for_row(row, source_file, *, source_key=None):
+    source_path = Path(str(row['source_file_path'] or ''))
+    relative = str(row['relative_path'] or '').replace('\\', '/')
+    if source_path == source_file and not relative.startswith(('d/', 'legacy_csv_deltas/')):
+        return 0, int(row['byte_length'])
+    if source_path.parent.name == (source_key or _source_delta_key(source_file)):
+        return _parse_delta_range(row['relative_path'], source_file)
+    return None
+
+
+def _raw_request_overlaps_waiting_delta(conn, row, source_file):
+    source_key = _source_delta_key(source_file)
+    def scope(candidate):
+        try:
+            return (candidate['endpoint_url'], candidate['producer_id'], candidate['key_id'],
+                    json.loads(candidate['metadata_json'])['producer_install_id'])
+        except (KeyError, TypeError, ValueError):
+            return None
+    original_scope = scope(row)
+    for other in conn.execute("SELECT * FROM direct_sync_relay_batches WHERE status IN ('pending','leased','retry_wait') AND relay_id!=?",
+                              (row['relay_id'],)):
+        if scope(other) != original_scope:
+            continue
+        bounds = _source_range_for_row(other, source_file, source_key=source_key)
+        if bounds is not None and bounds[0] < int(row['byte_length']) and bounds[1] > 0:
+            return True
+    return False
+
+
 def _read_delta_progress(
     conn: sqlite3.Connection,
     source_file: Path,
@@ -271,20 +320,32 @@ def _read_delta_progress(
     source_delta_key = _source_delta_key(source_file)
     rows = conn.execute(
         """
-        SELECT source_file_path, spooled_file_path, relative_path,
-               content_sha256, byte_length, status
+        SELECT *
         FROM direct_sync_relay_batches
         WHERE relative_path LIKE 'legacy_csv_deltas/%'
            OR relative_path LIKE 'd/%'
-        """
+           OR source_file_path = ? COLLATE NOCASE
+        """,
+        (_source_state_key(source_file),),
     ).fetchall()
+    held_ids = {item['relay_id'] for item in _held_spool_rows(conn)}
     matching_ranges: dict[int, int] = {}
     blocked_ranges: dict[int, tuple[int, str]] = {}
     for row in rows:
         source_path = Path(str(row["source_file_path"] or ""))
-        if source_path.parent.name != source_delta_key:
-            continue
-        parsed_range = _parse_delta_range(str(row["relative_path"] or ""), source_file)
+        relative = str(row['relative_path'] or '').replace('\\', '/')
+        direct = source_path == source_file and not relative.startswith(('d/', 'legacy_csv_deltas/'))
+        if direct:
+            try:
+                metadata = json.loads(row['metadata_json'])
+            except (TypeError, ValueError):
+                continue
+            recovered = (row['last_error_code'] in {'spooled_file_missing', 'spooled_file_unreadable', 'source_file_unreadable'}
+                         and all(name in metadata for name in RUNTIME_METADATA_FIELDS))
+            if (not _original_fingerprint_matches(row)
+                    or not (row['status'] == 'acked' or recovered or row['relay_id'] in held_ids)):
+                continue
+        parsed_range = _source_range_for_row(row, source_file, source_key=source_delta_key)
         if parsed_range is None:
             continue
         start_byte, end_byte = parsed_range
@@ -299,11 +360,10 @@ def _read_delta_progress(
                 if end_byte > blocked_ranges.get(start_byte, (0, ""))[0]:
                     blocked_ranges[start_byte] = (end_byte, str(row["content_sha256"]))
     best_end_byte = 0
-    while best_end_byte in matching_ranges:
-        next_end_byte = matching_ranges[best_end_byte]
-        if next_end_byte <= best_end_byte:
+    for start_byte, end_byte in sorted(matching_ranges.items()):
+        if start_byte > best_end_byte:
             break
-        best_end_byte = next_end_byte
+        best_end_byte = max(best_end_byte, end_byte)
     if include_blocked and best_end_byte in blocked_ranges:
         blocked_end_byte, blocked_hash = blocked_ranges[best_end_byte]
         if blocked_end_byte <= best_end_byte:
@@ -394,8 +454,10 @@ def _original_delta_content(source_file: Path, start_byte: int, end_byte: int) -
             return None
         handle.seek(start_byte)
         body = handle.read(end_byte - start_byte)
-    if len(body) != end_byte - start_byte or _source_scan_signature(source_file) != before:
+    if len(body) != end_byte - start_byte:
         return None
+    if _source_scan_signature(source_file) != before:
+        raise _SourceSnapshotChanged()
     return body if start_byte == 0 else header + body
 
 
@@ -425,17 +487,35 @@ def _publish_missing_delta_copy(path: Path, payload: bytes, *, copy_from: Path |
 
 
 @writer_sink("raw_relay_storage")
-def _reconstruct_delta_copies(config: DirectSyncRuntimeConfig, source_file: Path, relay_id: str) -> bool:
+def _reconstruct_delta_copies(config: DirectSyncRuntimeConfig, source_file: Path, relay_id: str, *, administrator=False) -> bool:
     conn = _scan_state_connect(config.db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT * FROM direct_sync_relay_batches WHERE relay_id = ?", (relay_id,)).fetchone()
         if row is None:
             return False
+        held = next((item for item in _held_spool_rows(conn) if item['relay_id'] == relay_id), None)
+        authority = None
+        if held is not None:
+            authority = conn.execute('SELECT * FROM direct_sync_runtime_authority WHERE assigned_relay_id=?',
+                                     (relay_id,)).fetchone()
+            if not _held_spool_request_matches(row, authority):
+                _set_held_spool_review(conn, row)
+                conn.commit()
+                return False
+            if authority['status'] != 'ACTIVE' and not (
+                administrator and authority['status'] == 'OPERATOR_REVIEW'
+                and authority['last_error_code'] == row['last_error_code']
+            ):
+                return False
         terminal = row["status"] == "failed_permanent"
-        if not (_missing_terminal_can_reenter(row) if terminal else row["status"] in {"pending", "retry_wait"}):
+        if not (held is not None or _missing_terminal_can_reenter(row) if terminal else row["status"] in {"pending", "retry_wait"}):
             return False
-        parsed = _parse_delta_range(row["relative_path"], source_file)
+        if held is not None and not _original_fingerprint_matches(row):
+            _set_held_spool_review(conn, row)
+            conn.commit()
+            return False
+        parsed = _source_range_for_row(row, source_file)
         if parsed is None:
             return False
         start_byte, end_byte = parsed
@@ -443,25 +523,50 @@ def _reconstruct_delta_copies(config: DirectSyncRuntimeConfig, source_file: Path
         spool = Path(str(row["spooled_file_path"]))
         expected_delta = (Path(config.spool_dir) / "_scan_delta_inputs" / _source_delta_key(source_file)
                           / f"bytes-{start_byte}-{end_byte}-sha256-{str(row['content_sha256'])[:16]}.csv")
-        if delta != expected_delta or spool != Path(config.spool_dir) / (relay_id + ".csv"):
+        direct = delta.resolve() == source_file.resolve()
+        if (direct and held is None) or (not direct and delta != expected_delta) or spool != Path(config.spool_dir) / (relay_id + ".csv"):
+            if held is not None:
+                _set_held_spool_review(conn, row)
+                conn.commit()
+            return False
+        if direct and _raw_request_overlaps_waiting_delta(conn, row, source_file):
+            _set_held_spool_review(conn, row)
+            conn.commit()
             return False
         payload = _original_delta_content(source_file, start_byte, end_byte)
         if (payload is None or len(payload) != int(row["byte_length"])
                 or hashlib.sha256(payload).hexdigest() != row["content_sha256"]):
+            if held is not None:
+                _set_held_spool_review(conn, row)
+                conn.commit()
             return False
-        states = [_delta_copy_state(path, payload) for path in (delta, spool)]
+        copies = (spool,) if direct else (delta, spool)
+        states = [_delta_copy_state(path, payload) for path in copies]
         if "conflict" in states:
+            if held is not None:
+                _set_held_spool_review(conn, row)
+                conn.commit()
             return False
-        for path, state in zip((delta, spool), states):
+        for path, state in zip(copies, states):
             if state == "missing" and not _publish_missing_delta_copy(
-                path, payload, copy_from=delta if path == spool else None
+                path, payload, copy_from=delta if path == spool and not direct else None
             ):
                 return False
-        if (any(_delta_copy_state(path, payload) != "matching" for path in (delta, spool))
+        if (any(_delta_copy_state(path, payload) != "matching" for path in copies)
                 or _has_active_source_writer_lock(source_file)
                 or _delta_content_sha256_for_range(source_file, start_byte, end_byte) != row["content_sha256"]):
             return False
-        if terminal:
+        if held is not None:
+            if authority['status'] == 'OPERATOR_REVIEW':
+                changed = conn.execute(
+                    "UPDATE direct_sync_runtime_authority SET status='ACTIVE',last_error_code=NULL,updated_at=? "
+                    "WHERE assigned_relay_id=? AND status='OPERATOR_REVIEW' AND last_error_code=?",
+                    (utc_now_text(), relay_id, row['last_error_code']))
+                if changed.rowcount != 1:
+                    return False
+            conn.execute("UPDATE direct_sync_relay_batches SET status='pending',updated_at=? WHERE relay_id=?",
+                         (utc_now_text(), relay_id))
+        elif terminal:
             changed = conn.execute(
                 """UPDATE direct_sync_relay_batches SET status = 'retry_wait', updated_at = ?
                    WHERE relay_id = ? AND status = 'failed_permanent' AND last_error_code = 'spooled_file_missing'""",
@@ -475,6 +580,122 @@ def _reconstruct_delta_copies(config: DirectSyncRuntimeConfig, source_file: Path
         return False
     finally:
         conn.close()
+
+
+
+def _held_runtime_backlog(config, source_files, terminal_sources=()):
+    held, waiting = _held_runtime_backlog_rows(config.db_path)
+    if not held:
+        return None
+    originals = {_source_delta_key(Path(path)): Path(path) for path in source_files}
+    groups = {}
+    for row in waiting:
+        path = Path(row['source_file_path'])
+        delta = '_scan_delta_inputs' in path.parts
+        key = path.parent.name if delta else _source_delta_key(path)
+        original = originals.get(key) if delta else path
+        bounds = _parse_delta_range(row['relative_path'], original) if original is not None else None
+        if bounds is None and not delta:
+            bounds = (0, row['byte_length'])
+        group = groups.setdefault(key, {'source': original, 'ranges': [], 'fallback': str(path)})
+        group['ranges'].append((*bounds, row['content_sha256']) if bounds is not None else None)
+    for source in terminal_sources:
+        path = Path(source)
+        key = path.parent.name if '_scan_delta_inputs' in path.parts else _source_delta_key(path)
+        if key in groups:
+            continue
+        try:
+            _read_source_scan_state(config.db_path, path)
+        except ExistingTerminalDeltaBlocked as blocked:
+            groups[key] = {'source': path, 'ranges': [(blocked.start_byte, blocked.end_byte, blocked.content_sha256)], 'fallback': str(path)}
+        except OSError:
+            groups[key] = {'source': None, 'ranges': [], 'fallback': str(path)}
+    total, known = 0, []
+    for group in groups.values():
+        source, ranges = group['source'], group['ranges']
+        known.append(str(source) if source is not None else group['fallback'])
+        if source is None or not ranges or any(value is None for value in ranges):
+            total = None
+            continue
+        try:
+            signature = _source_scan_signature(source)
+            counts = [_count_blocked_source_records(source, ExistingTerminalDeltaBlocked(
+                str(source), start_byte=start, end_byte=end, content_sha256=digest))
+                for start, end, digest in ranges]
+            # Every range is verified; the earliest suffix subsumes all later ones.
+            count = (max(counts) if all(value is not None for value in counts)
+                     and _source_scan_signature(source) == signature else None)
+        except (OSError, TypeError, ValueError):
+            count = None
+        total = total + count if total is not None and count is not None else None
+    return len(groups), total, known
+
+
+@writer_sink("raw_relay_storage")
+def _review_missing_held_originals(config, source_files):
+    originals = {_source_delta_key(Path(path)) for path in source_files}
+    conn = _scan_state_connect(config.db_path)
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        for row in _held_spool_rows(conn):
+            path = Path(row['source_file_path'])
+            if (('_scan_delta_inputs' in path.parts and path.parent.name not in originals)
+                    or ('_scan_delta_inputs' not in path.parts and not path.is_file())):
+                _set_held_spool_review(conn, row)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _repair_held_assignments_before_scan(config, source_file, *, administrator=False):
+    conn = _scan_state_connect(config.db_path)
+    try:
+        held = _held_spool_rows(conn)
+    finally:
+        conn.close()
+    return [row['relay_id'] for row in held
+            if _source_range_for_row(row, source_file) is not None
+            and (not row['next_attempt_at'] or row['next_attempt_at'] <= utc_now_text())
+            and _reconstruct_delta_copies(config, source_file, row['relay_id'], administrator=administrator)]
+
+
+
+def _held_review_status(config):
+    conn = _scan_state_connect(config.db_path)
+    try:
+        for row in _held_spool_rows(conn):
+            authority = conn.execute('SELECT status,last_error_code FROM direct_sync_runtime_authority WHERE assigned_relay_id=?',
+                                     (row['relay_id'],)).fetchone()
+            if (authority is not None and authority['status'] == 'OPERATOR_REVIEW'
+                    and authority['last_error_code'] == row['last_error_code']):
+                return {'status': 'operator_review', 'error_code': authority['last_error_code']}
+        return None
+    finally:
+        conn.close()
+
+
+def _terminal_source_backlog(config, originals):
+    sources, counts = [], []
+    for source in originals:
+        try:
+            _read_source_scan_state(config.db_path, source)
+        except ExistingTerminalDeltaBlocked as blocked:
+            sources.append(str(source))
+            counts.append(_count_blocked_source_records(source, blocked))
+        except OSError:
+            sources.append(str(source))
+            counts.append(None)
+    missing = _missing_original_delta_blocks(config, {_source_delta_key(path) for path in originals})
+    sources.extend(missing)
+    counts.extend([None] * len(missing))
+    return sources, counts
+
+
+def _scan_backlog(config, originals, terminal_sources, counts):
+    held = _held_runtime_backlog(config, originals, terminal_sources)
+    if held is not None:
+        return held[2], held[1]
+    return terminal_sources, None if any(value is None for value in counts) else sum(counts)
 
 
 def _missing_original_delta_blocks(config: DirectSyncRuntimeConfig, available_keys: set[str]) -> list[str]:
@@ -523,6 +744,9 @@ def _repair_recoverable_delta_spools_before_scan(
                OR relative_path LIKE 'd/%'
             """
         ).fetchall()
+        held = _held_spool_rows(conn)
+        held_ids = {row['relay_id'] for row in held}
+        rows = list({row['relay_id']: row for row in [*rows, *held]}.values())
     finally:
         conn.close()
 
@@ -530,9 +754,7 @@ def _repair_recoverable_delta_spools_before_scan(
     source_delta_key = _source_delta_key(source_file)
     for row in rows:
         source_path = Path(str(row["source_file_path"] or ""))
-        if source_path.parent.name != source_delta_key:
-            continue
-        parsed_range = _parse_delta_range(str(row["relative_path"] or ""), source_file)
+        parsed_range = _source_range_for_row(row, source_file, source_key=source_delta_key)
         if parsed_range is None:
             continue
         start_byte, end_byte = parsed_range
@@ -541,7 +763,7 @@ def _repair_recoverable_delta_spools_before_scan(
         both_missing = _delta_path_is_missing(source_path) and _delta_path_is_missing(
             Path(str(row["spooled_file_path"] or ""))
         )
-        if terminal_missing or (both_missing and status in {"pending", "retry_wait"}):
+        if row["relay_id"] in held_ids or terminal_missing or (both_missing and status in {"pending", "retry_wait"}):
             if not _reconstruct_delta_copies(config, source_file, str(row["relay_id"])):
                 raise ExistingTerminalDeltaBlocked(
                     str(source_file), start_byte=start_byte, end_byte=end_byte,
@@ -731,7 +953,7 @@ def _read_acknowledged_target_delta_range(
         return None
     row = conn.execute(
         """
-        SELECT relative_path, status, receipt_json
+        SELECT *
         FROM direct_sync_relay_batches
         WHERE relay_id = ?
         """,
@@ -739,7 +961,10 @@ def _read_acknowledged_target_delta_range(
     ).fetchone()
     if row is None or not _delta_relay_row_counts_as_progress(row, include_inflight=False):
         return None
-    return _parse_delta_range(str(row["relative_path"] or ""), source_file)
+    if (Path(row['source_file_path']).resolve() == source_file.resolve()
+            and not _original_fingerprint_matches(row)):
+        return None
+    return _source_range_for_row(row, source_file)
 
 
 def _complete_line_prefix(data: bytes) -> bytes:
@@ -798,8 +1023,12 @@ def _source_prefix_recently_verified(config, source_file, signature, source_size
             # Inflight, damaged and blocked deltas must still reach the full
             # repair/progress path. Only settled sources can skip content reads.
             pending = conn.execute(
-                "SELECT source_file_path, relative_path FROM direct_sync_relay_batches WHERE status != 'acked'"
+                "SELECT relay_id, source_file_path, relative_path FROM direct_sync_relay_batches WHERE status != 'acked'"
             ).fetchall()
+            held_ids = {item['relay_id'] for item in _held_spool_rows(conn)}
+            if any(item['relay_id'] in held_ids and Path(item['source_file_path']).resolve() == source_file.resolve()
+                   for item in pending):
+                return False
             source_key = _source_delta_key(source_file)
             if any(Path(str(item["source_file_path"] or "")).parent.name == source_key
                    and _parse_delta_range(item["relative_path"], source_file) is not None
@@ -1061,12 +1290,29 @@ def main(argv: list[str] | None = None) -> int:
             print(f"direct_sync_relay_status={preflight_status['status']}")
             return 1
     if args.enqueue_source_file:
-        status = enqueue_completed_source_file(
-            config,
-            source_file_path=args.enqueue_source_file,
-            relative_path=args.relative_path,
-        )
+        original = Path(args.enqueue_source_file)
+        repaired = _repair_held_assignments_before_scan(config, original, administrator=True)
+        held, _waiting = _held_runtime_backlog_rows(config.db_path)
+        matching = [row for row in held if _source_range_for_row(row, original) is not None]
+        if repaired or matching:
+            status = run_relay_once(config, target_relay_id=repaired[0] if repaired else '')
+            originals = _scan_source_files(str(original.parent), [], args.max_enqueue_files, 0, limit_results=False)
+            blocked, counts = _terminal_source_backlog(config, originals)
+            blocked, records = _scan_backlog(config, originals, blocked, counts)
+            status = record_scan_drain_status(config, drain_status=status, scan_status='scan_no_new_rows',
+                scan_enqueued_count=0, scan_attempted_count=1,
+                scan_terminal_blocked_count=len(blocked),
+                scan_terminal_blocked_record_count=records,
+                scan_terminal_blocked_source_files=blocked)
+        else:
+            status = enqueue_completed_source_file(
+                config,
+                source_file_path=args.enqueue_source_file,
+                relative_path=args.relative_path,
+            )
     elif args.scan_source_dir:
+        all_originals = _scan_source_files(args.scan_source_dir, [], args.max_enqueue_files, 0, limit_results=False)
+        _review_missing_held_originals(config, all_originals)
         statuses = []
         enqueued_count = 0
         attempted_count = 0
@@ -1133,16 +1379,14 @@ def main(argv: list[str] | None = None) -> int:
                 break
         available_keys = {
             _source_delta_key(path) for path in _scan_source_files(
-                args.scan_source_dir, args.source_glob, args.max_enqueue_files, 0, limit_results=False
+                args.scan_source_dir, [], args.max_enqueue_files, 0, limit_results=False
             )
         }
         for missing_source in _missing_original_delta_blocks(config, available_keys):
             terminal_blocked_sources.append(missing_source)
             terminal_blocked_record_counts.append(None)
-        blocked_record_count = (
-            None if any(value is None for value in terminal_blocked_record_counts)
-            else sum(terminal_blocked_record_counts)
-        )
+        terminal_blocked_sources, blocked_record_count = _scan_backlog(
+            config, all_originals, terminal_blocked_sources, terminal_blocked_record_counts)
         if preflight_status:
             scan_status = preflight_status
         elif statuses:
@@ -1158,6 +1402,9 @@ def main(argv: list[str] | None = None) -> int:
             }
         else:
             scan_status = {"status": "scan_no_new_rows" if no_new_count else "scan_no_files"}
+        held_review = _held_review_status(config)
+        if held_review is not None:
+            scan_status['runtime_lease'] = held_review
         scan_status["scan_enqueued_count"] = enqueued_count
         scan_status["scan_attempted_count"] = attempted_count
         scan_status["scan_no_new_count"] = no_new_count
@@ -1196,6 +1443,10 @@ def main(argv: list[str] | None = None) -> int:
             *SCAN_BLOCKED_STATUSES,
             "enqueue_error",
         }
+        if (args.drain_after_scan and scan_status['status'] == 'existing_terminal_blocked'
+                and held_review is None):
+            held, _waiting = _held_runtime_backlog_rows(config.db_path)
+            should_drain = any(row['status'] == 'pending' for row in held)
         if should_drain:
             targeted_drain_results = []
             status = None
@@ -1230,6 +1481,9 @@ def main(argv: list[str] | None = None) -> int:
             if targeted_drain_results:
                 status = dict(status)
                 status["targeted_drain_results"] = targeted_drain_results
+            terminal_blocked_sources, terminal_blocked_record_counts = _terminal_source_backlog(config, all_originals)
+            terminal_blocked_sources, blocked_record_count = _scan_backlog(
+                config, all_originals, terminal_blocked_sources, terminal_blocked_record_counts)
             status = record_scan_drain_status(
                 config,
                 drain_status=status,

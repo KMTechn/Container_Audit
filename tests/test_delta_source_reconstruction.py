@@ -353,7 +353,7 @@ def test_repair_after_lost_ack_preserves_the_binding_until_that_same_row_sends(
     capsys.readouterr()
     repaired = next(dict(row) for row in helpers.relay_rows(database)
                     if row['relay_id'] == active['relay_id'])
-    assert repaired['status'] == push.RELAY_STATUS_RETRY_WAIT
+    assert repaired['status'] == push.RELAY_STATUS_PENDING
     assert repaired['metadata_json'] == bound['metadata_json']
     assert repaired['attempt_count'] == terminal['attempt_count']
     assert dict(_authority_row(database)) == authority
@@ -362,18 +362,19 @@ def test_repair_after_lost_ack_preserves_the_binding_until_that_same_row_sends(
         db_path=database, credentials=_credentials(runtime_lease_mode=mode), session=server,
         target_relay_id='following',
     )
-    assert following is not None and following.retryable
-    assert len(server.source_calls) == calls_before_repair
-    assert dict(_authority_row(database)) == authority
+    assert following is not None and following.success
+    assert following.relay_id == active['relay_id']
+    assert len(server.source_calls) == calls_before_repair + 1
+    assert server.source_calls[-1] == server.source_calls[calls_before_repair - 1]
+    assert _authority_row(database)['assigned_relay_id'] is None
     server.at(30)
     sent = push.drain_one_relay_batch(
         db_path=database, credentials=_credentials(runtime_lease_mode=mode), session=server,
-        target_relay_id=active['relay_id'], status_dir=tmp_path / 'status',
+        target_relay_id='following', status_dir=tmp_path / 'status',
     )
     assert sent is not None and sent.success
-    assert len(server.source_calls) == calls_before_repair + 1
-    assert len(server.stored) == 2
-    assert server.source_calls[-1] == server.source_calls[calls_before_repair - 1]
+    assert len(server.source_calls) == calls_before_repair + 2
+    assert len(server.stored) == 3
     final = next(row for row in helpers.relay_rows(database) if row['relay_id'] == active['relay_id'])
     assert final['status'] == push.RELAY_STATUS_ACKED
     assert Path(final['spooled_file_path']).read_bytes() == payload

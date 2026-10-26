@@ -958,6 +958,10 @@ def _write_upload_block_status(status: Mapping[str, Any], *, force: bool) -> Non
             install_review = True
         elif runtime_lease.get("status") == "ACTIVE" and runtime_lease.get("server_grant_accepted") is True:
             install_review = False
+    last_result = status.get('last_result')
+    if (status.get('status') == 'acked' and isinstance(last_result, Mapping)
+            and last_result.get('success') is True):
+        install_review = False
     now = utc_now_text()
     since = None
     if blocked_files or install_review:
