@@ -232,3 +232,40 @@ def test_send_band_hides_old_review_line_and_fallback_stays_amber(flow):
     app._render_direct_sync_status_line()
     assert '관리자 확인' in app.direct_sync_status_label.options['text']
     assert app.direct_sync_status_label.options['fg'] == app.COLOR_IDLE_TEXT
+
+
+def test_blocked_since_is_first_scan_utc_until_clear_and_new_episode(tmp_path, monkeypatch):
+    config = runtime_helpers.make_config(tmp_path)
+    first_time, second_time = '2026-10-26T06:00:00Z', '2026-10-26T07:00:00Z'
+    monkeypatch.setattr(runtime, 'utc_now_text', lambda: first_time)
+    first = runtime.record_scan_status(config, status='existing_terminal_blocked',
+                                       scan_enqueued_count=0, scan_attempted_count=0,
+                                       scan_terminal_blocked_count=1, scan_terminal_blocked_record_count=2)
+    assert first['scan_terminal_blocked_since_utc'] == first_time
+    monkeypatch.setattr(runtime, 'utc_now_text', lambda: second_time)
+    idle = runtime._write_runtime_status(config, status='idle', queue=first['queue'], disk={})
+    assert idle['scan_terminal_blocked_since_utc'] == first_time
+    again = runtime.record_scan_status(config, status='existing_terminal_blocked',
+                                       scan_enqueued_count=0, scan_attempted_count=0,
+                                       scan_terminal_blocked_count=2, scan_terminal_blocked_record_count=4)
+    assert again['scan_terminal_blocked_since_utc'] == first_time
+    health = health_model.read_relay_health(db_path=config.db_path,
+                                          runtime_status_path=config.runtime_status_path)
+    assert health.scan_terminal_blocked_since_utc == first_time
+    clear = runtime.record_scan_status(config, status='scan_no_new_rows',
+                                       scan_enqueued_count=0, scan_attempted_count=0,
+                                       scan_terminal_blocked_count=0, scan_terminal_blocked_record_count=0)
+    assert 'scan_terminal_blocked_since_utc' not in clear
+    new = runtime.record_scan_status(config, status='existing_terminal_blocked',
+                                     scan_enqueued_count=0, scan_attempted_count=0,
+                                     scan_terminal_blocked_count=1, scan_terminal_blocked_record_count=2)
+    assert new['scan_terminal_blocked_since_utc'] == second_time
+
+
+@pytest.mark.parametrize('records,expected', [(7, '찍은 기록은 이 PC에 그대로 있습니다 · 막힌 기록 파일 2개'),
+                                             (None, '찍은 기록은 이 PC에 그대로 있습니다 · 막힌 기록 파일 2개')])
+def test_blocked_small_line_preserves_record_and_file_units(records, expected):
+    health = ca.RelayHealth(state='review', pending_count=0, failed_permanent_count=1,
+                           operator_review_count=0, last_acked_at='', oldest_pending_at='', observed_at='',
+                           scan_terminal_blocked_count=2, scan_terminal_blocked_record_count=records)
+    assert health_model.relay_blocked_files_warning_model(health)['tail'] == expected
