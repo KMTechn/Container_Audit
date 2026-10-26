@@ -911,9 +911,9 @@ locator를 준비하므로, owner가 높은 판으로 바뀌면 locator 재판�
 
 ### LIVE SYSTEM 결정과 bootstrap 감독 상한
 
-원래 감독 마감이 지나도 SYSTEM의 apply claim이 `LIVE`이고 전이가 아직 없거나 `PREPARED`·`APPLIED_PENDING_READY`·`ROLLBACK_PENDING`·`ROLLBACK_PENDING_READY`이면 같은 bootstrap의 시작+480초까지만 결정을 더 기다린다. 연장 중에는 실제 native mutex의 busy 재시도 사이에도 claim·phase 자격을 다시 읽는다(native 한 시도 최대 5초 유지). LIVE 대기 자격이 사라지면 acquired=false로 기존 마지막 읽기에 돌아간다. DEFERRED·CONFIRMED·ROLLED_BACK 결정을 받으면 원 시작+480초 상한 안에서 잠금 아래 기존 retained·saw_trial·요청 뒤 DEFERRED 분기를 처리하며, terminal의 시작+240초 식으로 보호 관측을 버리지 않는다. 잠금 밖 읽기는 기다림만 정하며, 실행과 포인터 변경의 기존 잠금·재확인은 그대로다. `UNKNOWN`·`ABSENT`·이미 결정된 기록에는 이 연장을 새로 주지 않는다. 480초에 닿으면 기존 마지막 읽기와 안내·rc20 출구를 유지한다. READY 240초·정상 종료 60초·단계 끝 여유 15초·relay 시도 수와 간격·nonce·G 판정은 바꾸지 않는다.
+원래 감독 마감이 지나도 SYSTEM의 apply claim이 `LIVE`이고 전이가 아직 없거나 `PREPARED`·`APPLIED_PENDING_READY`·`ROLLBACK_PENDING`·`ROLLBACK_PENDING_READY`이면 같은 bootstrap의 시작+1140초까지만 결정을 더 기다린다. 연장 중에는 실제 native mutex의 busy 재시도 사이에도 claim·phase 자격을 다시 읽는다(native 한 시도 최대 5초 유지). LIVE 대기 자격이 사라지면 acquired=false로 기존 마지막 읽기에 돌아간다. DEFERRED·CONFIRMED·ROLLED_BACK 결정을 받으면 원 시작+1140초 상한 안에서 잠금 아래 기존 retained·saw_trial·요청 뒤 DEFERRED 분기를 처리하며, terminal의 시작+240초 식으로 보호 관측을 버리지 않는다. 잠금 밖 읽기는 기다림만 정하며, 실행과 포인터 변경의 기존 잠금·재확인은 그대로다. `UNKNOWN`·`ABSENT`·이미 결정된 기록에는 이 연장을 새로 주지 않는다. 1140초에 닿으면 기존 마지막 읽기와 안내·rc20 출구를 유지한다. READY 900초·정상 종료 60초·단계 끝 여유 15초·relay 시도 수와 간격·nonce·G 판정은 바꾸지 않는다.
 
-### 업데이트 확인창 획득 busy 재시도(240 초 안)
+### 업데이트 확인창 획득 busy 재시도(900 초 안)
 
 인벤토리는 고정 process_snapshot의 literal Observe→raw helper 간선 하나만 비변경 호출로 분류한다. 함수·첫 rows 대입 호출 위치·literal mode·실행 본체 AST가 일치해야 하며 다른 mode/호출자/모듈/본문은 미보호로 남는다. fixed_helper의 writer 선언, registry schema와 빌더의 uncovered 거절 기준은 유지한다.
 
@@ -921,13 +921,13 @@ locator를 준비하므로, owner가 높은 판으로 바뀌면 locator 재판�
 
 `process_snapshot`의 읽기 전용 Observe는 공통 helper 실행 본체를 writer admission 없이 호출한다. Authority·Apply·Verify 등 `fixed_helper` 호출은 기존 writer sink 안에서 실행한다. Observe를 기다리는 동안 trial GUI/onboarding·relay의 writer admission을 보유하지 않는다. 명령·출력·권한 검증 및 기존 subprocess 실행 상한은 유지한다.
 
-SYSTEM의 후보·되돌림 READY 고리는 원래 `applied_at`·`rollback_at`에서 계산한 240초 마감을 그대로 사용한다. `update_lock`의 획득 단계에서 정확한 `RuntimeError("update mutex ownership is busy or abandoned")`와 `wait_result == 0x102`가 함께 확인되고 아직 마감 전이면 재획득한다. 이미 READY 대기 중인 최초 journal 획득도 포함한다. 이 최초 획득의 busy에서는 잠금 전 보호 journal을 원 시각의 대기 상한 계산에만 읽고, 판독·형식·시각이 유효하지 않거나 원 창 밖이면 재시도하지 않는다. 상한은 한 번만 계산하며 획득 뒤 본문은 journal을 다시 읽고 기존 증명을 적용한다. native 대기는 시도마다 기존 5초이며 새 240초 창을 만들지 않는다. abandoned·그 밖의 오류·획득 뒤 본문의 오류·마감에 도달한 busy는 그대로 전파한다. 재시도 중 SYSTEM은 다른 잠금을 보유하지 않으며 READY/receipt/trial/process 증명, journal·pointer와 권한은 유지한다. READY 대기가 아닌 최초 적용·최종 실패 정리·60초 정상 종료 고리는 기존 획득·실패 계약을 유지한다.
+SYSTEM의 후보·되돌림 READY 고리는 원래 `applied_at`·`rollback_at`에서 계산한 900초 마감을 그대로 사용한다. `update_lock`의 획득 단계에서 정확한 `RuntimeError("update mutex ownership is busy or abandoned")`와 `wait_result == 0x102`가 함께 확인되고 아직 마감 전이면 재획득한다. 이미 READY 대기 중인 최초 journal 획득도 포함한다. 이 최초 획득의 busy에서는 잠금 전 보호 journal을 원 시각의 대기 상한 계산에만 읽고, 판독·형식·시각이 유효하지 않거나 원 창 밖이면 재시도하지 않는다. 상한은 한 번만 계산하며 획득 뒤 본문은 journal을 다시 읽고 기존 증명을 적용한다. native 대기는 시도마다 기존 5초이며 새 900초 창을 만들지 않는다. abandoned·그 밖의 오류·획득 뒤 본문의 오류·마감에 도달한 busy는 그대로 전파한다. 재시도 중 SYSTEM은 다른 잠금을 보유하지 않으며 READY/receipt/trial/process 증명, journal·pointer와 권한은 유지한다. READY 대기가 아닌 최초 적용·최종 실패 정리·60초 정상 종료 고리는 기존 획득·실패 계약을 유지한다.
 
 ### Bootstrap relay 시작의 일시 admission 대기
 
 Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRITER_GATE_TIMEOUT`을 감독 마감 안에서 0.1초씩 쉬며 재시도한다. 각 시도는 기존 launch_version의 admission을 다시 얻으며 시도 사이에는 admission을 보유하지 않는다. 마지막 admission 대기는 기존 최대 5초이며 마감 뒤에는 기존 실패 출구를 유지한다. fence 확정·버려진 소유권 등 다른 거절과 GUI 실행 자체의 timeout은 재시도하지 않는다. 포인터·trial claim·READY·CONFIRMED·G 허가·cohort·잠금 순서는 유지한다. bootstrap 밖의 relay launcher admission과 실제 로그온/pythonw 수용은 별도 범위다.
 
-bootstrap의 시작을 `t_b`라 하면 감독 마감은 `max(t_b+240초, 진행 단계 창 끝+15초)`이며 `t_b+480초`를 넘지 않는다. 단계 창은 내구 기록된 후보 적용 시각+240초, 후보 정상 종료 기다림 시작 `normal_stop_started_at+60초`, `rollback_at+240초`다. bootstrap 재시작이 단계 창의 기준 시각을 바꾸지 않는다. 감독 마감 연장은 실제 READY 창이나 G 판정을 늘리지 않는다.
+bootstrap의 시작을 `t_b`라 하면 감독 마감은 `max(t_b+240초, 진행 단계 창 끝+15초)`이며 `t_b+1140초`를 넘지 않는다. 단계 창은 내구 기록된 후보 적용 시각+900초, 후보 정상 종료 기다림 시작 `normal_stop_started_at+60초`, `rollback_at+900초`다. bootstrap 재시작이 단계 창의 기준 시각을 바꾸지 않는다. 감독 마감 연장은 실제 READY 창이나 G 판정을 늘리지 않는다.
 
 trial GUI claim이 같은 nonce로 이미 존재하거나 GUI PID가 결속된 뒤에도 bootstrap은 반복마다 기존 `process_matches_trial(role="relay")`와 writer census의 같은 SHA·작업자 SID 판별로 실제 relay를 다시 관측한다. relay가 없을 때만 같은 bootstrap 프로세스의 nonce마다 최대 3회, 2초 이상 간격으로 감독 마감 안에서 시작을 시도한다. 재시작한 bootstrap은 다시 3회가 있지만 내구 시각에 묶인 READY 창은 늘지 않는다. Popen의 `OSError`만 이 횟수 안에서 다시 시도하며, 매 시도 전 표본을 다시 읽어 오류 뒤 실제로 생긴 relay의 중복 시작을 막는다. 세 번 모두 실패하면 기존 사용자 `staging/startup-support.json`과 공개 `CONTAINER_AUDIT_SUPPORT=` 한 줄에 정확한 공개 코드 `TRIAL_RELAY_START_FAILED`를 기록한다. 사용자 bootstrap은 SYSTEM 소유 transition.json에 재시도 기록을 쓰지 않으며 trial.json 형식은 유지한다. READY의 실제 relay 정확히 하나 조건과 기존 되돌림/FAILED 출구는 유지한다.
 
@@ -949,4 +949,4 @@ SYSTEM 적용은 검증된 작업자 루트의 `container_audit_user_relay.stop.
 
 중앙 등록 profile이 있고 기본 요청 한도(2초)를 사용할 때, 현재 신원·서버 URL로 기존 인증 primary/recovery 검증기를 통과하는 품목표가 둘 다 없으면 첫 요청 한도는 10초다. 첫 시도 시작의 단조 시계부터 요청·본문 수신 예산40초를 두고, 0.25초 대기 앞뒤 모두 다음 연결10초+읽기10초가 남을 때만 서버 응답 전 전송 오류를 최대 두 번 더 시도한다. 상태줄·헤더를 받으면 본문 오류도 다시 시도하지 않는다. 전체 40초는 돌려받은 조각 경계에서만 확인한다. 서버가 아주 느리게 끊임없이 보내면(읽기 간격마다 10초 안) 그보다 늦을 수 있으며, 조용히 멈추면 읽기 기다림 10초로 끊긴다. 새 타이머·소켓 중단 장치는 두지 않는다. 바로 거절되면 최대 세 번 빨리 끝난다. HTTP 응답·본문 읽기·목록 검증 실패는 다시 시도하지 않는다. 인증 cache가 있거나 한도를 다른 값으로 명시했으면 기존 한 번의 요청과 한도를 유지한다(캐시 길 timeout2초, 연결+읽기 끊김 합산 약4초+이름 풀이). profile 없는 로컬/패키지 경로와 인증·cache 내구 형식은 그대로다.
 
-연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+480초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.
+연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+1140초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.

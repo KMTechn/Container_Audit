@@ -1,3 +1,15 @@
+### 업데이트 확인 창 15분과 일시 실패의 다시 기회 (sub-659)
+
+후보와 되돌림의 READY 확인 창은 원래 `applied_at`·`rollback_at`부터 각각 900초(15분)다. 부트스트랩 감독 상한은 시작+1140초(900+240)이며, 재시작으로 원래 단계 시각을 바꾸지 않는다.
+
+READY 시간 초과와 준비 중 시간 초과(Observe 20/10초 초과·정지 관찰 넘김 포함), 파일 잠김, 전송·망 오류, 일시 디스크 오류는 같은 SHA의 `retry_shas`에 시도 수와 첫·마지막 시각을 보존한다. 준비 단계의 같은 SHA 재요청은 마지막 시도부터 900초 뒤에만 가능하다. 24시간 안 세 번째 실패 뒤에는 같은 SHA를 그 예산의 끝까지 보류한다. SHA를 영구 거절하지 않으며, `first_at+24h` 뒤 새 예산으로 자동 재시도한다. 원 실패 증거는 보존한다. 서명·해시·manifest 검증, 점검 F, 명시 거절, 시험 앱 기동 실패·이미 종료, 공간 없음(winerror 112)은 즉시 확정 거절이다. 모르는 예외도 제한된 다시 기회를 얻는다. 포인터 변경이 불확실한 실패는 기존 UNKNOWN/복구 경계를 유지한다.
+
+준비 표지의 SHA 자체를 일시적으로 못 읽으면 `preparation_retry_pending: true`와 기존 `deferred_at`으로 900초를 보존한다. 신원을 알기 전에는 SHA별 예산을 차감하지 않고, 재시작도 같은 시각을 따른다. 성공한 새 전환에는 이 표지를 넘기지 않는다.
+
+3회 소진의 다음 일반 시작은 기존 판으로 작업을 계속하며 `UPDATE_RETRY_REVIEW_REQUIRED`와 다음 안내를 기존 시작 지원 경로에 남긴다: 「업데이트를 세 번 시도했지만 끝내지 못했습니다 — 지금 판으로 작업은 그대로 할 수 있습니다 · 하루 뒤 저절로 다시 시도합니다 · 현장 관리자에게 알리세요」. 되돌림 READY 뒤에도 같다. 별도 해제 명령이나 영구 표지는 만들지 않는다.
+
+포장의 사용자 relay가 만든 `update-preparation-failure-<32자리 hex>.json`은 최근 20개만 보존한다. 다른 이름의 파일은 정리하지 않는다. 실제 설치·업데이트 및 현장 READY 실측은 이 단위 시험 단계의 검증 범위 밖이다.
+
 # 운영·환경·장애 복구
 
 10/15 화면 동작: 부분 제출 확인은 재시작 때 채우는 중으로 돌아가며, 이미 저장된 결정은 유예 없이 같은 키로 복구·확정한다. C02–C07·검증된 C09는 자기 작업에 한해 PIN 없이 처리하고 C08·수동 결속·격리 복원은 관리자 PIN을 요구한다. 실제 창 동작·장면 판정과 부분 제출/PIN 독립 검토는 통합 뒤 별도 수용한다.
@@ -1837,9 +1849,9 @@ Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종�
 
 ### LIVE SYSTEM 결정과 bootstrap 감독 상한
 
-원래 감독 마감이 지나도 SYSTEM의 apply claim이 `LIVE`이고 전이가 아직 없거나 `PREPARED`·`APPLIED_PENDING_READY`·`ROLLBACK_PENDING`·`ROLLBACK_PENDING_READY`이면 같은 bootstrap의 시작+480초까지만 결정을 더 기다린다. 연장 중에는 실제 native mutex의 busy 재시도 사이에도 claim·phase 자격을 다시 읽는다(native 한 시도 최대 5초 유지). LIVE 대기 자격이 사라지면 acquired=false로 기존 마지막 읽기에 돌아간다. DEFERRED·CONFIRMED·ROLLED_BACK 결정을 받으면 원 시작+480초 상한 안에서 잠금 아래 기존 retained·saw_trial·요청 뒤 DEFERRED 분기를 처리하며, terminal의 시작+240초 식으로 보호 관측을 버리지 않는다. 잠금 밖 읽기는 기다림만 정하며, 실행과 포인터 변경의 기존 잠금·재확인은 그대로다. `UNKNOWN`·`ABSENT`·이미 결정된 기록에는 이 연장을 새로 주지 않는다. 480초에 닿으면 기존 마지막 읽기와 안내·rc20 출구를 유지한다. READY 240초·정상 종료 60초·단계 끝 여유 15초·relay 시도 수와 간격·nonce·G 판정은 바꾸지 않는다.
+원래 감독 마감이 지나도 SYSTEM의 apply claim이 `LIVE`이고 전이가 아직 없거나 `PREPARED`·`APPLIED_PENDING_READY`·`ROLLBACK_PENDING`·`ROLLBACK_PENDING_READY`이면 같은 bootstrap의 시작+1140초까지만 결정을 더 기다린다. 연장 중에는 실제 native mutex의 busy 재시도 사이에도 claim·phase 자격을 다시 읽는다(native 한 시도 최대 5초 유지). LIVE 대기 자격이 사라지면 acquired=false로 기존 마지막 읽기에 돌아간다. DEFERRED·CONFIRMED·ROLLED_BACK 결정을 받으면 원 시작+1140초 상한 안에서 잠금 아래 기존 retained·saw_trial·요청 뒤 DEFERRED 분기를 처리하며, terminal의 시작+240초 식으로 보호 관측을 버리지 않는다. 잠금 밖 읽기는 기다림만 정하며, 실행과 포인터 변경의 기존 잠금·재확인은 그대로다. `UNKNOWN`·`ABSENT`·이미 결정된 기록에는 이 연장을 새로 주지 않는다. 1140초에 닿으면 기존 마지막 읽기와 안내·rc20 출구를 유지한다. READY 900초·정상 종료 60초·단계 끝 여유 15초·relay 시도 수와 간격·nonce·G 판정은 바꾸지 않는다.
 
-### 업데이트 확인창 획득 busy 재시도(240 초 안)
+### 업데이트 확인창 획득 busy 재시도(900 초 안)
 
 표지 처리와 READY 창 고침은 다시 설치 때 고정 `current`를 교체하는 길에 반영된다. 11/1 판 수명 동안은 기존 실패 거절·자료 보존·지원 복구 그물이 지킨다.
 
@@ -1851,13 +1863,13 @@ Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종�
 
 느린 process Observe는 writer gate를 쥐지 않으므로 trial GUI/onboarding·relay의 입장을 막지 않는다. Authority·Apply·Verify 등 fixed helper의 쓰기/검증은 gate 안에 남는다. Observe의 기존 subprocess 무응답 마감은 이번 고침에서 바꾸지 않으며, 별도 상한 근거는 sub-553 보고에 기록한다.
 
-사용자 bootstrap이 Observe 중 업데이트 잠금을 보유하면 SYSTEM의 후보·되돌림 READY 확인은 최초 journal 획득을 포함해 획득 busy만 원래 240초 창 안에서 다시 기다린다. 최초 busy의 잠금 전 보호 journal 판독은 원 시각의 상한 계산에만 쓰며, 판독 실패·형식/시각 이상은 재시도하지 않는다. 획득 뒤 본문은 journal을 다시 읽는다. 재시작이나 재시도로 `applied_at`·`rollback_at`을 갱신하지 않는다. native 5초 대기는 유지하며 abandoned·다른 오류·획득 뒤 본문 오류·마감 뒤 busy는 기존 fail-closed/UNKNOWN 경로를 따른다. 확인 증명이나 실패 뒤 복구 정책을 완화하지 않는다. 검증·잠금 자리별 근거는 `work/program/w9firstupd/sub-553/RESULT.md`에 남긴다. 공식 빌드는 하네스 RED 뒤 동일 사슬 GREEN을 확인한 다음 허용되며 게시·병합은 하지 않는다.
+사용자 bootstrap이 Observe 중 업데이트 잠금을 보유하면 SYSTEM의 후보·되돌림 READY 확인은 최초 journal 획득을 포함해 획득 busy만 원래 900초 창 안에서 다시 기다린다. 최초 busy의 잠금 전 보호 journal 판독은 원 시각의 상한 계산에만 쓰며, 판독 실패·형식/시각 이상은 재시도하지 않는다. 획득 뒤 본문은 journal을 다시 읽는다. 재시작이나 재시도로 `applied_at`·`rollback_at`을 갱신하지 않는다. native 5초 대기는 유지하며 abandoned·다른 오류·획득 뒤 본문 오류·마감 뒤 busy는 기존 fail-closed/UNKNOWN 경로를 따른다. 확인 증명이나 실패 뒤 복구 정책을 완화하지 않는다. 검증·잠금 자리별 근거는 `work/program/w9firstupd/sub-553/RESULT.md`에 남긴다. 공식 빌드는 하네스 RED 뒤 동일 사슬 GREEN을 확인한 다음 허용되며 게시·병합은 하지 않는다.
 
 ### Bootstrap relay 시작의 일시 admission 대기
 
 Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRITER_GATE_TIMEOUT`을 감독 마감 안에서 0.1초씩 쉬며 재시도한다. 각 시도는 기존 launch_version의 admission을 다시 얻으며 시도 사이에는 admission을 보유하지 않는다. 마지막 admission 대기는 기존 최대 5초이며 마감 뒤에는 기존 실패 출구를 유지한다. fence 확정·버려진 소유권 등 다른 거절과 GUI 실행 자체의 timeout은 재시도하지 않는다. 포인터·trial claim·READY·CONFIRMED·G 허가·cohort·잠금 순서는 유지한다. bootstrap 밖의 relay launcher admission과 실제 로그온/pythonw 수용은 별도 범위다.
 
-감독 마감은 시작+240초를 기본으로, 내구 기록된 현재 단계 창 끝+15초까지 늘리되 시작+480초를 넘지 않는다. 후보 READY·되돌림 READY는 같은 240초 상수로 원 applied_at·rollback_at에 묶고, 후보 정상 종료는 60초다. 재시작으로 이 기준 시각이나 마감을 새로 열지 않는다. 같은 trial GUI claim 뒤에도 relay 실제 표본을 다시 확인하며, 없을 때만 같은 bootstrap 프로세스의 nonce마다 최대 3회/간격 2초 이상으로 시작한다. 재시작해도 원 READY 창은 늘지 않는다. Popen OSError의 세 번 실패는 사용자 `staging/startup-support.json`과 공개 지원 한 줄에 `TRIAL_RELAY_START_FAILED`로 남기며 기존 되돌림/FAILED 판정을 따른다. 사용자 bootstrap이 SYSTEM 소유 transition을 쓰지 않는다.
+감독 마감은 시작+240초를 기본으로, 내구 기록된 현재 단계 창 끝+15초까지 늘리되 시작+1140초를 넘지 않는다. 후보 READY·되돌림 READY는 같은 900초 상수로 원 applied_at·rollback_at에 묶고, 후보 정상 종료는 60초다. 재시작으로 이 기준 시각이나 마감을 새로 열지 않는다. 같은 trial GUI claim 뒤에도 relay 실제 표본을 다시 확인하며, 없을 때만 같은 bootstrap 프로세스의 nonce마다 최대 3회/간격 2초 이상으로 시작한다. 재시작해도 원 READY 창은 늘지 않는다. Popen OSError의 세 번 실패는 사용자 `staging/startup-support.json`과 공개 지원 한 줄에 `TRIAL_RELAY_START_FAILED`로 남기며 기존 되돌림/FAILED 판정을 따른다. 사용자 bootstrap이 SYSTEM 소유 transition을 쓰지 않는다.
 
 정식 멈춤 PC는 업데이트 날 전에 `--onboard-current-user`로 onboarding하여 되살린다. relay 멈춤 표지가 있으면 SYSTEM은 포인터를 바꾸지 않고 기존 적용 전 보류와 같은 `DEFERRED`·`UPDATE_RELAY_STOP_REQUESTED`로 보류하며 recovery_pending은 두지 않는다. 사용자 bootstrap도 같은 표지에서 REQUEST_APPLY를 보내지 않고, 지원 기록·안내 한 번 뒤 기존 검증을 거쳐 지금 판 화면을 연다. relay는 표지대로 멈춘 채다. 표지는 업데이트가 지우지 않으며 onboarding 뒤 다음 로그온에서 적용한다. trial 도중 운영자가 새로 건 멈춤은 기존 READY 실패·되돌림/FAILED 흐름을 따른다.
 
@@ -1899,4 +1911,4 @@ run_app에는 셸 기본값과 같은 data/webview2를 udf로 명시한다. EBWe
 
 중앙 등록 profile이 있고 기본 요청 한도(2초)를 사용할 때, 현재 신원·서버 URL로 기존 인증 primary/recovery 검증기를 통과하는 품목표가 둘 다 없으면 첫 요청 한도는 10초다. 첫 시도 시작의 단조 시계부터 요청·본문 수신 예산40초를 두고, 0.25초 대기 앞뒤 모두 다음 연결10초+읽기10초가 남을 때만 서버 응답 전 전송 오류를 최대 두 번 더 시도한다. 상태줄·헤더를 받으면 본문 오류도 다시 시도하지 않는다. 전체 40초는 돌려받은 조각 경계에서만 확인한다. 서버가 아주 느리게 끊임없이 보내면(읽기 간격마다 10초 안) 그보다 늦을 수 있으며, 조용히 멈추면 읽기 기다림 10초로 끊긴다. 새 타이머·소켓 중단 장치는 두지 않는다. 바로 거절되면 최대 세 번 빨리 끝난다. HTTP 응답·본문 읽기·목록 검증 실패는 다시 시도하지 않는다. 인증 cache가 있거나 한도를 다른 값으로 명시했으면 기존 한 번의 요청과 한도를 유지한다(캐시 길 timeout2초, 연결+읽기 끊김 합산 약4초+이름 풀이). profile 없는 로컬/패키지 경로와 인증·cache 내구 형식은 그대로다.
 
-연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+480초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.
+연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+1140초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.

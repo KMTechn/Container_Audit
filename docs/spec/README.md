@@ -1,3 +1,5 @@
+후보·되돌림 READY 확인 창은 15분(900초), bootstrap 감독 상한은 1140초다. 준비 중 일시 실패의 같은 SHA는 마지막 시도 900초 뒤 다시 기회를 얻으며, 24시간 안 세 번째 실패 뒤 그 예산이 끝날 때까지 보류하며 하루 뒤 자동 재시도한다([운영](operations.md)).
+
 # 이적 목표 명세 (Container_Audit)
 
 ### retained 후보와 다음 업데이트 요청 (sub-555)
@@ -7,15 +9,15 @@ retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요
 
 ### LIVE SYSTEM 결정과 bootstrap 감독 상한
 
-원래 감독 마감이 지나도 SYSTEM의 apply claim이 `LIVE`이고 전이가 아직 없거나 `PREPARED`·`APPLIED_PENDING_READY`·`ROLLBACK_PENDING`·`ROLLBACK_PENDING_READY`이면 같은 bootstrap의 시작+480초까지만 결정을 더 기다린다. 연장 중에는 실제 native mutex의 busy 재시도 사이에도 claim·phase 자격을 다시 읽는다(native 한 시도 최대 5초 유지). LIVE 대기 자격이 사라지면 acquired=false로 기존 마지막 읽기에 돌아간다. DEFERRED·CONFIRMED·ROLLED_BACK 결정을 받으면 원 시작+480초 상한 안에서 잠금 아래 기존 retained·saw_trial·요청 뒤 DEFERRED 분기를 처리하며, terminal의 시작+240초 식으로 보호 관측을 버리지 않는다. 잠금 밖 읽기는 기다림만 정하며, 실행과 포인터 변경의 기존 잠금·재확인은 그대로다. `UNKNOWN`·`ABSENT`·이미 결정된 기록에는 이 연장을 새로 주지 않는다. 480초에 닿으면 기존 마지막 읽기와 안내·rc20 출구를 유지한다. READY 240초·정상 종료 60초·단계 끝 여유 15초·relay 시도 수와 간격·nonce·G 판정은 바꾸지 않는다.
+원래 감독 마감이 지나도 SYSTEM의 apply claim이 `LIVE`이고 전이가 아직 없거나 `PREPARED`·`APPLIED_PENDING_READY`·`ROLLBACK_PENDING`·`ROLLBACK_PENDING_READY`이면 같은 bootstrap의 시작+1140초까지만 결정을 더 기다린다. 연장 중에는 실제 native mutex의 busy 재시도 사이에도 claim·phase 자격을 다시 읽는다(native 한 시도 최대 5초 유지). LIVE 대기 자격이 사라지면 acquired=false로 기존 마지막 읽기에 돌아간다. DEFERRED·CONFIRMED·ROLLED_BACK 결정을 받으면 원 시작+1140초 상한 안에서 잠금 아래 기존 retained·saw_trial·요청 뒤 DEFERRED 분기를 처리하며, terminal의 시작+240초 식으로 보호 관측을 버리지 않는다. 잠금 밖 읽기는 기다림만 정하며, 실행과 포인터 변경의 기존 잠금·재확인은 그대로다. `UNKNOWN`·`ABSENT`·이미 결정된 기록에는 이 연장을 새로 주지 않는다. 1140초에 닿으면 기존 마지막 읽기와 안내·rc20 출구를 유지한다. READY 900초·정상 종료 60초·단계 끝 여유 15초·relay 시도 수와 간격·nonce·G 판정은 바꾸지 않는다.
 
-### 업데이트 확인창 획득 busy 재시도(240 초 안)
+### 업데이트 확인창 획득 busy 재시도(900 초 안)
 
 사용자 bootstrap의 실행 전 부재 확인 Observe와 실행은 같은 update→trial 잠금 안에서 원자적으로 수행한다. 반복 감독은 프로세스 안에 보관한 relay PID/생성 수명을 native 조회로 확인하며, 최초 실행 전과 그 수명이 끝난 뒤에만 Observe한다. 실행 상한 3회와 2초 간격은 유지한다. 한 번짜리 ordinary relay·recovery GUI·start_current·15분 stale UNKNOWN 복구의 Observe/증명/실행은 기존 잠금 안에 둔다. 실행을 결정하지 않는 prepared/READY 상태 읽기만 잠금 밖에서 하고 재획득 뒤 transition·nonce·PID/birth·claim·READY·active를 재확인한다. 바뀐 관측은 기존 감독 창으로 돌리며 새 마감·공유 기록을 만들지 않는다. 실행·request·claim 기록의 기존 잠금 순서를 유지한다.
 
 읽기 전용 process Observe는 writer admission 밖에서 실행해 trial GUI/onboarding·relay가 입장할 수 있게 한다. Authority·Apply·Verify 등 기존 fixed helper의 쓰기/검증 경로는 writer admission 안에 유지한다. PowerShell Observe의 기존 실행 상한은 이번에 변경하지 않는다.
 
-v2.0.121 다시 설치 때(current 교체 길) 고침: SYSTEM의 후보·되돌림 READY 확인은 최초 journal 획득을 포함해 원래 내구 시각에 묶인 240초 창 안에서만 업데이트 잠금 획득 busy를 다시 기다린다. 잠금 전 판독은 대기 상한에만 쓰고, 획득 뒤 journal과 확인 증명을 다시 검사한다. abandoned·다른 오류·잠금 획득 뒤 본문 오류·마감 뒤 busy는 기존 거절을 유지한다. native 5초 대기와 정상 시작 증명은 그대로다. 고침 가지 검증은 `work/program/w9firstupd/sub-553/RESULT.md`에 기록하며 공식 빌드·현장 적용은 별도 지시 대상이다.
+v2.0.121 다시 설치 때(current 교체 길) 고침: SYSTEM의 후보·되돌림 READY 확인은 최초 journal 획득을 포함해 원래 내구 시각에 묶인 900초 창 안에서만 업데이트 잠금 획득 busy를 다시 기다린다. 잠금 전 판독은 대기 상한에만 쓰고, 획득 뒤 journal과 확인 증명을 다시 검사한다. abandoned·다른 오류·잠금 획득 뒤 본문 오류·마감 뒤 busy는 기존 거절을 유지한다. native 5초 대기와 정상 시작 증명은 그대로다. 고침 가지 검증은 `work/program/w9firstupd/sub-553/RESULT.md`에 기록하며 공식 빌드·현장 적용은 별도 지시 대상이다.
 
 - v2.0.120: 정상 닫기의 끝 정리는 생성 시 명시 등록한 자료 일꾼만 기다린다. 화면·Tk 모두 화면 껍질·라이브러리·native Dummy·모르는 스레드는 대기하지 않는다. 자료 쓰기·60초 상한·종료 지연 표지와 다음 시작 복구는 유지한다. 집중 검증 근거는 `work/program/w9firstupd/sub-502/RESULT.md`이며 ZIP 빌드·실제 화면 검증은 후속 단계다.
 
@@ -309,4 +311,4 @@ v2.0.121 다시 설치 때(current 교체 길) 고침: SYSTEM의 후보·되돌�
 
 중앙 등록 profile이 있고 기본 요청 한도(2초)를 사용할 때, 현재 신원·서버 URL로 기존 인증 primary/recovery 검증기를 통과하는 품목표가 둘 다 없으면 첫 요청 한도는 10초다. 첫 시도 시작의 단조 시계부터 요청·본문 수신 예산40초를 두고, 0.25초 대기 앞뒤 모두 다음 연결10초+읽기10초가 남을 때만 서버 응답 전 전송 오류를 최대 두 번 더 시도한다. 상태줄·헤더를 받으면 본문 오류도 다시 시도하지 않는다. 전체 40초는 돌려받은 조각 경계에서만 확인한다. 서버가 아주 느리게 끊임없이 보내면(읽기 간격마다 10초 안) 그보다 늦을 수 있으며, 조용히 멈추면 읽기 기다림 10초로 끊긴다. 새 타이머·소켓 중단 장치는 두지 않는다. 바로 거절되면 최대 세 번 빨리 끝난다. HTTP 응답·본문 읽기·목록 검증 실패는 다시 시도하지 않는다. 인증 cache가 있거나 한도를 다른 값으로 명시했으면 기존 한 번의 요청과 한도를 유지한다(캐시 길 timeout2초, 연결+읽기 끊김 합산 약4초+이름 풀이). profile 없는 로컬/패키지 경로와 인증·cache 내구 형식은 그대로다.
 
-연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+480초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.
+연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+1140초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.

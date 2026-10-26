@@ -30,14 +30,16 @@ from storage_policy import ensure_user_runtime_directory
 
 SCHEMA = "container-audit-startup-update-v1"
 APPLY_PROGRESS_TIMEOUT = 60
-READY_WINDOW_SECONDS = 600
+READY_WINDOW_SECONDS = 900
 # The bootstrap decision wait must outlast one whole READY window plus the
 # normal-stop and settle tail it always had (the former 480 = 240 + 240).
 BOOTSTRAP_OBSERVATION_CAP_SECONDS = READY_WINDOW_SECONDS + 240
 # A transient failure of one candidate sha gets another chance; the failed
-# list (permanent) is for confirmed rejections and for an exhausted budget.
+# list (permanent) is only for confirmed rejections.
 RETRY_ATTEMPT_LIMIT = 3
 RETRY_WINDOW_SECONDS = 24 * 60 * 60
+UPDATE_RETRY_REVIEW_REQUIRED = 'UPDATE_RETRY_REVIEW_REQUIRED'
+RETRY_REVIEW_MESSAGE = '업데이트를 세 번 시도했지만 끝내지 못했습니다 — 지금 판으로 작업은 그대로 할 수 있습니다 · 하루 뒤 저절로 다시 시도합니다 · 현장 관리자에게 알리세요'
 STARTUP_PROGRESS_MESSAGE = '업데이트가 진행 중입니다. 잠시 뒤 다시 시작하세요.'
 READY_CHECKS = (
     "gui_initialized", "identity_readable", "ledger_readable",
@@ -205,6 +207,65 @@ def record_retry_chance(transition: Mapping[str, Any], sha: str, *, now: str) ->
     return entries, attempts >= RETRY_ATTEMPT_LIMIT
 
 
+def _transient_preparation_error(error: BaseException) -> bool:
+    """Unknown failures get a bounded retry; only proved rejections are final."""
+    import errno
+    if getattr(error, "winerror", None) == 112 or getattr(error, "errno", None) == errno.ENOSPC:
+        return False
+    return getattr(error, "_preparation_rejection", False) is not True
+
+
+def _preparation_rejection(message: str) -> ValueError:
+    error = ValueError(message)
+    error._preparation_rejection = True
+    return error
+
+
+def _retry_review_required(state: Mapping[str, Any] | None) -> bool:
+    entries = (state or {}).get("retry_shas")
+    if not isinstance(entries, Mapping) or (state or {}).get("preparation_retry_pending") is True:
+        return False
+    if (state or {}).get("reason_code") == "UPDATE_PREPARATION_FAILED":
+        selected = [entry for entry in entries.values() if isinstance(entry, Mapping)
+                    and entry.get("last_at") == state.get("deferred_at")]
+    else:
+        selected = [entries.get((state or {}).get("candidate_sha"))]
+    for entry in selected:
+        try:
+            if (type(entry["attempts"]) is int and entry["attempts"] >= RETRY_ATTEMPT_LIMIT
+                    and 0 <= (_utc(now_utc()) - _utc(entry["first_at"])).total_seconds() < RETRY_WINDOW_SECONDS):
+                return True
+        except (ValueError, TypeError, KeyError):
+            pass
+    return False
+
+
+def _preparation_retry_due(state: Mapping[str, Any] | None, sha: str) -> bool:
+    """Use the existing retry journal; restarting cannot reopen its interval."""
+    if ((state or {}).get("preparation_retry_pending") is True
+            or (not sha and (state or {}).get("reason_code") == "UPDATE_PREPARATION_FAILED")):
+        try:
+            if (_utc(now_utc()) - _utc(state["deferred_at"])).total_seconds() < READY_WINDOW_SECONDS:
+                return False
+        except (ValueError, KeyError, TypeError):
+            return False  # A malformed protected clock cannot reopen this wait.
+    raw = (state or {}).get("retry_shas")
+    entry = raw.get(sha) if isinstance(raw, Mapping) else None
+    if not isinstance(entry, Mapping):
+        return True
+    try:
+        now = _utc(now_utc())
+        age = (now - _utc(entry["first_at"])).total_seconds()
+        if not 0 <= age < RETRY_WINDOW_SECONDS:
+            return True
+        if type(entry["attempts"]) is not int or entry["attempts"] < 1:
+            return True
+        return (entry["attempts"] < RETRY_ATTEMPT_LIMIT
+                and (now - _utc(entry["last_at"])).total_seconds() >= READY_WINDOW_SECONDS)
+    except (ValueError, KeyError, TypeError):
+        return True  # Match record_retry_chance's handling of invalid entries.
+
+
 def request_rollback(transition: Mapping[str, Any], *, reason: str, transient: bool = False,
                      now: str | None = None) -> dict[str, Any]:
     if transition.get("phase") != "APPLIED_PENDING_READY":
@@ -214,7 +275,8 @@ def request_rollback(transition: Mapping[str, Any], *, reason: str, transient: b
     extra: dict[str, Any] = {}
     permanent = True
     if transient:
-        extra["retry_shas"], permanent = record_retry_chance(transition, candidate, now=now or now_utc())
+        extra["retry_shas"], _ = record_retry_chance(transition, candidate, now=now or now_utc())
+        permanent = False
     if permanent and candidate not in failures:
         failures.append(candidate)
     return {**transition, "phase": "ROLLBACK_PENDING", "reason": str(reason), "failed_shas": failures, **extra}
@@ -931,7 +993,7 @@ PUBLIC_CODES = frozenset({
     UPDATE_RELAY_STOP_REQUESTED, TRIAL_RELAY_START_FAILED,
     'INSTALL_SERVER_ORIGIN_CHANGED', 'BOOTSTRAP_INTEGRITY_RECORD_ABSENT',
     'UPDATE_APPLY_REQUEST_FAILED', 'UPDATE_APPLY_NO_PROGRESS',
-    'UPDATE_PREPARATION_FAILED', 'UPDATE_TERMINAL_RECOVERED',
+    'UPDATE_PREPARATION_FAILED', 'UPDATE_RETRY_REVIEW_REQUIRED', 'UPDATE_TERMINAL_RECOVERED',
     'UPDATE_GENERATION_UNKNOWN', 'UPDATE_PREVIOUS_CONFIRMED',
     'UPDATE_IN_PROGRESS', 'UPDATE_LOCK_WAIT_EXPIRED', 'UPDATE_LIFECYCLE_CHANGED', 'UPDATE_LIFECYCLE_UNKNOWN',
     'UPDATE_SUPERVISION_UNAVAILABLE', 'UPDATE_EXISTING_WRITER',
@@ -969,6 +1031,7 @@ SAFE_MESSAGES = (
     '설정 파일과 설치 경로를 확인하고 다시 실행하세요.',
     '업데이트가 진행 중입니다. 잠시 뒤 다시 시작하세요.',
 )
+SAFE_MESSAGES += (RETRY_REVIEW_MESSAGE,)
 _CONFIGURATION_STAGES = frozenset({
     'runtime_profile_check', 'runtime_profile_install', 'protected_admin_install',
     'update_archive_check', 'registration', 'relay_install',
@@ -998,7 +1061,8 @@ def support_record(fields=None, *, stage, error=None):
                           location_line=frame.tb_lineno)
     else:
         values.setdefault('reason_code', 'SUPPORT_RESULT')
-    values['guidance'] = (SAFE_MESSAGES[0] if stage == 'argument_parse'
+    values['guidance'] = (RETRY_REVIEW_MESSAGE if values.get('reason_code') == UPDATE_RETRY_REVIEW_REQUIRED
+                          else SAFE_MESSAGES[0] if stage == 'argument_parse'
                           else SAFE_MESSAGES[2] if stage in _CONFIGURATION_STAGES
                           else SAFE_MESSAGES[1])
     return public_record(values, PUBLIC_CODES, SAFE_MESSAGES)
@@ -1801,6 +1865,12 @@ def _run_fixed_helper(control: Path, mode: str, *, code_root: Path | None = None
     if completed.returncode:
         error = RuntimeError("fixed update helper failed: " + mode)
         error.stdout, error.stderr, error.exit_code = completed.stdout, completed.stderr, completed.returncode
+        error._preparation_timeout = mode == "Observe" and "STARTUP_QUERY_TIMEOUT_UNKNOWN" in (completed.stderr or "")
+        error._preparation_rejection = bool(re.search(
+            r"\bSTARTUP_UPDATE_(?:FILE_PIN_DIFFERS|PORTABLE_MANIFEST_DIFFERS|WRITER_INVENTORY_DIFFERS|"
+            r"PACKET_HAS_INSTALL_RECORD|VERSION_DIRECTORY_DIFFERS|VERSION_OUTSIDE_PROTECTED_ROOT|"
+            r"FIXED_BOOTSTRAP_REQUIRED|OPERATOR_DIFFERS|POLICY_OVERSIZED|SYSTEM_REQUIRED|"
+            r"PREVIOUS_RECORD_MISSING|APPLY_HAS_NO_USER_CODE_ARGUMENT)\b", completed.stderr or ""))
         raise error
     return completed.stdout.strip()
 
@@ -2000,6 +2070,17 @@ def apply_prepared(control: Path) -> int:
                        "reason": type(error).__name__, "failure_details": _failure_details(error), "failure_evidence": [],
                        "failed_prepared_sha": failed_prepared_sha,
                        "failed_prepared_marker_sha256": prepared_failure_identity(policy) if policy and not_applied else ""}
+            failure.pop("preparation_retry_pending", None)
+            if not_applied and _transient_preparation_error(error):
+                failure["failed_prepared_sha"] = ""
+                failure["failed_prepared_marker_sha256"] = ""
+                if failed_prepared_sha:
+                    failure["retry_shas"], _ = record_retry_chance(
+                        state or {}, failed_prepared_sha, now=failure["deferred_at"])
+                else:
+                    failure["preparation_retry_pending"] = True
+            elif not_applied and failed_prepared_sha:
+                failure["failed_shas"] = sorted(set(failure.get("failed_shas", [])) | {failed_prepared_sha})
             failure = mixed_status_record(failure)
             write_json_durable(control / ("failure-" + uuid.uuid4().hex + ".json"), failure)
             write_json_durable(control / "transition.json", failure)
@@ -2175,7 +2256,11 @@ def _apply_prepared_once(control: Path) -> int:
                 return 0  # A late task defers; it never stops an existing application.
             active = read_json(control / "active.json")
             fixed_helper(control, "Verify", code_root=version_bundle(control, active["sha"]))
-            current = version_manifest(version_bundle(control, active["sha"]), require_version=True)
+            try:
+                current = version_manifest(version_bundle(control, active["sha"]), require_version=True)
+            except ValueError as error:
+                error._preparation_rejection = True
+                raise
             key = read_json(control.parent / "current/app/update-manifest-key-config.json")["manifest_public_key"]
             # Copy user-owned bytes, then authenticate the protected copy. No path,
             # executable or command supplied by the prepared marker is executed.
@@ -2183,21 +2268,37 @@ def _apply_prepared_once(control: Path) -> int:
             create_protected_stage(protected)
             for name in ("manifest.json", "manifest.sig", "packet.zip"):
                 copy_prepared_file(stage / name, protected / name, expected_owner_sid=policy["operator_sid"])
-            manifest, candidate = verify_prepared_packet(protected, key_config=key, current_version=current["version"], channel=policy["channel"])
+            try:
+                manifest, candidate = verify_prepared_packet(protected, key_config=key, current_version=current["version"], channel=policy["channel"])
+            except ValueError as error:
+                error._preparation_rejection = True
+                raise
             sha = manifest["source_commit"]
             if sha in (state or {}).get("failed_shas", []):
                 return 0
             extracted = protected / "extracted"
-            extract_prepared_code(protected / "packet.zip", extracted, candidate["archive_policy"])
+            try:
+                extract_prepared_code(protected / "packet.zip", extracted, candidate["archive_policy"])
+            except ValueError as error:
+                error._preparation_rejection = True
+                raise
             target = extracted / "Container_Audit"
             # Verify stock bytes before reading version/contract authority.
             fixed_helper(control, "Verify", code_root=target)
-            candidate_manifest = version_manifest(target, require_version=True)
+            try:
+                candidate_manifest = version_manifest(target, require_version=True)
+            except ValueError as error:
+                error._preparation_rejection = True
+                raise
             if candidate_manifest["source_commit"] != sha or candidate_manifest["version"] != manifest["version"]:
-                raise ValueError("signed target SHA differs from the packet")
+                raise _preparation_rejection("signed target SHA differs from the packet")
             if file_sha256(target / "app/update-manifest-key-config.json") != file_sha256(control.parent / "current/app/update-manifest-key-config.json"):
-                raise ValueError("candidate signing key differs from the installed key")
-            forward, rollback, rollback_pair, pin_authority = manifest_transition_pins(manifest, current=current, candidate=candidate_manifest)
+                raise _preparation_rejection("candidate signing key differs from the installed key")
+            try:
+                forward, rollback, rollback_pair, pin_authority = manifest_transition_pins(manifest, current=current, candidate=candidate_manifest)
+            except ValueError as error:
+                error._preparation_rejection = True
+                raise
             # The fixed helper validates the portable tree and writes its own
             # integrity record. It never imports or executes candidate code.
             target_bundle = version_bundle(control, sha)
@@ -2229,20 +2330,28 @@ def _apply_prepared_once(control: Path) -> int:
                     return 0
                 protected_name = state.get("protected_packet")
                 if not isinstance(protected_name, str) or re.fullmatch(r"packet-[0-9a-f]{32}", protected_name) is None:
-                    raise ValueError("daily_update_prepared_authentication_missing")
+                    raise _preparation_rejection("daily_update_prepared_authentication_missing")
                 old_bundle = version_bundle(control, state["previous_sha"])
                 target_bundle = version_bundle(control, state["candidate_sha"])
                 fixed_helper(control, "Verify", code_root=old_bundle)
                 fixed_helper(control, "Verify", code_root=target_bundle)
                 key = read_json(control.parent / "current/app/update-manifest-key-config.json")["manifest_public_key"]
-                resumed_manifest, resumed_candidate = verify_prepared_packet(control / protected_name, key_config=key,
-                    current_version=version_manifest(old_bundle, require_version=True)["version"], channel=policy["channel"])
-                forward, reverse, rollback_pair, authority = manifest_transition_pins(resumed_manifest,
-                    current=version_manifest(old_bundle, require_version=True), candidate=version_manifest(target_bundle, require_version=True))
+                try:
+                    resumed_manifest, resumed_candidate = verify_prepared_packet(control / protected_name, key_config=key,
+                        current_version=version_manifest(old_bundle, require_version=True)["version"], channel=policy["channel"])
+                except ValueError as error:
+                    error._preparation_rejection = True
+                    raise
+                try:
+                    forward, reverse, rollback_pair, authority = manifest_transition_pins(resumed_manifest,
+                        current=version_manifest(old_bundle, require_version=True), candidate=version_manifest(target_bundle, require_version=True))
+                except ValueError as error:
+                    error._preparation_rejection = True
+                    raise
                 if (resumed_candidate["sha256"] != state["packet_sha256"] or forward != state["forward_pin"]
                         or reverse != state["rollback_pin"] or rollback_pair != state.get("rollback_pair")
                         or authority != state.get("pin_authority")):
-                    raise ValueError("daily_update_prepared_binding_mismatch")
+                    raise _preparation_rejection("daily_update_prepared_binding_mismatch")
                 if writer_processes(process_snapshot(control), own_pid=os.getpid()):
                     return 20
                 fixed_helper(control, "Verify", code_root=version_bundle(control, state["candidate_sha"]))
@@ -2542,6 +2651,8 @@ def prepared_failure_identity(policy: Mapping[str, Any]) -> str:
 def prepared_pending(control: Path, policy: Mapping[str, Any], state: Mapping[str, Any] | None) -> bool:
     if not policy.get("feed_url"):
         return False
+    if (state or {}).get("preparation_retry_pending") is True and not _preparation_retry_due(state, ""):
+        return False
     path = Path(policy["staging_root"]) / "prepared.json"
     if (state or {}).get("reason_code") == "UPDATE_PREPARATION_FAILED":
         identity = prepared_failure_identity(policy)
@@ -2550,7 +2661,7 @@ def prepared_pending(control: Path, policy: Mapping[str, Any], state: Mapping[st
     try:
         marker = optional_record(path)
     except (OSError, ValueError):
-        return path.exists()  # A corrupt hint still requests SYSTEM verification.
+        return path.exists() and _preparation_retry_due(state, "")  # Verify when the saved wait permits.
     if marker is None:
         return False
     try:
@@ -2558,7 +2669,8 @@ def prepared_pending(control: Path, policy: Mapping[str, Any], state: Mapping[st
     except ValueError:
         return True
     active = read_json(control / "active.json")
-    return sha != active["sha"] and sha not in (state or {}).get("failed_shas", []) and sha != (state or {}).get("failed_prepared_sha")
+    return (sha != active["sha"] and sha not in (state or {}).get("failed_shas", [])
+            and sha != (state or {}).get("failed_prepared_sha") and _preparation_retry_due(state, sha))
 
 
 def prepare_feed_packet(app_root: Path) -> dict[str, Any]:
@@ -3086,6 +3198,8 @@ def _bootstrap_existing_writers(control: Path, policy: Mapping[str, Any], active
 
 def start_current(control: Path, policy: Mapping[str, Any], state, active, arguments, *, code: str, report_once: bool = False, deadline: float | None = None) -> int:
     """Reuse ordinary launch and publish only the E9 allowlisted support fields."""
+    if _retry_review_required(state):
+        code = UPDATE_RETRY_REVIEW_REQUIRED
     report = support_record({"reason_code": code,
         "transition_code": (state or {}).get("failure_decision", {}).get("code", code),
         "retained_candidate": (state or {}).get("retained_candidate") is True}, stage="update_apply")
@@ -3100,7 +3214,7 @@ def start_current(control: Path, policy: Mapping[str, Any], state, active, argum
             previous = optional_record(report_path)
         if not (report_once and previous and previous.get("reason_code") == code
                 and previous.get("apply_claim_sha256") == report["apply_claim_sha256"]):
-            if code == UPDATE_RELAY_STOP_REQUESTED:
+            if code in {UPDATE_RELAY_STOP_REQUESTED, UPDATE_RETRY_REVIEW_REQUIRED}:
                 emit_support_record(report, stage="update_apply", policy=policy)
             else:
                 write_json_durable(report_path, report)

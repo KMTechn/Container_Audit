@@ -370,7 +370,7 @@ def test_engine_candidate_exit_selects_generation_compatible_code_without_revert
     assert updates.apply_prepared(control) == (0 if generation_case == "unchanged" else 20)
     result = updates.read_json(control / "transition.json")
     assert result["phase"] == ("ROLLED_BACK" if generation_case == "unchanged" else "DEFERRED")
-    assert result["failed_shas"] == [NEW]
+    assert result["failed_shas"] == ([] if failure_kind == "timeout" else [NEW])
     assert updates.read_json(control / "active.json")["sha"] == (OLD if generation_case == "unchanged" else NEW)
     if generation_case == "unchanged":
         assert len(nonces) == (2 if failure_kind == "exit" else 1)

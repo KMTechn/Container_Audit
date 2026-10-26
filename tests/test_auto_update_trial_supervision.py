@@ -116,9 +116,9 @@ def test_a_slow_rollback_is_supervised_after_240_seconds(scene, monkeypatch):
     s.tick[0] = advance
     assert updates._bootstrap(s.control.parent, [], role="gui") == 0
     assert 300 <= s.terminal[-1] < 301
-    # A durable future phase cannot extend the overall 480 second cap.
+    # A durable future phase cannot extend the overall READY-plus-240-second cap.
     assert updates.bootstrap_supervision_deadline(
-        {**s.state, "applied_at": stamp(1000)}, started=0, now=0, utc_now=stamp(0)) == 480
+        {**s.state, "applied_at": stamp(1000)}, started=0, now=0, utc_now=stamp(0)) == updates.BOOTSTRAP_OBSERVATION_CAP_SECONDS
     # The candidate normal-stop window must start with a durable UTC record.
     s.clock[0] = 0
     s.tick[0] = lambda: None
@@ -310,7 +310,7 @@ def test_restart_rollback_uses_only_original_remaining_window(scene, monkeypatch
     assert updates.read_json(s.control / "transition.json")["phase"] == "ROLLED_BACK"
     # Re-enter after the original window: no new GUI/relay trial is permitted.
     s.write(s.control / "transition.json", original)
-    s.clock[0] = 241
+    s.clock[0] = updates.READY_WINDOW_SECONDS + 1
     s.launches.clear()
     assert updates._bootstrap(s.control.parent, [], role="gui") == 20
     assert s.launches == []

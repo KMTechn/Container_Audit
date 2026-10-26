@@ -1,3 +1,5 @@
+- 10/26 sub-659 (P1·123/126): 후보·되돌림 READY 900초 / bootstrap 상한 1140초, 준비 중 일시 실패는 마지막 시도+900초 / 24시간 내 3회 예산을 같은 retry_shas로 보존한다. 소진/모르는 예외로 SHA를 영구 거절하지 않으며 관리자 안내 뒤 24시간 경계에서 자동 재시도한다. 확정 거절·UNKNOWN 복구 경계는 유지한다. 포장 실패 JSON은 최근 20개만 남긴다. 새 계약 시험·직접 호출자 바탕 대조·선언 write→check 근거: work/program/w9firstupd/sub-659/RESULT.md. 실제 설치·현장 확인은 별도 회차다.
+
 - 10/26 sub-590fix: 독립 검토 sub-590rev P2-1(사라진·보낼 것 없는 원본의 실패 항목 정리)·P2-2(csv.Error → source_csv_content_invalid)를 닫았다. 11/15 후보: P2-3 공용 부모 쓰기 거부가 원본별 mkdir 로 나타나면 모든 원본이 source_delta_write_failed 로 기록돼 개수로만 보인다(전역 중단 아님). P2-4 drain 뒤 오프셋 기록 구간의 SourceFileInputError 는 예전 크래시와 결과가 같아 표시 코드만 다르다(근거: work/program/w9firstupd/sub-590fix/RESULT.md).
 - 10/26 sub-590: relay의 한 CSV 오류가 뒤 파일과 drain을 막던 길을 파일별 재시도로 분리했다. 원본·오프셋·source_file_id+SHA256 멱등 키는 유지하고, 오류 목록·최초 시각을 큐 DB에 보존해 기존 Tk·기본 웹 상태 줄에 알린다. 전역 오류 중단·독립 검토·서명 판 통합 경계는 유지한다(검증 근거: work/program/w9firstupd/sub-590/RESULT.md).
 

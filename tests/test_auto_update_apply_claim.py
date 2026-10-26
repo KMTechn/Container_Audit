@@ -188,7 +188,9 @@ def test_system_restart_supervises_only_a_window_it_opens(endpoint, monkeypatch,
     assert updates.apply_prepared(control) == 0
     settled = updates.read_json(control/'transition.json')
     assert settled['phase'] == 'ROLLED_BACK'
-    assert settled['failed_shas'] == ([hot] if crash_phase == 'PREPARED' else [])
+    assert settled['failed_shas'] == []
+    if crash_phase == 'PREPARED':
+        assert settled['retry_shas'][hot]['attempts'] == 1
     assert any(value['phase'] == 'UNKNOWN' for value in observations) is (crash_phase == 'APPLIED_PENDING_READY')
     assert updates.read_json(control/'active.json')['sha'] == OLD
 

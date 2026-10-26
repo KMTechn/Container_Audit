@@ -1,4 +1,4 @@
-"""The durable candidate and rollback READY windows share one 240-second bound."""
+"""The durable candidate and rollback READY windows share one 900-second bound."""
 import ast
 import copy
 import json
@@ -25,7 +25,7 @@ def assert_one_ready_window(tree):
                            for t in n.targets)]
     assert len(definitions) == 1
     assert isinstance(definitions[0].value, ast.Constant)
-    assert definitions[0].value.value == 240
+    assert definitions[0].value.value == 900
     functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
     for name in WINDOW_FUNCTIONS:
         nodes = list(ast.walk(functions[name]))
@@ -68,8 +68,8 @@ def test_lock_retry_keeps_the_original_window_after_120_seconds(scene, rollback)
         s.state.update(phase="ROLLBACK_PENDING_READY", rollback_at=stamp(0))
         s.write(s.control / "transition.json", s.state)
     s.clock[0] = 180
-    assert updates._ready_window_deadline(s.control) == 240
-    s.clock[0] = 240
+    assert updates._ready_window_deadline(s.control) == updates.READY_WINDOW_SECONDS
+    s.clock[0] = updates.READY_WINDOW_SECONDS
     assert updates._ready_window_deadline(s.control) is None
 
 
@@ -79,7 +79,7 @@ def test_supervision_uses_the_same_durable_window(scene, rollback):
     if rollback:
         state.update(phase="ROLLBACK_PENDING_READY", rollback_at=stamp(0))
     assert updates.bootstrap_supervision_deadline(
-        state, started=0, now=180, utc_now=stamp(180)) == 255
+        state, started=0, now=180, utc_now=stamp(180)) == (updates.READY_WINDOW_SECONDS + 15)
 
 
 def test_candidate_ready_at_180_seconds_confirms_instead_of_rolling_back(world, monkeypatch, tmp_path):
@@ -173,7 +173,7 @@ def test_bootstrap_launches_one_trial_and_relay_after_120_seconds(scene, monkeyp
                 "sha": NEW, "ready_at": stamp(s.clock[0])}
             _, confirmed, _ = updates.observe_trial_ready(s.control, s.policy, state,
                 s.rows, {"pid": 101, "nonce": state["nonce"],
-                         "transition_id": state["transition_id"]}, proof, deadline=240)
+                         "transition_id": state["transition_id"]}, proof, deadline=updates.READY_WINDOW_SECONDS)
             assert confirmed
         return pid
 
@@ -183,4 +183,4 @@ def test_bootstrap_launches_one_trial_and_relay_after_120_seconds(scene, monkeyp
     assert updates._bootstrap(s.control.parent, arguments, role=role) == 0
     assert updates.read_json(s.control / "transition.json")["phase"] == "CONFIRMED"
     assert len(s.launches) == 2
-    assert deadlines == [240]
+    assert deadlines == [updates.READY_WINDOW_SECONDS]

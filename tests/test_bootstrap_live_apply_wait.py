@@ -20,7 +20,7 @@ def world(scene, monkeypatch, *, decision=True, final_claim="ABSENT", repeated_b
           terminal_at_old_end=False, applied=110.941488, initial_missing=False,
           decision_at=None, released_at=None, claim_boundary=None):
     s = scene
-    ready_end = applied + 240
+    ready_end = applied + updates.READY_WINDOW_SECONDS
     old_end = ready_end + 15
     stop = ready_end + 1.699512
     decided = ready_end + 17.672191 if decision else float("inf")
@@ -67,7 +67,7 @@ def world(scene, monkeypatch, *, decision=True, final_claim="ABSENT", repeated_b
             if terminal != "CONFIRMED":
                 s.rows.clear()
 
-    events = [applied, ready_end, stop, old_end, decided, released, 480]
+    events = [applied, ready_end, stop, old_end, decided, released, updates.BOOTSTRAP_OBSERVATION_CAP_SECONDS]
     if claim_boundary is not None:
         events.append(claim_boundary)
 
@@ -167,8 +167,8 @@ def test_live_apply_never_decides_stops_at_existing_480_cap(scene, monkeypatch, 
     w = world(scene, monkeypatch, decision=False, final_claim="LIVE",
               ready_phase=phase, normal_stop=normal_stop)
     assert updates._bootstrap(w.s.control.parent, [], role="gui") == 20
-    assert w.s.clock[0] == 480
-    assert w.progress == [480]
+    assert w.s.clock[0] == updates.BOOTSTRAP_OBSERVATION_CAP_SECONDS
+    assert w.progress == [updates.BOOTSTRAP_OBSERVATION_CAP_SECONDS]
     assert ordinary(w) == []
 
 
@@ -226,22 +226,22 @@ def test_preapply_without_live_claim_keeps_original_exit(scene, monkeypatch, ini
 
 @pytest.mark.parametrize("initial_missing", [False, True], ids=["PREPARED", "missing"])
 def test_live_preapply_owner_never_exceeds_existing_480_cap(scene, monkeypatch, initial_missing):
-    w = world(scene, monkeypatch, applied=600, initial_missing=initial_missing,
+    w = world(scene, monkeypatch, applied=updates.BOOTSTRAP_OBSERVATION_CAP_SECONDS + 120, initial_missing=initial_missing,
               decision=False, final_claim="LIVE")
     assert updates._bootstrap(w.s.control.parent, [], role="gui") == 20
-    assert w.s.clock[0] == pytest.approx(480)
+    assert w.s.clock[0] == pytest.approx(updates.BOOTSTRAP_OBSERVATION_CAP_SECONDS)
     assert w.popens == []
 
 
 @pytest.mark.parametrize("claim", ["UNKNOWN", "ABSENT"])
 def test_busy_extension_rechecks_live_claim_each_poll(scene, monkeypatch, claim):
     w = world(scene, monkeypatch, decision=False, final_claim=claim, repeated_busy=True,
-              claim_boundary=366.941488)
+              claim_boundary=366.941488 + updates.READY_WINDOW_SECONDS - 240)
     assert updates._bootstrap(w.s.control.parent, [], role="gui") == 20
     # The claim can change during the mocked one-second root-lock wait.
     # Recheck at its first completed busy poll, rather than at the event instant.
     first_nonlive_poll = min(t for t in w.denials if t >= w.claim_boundary)
     assert w.s.clock[0] == pytest.approx(first_nonlive_poll, rel=0, abs=1e-6)
-    assert w.s.clock[0] < 480
+    assert w.s.clock[0] < updates.BOOTSTRAP_OBSERVATION_CAP_SECONDS
     assert ordinary(w) == []
     assert any(w.old_end < denied for denied in w.denials)
