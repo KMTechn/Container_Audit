@@ -213,8 +213,8 @@ def test_missing_delta_counts_in_public_status_and_band_and_blocks_only_its_sour
     monkeypatch.setattr(runner, 'run_relay_once', lambda config, **kw: {'status': 'idle'})
     source = runner_helpers.write_container_csv(tmp_path / 'sources')
     args = runner_helpers.runner_args(tmp_path, scan_dir=source.parent)
-    # The drain stub deliberately reports no ACK, so targeted completion is 1.
-    assert runner.main(args) == 1
+    # Container's scan exit does not require a targeted drain ACK.
+    assert runner.main(args) == 0
     capsys.readouterr()
     database = Path(args[args.index('--db-path') + 1])
     row = _row(database)
