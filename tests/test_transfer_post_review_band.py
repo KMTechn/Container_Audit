@@ -366,6 +366,13 @@ def test_review_keeps_critical_status_visible_across_render(monkeypatch, color, 
         assert not getattr(app, "_scan_refusal_visible", False)
         band, = _alerts(app, app.warning_presenter.state, [], None)
         assert notice.message.splitlines()[0] in band["text"]
+        assert message in str(band)
+        assert band["kind"] == "warn"
+    app._acknowledge_active_notice()
+    assert app.warning_presenter.state.active_notice is None
+    assert message not in str(_alerts(app, app.warning_presenter.state, [], None))
+    app._present_transfer_post_review_required_notice("review-2")
+    assert message not in str(_alerts(app, app.warning_presenter.state, [], None))
 
 
 @pytest.mark.parametrize("injected", [False, True])
