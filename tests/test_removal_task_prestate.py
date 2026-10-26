@@ -11,7 +11,7 @@ REPO = Path(__file__).resolve().parents[1]
 DRIVER = r'''
 $evidence=Join-Path $env:CA_CONTRACT_ROOT 'application/removal-evidence/attempt'
 [void][IO.Directory]::CreateDirectory($evidence)
-if($env:CA_TASK_CASE -ceq 'canonical'){
+if($env:CA_TASK_CASE -cin @('canonical','untouched-enabled')){
     [void][IO.Directory]::CreateDirectory((Join-Path $env:CA_CONTRACT_ROOT 'application/current'))
 }
 Add-Type -TypeDefinition @'
@@ -26,6 +26,7 @@ public class CompensationTask {
 '@
 $task=[CompensationTask]::new()
 if($env:CA_TASK_CASE -ceq 'readback'){$task.IgnoreWrite=$true}
+if($env:CA_TASK_CASE -ceq 'untouched-enabled'){$task.Enabled=$true;$task.Writes=0}
 $folder=[pscustomobject]@{Task=$task}
 $folder | Add-Member ScriptMethod GetTask {param($Name) return $this.Task}
 $service=[pscustomobject]@{Folder=$folder}
@@ -47,7 +48,7 @@ $result=Restore-CanonicalRemovalScheduledTasks $evidence
 
 
 @pytest.mark.parametrize('engine', ['powershell.exe', 'pwsh.exe'])
-@pytest.mark.parametrize('case', ['disabled', 'enabled', 'unchanged', 'canonical', 'old', 'foreign', 'readback'])
+@pytest.mark.parametrize('case', ['disabled', 'enabled', 'unchanged', 'untouched-enabled', 'canonical', 'old', 'foreign', 'readback'])
 def test_task_compensation_preserves_the_removal_prestate(tmp_path, engine, case):
     result = run_functions(
         tmp_path, REPO / 'INSTALL_CANONICAL_PORTABLE.ps1',
@@ -56,7 +57,7 @@ def test_task_compensation_preserves_the_removal_prestate(tmp_path, engine, case
     )
     assert result.returncode == 0, 'isolated task compensation driver failed'
     actual = json.loads((tmp_path / 'result.json').read_bytes())
-    assert actual['enabled'] is (case == 'enabled')
+    assert actual['enabled'] is (case in ('enabled', 'untouched-enabled'))
     assert actual['writes'] == (1 if case in ('enabled', 'readback') else 0)
     assert actual['status'] == ('PARTIAL' if case in ('old', 'foreign', 'readback') else 'RESTORED')
     assert set(actual['states']) <= {'RESTORED', 'UNPROVEN'}

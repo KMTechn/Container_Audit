@@ -4500,6 +4500,10 @@ function Restore-CanonicalRemovalScheduledTasks([string]$Evidence) {
                     if($null -eq $enabledNode -or $null -eq $expectedNode){throw 'REMOVAL_TASK_RESTORE_UNPROVEN'}
                     $enabledNode.InnerText=$expectedNode.InnerText
                     if($actual.OuterXml -cne $expected.OuterXml -or [string]$task.GetSecurityDescriptor(7) -cne [string]$record.sddl){throw 'REMOVAL_TASK_RESTORE_CONFLICT'}
+                    if([bool]$task.Enabled -eq [bool]$record.enabled){
+                        $result.tasks+=@([ordered]@{name=[string]$record.name;state='RESTORED'})
+                        continue
+                    }
                     $current=Join-Path (Split-Path -Parent (Split-Path -Parent $Evidence)) 'current'
                     $desired=([bool]$record.enabled -and -not(Test-Path -LiteralPath $current))
                     if([bool]$task.Enabled -ne $desired){$task.Enabled=$desired}
