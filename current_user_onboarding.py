@@ -2913,7 +2913,16 @@ def restore_current_user_lifecycle_after_replacement(
         if lifecycle_mutated:
             try:
                 autostart_absent = dict(autostart_remover())
-                relay_absent = dict(relay_stopper(paths.direct_sync_root))
+                # This finite producer uses native stream capture, unlike the
+                # removal helper's PS5.1 2>&1 + Stop caller.
+                from user_relay import _log_wait_elapsed
+                elapsed_started = time.monotonic()
+                elapsed_status = 'ERROR'
+                try:
+                    relay_absent = dict(relay_stopper(paths.direct_sync_root))
+                    elapsed_status = 'ABSENT' if relay_absent.get('status') == 'ABSENT' else 'UNKNOWN'
+                finally:
+                    _log_wait_elapsed('replacement_relay_containment', elapsed_started, elapsed_status)
                 stop_path = user_relay_stop_path(paths.direct_sync_root)
                 _require_regular_unredirected_file(
                     stop_path,

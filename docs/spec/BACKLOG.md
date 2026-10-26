@@ -1,3 +1,5 @@
+- 10/27 sub-690: 사용자 제거·교체 봉쇄·후보 정상 종료는 relay 자식 한도+30초(현재150초)를 공유하고, 후보 종료의 원 normal_stop_started_at과 감독 창도 같은 한도에 묶는다. 승인된 설치 대기는120초(relay 정지·봉쇄150초), 초과 시 기존 실패/UNKNOWN과 강제 종료0을 유지한다. 안전한 호출 경로에는 event/elapsed_ms/status를 기록한다. CA 제거·업데이트의 PS5.1 병합 stderr 경로와 canonical의 추가 journal 줄은 생략하여 기존 설치 감사의 실패 판정·공간 한도를 보존한다. RED/GREEN·정본 선언 확인은 sub-690/RESULT.md에 기록하며 독립 검토는 레인이 붙인다.
+
 - 10/26 sub-641: 설치기의 사용자 relay 정상 정지 기다림을 15초에서 `RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS + 30`초(현재 150초)로 맞췄다. 고정 대기 안내를 표시하고, 부재 미증명 때 기존 실패와 강제 종료 0을 유지한다. 선언 재생성·RED/GREEN·직접 호출자 바탕 대조는 `work/program/w9firstupd/sub-641/RESULT.md`에 기록한다. 독립 검토는 레인이 붙이며 실제 배포본의 같은 장면도 확인한다.
 
 ### retained 후보와 다음 업데이트 요청 (sub-555)

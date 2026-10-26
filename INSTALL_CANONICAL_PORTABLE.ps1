@@ -29,6 +29,7 @@ param(
 Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
 Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 
+$Script:CanonicalRelayNormalStopTimeoutSeconds = 150
 $ErrorActionPreference = 'Stop'
 $CanonicalRoot = 'C:\KMTech\Apps\Container_Audit\current'
 $RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run'
@@ -1745,7 +1746,7 @@ print('installer_relay_stop=ABSENT')
         throw 'INSTALLER_RELAY_NORMAL_STOP_UNPROVEN'
     }
     [void](Read-CanonicalInstallerOwnedStopMarker $Script:CanonicalInstallerRelayStopOwnership -BindHash)
-    $deadline=[DateTime]::UtcNow.AddSeconds(15)
+    $deadline=[DateTime]::UtcNow.AddSeconds($Script:CanonicalRelayNormalStopTimeoutSeconds)
     do {
         if(@(Relays).Count -eq 0){
             Write-InstallationEvidenceEvent ([ordered]@{event='INSTALLER_RELAY_STOPPED';status='ABSENT';preimage_count=$Expected.Count})
@@ -1764,7 +1765,7 @@ function Confirm-CanonicalRuntimeQuiescence($Removal, [object[]]$ExpectedRelays,
         [string]$Removal.relay_process.request_id -cnotmatch '^[0-9a-f]{32}$' -or
         -not (Same ([string]$Removal.relay_process.stop_request_path) $StopRequestPath)
     ) { throw 'Verified replacement runtime quiescence failed: removal receipt.' }
-    $deadline = (Get-Date).AddSeconds(15)
+    $deadline = (Get-Date).AddSeconds($Script:CanonicalRelayNormalStopTimeoutSeconds)
     $observations = 0
     do {
         $marker = Get-Content -LiteralPath $StopRequestPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -3204,7 +3205,7 @@ function Disable-CanonicalOfficialLegacyRelay($Before) {
     $live=Get-CanonicalOfficialLegacyRelayPreimage
     if($null -eq $live -or [string]$live.identity.sha256 -cne [string]$Before.identity.sha256){throw 'NONCANONICAL_WRITER_ENABLED'}
     [void](DisableAndStop-ContainerScheduledTaskUnderWriterFence -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId -DelegationToken $Script:CanonicalWriterFenceDelegationToken -AuthorityLease $canonicalWriterFenceAuthority -TaskName $Before.task_name -TaskPath $Before.task_path)
-    $deadline=[DateTime]::UtcNow.AddSeconds(60)
+    $deadline=[DateTime]::UtcNow.AddSeconds($Script:CanonicalRelayNormalStopTimeoutSeconds)
     do{$running=Get-CanonicalOfficialLegacyRelayRunningCount;if($running){Start-Sleep -Milliseconds 250}}while($running -and [DateTime]::UtcNow -lt $deadline)
     $after=Get-CanonicalOfficialLegacyRelayPreimage
     if($running -or $null -eq $after -or $after.enabled -or [string]$after.identity.sha256 -cne [string]$Before.identity.sha256){throw 'OFFICIAL_LEGACY_RELAY_QUIESCENCE_UNPROVEN'}
@@ -3667,7 +3668,7 @@ function Assert-CanonicalRetiredLegacyWriterAdmission($Snapshot,[string]$Evidenc
     }
 }
 function Get-CanonicalWriterPreimageForQuiesce([string]$InstallRootValue) {
-    $deadline = (Get-Date).ToUniversalTime().AddSeconds(90)
+    $deadline = (Get-Date).ToUniversalTime().AddSeconds(120)
     do {
         $snapshot = Get-CanonicalWriterSnapshot $InstallRootValue
         if (-not [bool]$snapshot.restore_required) { return $snapshot }
@@ -3697,12 +3698,12 @@ function Disable-CanonicalWriter([string]$InstallRootValue, $Before) {
         -AuthorityLease $canonicalWriterFenceAuthority `
         -TaskName ([string]$Before.task_name) `
         -TaskPath ([string]$Before.task_path)
-    $deadline = (Get-Date).ToUniversalTime().AddSeconds(30)
+    $deadline = (Get-Date).ToUniversalTime().AddSeconds(120)
     do {
         Start-Sleep -Milliseconds 250
         $task = Get-ScheduledTask -TaskName ([string]$Before.task_name) -TaskPath ([string]$Before.task_path) -ErrorAction Stop
     } while ([string]$task.State -ceq 'Running' -and (Get-Date).ToUniversalTime() -lt $deadline)
-    $processDeadline = (Get-Date).ToUniversalTime().AddSeconds(30)
+    $processDeadline = (Get-Date).ToUniversalTime().AddSeconds(120)
     do {
         $processes = @(Get-CanonicalWriterProcesses $InstallRootValue)
         if ($processes.Count -gt 0) { Start-Sleep -Milliseconds 250 }
@@ -3755,7 +3756,7 @@ function Enable-CanonicalWriter([string]$InstallRootValue, $Before) {
         -AuthorityLease $canonicalWriterFenceAuthority `
         -TaskName ([string]$Before.task_name) `
         -TaskPath ([string]$Before.task_path))
-    $deadline = (Get-Date).ToUniversalTime().AddSeconds(20)
+    $deadline = (Get-Date).ToUniversalTime().AddSeconds(120)
     do {
         Start-Sleep -Milliseconds 250
         $after = Get-CanonicalWriterSnapshot $InstallRootValue
@@ -3780,7 +3781,7 @@ function Confirm-CanonicalWriterRunning([string]$InstallRootValue, $EnabledBasel
     $baseline = $EnabledBaseline.readback
     $boundary = [datetime]::Parse([string]$EnabledBaseline.future_natural_trigger_utc).ToUniversalTime()
     while ((Get-Date).ToUniversalTime() -lt $boundary.AddSeconds(5)) { Start-Sleep -Milliseconds 500 }
-    $deadline = $boundary.AddSeconds(45)
+    $deadline = $boundary.AddSeconds(120)
     do {
         $after = Get-CanonicalWriterSnapshot $InstallRootValue
         $last = if ([string]::IsNullOrWhiteSpace([string]$after.last_run_time_utc)) {

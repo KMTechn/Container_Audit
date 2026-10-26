@@ -790,6 +790,15 @@ function Test-ContainerAttestedNewPlacementRemoval {
     return $true
 }
 
+function Write-ContainerWaitElapsed([string]$Event,[long]$ElapsedMilliseconds,[string]$Status) {
+    try { [Console]::Error.WriteLine((([ordered]@{event=$Event;elapsed_ms=$ElapsedMilliseconds;status=$Status})|ConvertTo-Json -Compress)) } catch {}
+}
+function Invoke-ContainerTimedWait([string]$Event,[scriptblock]$Action) {
+    $watch=[Diagnostics.Stopwatch]::StartNew();$status='ERROR'
+    try {$result=& $Action;$status=if($result -is [bool] -and -not $result){'UNKNOWN'}else{'COMPLETE'};return $result}
+    finally {$watch.Stop();Write-ContainerWaitElapsed $Event $watch.ElapsedMilliseconds $status}
+}
+
 function Enter-ContainerPlacementWriterFence {
     if (
         [string]::IsNullOrWhiteSpace($WriterFenceHelperPath) -or
@@ -842,14 +851,14 @@ function Enter-ContainerPlacementWriterFence {
     $controlRoot = [string]$operatorBinding.control_root
     $Script:ContainerWriterFenceAdmissionProductionRoot = $controlRoot
     if ($MachineControlRoot) { $Script:ContainerMachineInstallControlRoot=$controlRoot }
-    $preflightLease = Enter-ContainerWriterDelegatedOperation `
+    $preflightLease = Invoke-ContainerTimedWait 'placement_preflight_admission' { Enter-ContainerWriterDelegatedOperation `
         -ControlRoot $controlRoot `
         -SessionId $WriterFenceSessionId `
         -AttemptId $WriterFenceAttemptId `
         -ReplacementTransactionId $WriterFenceReplacementTransactionId `
         -DelegationToken $WriterFenceDelegationToken `
         -Source $PlacementWriterSource `
-        -TimeoutMilliseconds 15000
+        -TimeoutMilliseconds 120000 }
     $failedSupportIdentity=$null
     try {
         $active = Read-ContainerWriterFence -ControlRoot $controlRoot
@@ -886,14 +895,14 @@ function Enter-ContainerPlacementWriterFence {
     }
     finally { Exit-ContainerWriterAdmission $preflightLease }
     if (-not $testOverride) { Invoke-SelfElevated }
-    $lease=Enter-ContainerWriterDelegatedOperation `
+    $lease=Invoke-ContainerTimedWait 'placement_write_admission' { Enter-ContainerWriterDelegatedOperation `
         -ControlRoot $controlRoot `
         -SessionId $WriterFenceSessionId `
         -AttemptId $WriterFenceAttemptId `
         -ReplacementTransactionId $WriterFenceReplacementTransactionId `
         -DelegationToken $WriterFenceDelegationToken `
         -Source $PlacementWriterSource `
-        -TimeoutMilliseconds 15000
+        -TimeoutMilliseconds 120000 }
     $lease|Add-Member -NotePropertyName failed_support_identity -NotePropertyValue $failedSupportIdentity
     return $lease
 }
@@ -2910,7 +2919,7 @@ function Invoke-ContainerSupportedActiveVersionPlacement {
     $gate=New-Object Threading.Mutex($false,('Global\KMTech.ContainerAudit.Update.'+(Get-ContainerWriterFenceStringSha256 $control.ToLowerInvariant()).Substring(0,24)))
     $held=$false
     try {
-        try{$held=$gate.WaitOne(5000)}catch [Threading.AbandonedMutexException]{$held=$true;throw 'Supported update gate was abandoned.'}
+        try{$held=(Invoke-ContainerTimedWait 'supported_update_gate' { $gate.WaitOne(120000) })}catch [Threading.AbandonedMutexException]{$held=$true;throw 'Supported update gate was abandoned.'}
         if(-not $held){throw 'Supported update gate is busy.'}
         # Verify the old stock through the admitted source, never by running B.
         $context=Get-ContainerSupportedInstallContext $sourceRootFull $installRootFull -SelfIdentity $placementWriterFenceLease.failed_support_identity
