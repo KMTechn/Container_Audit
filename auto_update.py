@@ -2195,6 +2195,7 @@ def _apply_prepared(control: Path) -> int:
 
 def _apply_prepared_once(control: Path) -> int:
     """SYSTEM applies code only; the operator bootstrap launches the trial."""
+    from user_relay import RELAY_NORMAL_STOP_TIMEOUT_SECONDS
     import time
     from update_service import file_sha256
 
@@ -2430,8 +2431,10 @@ def _apply_prepared_once(control: Path) -> int:
                 state, state["candidate_sha"], now=now_utc())
         state = {**state, "normal_stop_started_at": state.get("normal_stop_started_at") or now_utc()}
         write_json_durable(control / "transition.json", state)
-    remaining = 60 - (_utc(now_utc()) - _utc(state["normal_stop_started_at"])).total_seconds()
-    deadline = time.monotonic() + min(60.0, max(0.0, remaining))
+    # The fixed PS5.1 apply helper merges stderr under ErrorActionPreference=Stop.
+    # This wait intentionally emits no diagnostic stream (lane ANSWER-3).
+    remaining = RELAY_NORMAL_STOP_TIMEOUT_SECONDS - (_utc(now_utc()) - _utc(state["normal_stop_started_at"])).total_seconds()
+    deadline = time.monotonic() + min(RELAY_NORMAL_STOP_TIMEOUT_SECONDS, max(0.0, remaining))
     while time.monotonic() < deadline:
         with update_lock(control, policy["operator_sid"]):
             if not writer_processes(process_snapshot(control), own_pid=os.getpid()):
@@ -3271,6 +3274,7 @@ def bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
 
 def bootstrap_supervision_deadline(state, *, started: float, now: float, utc_now: str) -> float:
     """Observe durable stage clocks without reopening any of their windows."""
+    from user_relay import RELAY_NORMAL_STOP_TIMEOUT_SECONDS
     phase = (state or {}).get("phase")
     timestamp, window = None, 0
     if phase == "APPLIED_PENDING_READY":
@@ -3278,7 +3282,7 @@ def bootstrap_supervision_deadline(state, *, started: float, now: float, utc_now
     elif phase == "ROLLBACK_PENDING_READY":
         timestamp, window = state.get("rollback_at", state.get("applied_at")), READY_WINDOW_SECONDS
     elif phase in {"ROLLBACK_PENDING", "UNKNOWN"}:
-        timestamp, window = state.get("normal_stop_started_at"), 60
+        timestamp, window = state.get("normal_stop_started_at"), RELAY_NORMAL_STOP_TIMEOUT_SECONDS
     stage_end = now + (window - (_utc(utc_now) - _utc(timestamp)).total_seconds()) if timestamp else started
     return min(started + BOOTSTRAP_OBSERVATION_CAP_SECONDS, max(started + 240, stage_end + 15))
 

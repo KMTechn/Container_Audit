@@ -546,3 +546,88 @@ def test_network_failure_leaves_the_same_row_to_the_next_relay_cycle(
     assert len(offline.calls) == len(online.calls) == 1
     assert offline.calls[0]["idempotency_key"] == online.calls[0]["idempotency_key"]
     assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_ACKED] == 1
+
+
+def _slow_child_cycle(tmp_path, monkeypatch, child_seconds):
+    import contextlib
+    import subprocess
+
+    import direct_sync_auto_bootstrap as bootstrap
+
+    calls = []
+
+    def fake_run(command, *, timeout=None, **_kwargs):
+        calls.append(timeout)
+        if timeout is not None and timeout < child_seconds:
+            raise subprocess.TimeoutExpired(command, timeout)
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(user_relay, "writer_admission", lambda *_a, **_k: contextlib.nullcontext())
+    monkeypatch.setattr("data_generation_guard.probe_before_owner_paths", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "logistics_runtime_profile.resolve_logistics_profile_path", lambda: tmp_path / "no-profile.json"
+    )
+    monkeypatch.setattr("auto_update.prepare_feed_packet", lambda _root: {"status": "OFF"})
+    monkeypatch.setattr(bootstrap, "build_session_direct_sync_command", lambda **_: ["child"])
+    monkeypatch.setattr(bootstrap.subprocess, "run", fake_run)
+    (tmp_path / "app").mkdir()
+    report = user_relay._runtime_cycle(
+        app_root=tmp_path / "app",
+        direct_sync_root=tmp_path / "direct_sync",
+        scan_source_dir=tmp_path / "scan",
+        data_root=tmp_path / "data",
+    )
+    return report, calls
+
+
+def test_relay_waits_for_a_slow_wireless_direct_sync_child(tmp_path, monkeypatch):
+    """A 60 s child (slow wireless notebook) is not an UNKNOWN cycle."""
+    report, calls = _slow_child_cycle(tmp_path, monkeypatch, 60)
+
+    assert report["process_status"] == "PASS"
+    assert calls == [120]
+
+
+def test_relay_child_beyond_the_budget_is_unknown_for_the_next_cycle(tmp_path, monkeypatch):
+    report, calls = _slow_child_cycle(tmp_path, monkeypatch, 150)
+
+    assert calls == [120]
+    assert report["status"] == "UNKNOWN"
+    assert report["process_status"] == "UNKNOWN"
+
+
+def test_relay_child_budget_is_one_shared_constant():
+    assert user_relay.RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS == 120
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows process handle probe")
+def test_child_overrunning_the_budget_is_unknown_and_not_left_running(tmp_path):
+    import ctypes
+    import sys
+    import time
+
+    import direct_sync_auto_bootstrap as bootstrap
+
+    pid_file = tmp_path / "child.pid"
+    started = time.monotonic()
+    result = bootstrap._run_command(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-c",
+            "import os, time; open(r'%s', 'w').write(str(os.getpid())); time.sleep(120)" % pid_file,
+        ],
+        10,
+    )
+
+    assert time.monotonic() - started < 40
+    assert result["status"] == "UNKNOWN"
+    assert result["error_type"] == "TimeoutExpired"
+    pid = int(pid_file.read_text())
+    handle = ctypes.windll.kernel32.OpenProcess(0x00100000, False, pid)
+    if handle:
+        try:
+            assert ctypes.windll.kernel32.WaitForSingleObject(handle, 5000) == 0
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)

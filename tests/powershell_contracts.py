@@ -118,6 +118,11 @@ $tokens=$null; $errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile($env:CA_CONTRACT_SOURCE,[ref]$tokens,[ref]$errors)
 if ($errors.Count) { throw 'product PowerShell parse failed' }
 $definition_nodes=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$true))
+foreach($assignment in $ast.FindAll({param($n) $n -is [Management.Automation.Language.AssignmentStatementAst]},$true)) {
+    if($assignment.Left.Extent.Text -ceq '$Script:CanonicalRelayNormalStopTimeoutSeconds') {
+        Invoke-Expression $assignment.Extent.Text
+    }
+}
 foreach ($name in $env:CA_CONTRACT_NAMES.Split(',')) {
     $functions=@($definition_nodes | Where-Object {$_.Name -ceq $name})
     if ($functions.Count -ne 1) { throw ('expected one actual product function: '+$name) }

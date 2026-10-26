@@ -35,6 +35,8 @@ USER_RELAY_RUN_VALUE = "KMTech.ContainerAudit.Relay"
 USER_RELAY_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 DEFAULT_RETRY_INTERVAL_SECONDS = 30
 MAX_RETRY_INTERVAL_SECONDS = 60
+RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS = 120
+RELAY_NORMAL_STOP_TIMEOUT_SECONDS = RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS + 30
 USER_RELAY_STATUS_NAME = "container_audit_user_relay.json"
 USER_RELAY_STOP_NAME = "container_audit_user_relay.stop.json"
 APP_STOP_NAME = "container_audit_app.stop.json"
@@ -479,7 +481,7 @@ def _runtime_cycle(
         direct_sync_root=direct_sync_root,
         scan_source_dir=scan_source_dir,
         reason="PERSISTENT_USER_RELAY",
-        timeout_seconds=45,
+        timeout_seconds=RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS,
     )
     try:
         with writer_admission("persistent_relay_status"):
@@ -519,15 +521,32 @@ def _runtime_cycle(
     return report
 
 
+def _log_wait_elapsed(event: str, started: float, status: str) -> None:
+    """Use only callers whose native stderr capture accepts diagnostics."""
+    try:
+        stream = sys.stderr
+        if stream is None:
+            return
+        print(json.dumps({
+            'event': event,
+            'elapsed_ms': max(0, int((time.monotonic() - started) * 1000)),
+            'status': status,
+        }, separators=(',', ':')), file=stream)
+    except Exception:
+        pass
+
+
 def request_user_relay_stop(
     direct_sync_root: str | os.PathLike[str],
     *,
-    timeout_seconds: float = 10.0,
+    timeout_seconds: float = RELAY_NORMAL_STOP_TIMEOUT_SECONDS,
     wait: Callable[[float], None] = time.sleep,
     lease_factory: Callable[[str | os.PathLike[str]], Any] = acquire_runtime_instance,
     publication_deadline: float | None = None,
     request_id: str | None = None,
 ) -> dict[str, Any]:
+    # This shared removal path is also called with PS5.1 2>&1 and Stop.
+    # Keep stderr silent: even a successful diagnostic would fail that caller.
     timeout_seconds = max(0.0, float(timeout_seconds))
     deadline = time.monotonic() + timeout_seconds
     # A zero timeout requests publication without waiting for the relay to exit.

@@ -12,6 +12,9 @@
 P1-1·P1-2: 봉인 큐의 본문 표시 없는 408·429를 `RETRY_WAIT`로 보존하고, 미사용 임대 해제의 같은 상태를 만료 전 다음 회차·재시작 재시도로 남긴다. 원 명령·키·로컬 완료를 유지하며 CAS/확정 거절·계약 오류·committed receipt 보호는 그대로다. RED→GREEN·좁은 직접 호출자 바탕 대조와 선언 확인 근거: `work/program/w9firstupd/sub-665/RESULT.md`. 독립 검토·123 통합은 레인 몫이다.
 - sub-694 / CA-1: CSV 실패 뒤 outbox JSON 소실 때 캐시를 무효화해 기존 사본을 재생성하고, 실제 drain의 내구 CSV 투영 확인 전에는 checkpoint 감사를 지우지 않는다. 잠김 해제 뒤 동일 행 한 번 재생 및 기존 업무 흐름을 좁은 headless 회귀로 확인한다. 실제 백신·현장 화면·배포 검증은 수행하지 않았다.
 - sub-698 / 일반 감사행: checkpoint 없는 SCAN_OK 등의 미확정 outbox 소실을 drain에서 확인하여 메모리 원문을 기존 사본으로 재저장한다. 재저장 실패 뒤 재시도·재시작 재생·격리 사본 복귀에도 멱등 CSV 한 행을 유지한다. 새 파일 이름·공유 상태·업무 대기는 추가하지 않는다.
+- 10/27 sub-690: 사용자 제거·교체 봉쇄·후보 정상 종료는 relay 자식 한도+30초(현재150초)를 공유하고, 후보 종료의 원 normal_stop_started_at과 감독 창도 같은 한도에 묶는다. 승인된 설치 대기는120초(relay 정지·봉쇄150초), 초과 시 기존 실패/UNKNOWN과 강제 종료0을 유지한다. 안전한 호출 경로에는 event/elapsed_ms/status를 기록한다. CA 제거·업데이트의 PS5.1 병합 stderr 경로와 canonical의 추가 journal 줄은 생략하여 기존 설치 감사의 실패 판정·공간 한도를 보존한다. RED/GREEN·정본 선언 확인은 sub-690/RESULT.md에 기록하며 독립 검토는 레인이 붙인다.
+
+- 10/26 sub-641: 설치기의 사용자 relay 정상 정지 기다림을 15초에서 `RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS + 30`초(현재 150초)로 맞췄다. 고정 대기 안내를 표시하고, 부재 미증명 때 기존 실패와 강제 종료 0을 유지한다. 선언 재생성·RED/GREEN·직접 호출자 바탕 대조는 `work/program/w9firstupd/sub-641/RESULT.md`에 기록한다. 독립 검토는 레인이 붙이며 실제 배포본의 같은 장면도 확인한다.
 
 ### retained 후보와 다음 업데이트 요청 (sub-555)
 
@@ -1023,3 +1026,4 @@ P3 한계(ANSWER-37, 10/26 레인 판정): 첫 품목표의 40초 예산은 돌�
 11/15 서버 후속: producer receipt 조회 API는 이번에 추가하지 않는다. sub-700은 sub-697 재구성 한 벌과 동일 키 재전송으로 보류 배정을 회복하며, 원본 소실·변경의 전용 검토는 기존 단건 모드에서만 재개한다. retry-dead가 spool 소실 시 BLOCKED인 포기 출구는 별도 후속으로 남긴다. CA 24 h 나이 조건은 경고뿐이다. 원본 직접 행과 다른 대기 범위의 겹침은 배정 보존 전용 검토로 멈추며, 겹친 행 정리는 11/15 판단으로 남긴다(ANSWER-7).
 
 - 제거가 뒤 단계에서 실패하면 제거 전 내용 소유 코드·control·바로가기를 원위치로 복원하고 실패를 반환한다. 복원도 실패하면 removal-evidence/<attempt>/rollback.json에 설치 손상을 남기고 승인 새 판 재설치를 안내한다. 자료·기존 evidence는 보존하며, 옛 제거 잔재에 대한 설치·U/stop/소스 증명 거절은 유지한다. current 없음+policy 잔재의 새 복구는 이번 범위 밖이며 PC를 멈추고 자료·증거를 보존해 별도 지원 절차를 따른다(sub-681, 레인 ANSWER-3).
+- w9firstupdsub633 / relay 자식 대기 45 → 120 초: LM1 밤 창 실측으로 확인 예정(RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS · 포장 user_relay.run_session_direct_sync_once 기본값 · 이적 _runtime_cycle 호출).

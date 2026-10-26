@@ -1877,7 +1877,7 @@ Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종�
 
 ### LIVE SYSTEM 결정과 bootstrap 감독 상한
 
-원래 감독 마감이 지나도 SYSTEM의 apply claim이 `LIVE`이고 전이가 아직 없거나 `PREPARED`·`APPLIED_PENDING_READY`·`ROLLBACK_PENDING`·`ROLLBACK_PENDING_READY`이면 같은 bootstrap의 시작+1140초까지만 결정을 더 기다린다. 연장 중에는 실제 native mutex의 busy 재시도 사이에도 claim·phase 자격을 다시 읽는다(native 한 시도 최대 5초 유지). LIVE 대기 자격이 사라지면 acquired=false로 기존 마지막 읽기에 돌아간다. DEFERRED·CONFIRMED·ROLLED_BACK 결정을 받으면 원 시작+1140초 상한 안에서 잠금 아래 기존 retained·saw_trial·요청 뒤 DEFERRED 분기를 처리하며, terminal의 시작+240초 식으로 보호 관측을 버리지 않는다. 잠금 밖 읽기는 기다림만 정하며, 실행과 포인터 변경의 기존 잠금·재확인은 그대로다. `UNKNOWN`·`ABSENT`·이미 결정된 기록에는 이 연장을 새로 주지 않는다. 1140초에 닿으면 기존 마지막 읽기와 안내·rc20 출구를 유지한다. READY 900초·정상 종료 60초·단계 끝 여유 15초·relay 시도 수와 간격·nonce·G 판정은 바꾸지 않는다.
+원래 감독 마감이 지나도 SYSTEM의 apply claim이 `LIVE`이고 전이가 아직 없거나 `PREPARED`·`APPLIED_PENDING_READY`·`ROLLBACK_PENDING`·`ROLLBACK_PENDING_READY`이면 같은 bootstrap의 시작+1140초까지만 결정을 더 기다린다. 연장 중에는 실제 native mutex의 busy 재시도 사이에도 claim·phase 자격을 다시 읽는다(native 한 시도 최대 5초 유지). LIVE 대기 자격이 사라지면 acquired=false로 기존 마지막 읽기에 돌아간다. DEFERRED·CONFIRMED·ROLLED_BACK 결정을 받으면 원 시작+1140초 상한 안에서 잠금 아래 기존 retained·saw_trial·요청 뒤 DEFERRED 분기를 처리하며, terminal의 시작+240초 식으로 보호 관측을 버리지 않는다. 잠금 밖 읽기는 기다림만 정하며, 실행과 포인터 변경의 기존 잠금·재확인은 그대로다. `UNKNOWN`·`ABSENT`·이미 결정된 기록에는 이 연장을 새로 주지 않는다. 1140초에 닿으면 기존 마지막 읽기와 안내·rc20 출구를 유지한다. READY 900초·정상 종료 150초·단계 끝 여유 15초·relay 시도 수와 간격·nonce·G 판정은 바꾸지 않는다.
 
 ### 업데이트 확인창 획득 busy 재시도(900 초 안)
 
@@ -1897,7 +1897,7 @@ Writer fence 거절은 공개 실패 레코드에서도 기존 프로세스 종�
 
 Run 및 GUI가 만든 bootstrap의 relay 실행은 `WriterFencedError` 중 `WRITER_GATE_TIMEOUT`을 감독 마감 안에서 0.1초씩 쉬며 재시도한다. 각 시도는 기존 launch_version의 admission을 다시 얻으며 시도 사이에는 admission을 보유하지 않는다. 마지막 admission 대기는 기존 최대 5초이며 마감 뒤에는 기존 실패 출구를 유지한다. fence 확정·버려진 소유권 등 다른 거절과 GUI 실행 자체의 timeout은 재시도하지 않는다. 포인터·trial claim·READY·CONFIRMED·G 허가·cohort·잠금 순서는 유지한다. bootstrap 밖의 relay launcher admission과 실제 로그온/pythonw 수용은 별도 범위다.
 
-감독 마감은 시작+240초를 기본으로, 내구 기록된 현재 단계 창 끝+15초까지 늘리되 시작+1140초를 넘지 않는다. 후보 READY·되돌림 READY는 같은 900초 상수로 원 applied_at·rollback_at에 묶고, 후보 정상 종료는 60초다. 재시작으로 이 기준 시각이나 마감을 새로 열지 않는다. 같은 trial GUI claim 뒤에도 relay 실제 표본을 다시 확인하며, 없을 때만 같은 bootstrap 프로세스의 nonce마다 최대 3회/간격 2초 이상으로 시작한다. 재시작해도 원 READY 창은 늘지 않는다. Popen OSError의 세 번 실패는 사용자 `staging/startup-support.json`과 공개 지원 한 줄에 `TRIAL_RELAY_START_FAILED`로 남기며 기존 되돌림/FAILED 판정을 따른다. 사용자 bootstrap이 SYSTEM 소유 transition을 쓰지 않는다.
+감독 마감은 시작+240초를 기본으로, 내구 기록된 현재 단계 창 끝+15초까지 늘리되 시작+1140초를 넘지 않는다. 후보 READY·되돌림 READY는 같은 900초 상수로 원 applied_at·rollback_at에 묶고, 후보 정상 종료는 150초다. 재시작으로 이 기준 시각이나 마감을 새로 열지 않는다. 같은 trial GUI claim 뒤에도 relay 실제 표본을 다시 확인하며, 없을 때만 같은 bootstrap 프로세스의 nonce마다 최대 3회/간격 2초 이상으로 시작한다. 재시작해도 원 READY 창은 늘지 않는다. Popen OSError의 세 번 실패는 사용자 `staging/startup-support.json`과 공개 지원 한 줄에 `TRIAL_RELAY_START_FAILED`로 남기며 기존 되돌림/FAILED 판정을 따른다. 사용자 bootstrap이 SYSTEM 소유 transition을 쓰지 않는다.
 
 정식 멈춤 PC는 업데이트 날 전에 `--onboard-current-user`로 onboarding하여 되살린다. relay 멈춤 표지가 있으면 SYSTEM은 포인터를 바꾸지 않고 기존 적용 전 보류와 같은 `DEFERRED`·`UPDATE_RELAY_STOP_REQUESTED`로 보류하며 recovery_pending은 두지 않는다. 사용자 bootstrap도 같은 표지에서 REQUEST_APPLY를 보내지 않고, 지원 기록·안내 한 번 뒤 기존 검증을 거쳐 지금 판 화면을 연다. relay는 표지대로 멈춘 채다. 표지는 업데이트가 지우지 않으며 onboarding 뒤 다음 로그온에서 적용한다. trial 도중 운영자가 새로 건 멈춤은 기존 READY 실패·되돌림/FAILED 흐름을 따른다.
 
@@ -1940,3 +1940,15 @@ run_app에는 셸 기본값과 같은 data/webview2를 udf로 명시한다. EBWe
 중앙 등록 profile이 있고 기본 요청 한도(2초)를 사용할 때, 현재 신원·서버 URL로 기존 인증 primary/recovery 검증기를 통과하는 품목표가 둘 다 없으면 첫 요청 한도는 10초다. 첫 시도 시작의 단조 시계부터 요청·본문 수신 예산40초를 두고, 0.25초 대기 앞뒤 모두 다음 연결10초+읽기10초가 남을 때만 서버 응답 전 전송 오류를 최대 두 번 더 시도한다. 상태줄·헤더를 받으면 본문 오류도 다시 시도하지 않는다. 전체 40초는 돌려받은 조각 경계에서만 확인한다. 서버가 아주 느리게 끊임없이 보내면(읽기 간격마다 10초 안) 그보다 늦을 수 있으며, 조용히 멈추면 읽기 기다림 10초로 끊긴다. 새 타이머·소켓 중단 장치는 두지 않는다. 바로 거절되면 최대 세 번 빨리 끝난다. HTTP 응답·본문 읽기·목록 검증 실패는 다시 시도하지 않는다. 인증 cache가 있거나 한도를 다른 값으로 명시했으면 기존 한 번의 요청과 한도를 유지한다(캐시 길 timeout2초, 연결+읽기 끊김 합산 약4초+이름 풀이). profile 없는 로컬/패키지 경로와 인증·cache 내구 형식은 그대로다.
 
 연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+1140초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.
+relay가 direct-sync 자식을 기다리는 한도(RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS)를 45초에서 120초로 넓혔다(느린 무선 노트북의 정상 바퀴가 41.9초까지 걸려 시간 초과 UNKNOWN이 났다). 자식 대기 중에는 probe-only 자식 발사기가 writer admission을 내려놓고, relay는 화면 앱과 다른 프로세스이므로 화면 쓰기·스캔 입력은 기다리지 않는다. 시간 초과 때 subprocess.run이 자식을 끝내고 UNKNOWN 뒤 30초 쉬고 다시 도는 동작은 그대로다. 첫 바퀴가 끝나야 relay 상태가 RUNNING이 되므로 READY 240초(상한 480) 안의 여유는 준비 시간 + 120초로 본다.
+
+### 설치 밤 relay 정상 정지 기다림 (sub-641)
+
+설치기는 relay가 진행 중인 서버 전송을 끝내도록 `user_relay.RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS + 30`초 기다린다. 현재 값은 120 + 30 = 150초(최대 2분 반)다. 기다리기 직전에 「작업 앱이 서버 보내기를 마치기를 기다리는 중」을 한 줄 표시한다. 부재를 확인하지 못하면 기존 실패로 설치/되돌림을 중단하며, 이 정지 요청은 relay나 전송 자식을 강제로 끝내지 않는다. 정지 요청의 부재 확인 뒤 인터프리터 종료를 확인하는 기존 후속 대기는 별도다.
+
+옛 공개 앱의 예약 작업 relay는 이 사용자 relay 정지와 다른 기존 경로로 처리한다. 자동 첫 업데이트는 설치된 N 판의 고정 적용기에서 살아 있는 writer를 보류하고 이 설치기 정지 요청을 부르지 않는다. 새 꾸러미로 수동 재설치할 때는 N+1 꾸러미의 설치기와 Python 상수를 사용하므로, 11/15 꾸러미 검증에도 15초를 넘겨 전송한 뒤 정상 종료하는 같은 RED/GREEN 장면을 포함한다.
+
+
+### relay 정지 및 설치 대기 상한 (sub-690)
+
+10/27 sub-690: 사용자 제거·교체 봉쇄·후보 정상 종료는 relay 자식 한도+30초(현재150초)를 공유하고, 후보 종료의 원 normal_stop_started_at과 감독 창도 같은 한도에 묶는다. 승인된 설치 대기는120초(relay 정지·봉쇄150초), 초과 시 기존 실패/UNKNOWN과 강제 종료0을 유지한다. 안전한 호출 경로에는 event/elapsed_ms/status를 기록한다. CA 제거·업데이트의 PS5.1 병합 stderr 경로와 canonical의 추가 journal 줄은 생략하여 기존 설치 감사의 실패 판정·공간 한도를 보존한다.
