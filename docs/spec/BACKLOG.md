@@ -1,3 +1,4 @@
+- w9firstupdsub693: spool 소실·잠금 외 I/O 오류는 기존 terminal·K/N·띠로 격리하고 잠금만 재시도한다. ACK 유실 가능 행의 배정·runtime 다섯 칸과 같은 원본 앞 구간을 보존하며, 포장 24 h 뒤 다른 새 enqueue 지속을 검증한다.
 ### retained 후보와 다음 업데이트 요청 (sub-555)
 
 retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요청을 한 번 수행하고 journal을 다시 읽는다. 기존 writer가 있으면 SYSTEM의 유예를 따른다. 일반 복귀는 요청한 GUI/relay 역할을 보존한다. 늦은 READY 확정은 현재 기록에서 같은 전환의 timeout만 식별할 수 없어 닫아 둔다(실패 사유는 세대 code로 덮이고 failed_shas는 sha만 보존). 새 기록 형식·사유 값·phase·대기창을 만들지 않는다.

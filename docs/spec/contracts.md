@@ -952,7 +952,9 @@ SYSTEM 적용은 검증된 작업자 루트의 `container_audit_user_relay.stop.
 연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+480초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.
 ## PC 시계 거절의 자동 재전송 (sub-635 · v2.0.123 재서명 대상)
 
-서버 source POST 전의 로컬 OSError(파일 부재·접근 거절·공유 잠김 포함)는 기존 retry_wait/backoff로 보존한다. spool hash/길이 불일치는 기존 terminal이다. POST가 시작된 뒤 반환 결과 없이 생긴 로컬 예외는 기존 검토 보호를 유지한다. 비JSON 400–599(401 포함)는 업로드·lease 준비 모두 재시도한다. JSON 4xx(401 제외)에 committed 칸이 아예 없으면 불완전 응답으로 재시도하며, 그 응답의 runtime 검토 코드·표지는 설치 검토를 만들지 않는다. JSON401의 다른 거절, 명시적 committed:false의 실제 거절, committed/2xx 영수증 불명은 기존 보호를 유지한다. 서버 정본 app.py:3072–3093·3113–3130과 producer_ingest.py:3574–3588(9d16cd59)은 실제 거절에 committed를 항상 넣는다.
+spool/본문 읽기에서 FileNotFoundError와 잠금 외 OSError는 기존 failed_permanent로 해당 행만 닫고 K/N·보내기 띠에 반영한다. PermissionError 또는 winerror 5/32/33만 retry_wait이며, 앞선 POST 가능 행의 terminal 전환은 기존 배정과 runtime 다섯 칸을 보존한다. 같은 원본 terminal 앞 구간을 건너뛰지 않으며 포장의 24 h 나이 gate는 소실 행 때문에 다른 새 enqueue를 막지 않는다(w9firstupdsub693, ANSWER-1).
+
+서버 source POST 전의 서명·TLS 준비 OSError와 파일의 일시 잠금은 기존 retry_wait/backoff로 보존한다. spool hash/길이 불일치는 기존 terminal이다. POST가 시작된 뒤 반환 결과 없이 생긴 로컬 예외는 기존 검토 보호를 유지한다. 비JSON 400–599(401 포함)는 업로드·lease 준비 모두 재시도한다. JSON 4xx(401 제외)에 committed 칸이 아예 없으면 불완전 응답으로 재시도하며, 그 응답의 runtime 검토 코드·표지는 설치 검토를 만들지 않는다. JSON401의 다른 거절, 명시적 committed:false의 실제 거절, committed/2xx 영수증 불명은 기존 보호를 유지한다. 서버 정본 app.py:3072–3093·3113–3130과 producer_ingest.py:3574–3588(9d16cd59)은 실제 거절에 committed를 항상 넣는다.
 
 retry_wait에서 runtime 배정을 풀 수 있는 경우는 명시적 committed:false 거절 또는 source POST 전 로컬 실패뿐이다. 같은 트랜잭션의 기존 release 동작으로 해당 행 배정을 돌려주고 행 metadata의 runtime 다섯 칸을 제거한다. 유효한 설치 lease는 다시 배정할 수 있고 TTL 경과 뒤에는 기존 만료 경로가 새 identity/lease를 받는다. 전송·응답이 모호한 행은 같은 권한을 보존한다. 이전 회차에서 이어받은 배정은 앞선 POST 결과가 불명일 수 있으므로, 뒤 회차의 spool 읽기·원본 읽기·서명 실패로 해제하지 않는다. POST 전 로컬 실패로 해제하는 대상은 이번 회차에 새로 받은 배정이며, 명시적 committed:false 응답의 기존 해제 조건은 유지한다. runtime lease를 끄는 새 길은 없다. stale_timestamp retry 행에서 PC UTC가 마지막 실패 시각(행 updated_at)보다 뒤로 갔으면 일반 선택과 relay-id 지정 선택 모두 다음 회차에 다시 고른다. 정상 시간의 backoff는 유지한다.
 

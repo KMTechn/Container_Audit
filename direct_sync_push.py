@@ -1063,6 +1063,24 @@ def _redact_remote_error_payload(
     return redact_runtime_secrets(redact_value(dict(payload)))
 
 
+def _spool_read_is_retryable(exc: OSError) -> bool:
+    if isinstance(exc, FileNotFoundError):
+        return False
+    return isinstance(exc, PermissionError) or getattr(exc, "winerror", None) in {5, 32, 33}
+
+
+def _spool_read_error_result(exc: OSError, *, relay_id: str = "") -> UploadResult:
+    return UploadResult(
+        success=False,
+        status_code=0,
+        committed=False,
+        retryable=_spool_read_is_retryable(exc),
+        receipt={"client_batch_id": relay_id} if relay_id else {},
+        error_code="spooled_file_missing" if isinstance(exc, FileNotFoundError) else "spooled_file_unreadable",
+        error_message=f"spooled file cannot be read: {exc}",
+    )
+
+
 def _transport_error_result(exc: Exception) -> UploadResult:
     return UploadResult(
         success=False,
@@ -1080,7 +1098,7 @@ def _source_file_unreadable_result(exc: OSError) -> UploadResult:
         success=False,
         status_code=0,
         committed=False,
-        retryable=True,
+        retryable=_spool_read_is_retryable(exc),
         receipt={},
         error_code="source_file_unreadable",
         error_message=f"source file cannot be read before upload: {type(exc).__name__}",
@@ -2558,7 +2576,7 @@ def _set_relay_status(
             "runtime_lease_receipt"
         )
         authority_action = str(runtime_authority_action or "").strip().lower()
-        if authority_action not in {"", "dead_fence", "legacy_accepted", "operator_review", "release"}:
+        if authority_action not in {"", "dead_fence", "legacy_accepted", "operator_review", "preserve", "release"}:
             raise DirectSyncPushError("runtime authority action is invalid")
         if not authority_action and runtime_review and status != RELAY_STATUS_RETRY_WAIT:
             authority_action = "operator_review"
@@ -2567,6 +2585,12 @@ def _set_relay_status(
             RELAY_STATUS_FAILED_PERMANENT,
             RELAY_STATUS_OPERATOR_REVIEW,
         }
+        # ANSWER-1: local spool loss cannot resolve a prior missing ACK.
+        preserve_spool_binding = (
+            authority_action == "preserve"
+            and status == RELAY_STATUS_FAILED_PERMANENT
+            and error_code in {"spooled_file_missing", "spooled_file_unreadable", "source_file_unreadable"}
+        )
         if int(cursor.rowcount) == 1 and (
             runtime_lease is not None or authority_action or terminal_runtime_metadata
         ):
@@ -2643,6 +2667,7 @@ def _set_relay_status(
                 )
             if (
                 terminal_runtime_metadata
+                and not preserve_spool_binding
                 and runtime_metadata is not None
                 and "runtime_request_token" in runtime_metadata
             ):
@@ -2650,7 +2675,7 @@ def _set_relay_status(
                     "UPDATE direct_sync_relay_batches SET metadata_json=? WHERE relay_id=?",
                     (canonical_json(scrub_terminal_runtime_metadata(runtime_metadata)), relay_id),
                 )
-            elif terminal_runtime_metadata and token_in_metadata:
+            elif terminal_runtime_metadata and token_in_metadata and not preserve_spool_binding:
                 conn.execute(
                     "UPDATE direct_sync_relay_batches SET metadata_json=? WHERE relay_id=?",
                     (
@@ -2979,27 +3004,23 @@ def drain_one_relay_batch(
     try:
         spooled_hash, spooled_bytes = _read_file_digest(Path(row.spooled_file_path))
     except OSError as exc:
-        error_code = "spooled_file_missing" if isinstance(exc, FileNotFoundError) else "spooled_file_unreadable"
-        result = UploadResult(
-            success=False,
-            status_code=0,
-            committed=False,
-            retryable=True,
-            receipt={"client_batch_id": row.relay_id},
-            error_code=error_code,
-            error_message=f"spooled file cannot be read: {exc}",
-        )
+        result = _spool_read_error_result(exc, relay_id=row.relay_id)
+        next_attempt_at = ""
+        if result.retryable:
+            next_attempt_at = (
+                datetime.fromisoformat(now.replace("Z", "+00:00")).astimezone(timezone.utc)
+                + timedelta(seconds=_retry_after_seconds(row.attempt_count, retry_base_seconds, row.relay_id))
+            ).isoformat().replace("+00:00", "Z")
         if not _set_claimed_relay_status(
             row,
             db_path=db_path,
-            status=RELAY_STATUS_RETRY_WAIT,
+            status=RELAY_STATUS_RETRY_WAIT if result.retryable else RELAY_STATUS_FAILED_PERMANENT,
             receipt=result.receipt,
-            next_attempt_at=(datetime.fromisoformat(now.replace("Z", "+00:00")).astimezone(timezone.utc)
-                             + timedelta(seconds=_retry_after_seconds(row.attempt_count, retry_base_seconds, row.relay_id))
-                             ).isoformat().replace("+00:00", "Z"),
+            next_attempt_at=next_attempt_at,
             error_code=result.error_code,
             error_message=result.error_message,
             runtime_credentials=credentials,
+            runtime_authority_action="preserve" if runtime_binding_carried else "",
         ):
             return _relay_status_update_conflict(row, prior_result=result)
         return _local_relay_upload_result(row, result)
@@ -3325,7 +3346,11 @@ def drain_one_relay_batch(
             error_message=result.error_message,
             runtime_credentials=credentials,
             runtime_authority_action=(
-                "release" if result._runtime_token_unconsumed else "operator_review"
+                "preserve" if runtime_binding_carried and not source_post_started
+                and result.error_code == "source_file_unreadable"
+                else "release" if result._runtime_token_unconsumed or (
+                    not source_post_started and result.error_code == "source_file_unreadable"
+                ) else "operator_review"
             ),
         ):
             return _relay_status_update_conflict(row, committed=result.committed, prior_result=result)
