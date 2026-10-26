@@ -985,3 +985,4 @@ sub-298 소스 구현: 최초 격리 journal·원 작업자·현품표·격리 �
 연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+480초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.
 
 P3 한계(ANSWER-37, 10/26 레인 판정): 첫 품목표의 40초 예산은 돌려받은 조각 경계에서만 확인한다. 읽기 간격 10초 안으로 아주 느리게 연속 수신하면 전체 종료는 더 늦을 수 있다. 현재 협조 중단을 유지하고 raw read·decoder 내부 검사나 새 타이머·소켓 장치를 더하지 않는다. 원인 probe는 sub-555/closing36에 보존한다.
+- w9firstupdsub633 / relay 자식 대기 45 → 120 초: LM1 밤 창 실측으로 확인 예정(RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS · 포장 user_relay.run_session_direct_sync_once 기본값 · 이적 _runtime_cycle 호출).
