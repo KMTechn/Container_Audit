@@ -51,7 +51,7 @@ function Load-Functions([string]$Path,[string[]]$Names){
 $canonical=[Management.Automation.Language.Parser]::ParseFile($env:CA_RESUME_CANONICAL,[ref]$null,[ref]$null)
 $lower=[Management.Automation.Language.Parser]::ParseFile($env:CA_RESUME_LOWER,[ref]$null,[ref]$null)
 foreach($name in @('Full','Same','Sha','Test-JsonPositiveInt32','Test-JsonInteger','Assert-RetirementOwnerExited',
- 'Read-CanonicalSupportedRemovalResume','Resume-CanonicalSupportedRemovalFence')){
+ 'Read-CanonicalSupportedRemovalResume','Resume-CanonicalSupportedRemovalFence','Get-CanonicalMachineArtifactPreimage')){
  $fn=@($canonical.EndBlock.Statements|Where-Object {$_.Name -ceq $name});if($fn.Count -eq 1){Invoke-Expression $fn[0].Extent.Text}
 }
 foreach($name in @('Test-SamePath','Assert-NoReparsePoint','Write-ContainerSupportedRemovalJournal','Get-ContainerRemovalIoPath',
@@ -114,8 +114,9 @@ $journalCaller=@($lower.FindAll({param($n) $n -is [Management.Automation.Languag
  $n.Clauses[0].Item1.Extent.Text -ceq '$UninstallAuditPath' -and $n.Extent.Text.Contains('Write-ContainerSupportedRemovalJournal')},$true))
 function Invoke-InstallationEvidenceChild([string]$Label,[string]$Executable,[object[]]$Arguments){
  $excluded=@($PID)
+ $RemovalControllerProcessId=$PID
  if($Label -cne 'supported-content-removal' -or $content.Count -ne 1){throw 'actual public removal child ambiguous'}
- foreach($name in @('UninstallAuditPath','UninstallAuditSha256')){
+ foreach($name in @('UninstallAuditPath','UninstallAuditSha256','RemovalControllerProcessId','RemovalControllerStartedAtUtc','RemovalControllerCanonicalPath')){
   $index=[Array]::IndexOf($Arguments,('-'+$name))
   if($index -ge 0){Set-Variable -Name $name -Value ([string]$Arguments[$index+1]) -Scope Script}
  }
@@ -130,12 +131,16 @@ if($publicRemoval.Count -ne 1){throw 'actual public supported uninstall branch a
 $Uninstall=$true;$CompleteRetiredRemoval=$false;$testMode=$true;$winps='fixture';$elevationLogPath='fixture';$evidenceFull=''
 $stop=Join-Path $base 'status/stop.json';$removalPath=Join-Path $base 'status/removal.json'
 $auditPath=Join-Path $base 'audit.json';$old=@();$productCompleteAuthorizationPath=Join-Path $base 'release.json'
+$workerShortcutRecordPath=Join-Path $base 'worker-shortcuts.json'
+$supportedRemovalArtifactPreimage=@();$supportedRemovalArtifactAllowedHashes=@{}
+$env:KMTECH_FACTORY_INSTALL_TEST_MODE='1';$env:KMTECH_TEST_CA_WORKER_SHORTCUT_ROOT=$base
 $audit=[ordered]@{schema='container-audit-canonical-portable-install-v2';operation='UNINSTALL';status='PREIMAGE_SAVED';
  install_root=$install;source_manifest_sha256=$sourceManifestSha256;code_replacement=@{transaction_id=$Script:CanonicalWriterFenceTransactionId};stage_evidence_root=('audit.evidence.'+$PID)}
 Save $auditPath $audit
 if($env:CA_RESUME_PHASE -ceq 'first'){
  $canonicalWriterFenceAuthority=Enter-ContainerWriterSessionAuthority $Script:CanonicalWriterFenceSessionId $Script:CanonicalWriterFenceAttemptId $canonicalWriterFenceOrchestratorSha256 $Script:CanonicalWriterFenceTransactionId $canonicalWriterFenceContractSha256
  Invoke-Expression $dispatch[0].Extent.Text
+ $RemovalControllerProcessId=$PID
  $UninstallAuditPath=Join-Path $base 'audit.json'
  $origin=[ordered]@{schema='container-audit-canonical-portable-install-v2';operation='UNINSTALL';status='PREIMAGE_SAVED';
  install_root=$install;source_manifest_sha256=$sourceManifestSha256;code_replacement=@{transaction_id=$Script:CanonicalWriterFenceTransactionId};stage_evidence_root=('audit.evidence.'+$PID)}

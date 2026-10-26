@@ -11,6 +11,7 @@ import uuid
 
 import pytest
 from tests.powershell_contracts import run_functions
+from tests.test_official_legacy_relay_identity import XML_SETUP
 
 REPO = Path(__file__).resolve().parents[1]
 NAMES = ['Test-SamePath', 'Get-ContainerRemovalIoPath',
@@ -26,14 +27,25 @@ $root=$env:CA_REMOVAL_ROOT;$testOverride=$true;$script:cut=$env:CA_REMOVAL_CUT
 Add-Type -TypeDefinition @'
 using System; using System.Collections.Generic; using System.Runtime.InteropServices;
 public class RemovalTask {
- public string Name="fixture"; public string Xml="<Task><Fixture/></Task>";
+ public string Name; public string RawXml; public bool Enabled=true;
+ public string Xml {get{return RawXml.Replace("<Enabled>true</Enabled>",Enabled?"<Enabled>true</Enabled>":"<Enabled>false</Enabled>");}}
+ public RemovalTask(string name,string xml){Name=name;RawXml=xml;}
  public string GetSecurityDescriptor(int flags){return "fixture-sddl";} public void Stop(int flags){}
 }
 public class RemovalFolder {
+ public string LegacyXml="";
  public HashSet<string> Tasks=new HashSet<string>{"direct-sync-relay-container-audit","container-audit-isolated-qualification-authority"};
+ public Dictionary<string,RemovalTask> Definitions=new Dictionary<string,RemovalTask>();
  public object[] GetTasks(int flags){return new object[0];}
- public RemovalTask GetTask(string name){if(!Tasks.Contains(name))throw new COMException("absent",unchecked((int)0x80070002)); return new RemovalTask();}
- public void DeleteTask(string name,int flags){Tasks.Remove(name);}
+ public RemovalTask GetTask(string name){
+   if(!Tasks.Contains(name))throw new COMException("absent",unchecked((int)0x80070002));
+   if(!Definitions.ContainsKey(name))Definitions[name]=new RemovalTask(name,name=="direct-sync-relay-container-audit"?LegacyXml:"<Task><Fixture/></Task>");
+   return Definitions[name];
+ }
+ public void DeleteTask(string name,int flags){Tasks.Remove(name);Definitions.Remove(name);}
+ public RemovalTask RegisterTask(string name,string xml,int flags,string user,object password,int logon,string sddl){
+   Tasks.Add(name);Definitions[name]=new RemovalTask(name,xml);return Definitions[name];
+ }
 }
 '@
 $folder=[RemovalFolder]::new()
@@ -65,9 +77,13 @@ if($null -ne $locked){$locked.Dispose()}
 $script:cut='';$env:CA_REMOVAL_CUT=''
 [void](Invoke-ContainerConvergentRemoval (Join-Path $root 'current') $folder)
 [void](Invoke-ContainerConvergentRemoval (Join-Path $root 'current') $folder)
-if($folder.Tasks.Count){throw 'task absence not proven'}
+if($folder.Tasks.Count -ne 1 -or -not $folder.Tasks.Contains('direct-sync-relay-container-audit') -or $folder.GetTask('direct-sync-relay-container-audit').Enabled){throw 'owned startup absence and credential-preserving legacy disable not proven'}
 'PASS'
 '''
+
+
+# Use the real source-owned legacy XML; the native folder retains its credentials.
+DRIVER = DRIVER.replace('$folder=[RemovalFolder]::new()', XML_SETUP + '\n$folder=[RemovalFolder]::new();$folder.LegacyXml=$xml')
 
 
 def setup_tree():

@@ -1,4 +1,4 @@
-$ErrorActionPreference='Stop'
+﻿$ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 function Protect-InstallationText($Text,[int]$Limit=512,[switch]$Configuration){
     if($Configuration){return @{full_byte_cap=65536}}

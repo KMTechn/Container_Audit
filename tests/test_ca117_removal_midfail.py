@@ -31,6 +31,7 @@ FUNCTIONS = [
     "Restore-CanonicalMachineInstallationPrestate", "Read-CanonicalMachineInstallationRecovery",
     "Invoke-CanonicalMachineInstallationRecovery", "Get-CanonicalMachinePlacementArguments",
     "Write-CanonicalMachinePublicRecord", "Get-CanonicalMachineRecoveryEntry",
+    "Test-CanonicalMachineRecoveryCompleted", "Test-CanonicalMachineCompensationComplete",
 ]
 # Functions the fix adds; absent before the fix (RED run) so the harness still starts.
 OPTIONAL = ["Restore-CanonicalRemovalFromMoveJournal", "Restore-CanonicalRemovalScheduledTasks",
@@ -370,4 +371,4 @@ def test_failed_uninstall_guidance_names_the_exact_accepting_entry(tmp_path, mon
     # and that entry accepts the operation (recovery of a dead remover above); gate is not INSTALL-only
     gate = INSTALLER_TEXT[INSTALLER_TEXT.index("function Read-CanonicalMachineInstallationRecovery"):
                           INSTALLER_TEXT.index("function Confirm-CanonicalMachineRecoveryChildExit")]
-    assert "-cnotin @('INSTALL','UNINSTALL')" in gate and "'PREIMAGE_SAVED'" in gate
+    assert "-cnotin @('INSTALL','UNINSTALL','RESTORE_VERIFIED_REPLACEMENT')" in gate and "'PREIMAGE_SAVED'" in gate
