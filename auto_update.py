@@ -3227,7 +3227,11 @@ def start_current(control: Path, policy: Mapping[str, Any], state, active, argum
         emit_support_record({"reason_code": "REPORT_UNAVAILABLE"}, stage="update_apply")
     started_at = now_utc()
     if state and state["phase"] in {"PREPARED", "FAILED", "UNKNOWN", "APPLIED_PENDING_READY"}:
-        assert_ordinary_recovery(control, policy, active["sha"], started_at)
+        try:
+            assert_ordinary_recovery(control, policy, active["sha"], started_at)
+        except (OSError, ValueError, TypeError, KeyError):
+            emit_progress_guidance()
+            return 20
     if deadline is None:
         launch_version(control, active["sha"], arguments, deferred_at=started_at)
     else:

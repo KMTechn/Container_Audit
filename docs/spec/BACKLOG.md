@@ -990,3 +990,4 @@ sub-298 소스 구현: 최초 격리 journal·원 작업자·현품표·격리 �
 연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+480초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.
 
 P3 한계(ANSWER-37, 10/26 레인 판정): 첫 품목표의 40초 예산은 돌려받은 조각 경계에서만 확인한다. 읽기 간격 10초 안으로 아주 느리게 연속 수신하면 전체 종료는 더 늦을 수 있다. 현재 협조 중단을 유지하고 raw read·decoder 내부 검사나 새 타이머·소켓 장치를 더하지 않는다. 원인 probe는 sub-555/closing36에 보존한다.
+- 10/26 sub-692: 적용 요청 실패에서 start_current 일반 복구 거절의 ValueError 전파를 안내·20으로 고침. 기존 재사용 증명·다시 기회는 유지. RED→GREEN 및 정본 선언 근거는 work/program/w9firstupd/sub-692/RESULT.md.
