@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "5686d6425d1fecf4185810a964ddf9394de99469f23c71bc7c9136f5a88d8b69",
+  "after_inventory_sha256": "fe0b1236a8905ef96b66a95482a93a7ebe8b9b8bb7230276c68b48ea473ac417",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -178,7 +178,7 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "28867e5a4cbf71e1c92cc93af428c40e0f6a41a127c9dc1d04c2d034c0a4127f"
+      "after": "e908d83e1287db6c0bc539c75b927e9b18d50b591f2be1b330b33bb32436886a"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -1463,7 +1463,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "2afa42768bf1b4b64826ee353d95d03ea175cc0787e15bda54ed514d57dfb1cc"
+      "after": "e1537f54a0d8f458b04cb43a0c7b4025d651dd6e559b64f094572d797c38d52a"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4508,12 +4508,12 @@
     {
       "path": "tools/bootstrap_integrity.ps1",
       "before": "01919751911b37dea315a412585c85ec397e479ca02df36554ca7309a27fa9ba",
-      "after": "c9ec19eaafad68f621f8a4492f0ae3c37fb2e276bc2e7bd7d8a6a12945d4935c"
+      "after": "a5df36eebd04232af6b70d9b8d78f1afd42d618f36c5a33344f6a682ed935940"
     },
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "33e142c93ca1ccf580d7caccaa4509440e5c92adf5701e331ccae66fdc5ba872"
+      "after": "ff2adea1b39ac50e5d8fafc5bc92572baefd8789c6934c719563757aa2520bd1"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4523,12 +4523,12 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "08556f61b36de7e6492c008e47c36cfceed564eb64a71df65a9f21c7b7445c18"
+      "after": "2bb3a408f76f2dbef347e536238dea5f7a29b8e1c80371d4fbe2cfccd6072f42"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "3350cfdef43d3e3908e1f7dc0c0d456f9daa262a0c9dadc428e0acd34f4e66b4"
+      "after": "72c53b43286ec41a2f93760e4ec142f62cb1a3c528c624d2726c8054847ac0d3"
     }
   ],
   "source_replacements": [
@@ -4540,7 +4540,7 @@
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
       "before": "e235b59d795a5da91f0c26bf1d6d1e0b8c0604ae6dbbde82b131d4f7105e3e49",
-      "after": "28867e5a4cbf71e1c92cc93af428c40e0f6a41a127c9dc1d04c2d034c0a4127f"
+      "after": "e908d83e1287db6c0bc539c75b927e9b18d50b591f2be1b330b33bb32436886a"
     },
     {
       "path": "INSTALL_THIS_PC.ps1",
@@ -4645,7 +4645,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "33e142c93ca1ccf580d7caccaa4509440e5c92adf5701e331ccae66fdc5ba872"
+      "after": "ff2adea1b39ac50e5d8fafc5bc92572baefd8789c6934c719563757aa2520bd1"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4695,7 +4695,7 @@
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "2afa42768bf1b4b64826ee353d95d03ea175cc0787e15bda54ed514d57dfb1cc"
+      "after": "e1537f54a0d8f458b04cb43a0c7b4025d651dd6e559b64f094572d797c38d52a"
     }
   ],
   "hash_provenance": {

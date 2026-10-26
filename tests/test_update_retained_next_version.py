@@ -63,7 +63,7 @@ def test_retained_x_next_version_system_outcome(world, monkeypatch, tmp_path, ca
     monkeypatch.setattr(updates, "version_manifest",
         lambda path, **kw: copy.deepcopy(current if path.name == x else candidate))
     monkeypatch.setattr(updates, "verify_prepared_packet",
-        lambda *a, **k: (manifest, {"sha256": pending["packet_sha256"]}))
+        lambda *a, **k: ({**manifest, "source_commit": w.candidate}, {"sha256": pending["packet_sha256"]}))
     monkeypatch.setattr(updates, "prepared_pending", lambda *_: False)
     original_snapshot = updates.process_snapshot
     original_lock = updates.update_lock

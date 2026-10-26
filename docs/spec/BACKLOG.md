@@ -1,3 +1,4 @@
+- 10/27 sub-695: READY900 검토 P1-1 도우미 죽은 분류 제거·선언 복원, P2-2 서명된 SHA만 영구 거절·공간 부족/설치판 오류 다시 기회·P2-1 failed-support PS/Python 판정 일치. RED→GREEN·선언·호출자 근거는 work/program/w9firstupd/sub-695/RESULT.md. P3 메모는 11/15 후속으로 보존한다.
 - 10/26 sub-659 (P1·123/126): 후보·되돌림 READY 900초 / bootstrap 상한 1140초, 준비 중 일시 실패는 마지막 시도+900초 / 24시간 내 3회 예산을 같은 retry_shas로 보존한다. 소진/모르는 예외로 SHA를 영구 거절하지 않으며 관리자 안내 뒤 24시간 경계에서 자동 재시도한다. 확정 거절·UNKNOWN 복구 경계는 유지한다. 포장 실패 JSON은 최근 20개만 남긴다. 새 계약 시험·직접 호출자 바탕 대조·선언 write→check 근거: work/program/w9firstupd/sub-659/RESULT.md. 실제 설치·현장 확인은 별도 회차다.
 
 - 10/26 sub-590fix: 독립 검토 sub-590rev P2-1(사라진·보낼 것 없는 원본의 실패 항목 정리)·P2-2(csv.Error → source_csv_content_invalid)를 닫았다. 11/15 후보: P2-3 공용 부모 쓰기 거부가 원본별 mkdir 로 나타나면 모든 원본이 source_delta_write_failed 로 기록돼 개수로만 보인다(전역 중단 아님). P2-4 drain 뒤 오프셋 기록 구간의 SourceFileInputError 는 예전 크래시와 결과가 같아 표시 코드만 다르다(근거: work/program/w9firstupd/sub-590fix/RESULT.md).

@@ -209,9 +209,6 @@ def record_retry_chance(transition: Mapping[str, Any], sha: str, *, now: str) ->
 
 def _transient_preparation_error(error: BaseException) -> bool:
     """Unknown failures get a bounded retry; only proved rejections are final."""
-    import errno
-    if getattr(error, "winerror", None) == 112 or getattr(error, "errno", None) == errno.ENOSPC:
-        return False
     return getattr(error, "_preparation_rejection", False) is not True
 
 
@@ -219,6 +216,24 @@ def _preparation_rejection(message: str) -> ValueError:
     error = ValueError(message)
     error._preparation_rejection = True
     return error
+
+
+@contextmanager
+def _authenticated_preparation(sha: str):
+    """Carry only the verified manifest identity through local validation errors."""
+    sha = _sha(sha)
+    try:
+        yield
+    except ValueError as error:
+        error._preparation_signed_sha = sha
+        raise
+
+
+def _permanent_preparation_sha(error: BaseException) -> str:
+    try:
+        return _sha(getattr(error, "_preparation_signed_sha", None))
+    except ValueError:
+        return ""
 
 
 def _retry_review_required(state: Mapping[str, Any] | None) -> bool:
@@ -1686,14 +1701,14 @@ def verify_prepared_packet(
     if signature_path.stat().st_size > 16384:
         raise ValueError("update signature is oversized")
     verify_update_manifest_signature(manifest, signature_path.read_bytes(), key_config)
-    candidate = update_candidate_from_private_manifest(manifest, current_version=current_version, expected_channel=channel)
-    if candidate is None or candidate["archive_policy"].get("layout") != "canonical_portable":
-        raise ValueError("update is not a targeted canonical portable candidate")
-    packet = stage / "packet.zip"
-    _assert_no_reparse_components(packet)
-    if packet.stat().st_size != manifest["artifact"]["size_bytes"] or file_sha256(packet) != candidate["sha256"]:
-        raise ValueError("prepared packet size or SHA256 differs")
-    _sha(manifest.get("source_commit"))
+    with _authenticated_preparation(manifest.get("source_commit")):
+        candidate = update_candidate_from_private_manifest(manifest, current_version=current_version, expected_channel=channel)
+        if candidate is None or candidate["archive_policy"].get("layout") != "canonical_portable":
+            raise ValueError("update is not a targeted canonical portable candidate")
+        packet = stage / "packet.zip"
+        _assert_no_reparse_components(packet)
+        if packet.stat().st_size != manifest["artifact"]["size_bytes"] or file_sha256(packet) != candidate["sha256"]:
+            raise ValueError("prepared packet size or SHA256 differs")
     return manifest, candidate
 
 
@@ -1865,12 +1880,6 @@ def _run_fixed_helper(control: Path, mode: str, *, code_root: Path | None = None
     if completed.returncode:
         error = RuntimeError("fixed update helper failed: " + mode)
         error.stdout, error.stderr, error.exit_code = completed.stdout, completed.stderr, completed.returncode
-        error._preparation_timeout = mode == "Observe" and "STARTUP_QUERY_TIMEOUT_UNKNOWN" in (completed.stderr or "")
-        error._preparation_rejection = bool(re.search(
-            r"\bSTARTUP_UPDATE_(?:FILE_PIN_DIFFERS|PORTABLE_MANIFEST_DIFFERS|WRITER_INVENTORY_DIFFERS|"
-            r"PACKET_HAS_INSTALL_RECORD|VERSION_DIRECTORY_DIFFERS|VERSION_OUTSIDE_PROTECTED_ROOT|"
-            r"FIXED_BOOTSTRAP_REQUIRED|OPERATOR_DIFFERS|POLICY_OVERSIZED|SYSTEM_REQUIRED|"
-            r"PREVIOUS_RECORD_MISSING|APPLY_HAS_NO_USER_CODE_ARGUMENT)\b", completed.stderr or ""))
         raise error
     return completed.stdout.strip()
 
@@ -2079,8 +2088,10 @@ def apply_prepared(control: Path) -> int:
                         state or {}, failed_prepared_sha, now=failure["deferred_at"])
                 else:
                     failure["preparation_retry_pending"] = True
-            elif not_applied and failed_prepared_sha:
-                failure["failed_shas"] = sorted(set(failure.get("failed_shas", [])) | {failed_prepared_sha})
+            elif not_applied:
+                signed_sha = _permanent_preparation_sha(error)
+                if signed_sha:
+                    failure["failed_shas"] = sorted(set(failure.get("failed_shas", [])) | {signed_sha})
             failure = mixed_status_record(failure)
             write_json_durable(control / ("failure-" + uuid.uuid4().hex + ".json"), failure)
             write_json_durable(control / "transition.json", failure)
@@ -2256,11 +2267,7 @@ def _apply_prepared_once(control: Path) -> int:
                 return 0  # A late task defers; it never stops an existing application.
             active = read_json(control / "active.json")
             fixed_helper(control, "Verify", code_root=version_bundle(control, active["sha"]))
-            try:
-                current = version_manifest(version_bundle(control, active["sha"]), require_version=True)
-            except ValueError as error:
-                error._preparation_rejection = True
-                raise
+            current = version_manifest(version_bundle(control, active["sha"]), require_version=True)
             key = read_json(control.parent / "current/app/update-manifest-key-config.json")["manifest_public_key"]
             # Copy user-owned bytes, then authenticate the protected copy. No path,
             # executable or command supplied by the prepared marker is executed.
@@ -2276,29 +2283,30 @@ def _apply_prepared_once(control: Path) -> int:
             sha = manifest["source_commit"]
             if sha in (state or {}).get("failed_shas", []):
                 return 0
-            extracted = protected / "extracted"
-            try:
-                extract_prepared_code(protected / "packet.zip", extracted, candidate["archive_policy"])
-            except ValueError as error:
-                error._preparation_rejection = True
-                raise
-            target = extracted / "Container_Audit"
-            # Verify stock bytes before reading version/contract authority.
-            fixed_helper(control, "Verify", code_root=target)
-            try:
-                candidate_manifest = version_manifest(target, require_version=True)
-            except ValueError as error:
-                error._preparation_rejection = True
-                raise
-            if candidate_manifest["source_commit"] != sha or candidate_manifest["version"] != manifest["version"]:
-                raise _preparation_rejection("signed target SHA differs from the packet")
-            if file_sha256(target / "app/update-manifest-key-config.json") != file_sha256(control.parent / "current/app/update-manifest-key-config.json"):
-                raise _preparation_rejection("candidate signing key differs from the installed key")
-            try:
-                forward, rollback, rollback_pair, pin_authority = manifest_transition_pins(manifest, current=current, candidate=candidate_manifest)
-            except ValueError as error:
-                error._preparation_rejection = True
-                raise
+            with _authenticated_preparation(sha):
+                extracted = protected / "extracted"
+                try:
+                    extract_prepared_code(protected / "packet.zip", extracted, candidate["archive_policy"])
+                except ValueError as error:
+                    error._preparation_rejection = True
+                    raise
+                target = extracted / "Container_Audit"
+                # Verify stock bytes before reading version/contract authority.
+                fixed_helper(control, "Verify", code_root=target)
+                try:
+                    candidate_manifest = version_manifest(target, require_version=True)
+                except ValueError as error:
+                    error._preparation_rejection = True
+                    raise
+                if candidate_manifest["source_commit"] != sha or candidate_manifest["version"] != manifest["version"]:
+                    raise _preparation_rejection("signed target SHA differs from the packet")
+                if file_sha256(target / "app/update-manifest-key-config.json") != file_sha256(control.parent / "current/app/update-manifest-key-config.json"):
+                    raise _preparation_rejection("candidate signing key differs from the installed key")
+                try:
+                    forward, rollback, rollback_pair, pin_authority = manifest_transition_pins(manifest, current=current, candidate=candidate_manifest)
+                except ValueError as error:
+                    error._preparation_rejection = True
+                    raise
             # The fixed helper validates the portable tree and writes its own
             # integrity record. It never imports or executes candidate code.
             target_bundle = version_bundle(control, sha)
@@ -2336,22 +2344,24 @@ def _apply_prepared_once(control: Path) -> int:
                 fixed_helper(control, "Verify", code_root=old_bundle)
                 fixed_helper(control, "Verify", code_root=target_bundle)
                 key = read_json(control.parent / "current/app/update-manifest-key-config.json")["manifest_public_key"]
+                previous_manifest = version_manifest(old_bundle, require_version=True)
                 try:
                     resumed_manifest, resumed_candidate = verify_prepared_packet(control / protected_name, key_config=key,
-                        current_version=version_manifest(old_bundle, require_version=True)["version"], channel=policy["channel"])
+                        current_version=previous_manifest["version"], channel=policy["channel"])
                 except ValueError as error:
                     error._preparation_rejection = True
                     raise
-                try:
-                    forward, reverse, rollback_pair, authority = manifest_transition_pins(resumed_manifest,
-                        current=version_manifest(old_bundle, require_version=True), candidate=version_manifest(target_bundle, require_version=True))
-                except ValueError as error:
-                    error._preparation_rejection = True
-                    raise
-                if (resumed_candidate["sha256"] != state["packet_sha256"] or forward != state["forward_pin"]
-                        or reverse != state["rollback_pin"] or rollback_pair != state.get("rollback_pair")
-                        or authority != state.get("pin_authority")):
-                    raise _preparation_rejection("daily_update_prepared_binding_mismatch")
+                with _authenticated_preparation(resumed_manifest["source_commit"]):
+                    try:
+                        forward, reverse, rollback_pair, authority = manifest_transition_pins(resumed_manifest,
+                            current=previous_manifest, candidate=version_manifest(target_bundle, require_version=True))
+                    except ValueError as error:
+                        error._preparation_rejection = True
+                        raise
+                    if (resumed_candidate["sha256"] != state["packet_sha256"] or forward != state["forward_pin"]
+                            or reverse != state["rollback_pin"] or rollback_pair != state.get("rollback_pair")
+                            or authority != state.get("pin_authority")):
+                        raise _preparation_rejection("daily_update_prepared_binding_mismatch")
                 if writer_processes(process_snapshot(control), own_pid=os.getpid()):
                     return 20
                 fixed_helper(control, "Verify", code_root=version_bundle(control, state["candidate_sha"]))

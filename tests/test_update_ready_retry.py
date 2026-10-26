@@ -95,7 +95,7 @@ def pend_candidate(w, monkeypatch, tmp_path, *, failed=(), retry=None):
     monkeypatch.setattr(updates, "version_manifest",
         lambda path, **kw: copy.deepcopy(current if path.name == w.previous else candidate))
     monkeypatch.setattr(updates, "verify_prepared_packet",
-        lambda *a, **k: (manifest, {"sha256": pending["packet_sha256"]}))
+        lambda *a, **k: ({**manifest, "source_commit": w.candidate}, {"sha256": pending["packet_sha256"]}))
     w.auto_ready = True  # A failed candidate also exercises the real rollback consumer.
 
 
@@ -210,7 +210,7 @@ def _confirmed_error():
     return error
 
 
-@pytest.mark.parametrize("error", [_confirmed_error(), _native_error(112)])
+@pytest.mark.parametrize("error", [_confirmed_error()])
 def test_confirmed_preparation_failure_still_blocks_immediately(tmp_path, monkeypatch, error):
     case = _preparation_case(tmp_path, monkeypatch, error)
     assert case.run() == 0
@@ -236,10 +236,10 @@ def test_a_preparation_error_after_an_uncertain_pointer_never_opens_a_retry(tmp_
     assert not case.state().get("retry_shas")
 
 
-def test_observe_timeout_is_classified_before_child_output_is_redacted(monkeypatch, tmp_path):
+def test_observe_generic_stdout_remains_unknown(monkeypatch, tmp_path):
     import subprocess
     from types import SimpleNamespace
-    completed = SimpleNamespace(returncode=1, stdout="", stderr="STARTUP_QUERY_TIMEOUT_UNKNOWN")
+    completed = SimpleNamespace(returncode=1, stdout='CONTAINER_AUDIT_UPDATE={"reason_code":"STARTUP_UPDATE_FAILURE"}', stderr="")
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: completed)
     monkeypatch.setattr(updates, "system_executable", lambda *a: tmp_path / "powershell.exe")
     try:
@@ -273,7 +273,7 @@ def test_only_the_approved_io_errors_are_temporary(kind):
     from requests.exceptions import ConnectionError as RequestConnectionError
     errors = {"network": RequestConnectionError(), "query_timeout": subprocess.TimeoutExpired("Observe", 20),
               "disk_io": OSError(errno.EIO, "simulated"), "disk_full": OSError(errno.ENOSPC, "simulated")}
-    assert updates._transient_preparation_error(errors[kind]) is (kind != "disk_full")
+    assert updates._transient_preparation_error(errors[kind]) is True
 
 
 def test_an_unreadable_prepared_identity_keeps_its_saved_wait_after_restart(tmp_path, monkeypatch):
@@ -353,22 +353,6 @@ def test_a_rolled_back_ready_timeout_has_the_same_review_budget(monkeypatch):
     assert updates._retry_review_required(state)
     monkeypatch.setattr(updates, "now_utc", lambda: at(24))
     assert not updates._retry_review_required(state)
-
-
-@pytest.mark.parametrize("marker,temporary", [("STARTUP_UPDATE_FILE_PIN_DIFFERS", False),
-                                             ("STARTUP_UPDATE_FAILURE", True)])
-def test_fixed_helper_distinguishes_a_proved_rejection_from_an_unknown_error(tmp_path, monkeypatch, marker, temporary):
-    import subprocess
-    from types import SimpleNamespace
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr=marker))
-    monkeypatch.setattr(updates, "system_executable", lambda *a: tmp_path / "powershell.exe")
-    try:
-        updates._run_fixed_helper(tmp_path / "control", "Verify")
-    except RuntimeError as error:
-        assert updates._transient_preparation_error(error) is temporary
-    else:
-        pytest.fail("the failed Verify helper must still reject this invocation")
-
 
 
 def test_the_real_generic_helper_stdout_keeps_an_unknown_preparation_retry(tmp_path, monkeypatch):

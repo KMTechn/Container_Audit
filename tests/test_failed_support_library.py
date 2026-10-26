@@ -75,7 +75,9 @@ try {
 
 @pytest.mark.parametrize("engine", ["powershell.exe", "pwsh"])
 @pytest.mark.parametrize("case", ["allow", "code", "writer", "generation", "fence", "prepared",
-                                  "self", "self_hash", "self_thread", "other_fence", "ordinary"])
+                                  "self", "self_hash", "self_thread", "other_fence", "ordinary", "retry_wait", "retry_due", "retry_exhausted",
+                                  "retry_expired", "retry_bad_count", "retry_bad_time", "retry_future",
+                                  "retry_pending", "retry_pending_expired", "retry_pending_bad_time"])
 def test_failed_library_checks_proofs_and_same_thread_identity(tmp_path, monkeypatch, engine, case):
     if not shutil.which(engine):
         pytest.skip("engine unavailable")
@@ -107,6 +109,26 @@ def test_failed_library_checks_proofs_and_same_thread_identity(tmp_path, monkeyp
     policy = dict(schema="container-audit-startup-update-policy-v1", operator_sid=sid,
                   operator_local_app_data=str(local), feed_url="https://updates.invalid/", staging_root=str(staging))
     state = dict(schema=update.SCHEMA, phase="FAILED", reason="readiness failure", failed_shas=[])
+    if case.startswith("retry_"):
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        state.update(reason_code="UPDATE_PREPARATION_FAILED", failed_prepared_sha="",
+                     failed_prepared_marker_sha256="")
+        first = now - timedelta(hours=1)
+        last = now - timedelta(seconds=30 if case == "retry_wait" else 1800)
+        attempts = 3 if case in {"retry_exhausted", "retry_exhausted_bad_time"} else 1
+        if case == "retry_expired":
+            first = now - timedelta(hours=25)
+            last = now - timedelta(seconds=30)
+        if case == "retry_future":
+            first = now + timedelta(hours=1)
+        state["retry_shas"] = {"c" * 40: {"attempts": True if case == "retry_bad_count" else attempts,
+            "first_at": first.isoformat(), "last_at": "invalid" if case in {"retry_bad_time", "retry_exhausted_bad_time"} else last.isoformat()}}
+        if case.startswith("retry_pending"):
+            state.update(preparation_retry_pending=True,
+                deferred_at="invalid" if case == "retry_pending_bad_time" else
+                    (now - timedelta(seconds=1800 if case == "retry_pending_expired" else 30)).isoformat())
+        (staging / "prepared.json").write_text(json.dumps(dict(source_commit="c" * 40)), encoding="utf-8")
     for name, value in (("policy", policy), ("active", dict(schema=update.SCHEMA, sha=active)), ("transition", state)):
         (control / (name + ".json")).write_text(json.dumps(value), encoding="utf-8")
     marker = local / "KMTech/ContainerAudit/data-generation.json"
@@ -134,5 +156,14 @@ def test_failed_library_checks_proofs_and_same_thread_identity(tmp_path, monkeyp
     assert result.returncode == 0
     decision = json.loads(result.stdout)
     (tmp_path / "library-diagnostic.json").write_text(json.dumps(decision), encoding="utf-8")
-    assert decision["allowed"] == (case in {"allow", "self"})
+    expected = case in {"allow", "self", "retry_wait", "retry_exhausted", "retry_pending", "retry_pending_bad_time", "retry_exhausted_bad_time"}
+    assert decision["allowed"] == expected
+    if case.startswith("retry_"):
+        assert (not update.prepared_pending(control, policy, state)) == expected
     assert all(path.read_bytes() == raw for path, raw in before.items())
+
+
+@pytest.mark.parametrize("engine", ["powershell.exe", "pwsh"])
+def test_exhausted_retry_does_not_read_a_malformed_last_clock(tmp_path, monkeypatch, engine):
+    test_failed_library_checks_proofs_and_same_thread_identity(
+        tmp_path, monkeypatch, engine, "retry_exhausted_bad_time")

@@ -105,7 +105,7 @@ def test_candidate_ready_at_180_seconds_confirms_instead_of_rolling_back(world, 
     monkeypatch.setattr(updates, "version_manifest",
         lambda path, **kw: copy.deepcopy(current if path.name == w.previous else candidate))
     monkeypatch.setattr(updates, "verify_prepared_packet",
-        lambda *a, **k: (manifest, {"sha256": pending["packet_sha256"]}))
+        lambda *a, **k: ({**manifest, "source_commit": w.candidate}, {"sha256": pending["packet_sha256"]}))
     snapshot = updates.process_snapshot
     started = w.clock
 
