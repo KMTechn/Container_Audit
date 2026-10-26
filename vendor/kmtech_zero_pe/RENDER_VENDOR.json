@@ -15,7 +15,7 @@
   "shared_source": {
     "manifest": "../../kmtech_shared.manifest.json",
     "lock": "../../kmtech_shared.lock.json",
-    "version": "0.3.8",
+    "version": "0.3.8+w9.1",
     "source_commit": "807564228bdefae668d338bd7e5d54f9c90f5486",
     "manifest_commit": "32b893d7fa8b68148c847797a861d08da83e8c11"
   }
