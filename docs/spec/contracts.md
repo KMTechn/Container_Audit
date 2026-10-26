@@ -950,3 +950,22 @@ SYSTEM 적용은 검증된 작업자 루트의 `container_audit_user_relay.stop.
 중앙 등록 profile이 있고 기본 요청 한도(2초)를 사용할 때, 현재 신원·서버 URL로 기존 인증 primary/recovery 검증기를 통과하는 품목표가 둘 다 없으면 첫 요청 한도는 10초다. 첫 시도 시작의 단조 시계부터 요청·본문 수신 예산40초를 두고, 0.25초 대기 앞뒤 모두 다음 연결10초+읽기10초가 남을 때만 서버 응답 전 전송 오류를 최대 두 번 더 시도한다. 상태줄·헤더를 받으면 본문 오류도 다시 시도하지 않는다. 전체 40초는 돌려받은 조각 경계에서만 확인한다. 서버가 아주 느리게 끊임없이 보내면(읽기 간격마다 10초 안) 그보다 늦을 수 있으며, 조용히 멈추면 읽기 기다림 10초로 끊긴다. 새 타이머·소켓 중단 장치는 두지 않는다. 바로 거절되면 최대 세 번 빨리 끝난다. HTTP 응답·본문 읽기·목록 검증 실패는 다시 시도하지 않는다. 인증 cache가 있거나 한도를 다른 값으로 명시했으면 기존 한 번의 요청과 한도를 유지한다(캐시 길 timeout2초, 연결+읽기 끊김 합산 약4초+이름 풀이). profile 없는 로컬/패키지 경로와 인증·cache 내구 형식은 그대로다.
 
 연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+480초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.
+## PC 시계 거절의 자동 재전송 (sub-635 · v2.0.123 재서명 대상)
+
+서버 source POST 전의 로컬 OSError(파일 부재·접근 거절·공유 잠김 포함)는 기존 retry_wait/backoff로 보존한다. spool hash/길이 불일치는 기존 terminal이다. POST가 시작된 뒤 반환 결과 없이 생긴 로컬 예외는 기존 검토 보호를 유지한다. 비JSON 400–599(401 포함)는 업로드·lease 준비 모두 재시도한다. JSON 4xx(401 제외)에 committed 칸이 아예 없으면 불완전 응답으로 재시도하며, 그 응답의 runtime 검토 코드·표지는 설치 검토를 만들지 않는다. JSON401의 다른 거절, 명시적 committed:false의 실제 거절, committed/2xx 영수증 불명은 기존 보호를 유지한다. 서버 정본 app.py:3072–3093·3113–3130과 producer_ingest.py:3574–3588(9d16cd59)은 실제 거절에 committed를 항상 넣는다.
+
+retry_wait에서 runtime 배정을 풀 수 있는 경우는 명시적 committed:false 거절 또는 source POST 전 로컬 실패뿐이다. 같은 트랜잭션의 기존 release 동작으로 해당 행 배정을 돌려주고 행 metadata의 runtime 다섯 칸을 제거한다. 유효한 설치 lease는 다시 배정할 수 있고 TTL 경과 뒤에는 기존 만료 경로가 새 identity/lease를 받는다. 전송·응답이 모호한 행은 같은 권한을 보존한다. runtime lease를 끄는 새 길은 없다. stale_timestamp retry 행에서 PC UTC가 마지막 실패 시각(행 updated_at)보다 뒤로 갔으면 일반 선택과 relay-id 지정 선택 모두 다음 회차에 다시 고른다. 정상 시간의 backoff는 유지한다.
+
+스캔의 첫 양수 K 관측 시각은 `scan_terminal_blocked_since_utc`로 남기고 K가 0인 명시적 스캔까지 보존한다. 앱 데이터 뿌리의 `upload_block_status.json`은 공용 관찰 계약이며 `schema:1`, `app:"CA"`, `blocked_files:K`, `blocked_records:N|null`, `install_review:boolean`, `since:UTC Z|null`, `updated:UTC Z` 일곱 칸만 쓴다. 기본 경로는 `%LOCALAPPDATA%\KMTech\ContainerAudit\upload_block_status.json`이며 기존 data-root 재정의를 따른다. 선행 lease의 `operator_review`만 설치 전체 검토로 보고 `ACTIVE`와 `server_grant_accepted=true`를 함께 확인하면 해제한다. 그 관측이 없는 스캔·idle·통신 실패는 마지막 값을 보존한다. `since`는 K>0 또는 설치 검토가 연속된 최초 시각이며 둘 다 풀리면 null이다. 수/상태 변경 및 relay 회차마다 같은 폴더의 임시 파일을 UTF-8 BOM 없이 쓴 뒤 원자 교체한다. 해제 파일도 0·false·null로 보존하며 쓰기 실패는 고정 로그 한 줄만 남기고 업로드·화면을 막지 않는다. 파일명·작업자·서버·자격·기록 내용은 내보내지 않는다.
+
+연결 거절·DNS·TLS·소켓 예외·읽기/연결 timeout과 미커밋 HTTP 408/429/500–599도 같은 기존 retry_wait/backoff를 따른다. legacy_exact_replay/enforce의 명시적 미커밋 transient도 자동 재시도를 유지하며, 이미 committed인 결과·receipt 불일치의 기존 검토 보호는 유지한다. 실제 terminal인 원본 CSV 앞 구간을 건너뛰어 뒤 기록을 보내는 변경은 없다.
+
+스캔 상태의 `scan_terminal_blocked_count`는 기존 runner가 확인한 막힌 원본 파일 수 K다. 선택 칸 `scan_terminal_blocked_record_count`는 각 원본의 첫 terminal delta 시작 byte부터 안정적으로 확인한 EOF까지의 CSV 데이터 레코드 수 N의 합이다(막힌 구간 포함·header 제외·같은 파일 한 번). 배치 수·제품 수와 합치지 않는다. 범위/hash 불일치·CSV 해석 실패·읽는 중 변경·끝 미완성 행은 null(미확인)이고 0으로 꾸미지 않는다. 이 값들은 스캔에서만 세고 다음 명시적 스캔 결과까지 idle·재시작에도 보존한다.
+
+보내기 띠는 ① 시계 ② 막힘 ③ 기존 oldest pending 600초 초과 순으로 한 번에 하나다. ② 큰 줄은 「회사 서버가 받지 않은 기록이 있어 그 뒤 기록 N건을 보내지 못하고 있습니다 — 현장 관리자에게 알리세요」, 작은 줄은 「찍은 기록은 이 PC에 그대로 있습니다 · 막힌 기록 파일 K개」다. N 미확인이면 큰 줄의 수량 조각을 뺀다. 시계 띠가 우선할 때 확정된 N/K만 둘째 줄 끝에 붙인다. ③은 「회사 서버로 기록을 보내지 못하고 있습니다 — 현장 관리자에게 알리세요」/「찍은 기록은 이 PC에 그대로 있고, 연결이 돌아오면 저절로 보내집니다」다. 새 보내기 띠가 있으면 기존 서버 검토 상태 안내는 숨기고, 없으면 기존 안내를 노랑으로 유지한다. alerts 계약은 보내기 한 칸+기존 네 칸=최대 5이며 다른 경고는 보존한다. 이 판에는 자동 끄기 마감 입력이 없어 진한 노랑·새 종료 예약은 추가하지 않는다.
+
+producer 업로드와 행별 runtime lease 준비의 JSON HTTP 401 + 오류 코드 `stale_timestamp`만 기존 `retry_wait`로 돌린다. 원 행·spool·업무 metadata·멱등 identity를 보존하며 기존 backoff·Retry-After·재시도 횟수 규칙을 그대로 따른다. JSON 응답의 다른 401, committed receipt 확인, runtime fence와 관리자 검토 경계는 유지한다. 선행 lease 거절은 다음 상주 회차에서 다시 요청하며 설치 전체의 terminal 거절로 바꾸지 않는다.
+
+유효한 응답 HTTP `Date`를 읽으면 기존 업로드 상태 JSON의 선택 칸 `clock_skew={pc_time_utc,server_time_utc,offset_seconds}`에 초 단위 `PC UTC − 서버 UTC`를 남긴다. Date가 없거나 해석되지 않으면 이 칸을 쓰지 않는다. 서명 시각이나 시스템 시계를 자동 보정하지 않는다. runtime 상태의 선택 칸 `clock_warning={status_code:401,error_code:"stale_timestamp",clock_skew?:…}`은 대기·idle·재시작 동안 유지되고 다음 업로드 성공 때 제거된다. Date가 없는 새 stale 응답은 이전 시각 조각을 재사용하지 않는다.
+
+두 화면의 노랑 안내는 스캔·작업을 막거나 확인 단추·오류음을 만들지 않는다. 큰 줄은 「이 PC 시계가 회사 서버와 5분 넘게 달라 기록을 보내지 못하고 있습니다 — 현장 관리자에게 알리세요」, 둘째 줄은 「찍은 기록은 이 PC에 그대로 있고, 시계를 맞추면 저절로 보내집니다」다. Date를 알면 같은 PC 표시 시간대의 「 · 이 PC HH:MM · 회사 서버 HH:MM」을 덧붙인다. 기존 품목 안내도 보존한다.

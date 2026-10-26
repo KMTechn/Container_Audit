@@ -985,3 +985,14 @@ sub-298 소스 구현: 최초 격리 journal·원 작업자·현품표·격리 �
 연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+480초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.
 
 P3 한계(ANSWER-37, 10/26 레인 판정): 첫 품목표의 40초 예산은 돌려받은 조각 경계에서만 확인한다. 읽기 간격 10초 안으로 아주 느리게 연속 수신하면 전체 종료는 더 늦을 수 있다. 현재 협조 중단을 유지하고 raw read·decoder 내부 검사나 새 타이머·소켓 장치를 더하지 않는다. 원인 probe는 sub-555/closing36에 보존한다.
+### 서버 시각 401 stale_timestamp (sub-635 · P1)
+
+16:1x–17:4x 추가 고침: 전송 전 로컬 OSError·spool 읽기 잠김, 비JSON400–599, committed 칸 없는 JSON4xx(401 제외)의 자동 재시도를 포함한다. 불완전 응답의 runtime 검토 표지는 무시하고 실제 committed/receipt·명시적 거절 보호는 유지한다. 확실한 미커밋/전송 전 로컬 실패만 runtime 배정을 풀어 TTL 뒤 새 lease를 받고 모호한 전송은 보존한다. 시계 뒤로 수정 뒤 stale 행 재선택을 포함한다. 공용 blocked K/N은 ANSWER-8대로 terminal 원본 범위만 유지한다. 새 전송 모드·runtime 끄기·숫자 상한은 없다.
+
+레인 15:39 추가 범위: 최초 terminal 막힘 UTC를 보존하고 앱 뿌리에 공용 일곱 칸 `upload_block_status.json`을 원자 기록한다. K/N(null 허용), 선행 lease 설치 검토, 연속 구간 since와 relay 갱신 updated만 제공한다. 중계 호스트와 서버의 현장 관리자 알림은 해당 담당 몫이며 앱 직접 알림은 구현하지 않는다.
+
+- 11/15 후보: 실제 terminal 앞 구간이 있는 원본에서 새 기록을 별도 파일로 자동 전환하는 길은 별도 설계 대상이다. 이번에는 구현하지 않으며 기존 원본/앞 구간 계약을 유지한다.
+
+레인 15:0x–15:2x 덧 반영: 미커밋 망 오류·timeout·408/429/모든 5xx의 terminal 전환도 방지한다. N=첫 terminal delta 시작부터 안정 EOF까지 CSV 기록 수, K=원본 파일 수로 분리하고, 미확인·다음 스캔까지 보존·시계/막힘/10분 대기 우선순위를 반영한다. 보내기 한 칸+기존 네 칸 계약5, 기존 검토 안내 숨김/노랑 fallback, 정본 exporter 함수/check의 UI manifest 재계산을 포함한다. 자동 끄기 마감 입력이 없어 진한 노랑·새 종료 예약은 구현0(ANSWER-3); 텔레그램 송신도 구현0이다. 보호된 앞 구간을 건너뛰는 변경은 없다. 검증의 위험 노드는 레인 지시대로 미검증으로 남기며 안전 분류 표·바탕 대조를 결과에 연결한다.
+
+업로드·행별 lease 준비의 stale 401을 기존 retry_wait로 보존하고 시계 수정 뒤 자동 회복하게 고친다. 기존 runtime/upload JSON의 선택 시각 관측과 두 화면의 비차단 노랑 안내를 연결한다. 다른 401은 유지한다. 대상은 화요일 밤 v2.0.123 재서명이며 월요일 밤 122에는 포함하지 않는다. 옛 terminal 행 되살리기는 레인 10/26 14:38 덧지시로 구현 0·QUESTION 0이고 사실은 work/program/w9firstupd/sub-635/FACTS.md에 남긴다. RED/GREEN·직접 호출자 팩·바탕 대조·선언 check 결과는 같은 폴더 RESULT.md가 정본이다. 실제 화면·배포본·현장 PC의 시계 수정 회차는 이번 headless 소스 검증으로 단정하지 않는다.
