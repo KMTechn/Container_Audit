@@ -30,7 +30,14 @@ from storage_policy import ensure_user_runtime_directory
 
 SCHEMA = "container-audit-startup-update-v1"
 APPLY_PROGRESS_TIMEOUT = 60
-READY_WINDOW_SECONDS = 240
+READY_WINDOW_SECONDS = 600
+# The bootstrap decision wait must outlast one whole READY window plus the
+# normal-stop and settle tail it always had (the former 480 = 240 + 240).
+BOOTSTRAP_OBSERVATION_CAP_SECONDS = READY_WINDOW_SECONDS + 240
+# A transient failure of one candidate sha gets another chance; the failed
+# list (permanent) is for confirmed rejections and for an exhausted budget.
+RETRY_ATTEMPT_LIMIT = 3
+RETRY_WINDOW_SECONDS = 24 * 60 * 60
 STARTUP_PROGRESS_MESSAGE = '업데이트가 진행 중입니다. 잠시 뒤 다시 시작하세요.'
 READY_CHECKS = (
     "gui_initialized", "identity_readable", "ledger_readable",
@@ -82,6 +89,7 @@ def prepare_transition(
     *, previous_sha: str, candidate_sha: str, packet_sha256: str,
     forward_pin: str, rollback_pin: str, transition_id: str, nonce: str,
     now: str, failed_shas: list[str] | None = None,
+    retry_shas: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     previous_sha = _sha(previous_sha)
     candidate_sha = _sha(candidate_sha)
@@ -93,7 +101,7 @@ def prepare_transition(
     if candidate_sha in failures:
         raise ValueError("a failed version must not be reapplied")
     _utc(now)
-    return {
+    prepared = {
         "schema": SCHEMA, "phase": "PREPARED",
         "previous_sha": previous_sha, "candidate_sha": candidate_sha,
         "packet_sha256": _sha(packet_sha256, length=64),
@@ -103,6 +111,9 @@ def prepare_transition(
         "nonce": _sha(nonce, length=32), "started_at": now,
         "failed_shas": failures, "trial_pid": None,
     }
+    if isinstance(retry_shas, Mapping) and retry_shas:
+        prepared["retry_shas"] = dict(retry_shas)
+    return prepared
 
 
 def apply_transition(
@@ -172,14 +183,41 @@ def confirm_transition(
     return {**transition, "phase": "ROLLED_BACK" if rollback else "CONFIRMED", "confirmed_at": now}
 
 
-def request_rollback(transition: Mapping[str, Any], *, reason: str) -> dict[str, Any]:
+def record_retry_chance(transition: Mapping[str, Any], sha: str, *, now: str) -> tuple[dict[str, Any], bool]:
+    """Count one transient failure of ``sha``; return the new retry record and
+    whether the sha has used up its chances inside the retry window."""
+    sha = _sha(sha)
+    current = _utc(now)
+    entries: dict[str, Any] = {}
+    raw = transition.get("retry_shas")
+    for key, entry in (raw.items() if isinstance(raw, Mapping) else ()):
+        try:
+            _sha(key)
+            age = (current - _utc(entry["first_at"])).total_seconds()
+            if 0 <= age < RETRY_WINDOW_SECONDS and type(entry["attempts"]) is int and entry["attempts"] >= 1:
+                _utc(entry["last_at"])
+                entries[key] = {"attempts": entry["attempts"], "first_at": entry["first_at"], "last_at": entry["last_at"]}
+        except (ValueError, KeyError, TypeError):
+            continue
+    prior = entries.get(sha)
+    attempts = (prior["attempts"] if prior else 0) + 1
+    entries[sha] = {"attempts": attempts, "first_at": prior["first_at"] if prior else now, "last_at": now}
+    return entries, attempts >= RETRY_ATTEMPT_LIMIT
+
+
+def request_rollback(transition: Mapping[str, Any], *, reason: str, transient: bool = False,
+                     now: str | None = None) -> dict[str, Any]:
     if transition.get("phase") != "APPLIED_PENDING_READY":
         raise ValueError("rollback requires a pending trial")
     failures = list(transition.get("failed_shas", []))
     candidate = _sha(transition.get("candidate_sha"))
-    if candidate not in failures:
+    extra: dict[str, Any] = {}
+    permanent = True
+    if transient:
+        extra["retry_shas"], permanent = record_retry_chance(transition, candidate, now=now or now_utc())
+    if permanent and candidate not in failures:
         failures.append(candidate)
-    return {**transition, "phase": "ROLLBACK_PENDING", "reason": str(reason), "failed_shas": failures}
+    return {**transition, "phase": "ROLLBACK_PENDING", "reason": str(reason), "failed_shas": failures, **extra}
 
 
 def rollback_transition(
@@ -2171,7 +2209,7 @@ def _apply_prepared_once(control: Path) -> int:
                 write_json_durable(control / "transition.json", {**(state or {}), "schema": SCHEMA,
                     "phase": "DEFERRED", "deferred_at": now_utc(), "reason_code": "UPDATE_GENERATION_UNKNOWN"})
                 return 0
-            state = prepare_transition(previous_sha=active["sha"], candidate_sha=sha, packet_sha256=candidate["sha256"], forward_pin=forward, rollback_pin=rollback, transition_id=uuid.uuid4().hex, nonce=uuid.uuid4().hex, now=now_utc(), failed_shas=(state or {}).get("failed_shas", []))
+            state = prepare_transition(previous_sha=active["sha"], candidate_sha=sha, packet_sha256=candidate["sha256"], forward_pin=forward, rollback_pin=rollback, transition_id=uuid.uuid4().hex, nonce=uuid.uuid4().hex, now=now_utc(), failed_shas=(state or {}).get("failed_shas", []), retry_shas=(state or {}).get("retry_shas"))
             preimage = "policy-before-" + state["transition_id"] + ".json"
             write_json_durable(control / preimage, policy)
             state = {**state, "rollback_pair": rollback_pair, "pin_authority": pin_authority, "policy_preimage": preimage,
@@ -2225,6 +2263,7 @@ def _apply_prepared_once(control: Path) -> int:
                 persist_switch(control, state, sha)
     remaining = READY_WINDOW_SECONDS - (_utc(now_utc()) - _utc(state["applied_at"])).total_seconds()
     deadline = time.monotonic() + min(READY_WINDOW_SECONDS, max(0.0, remaining))
+    candidate_exited = False
     while time.monotonic() < deadline:
         with _ready_window_update_lock(control, policy["operator_sid"], deadline=deadline):
             state = read_json(control / "transition.json")
@@ -2248,6 +2287,7 @@ def _apply_prepared_once(control: Path) -> int:
             if confirmed:
                 return 0
             if exited:
+                candidate_exited = True
                 break
         time.sleep(0.25)
     with update_lock(control, policy["operator_sid"]):
@@ -2258,7 +2298,10 @@ def _apply_prepared_once(control: Path) -> int:
             write_json_durable(control / "transition.json", {**state, "phase": "FAILED", "reason": "previous version readiness failed"})
             return 20
         if opened_here:
-            state = request_rollback(state, reason="candidate startup failed or readiness timed out")
+            # A timeout alone may be a slow or busy PC: the candidate gets another
+            # chance (bounded). A candidate process that already exited stays final.
+            state = request_rollback(state, reason="candidate startup failed or readiness timed out",
+                                     transient=not candidate_exited, now=now_utc())
         else:
             if state["phase"] != "APPLIED_PENDING_READY":
                 raise ValueError("rollback requires a pending trial")
@@ -3100,7 +3143,7 @@ def bootstrap_supervision_deadline(state, *, started: float, now: float, utc_now
     elif phase in {"ROLLBACK_PENDING", "UNKNOWN"}:
         timestamp, window = state.get("normal_stop_started_at"), 60
     stage_end = now + (window - (_utc(utc_now) - _utc(timestamp)).total_seconds()) if timestamp else started
-    return min(started + 480, max(started + 240, stage_end + 15))
+    return min(started + BOOTSTRAP_OBSERVATION_CAP_SECONDS, max(started + 240, stage_end + 15))
 
 
 def _bootstrap_trial_relay(control, policy, state, active, gui_arguments, attempts, *, deadline):
@@ -3288,14 +3331,14 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
         return bool(state and state.get("phase") in {"DEFERRED", "CONFIRMED", "ROLLED_BACK"})
 
     def still_waiting_for_apply():
-        return (time.monotonic() < started + 480
+        return (time.monotonic() < started + BOOTSTRAP_OBSERVATION_CAP_SECONDS
                 and apply_claim_status(control) == "LIVE"
                 and apply_pending(optional_record(control / "transition.json")))
 
     def extend_live_apply_wait():
         nonlocal deadline, live_apply_wait
         now = time.monotonic()
-        if now >= started + 480 or (not live_apply_wait and now < deadline):
+        if now >= started + BOOTSTRAP_OBSERVATION_CAP_SECONDS or (not live_apply_wait and now < deadline):
             return False
         claim_status = apply_claim_status(control)
         pending = optional_record(control / "transition.json")
@@ -3304,7 +3347,7 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                 return False
         # Unlocked observations only choose another protected poll. A decision
         # uses the remaining original cap without renewing any stage window.
-        deadline = started + 480
+        deadline = started + BOOTSTRAP_OBSERVATION_CAP_SECONDS
         live_apply_wait = True
         return True
 
@@ -3321,7 +3364,7 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                         raise _BootstrapObservationChanged()
                     break
                 state = optional_record(control / "transition.json")
-                deadline = (started + 480 if live_apply_wait else
+                deadline = (started + BOOTSTRAP_OBSERVATION_CAP_SECONDS if live_apply_wait else
                     bootstrap_supervision_deadline(state, started=started,
                         now=time.monotonic(), utc_now=now_utc()))
                 poll.deadline = deadline
@@ -3452,7 +3495,7 @@ def _bootstrap(app_root: Path, arguments: list[str], *, role: str) -> int:
                 raise
         time.sleep(0.1)
     state = optional_record(control / "transition.json")
-    if (live_apply_wait and time.monotonic() >= started + 480
+    if (live_apply_wait and time.monotonic() >= started + BOOTSTRAP_OBSERVATION_CAP_SECONDS
             and ((state is None and apply_claim_status(control) == "LIVE")
                  or (apply_decided(state) and apply_claim_status(control) in {"LIVE", "UNKNOWN"}))):
         # An absent journal cannot authorize launch while apply still owns the cap.
