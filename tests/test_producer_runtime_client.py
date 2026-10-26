@@ -78,6 +78,7 @@ class _ExactCloneThenGrantSession(_LeaseSession):
             return _Response(
                 409,
                 {
+                    "committed": False,
                     "ok": False,
                     "status": "conflict",
                     "error": {
@@ -105,6 +106,7 @@ class _StaleTokenSession(_LeaseSession):
         return _Response(
             409,
             {
+                "committed": False,
                 "ok": False,
                 "status": "conflict",
                 "error": {
