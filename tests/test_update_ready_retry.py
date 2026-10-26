@@ -40,7 +40,7 @@ def test_a_confirmed_rejection_stays_permanent_at_once():
     assert state["failed_shas"] == [NEW] and "retry_shas" not in state
 
 
-def test_a_transient_failure_is_not_blacklisted_until_the_third_chance_inside_a_day():
+def test_transient_failures_never_blacklist_even_after_three_chances():
     state = trial_state()
     first = updates.request_rollback(state, reason="timeout", transient=True, now=at(0))
     assert first["failed_shas"] == []
@@ -211,7 +211,7 @@ def _confirmed_error():
 
 
 @pytest.mark.parametrize("error", [_confirmed_error(), _native_error(112)])
-def test_confirmed_or_unknown_preparation_failure_still_blocks_immediately(tmp_path, monkeypatch, error):
+def test_confirmed_preparation_failure_still_blocks_immediately(tmp_path, monkeypatch, error):
     case = _preparation_case(tmp_path, monkeypatch, error)
     assert case.run() == 0
     assert not case.state().get("retry_shas")
@@ -368,3 +368,25 @@ def test_fixed_helper_distinguishes_a_proved_rejection_from_an_unknown_error(tmp
         assert updates._transient_preparation_error(error) is temporary
     else:
         pytest.fail("the failed Verify helper must still reject this invocation")
+
+
+
+def test_the_real_generic_helper_stdout_keeps_an_unknown_preparation_retry(tmp_path, monkeypatch):
+    import json
+    import subprocess
+    from types import SimpleNamespace
+    case = _preparation_case(tmp_path, monkeypatch, RuntimeError())
+    output = 'CONTAINER_AUDIT_UPDATE=' + json.dumps({
+        "status": "FAILED", "stage": "startup_update", "reason_code": "STARTUP_UPDATE_FAILURE",
+        "exit_code": 1, "report_status": "REPORT_UNAVAILABLE"})
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(
+        returncode=1, stdout=output, stderr=""))
+    monkeypatch.setattr(updates, "system_executable", lambda *a: tmp_path / "powershell.exe")
+    monkeypatch.setattr(updates, "_apply_prepared", lambda control: updates._run_fixed_helper(control, "Verify"))
+    assert case.run() == 0
+    assert case.state().get("failed_shas", []) == []
+    assert case.state()["retry_shas"][NEW]["attempts"] == 1
+    case.clock[0] = 899
+    assert not updates.prepared_pending(case.control, case.policy, case.state())
+    case.clock[0] = 900
+    assert updates.prepared_pending(case.control, case.policy, case.state())
