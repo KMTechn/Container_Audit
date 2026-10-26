@@ -1,3 +1,7 @@
+### 서버 명령 일시 상태의 자동 복구 (sub-665)
+
+P1-1·P1-2: 봉인 큐의 본문 표시 없는 408·429를 `RETRY_WAIT`로 보존하고, 미사용 임대 해제의 같은 상태를 만료 전 다음 회차·재시작 재시도로 남긴다. 원 명령·키·로컬 완료를 유지하며 CAS/확정 거절·계약 오류·committed receipt 보호는 그대로다. RED→GREEN·좁은 직접 호출자 바탕 대조와 선언 확인 근거: `work/program/w9firstupd/sub-665/RESULT.md`. 독립 검토·123 통합은 레인 몫이다.
+
 ### retained 후보와 다음 업데이트 요청 (sub-555)
 
 retained DEFERRED라도 별개의 PREPARED가 있으면 기존 SYSTEM 적용 요청을 한 번 수행하고 journal을 다시 읽는다. 기존 writer가 있으면 SYSTEM의 유예를 따른다. 일반 복귀는 요청한 GUI/relay 역할을 보존한다. 늦은 READY 확정은 현재 기록에서 같은 전환의 timeout만 식별할 수 없어 닫아 둔다(실패 사유는 세대 code로 덮이고 failed_shas는 sha만 보존). 새 기록 형식·사유 값·phase·대기창을 만들지 않는다.

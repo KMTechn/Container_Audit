@@ -20805,7 +20805,10 @@ class ContainerAudit:
                     code = str(getattr(exc, "code", "") or exc.__class__.__name__)
                     if code == "TRANSFER_HOLD_WAIT":
                         break
-                    if callable(bounded_wait) and client.server_unanswered():
+                    if (
+                        int(getattr(exc, "status_code", 0) or 0) in {408, 429}
+                        or (callable(bounded_wait) and client.server_unanswered())
+                    ):
                         if operation_lease_utc_text() >= release["expires_at"]:
                             # Past expiry the administrator screen releases it.
                             pending.pop(lease_id, None)
