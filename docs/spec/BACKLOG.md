@@ -1,3 +1,7 @@
+- 10/27 sub-715: 기동 실패·조기 종료의 영구 거절을 UNKNOWN 다시 기회로 변경했다. 신규·상속 후보 모두 900초 간격·24시간 세 번 예산과 소진 안내를 사용하며 서명·해시·검사 거절은 유지한다. 상속 applied_at 마감과 failed-support Python/PS 판정은 기존과 같다. 근거: work/program/w9firstupd/sub-715/RESULT.md.
+- 10/27 sub-695: READY900 검토 P1-1 도우미 죽은 분류 제거·선언 복원, P2-2 서명된 SHA만 영구 거절·공간 부족/설치판 오류 다시 기회·P2-1 failed-support PS/Python 판정 일치·옛 failed_prepared_sha 단독 거절 제거(같은 표지 지문은 보존). RED→GREEN·선언·호출자 근거는 work/program/w9firstupd/sub-695/RESULT.md. P3 메모는 11/15 후속으로 보존한다.
+- 10/26 sub-659 (P1·123/126): 후보·되돌림 READY 900초 / bootstrap 상한 1140초, 준비 중 일시 실패는 마지막 시도+900초 / 24시간 내 3회 예산을 같은 retry_shas로 보존한다. 소진/모르는 예외로 SHA를 영구 거절하지 않으며 관리자 안내 뒤 24시간 경계에서 자동 재시도한다. 확정 거절·UNKNOWN 복구 경계는 유지한다. 포장 실패 JSON은 최근 20개만 남긴다. 새 계약 시험·직접 호출자 바탕 대조·선언 write→check 근거: work/program/w9firstupd/sub-659/RESULT.md. 실제 설치·현장 확인은 별도 회차다.
+
 - 10/26 sub-590fix: 독립 검토 sub-590rev P2-1(사라진·보낼 것 없는 원본의 실패 항목 정리)·P2-2(csv.Error → source_csv_content_invalid)를 닫았다. 11/15 후보: P2-3 공용 부모 쓰기 거부가 원본별 mkdir 로 나타나면 모든 원본이 source_delta_write_failed 로 기록돼 개수로만 보인다(전역 중단 아님). P2-4 drain 뒤 오프셋 기록 구간의 SourceFileInputError 는 예전 크래시와 결과가 같아 표시 코드만 다르다(근거: work/program/w9firstupd/sub-590fix/RESULT.md).
 - 10/26 sub-590: relay의 한 CSV 오류가 뒤 파일과 drain을 막던 길을 파일별 재시도로 분리했다. 원본·오프셋·source_file_id+SHA256 멱등 키는 유지하고, 오류 목록·최초 시각을 큐 DB에 보존해 기존 Tk·기본 웹 상태 줄에 알린다. 전역 오류 중단·독립 검토·서명 판 통합 경계는 유지한다(검증 근거: work/program/w9firstupd/sub-590/RESULT.md).
 
@@ -989,3 +993,4 @@ sub-298 소스 구현: 최초 격리 journal·원 작업자·현품표·격리 �
 연장 중 terminal 결정 기록이 공개되어도 apply claim이 LIVE/UNKNOWN이면 원 시작+480초 마감을 유지하며 claim 종료를 기다린다. NONE/ABSENT 확인 뒤 잠금 아래 기존 결정 분기로 들어간다. 상한에서 아직 terminal claim이 끝나지 않았으면 안내와 rc20으로 끝나며 일반 실행으로 우회하지 않는다.
 
 P3 한계(ANSWER-37, 10/26 레인 판정): 첫 품목표의 40초 예산은 돌려받은 조각 경계에서만 확인한다. 읽기 간격 10초 안으로 아주 느리게 연속 수신하면 전체 종료는 더 늦을 수 있다. 현재 협조 중단을 유지하고 raw read·decoder 내부 검사나 새 타이머·소켓 장치를 더하지 않는다. 원인 probe는 sub-555/closing36에 보존한다.
+- 10/26 sub-692: 적용 요청 실패에서 start_current 일반 복구 거절의 ValueError 전파를 안내·20으로 고침. 기존 재사용 증명·다시 기회는 유지. RED→GREEN 및 정본 선언 근거는 work/program/w9firstupd/sub-692/RESULT.md.

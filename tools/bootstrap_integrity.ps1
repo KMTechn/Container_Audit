@@ -4058,6 +4058,33 @@ function Assert-BootstrapSupportQuiescent([string]$ApplicationRoot,[int[]]$Exclu
     }
 }
 
+function ConvertTo-BootstrapRetryUtc($Value) {
+    if($Value -isnot [string] -or $Value -cnotmatch '(?:Z|[+-][0-9]{2}:[0-9]{2})$'){throw 'retry_time_invalid'}
+    return [DateTimeOffset]::Parse($Value,[Globalization.CultureInfo]::InvariantCulture).ToUniversalTime()
+}
+
+function Test-BootstrapPreparationRetryDue($State,[string]$Sha) {
+    $now=[DateTimeOffset]::UtcNow
+    if(($State['preparation_retry_pending'] -is [bool] -and $State['preparation_retry_pending']) -or
+        (-not $Sha -and $State['reason_code'] -ceq 'UPDATE_PREPARATION_FAILED')) {
+        try {
+            if(($now-(ConvertTo-BootstrapRetryUtc $State['deferred_at'])).TotalSeconds -lt 900){return $false}
+        } catch {return $false}
+    }
+    $entries=$State['retry_shas']
+    if($entries -isnot [Collections.IDictionary]){return $true}
+    $entry=$entries[$Sha]
+    if($entry -isnot [Collections.IDictionary]){return $true}
+    try {
+        $age=($now-(ConvertTo-BootstrapRetryUtc $entry['first_at'])).TotalSeconds
+        if($age -lt 0 -or $age -ge 86400){return $true}
+        $attempts=$entry['attempts']
+        if(($attempts -isnot [int] -and $attempts -isnot [long] -and $attempts -isnot [bigint]) -or $attempts -lt 1){return $true}
+        $elapsed=if($attempts -lt 3){($now-(ConvertTo-BootstrapRetryUtc $entry['last_at'])).TotalSeconds}else{0}
+        return ($attempts -lt 3 -and $elapsed -ge 900)
+    } catch {return $true}
+}
+
 function Assert-BootstrapFailedSupportState([string]$Root,$Policy,$State,[string]$ActiveRoot,$SelfIdentity) {
     Assert-BootstrapSupportQuiescent $Root
     $local=Get-StrictFullPath ([string]$Policy['operator_local_app_data']) 'support operator profile'
@@ -4094,13 +4121,16 @@ function Assert-BootstrapFailedSupportState([string]$Root,$Policy,$State,[string
         }
         Assert-BootstrapNoReparsePoint $existing 'support prepared receipt' -PathOnly
         if(Test-Path -LiteralPath $prepared) {
-            $ignoredFailure=($State['reason_code'] -ceq 'UPDATE_PREPARATION_FAILED' -and
-                (Get-FileSha256 $prepared) -ceq $State['failed_prepared_marker_sha256'])
+            $ignoredFailure=((($State['preparation_retry_pending'] -is [bool] -and $State['preparation_retry_pending']) -and
+                -not(Test-BootstrapPreparationRetryDue $State '')) -or
+                ($State['reason_code'] -ceq 'UPDATE_PREPARATION_FAILED' -and
+                (Get-FileSha256 $prepared) -ceq $State['failed_prepared_marker_sha256']))
             if(-not $ignoredFailure) {
                 $pending=Read-BootstrapLifecycleJson $prepared
                 $sha=$pending['source_commit'];$activeSha=Split-Path -Leaf $ActiveRoot
                 if($sha -isnot [string] -or $sha -cnotmatch '^[0-9a-f]{40}$' -or
-                    ($sha -cne $activeSha -and $sha -cnotin @($State['failed_shas']) -and $sha -cne $State['failed_prepared_sha'])){throw 'failed_support_prepared_pending'}
+                    ($sha -cne $activeSha -and $sha -cnotin @($State['failed_shas']) -and
+                        (Test-BootstrapPreparationRetryDue $State $sha))){throw 'failed_support_prepared_pending'}
             }
         }
     }

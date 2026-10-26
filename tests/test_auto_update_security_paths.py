@@ -235,7 +235,8 @@ def test_readiness_io_error_keeps_normal_rollback_and_original_proof(monkeypatch
                 raise OSError("synthetic sharing contention")
         return original(path, **kwargs)
     monkeypatch.setattr(updates, "read_json", contested)
-    test_engine_candidate_exit_selects_generation_compatible_code_without_reverting_data(monkeypatch, tmp_path, "unchanged", "exit")
+    test_engine_candidate_exit_selects_generation_compatible_code_without_reverting_data(
+        monkeypatch, tmp_path, "unchanged", "exit", transient_failure=True)
     assert denied
     # Recovery replaces candidate proofs only with a fresh rollback cohort.
     proof = original(tmp_path / "operator/updates" / record)

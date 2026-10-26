@@ -194,8 +194,14 @@ def test_failed_prepared_is_preserved_once_without_second_state_write(endpoint, 
     assert not updates.prepared_pending(control, policy, updates.read_json(control / 'transition.json'))
     if marker_shape == 'valid':
         updates.write_json_durable(stage / 'prepared.json', {'source_commit': candidate, 'prepared_at': updates.now_utc()})
+        assert updates.prepared_pending(control, policy, updates.read_json(control / 'transition.json'))
         assert updates.apply_prepared(control) == 0
-        assert fingerprints(control) == before
+        changed = fingerprints(control)
+        assert changed != before
+        assert len(list(control.glob('failure-*.json'))) == 2
+        assert candidate not in updates.read_json(control / 'transition.json').get('failed_shas', [])
+        assert updates.apply_prepared(control) == 0
+        assert fingerprints(control) == changed
         updates.write_json_durable(stage / 'prepared.json', {'source_commit': NEW})
         assert updates.prepared_pending(control, policy, updates.read_json(control / 'transition.json'))
 

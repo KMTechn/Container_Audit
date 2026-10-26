@@ -285,7 +285,7 @@ def test_failed_preparation_defers_but_failed_activation_remains_unknown(monkeyp
 
 @pytest.mark.parametrize("generation_case,failure_kind", [
     ("unchanged", "exit"), ("advanced", "exit"), ("unknown", "exit"), ("unchanged", "timeout")])
-def test_engine_candidate_exit_selects_generation_compatible_code_without_reverting_data(monkeypatch, tmp_path, generation_case, failure_kind):
+def test_engine_candidate_exit_selects_generation_compatible_code_without_reverting_data(monkeypatch, tmp_path, generation_case, failure_kind, *, transient_failure=None):
     """Exercise the apply loop/journal with synthetic process and crypto adapters."""
     import json
     import time
@@ -370,7 +370,11 @@ def test_engine_candidate_exit_selects_generation_compatible_code_without_revert
     assert updates.apply_prepared(control) == (0 if generation_case == "unchanged" else 20)
     result = updates.read_json(control / "transition.json")
     assert result["phase"] == ("ROLLED_BACK" if generation_case == "unchanged" else "DEFERRED")
-    assert result["failed_shas"] == [NEW]
+    if transient_failure is None:
+        transient_failure = True  # Intentional policy change: startup/exit failures are unknown.
+    assert result["failed_shas"] == ([] if transient_failure else [NEW])
+    if transient_failure:
+        assert result["retry_shas"][NEW]["attempts"] == 1
     assert updates.read_json(control / "active.json")["sha"] == (OLD if generation_case == "unchanged" else NEW)
     if generation_case == "unchanged":
         assert len(nonces) == (2 if failure_kind == "exit" else 1)

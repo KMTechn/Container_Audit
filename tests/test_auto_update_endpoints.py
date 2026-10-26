@@ -685,7 +685,7 @@ def test_inherited_expiry_preserves_other_system_phase_change(endpoint, monkeypa
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     def other_system(_):
         updates.write_json_durable(control / "transition.json", {**state, "phase": changed_phase})
-        clock[0] = 240
+        clock[0] = updates.READY_WINDOW_SECONDS
     monkeypatch.setattr(time, "sleep", other_system)
     written, phases = updates.write_json_durable, []
     def observe(path, value):

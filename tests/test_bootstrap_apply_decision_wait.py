@@ -5,7 +5,7 @@ from tests.test_bootstrap_live_apply_wait import scene,world,ordinary
 NATIVE_STARTUP_LOCK=updates.startup_update_lock
 @pytest.mark.parametrize('claim',['UNKNOWN','ABSENT'])
 def test_actual_startup_lock_claim_loss_bounded_observation(scene,monkeypatch,claim):
- w=world(scene,monkeypatch,decision=False,final_claim=claim,claim_boundary=366.941488)
+ w=world(scene,monkeypatch,decision=False,final_claim=claim,claim_boundary=366.941488 + updates.READY_WINDOW_SECONDS - 240)
  reads=[];calls=[];returned=[];original=updates.apply_claim_status
  @contextlib.contextmanager
  def recorded_native(*args,**kwargs):
