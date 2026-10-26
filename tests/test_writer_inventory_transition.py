@@ -114,7 +114,17 @@ catch { if ($_.Exception.Message -cne 'CODE_RESTORE_WRITER_SEMANTICS_DIFFER') { 
     _run_canonical(tmp_path, approvals, command)
 
 
+def _verified_removal_identity(tmp_path):
+    from tests.test_canonical_portable_uninstall import _setup
+
+    fixture = tmp_path/'verified-packet'
+    fixture.mkdir()
+    environment, _source, installed, _protected = _setup(fixture)
+    return environment, installed/'app'
+
+
 def _exercise_transition(tmp_path, old_root):
+    identity_environment, authenticated_app = _verified_removal_identity(tmp_path)
     old_source = (old_root/'writer_session_fence.py').read_text(encoding='utf-8')
     old_pin = re.search(r'WRITER_INVENTORY_SHA256\s*=\s*["\']([0-9a-f]{64})', old_source)[1]
     assert old_pin != fence.WRITER_INVENTORY_SHA256
@@ -138,6 +148,8 @@ assert mutex != fence.WRITER_MUTEX_NAME
 fence.canonical_control_root = lambda environ=None: root
 fence.writer_admission_mutex_name = lambda root, environ=None: mutex
 import current_user_onboarding as onboarding
+import data_generation_guard as guard
+guard.__file__ = str(Path(os.environ['CA_TEST_AUTHENTICATED_APP_ROOT'])/'data_generation_guard.py')
 # Keep the actual product dispatcher, admission, removal body and report. Only
 # the OS boundaries are isolated so no controller HKCU or process is changed.
 removal = onboarding.remove_current_user_setup
@@ -146,7 +158,7 @@ defaults['autostart_remover'] = lambda: {'status': 'ABSENT'}
 defaults['relay_stopper'] = lambda root: {'status': 'ABSENT'}
 from container_audit_product_host import dispatch_product_mode
 try:
-    result = dispatch_product_mode(['--remove-current-user-setup', '--app-root', sys.argv[1]])
+    result = dispatch_product_mode(['--remove-current-user-setup', '--app-root', os.environ['CA_TEST_AUTHENTICATED_APP_ROOT']])
 except fence.WriterFenceError as exc:
     print(exc.code)
     raise SystemExit(23)
@@ -223,12 +235,14 @@ try {
     'TRANSITION_AND_ROLLBACK_PASS'
 } finally { Exit-ContainerWriterSessionAuthority $authority }
 ''', encoding='utf-8')
-    environment = dict(os.environ)
+    environment = dict(identity_environment)
+    (tmp_path/'business').mkdir(exist_ok=True)
     environment.update({
         'CA_TEST_SOURCE':str(ROOT),'CA_TEST_OLD':str(old_root),'CA_TEST_OLD_PIN':old_pin,
         'CA_TEST_TMP':str(tmp_path),'CA_TEST_CONTROL':str(tmp_path/'control'),
         'CA_TEST_PYTHON':sys.executable,'LOCALAPPDATA':str(tmp_path/'local'),
         'CONTAINER_AUDIT_DATA_ROOT':str(tmp_path/'business'),
+        'CA_TEST_AUTHENTICATED_APP_ROOT':str(authenticated_app),
     })
     completed = subprocess.run([str(WINPS),'-NoProfile','-NonInteractive','-File',str(script)],
         env=environment, capture_output=True, text=True, timeout=60)
@@ -278,6 +292,7 @@ def test_removal_read_probe_has_one_admitted_production_call_site():
 
 @pytest.mark.parametrize('marker_state', ('missing', 'same', 'newer', 'unknown'))
 def test_admitted_removal_probe_preserves_metadata_and_refusal_state(tmp_path, marker_state):
+    identity_environment, authenticated_app = _verified_removal_identity(tmp_path)
     child = tmp_path/'readonly_removal.py'
     child.write_text(r'''
 import json, os, sys
@@ -292,6 +307,7 @@ sys.modules['requests'] = requests
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 import data_generation_guard as guard
+guard.__file__ = str(Path(sys.argv[3])/'data_generation_guard.py')
 import current_user_onboarding as onboarding
 from writer_session_fence import writer_admission, canonical_control_root
 data = Path(os.environ['CONTAINER_AUDIT_DATA_ROOT'])
@@ -335,7 +351,7 @@ def relay(root):
     return {'status': 'ABSENT'}
 before_removal = snapshot()
 try:
-    result = onboarding.remove_current_user_setup(sys.argv[1], autostart_remover=autostart,
+    result = onboarding.remove_current_user_setup(sys.argv[3], autostart_remover=autostart,
                                                   relay_stopper=relay)
 except onboarding.CurrentUserOnboardingError as exc:
     assert state in ('newer', 'unknown'), 'normal removal was refused'
@@ -349,9 +365,9 @@ else:
 assert decision == {'missing':'ALLOW', 'same':'ALLOW', 'newer':'REFUSE', 'unknown':'UNKNOWN'}[state]
 print('READ_ONLY_PROBE_AND_REMOVAL_ORACLES_PASS')
 ''', encoding='utf-8')
-    environment = dict(os.environ, LOCALAPPDATA=str(tmp_path/'local'),
+    environment = dict(identity_environment, LOCALAPPDATA=str(tmp_path/'local'),
                        CONTAINER_AUDIT_DATA_ROOT=str(tmp_path/'business'))
-    result = subprocess.run([sys.executable, '-I', '-B', str(child), str(ROOT), marker_state],
+    result = subprocess.run([sys.executable, '-I', '-B', str(child), str(ROOT), marker_state, str(authenticated_app)],
                             env=environment, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'READ_ONLY_PROBE_AND_REMOVAL_ORACLES_PASS' in result.stdout

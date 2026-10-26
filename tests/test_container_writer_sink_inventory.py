@@ -365,14 +365,14 @@ def test_container_writer_sink_inventory_has_expected_current_findings(tmp_path)
         path.as_posix() for path in module._discover_shipped_powershell_paths(ROOT)
     ]
     assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
-    "call_operator": 19,
-    "com_wmi_process_create": 15,
-    "dot_source": 47,
+    "call_operator": 27,
+    "com_wmi_process_create": 16,
+    "dot_source": 51,
     "dotnet_process_start": 2,
     "invoke_expression": 1,
     "native_process_api": 4,
-    "reflective_invocation": 7,
-    "scheduler_com": 5,
+    "reflective_invocation": 11,
+    "scheduler_com": 8,
     "start_process": 4
 }
     preflight_calls = [

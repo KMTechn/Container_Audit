@@ -44,6 +44,12 @@ assert os.environ['CA_UNINSTALL_MUTEX'] != fence.WRITER_MUTEX_NAME
 fence.writer_admission_mutex_name = lambda root, environ=None: os.environ['CA_UNINSTALL_MUTEX']
 import user_relay
 import current_user_onboarding as onboarding
+import data_generation_guard as generation_guard
+# The process executes this verified disposable packet, not the dirty source
+# checkout from which the harness imports implementations.
+generation_app = (Path(sys.argv[2]) if sys.argv[1] in ('prepare-ready', 'onboard')
+                  else Path(os.environ['CA_UNINSTALL_GENERATION_APP_ROOT']))
+generation_guard.__file__ = str(generation_app / 'data_generation_guard.py')
 root = Path(os.environ['CA_UNINSTALL_ROOT'])
 registry = root / 'registry.json'
 direct = Path(os.environ['LOCALAPPDATA']) / 'KMTech/DirectSync/container_audit'
@@ -73,6 +79,12 @@ if sys.argv[1] == 'relay':
     finally:
         lease.release()
         (root / 'relay.ready').unlink(missing_ok=True)
+elif sys.argv[1] == 'installer-stop':
+    # Execute the stock, hash-checked probe verbatim with this fixture's native
+    # interpreter, real relay implementation and isolated admission mutex.
+    probe = sys.argv[2]
+    sys.argv = ['installer-normal-relay-stop', *sys.argv[3:]]
+    exec(compile(probe, '<stock-installer-relay-stop>', 'exec'))
 elif sys.argv[1] == 'preflight':
     assert sys.argv[2] == '--onboard-current-user'
     raise SystemExit(onboarding.onboarding_main(sys.argv[3:]))
@@ -116,6 +128,7 @@ else:
         child = subprocess.Popen(
             [os.environ['CA_UNINSTALL_PYTHON'], '-I', '-B', __file__, 'relay'],
             env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
         )
         try:
             deadline = time.monotonic() + 10
@@ -402,7 +415,7 @@ def _ps(path, env, *args):
     result.fixture_audit = observations[0] if observations else None
     return result
 
-def _setup(tmp_path, fault='', *, stock_version_identity=False, install_directory=None):
+def _setup(tmp_path, fault='', *, stock_version_identity=True, install_directory=None):
     env = native_python_environment()
     for name in ('LOCALAPPDATA', 'APPDATA', 'PROGRAMDATA', 'TEMP', 'TMP'):
         target = tmp_path / ("l" if name == "LOCALAPPDATA" else name)
@@ -427,6 +440,7 @@ def _setup(tmp_path, fault='', *, stock_version_identity=False, install_director
         "runpy.run_path(os.environ['CA_UNINSTALL_HOST'], run_name='__main__')\n", encoding='utf-8')
     env['CA_UNINSTALL_PREFLIGHT'] = str(preflight)
     source = _portable_release_fixture(tmp_path, directory='packet')
+    env['CA_UNINSTALL_GENERATION_APP_ROOT'] = str(source / 'app')
     (source / 'app/assets').mkdir(exist_ok=True)
     (source / 'app/assets/logo.ico').write_bytes(b'isolated-shortcut-icon')
     if stock_version_identity:
@@ -439,6 +453,10 @@ def _setup(tmp_path, fault='', *, stock_version_identity=False, install_director
         shutil.copyfile(version_file, source / 'app/Container_Audit.py')
     canonical = source / 'INSTALL_CANONICAL_PORTABLE.ps1'
     text = canonical.read_text(encoding='utf-8-sig').replace('$wanted = Command $install', OS_BOUNDARIES + '\n$wanted = Command $install')
+    stop_capture = "Invoke-InstallationEvidenceChild 'installer-normal-relay-stop' (Join-Path $CodeRoot 'runtime\\python.exe') @('-I','-B','-c',$probe,"
+    assert text.count(stop_capture) == 1
+    text = text.replace(stop_capture,
+        "Invoke-InstallationEvidenceChild 'installer-normal-relay-stop' $env:CA_UNINSTALL_PYTHON @('-I','-B',$env:CA_UNINSTALL_HOST,'installer-stop',$probe,")
     text = text.replace(
         '$elevationLogPath = Join-Path $auditRoot "canonical-portable-$runId-elevated.jsonl"',
         '$elevationLogPath = Join-Path $auditRoot "e.jsonl"',
@@ -475,9 +493,9 @@ def _setup(tmp_path, fault='', *, stock_version_identity=False, install_director
         target = "$child=Invoke-InstallationEvidenceChild 'supported-content-removal' $winps $args"
         assert text.count(target) == 1
         text = text.replace(target, "if($env:CA_UNINSTALL_INJECT -ceq '1'){$args[$args.IndexOf('-WriterFenceDelegationToken')+1]=('e'*64)}\n        " + target)
-        retired_target = "$capturedChild = Invoke-InstallationEvidenceChild 'uninstall-helper' $winps $uninstallArguments"
+        retired_target = "Invoke-InstallationEvidenceChild 'uninstall-helper' $winps $uninstallArguments"
         assert text.count(retired_target) == 1
-        text = text.replace(retired_target, "if($env:CA_UNINSTALL_INJECT -ceq '1'){$uninstallArguments[$uninstallArguments.IndexOf('-WriterFenceDelegationToken')+1]=('e'*64)}\n        " + retired_target)
+        text = text.replace(retired_target, "& { if($env:CA_UNINSTALL_INJECT -ceq '1'){$uninstallArguments[$uninstallArguments.IndexOf('-WriterFenceDelegationToken')+1]=('e'*64)}; " + retired_target + " }")
     elif fault == 'fence_release':
         target = "        Clear-CanonicalWriterFenceReleaseDelegation\n        Stop-CanonicalWriterFenceRelease $releaseAuthorization\n        $canonicalWriterFenceActive=$false"
         assert text.count(target) == 1
@@ -492,7 +510,12 @@ def _setup(tmp_path, fault='', *, stock_version_identity=False, install_director
     assert text.count(preparation_exit) == 1
     text = text.replace(preparation_exit,
         "Write-Output (ConvertTo-KmtechRedactedSinkText -Text ('fixture_preparation_failure='+((Get-InstallationFailureDetails $_)|ConvertTo-Json -Depth 6 -Compress)))\n        " + preparation_exit)
-    if fault in {'partial', 'restore_failure', 'partial_foreign', 'partial_damaged', 'diagnostic'}:
+    if fault == 'partial':
+        target = '            Move-Item -LiteralPath (Get-ContainerRemovalIoPath $path) -Destination $destinationIo -ErrorAction Stop'
+        assert text.count(target) == 1
+        # Fail after a real journalled rename, inside the production preimage.
+        text = text.replace(target, target + "\n            if($env:CA_UNINSTALL_INJECT -ceq '1'){[IO.File]::WriteAllText((Join-Path $env:CA_UNINSTALL_ROOT 'partial-move-observed'),'MOVED');throw ('PARTIAL_REMOVAL_INJECTED_FAILURE'+$env:CUSTOM_REMOVAL_SECRET)}")
+    elif fault in {'restore_failure', 'partial_foreign', 'partial_damaged', 'diagnostic'}:
         target = '        $removed = Invoke-ContainerConvergentRemoval -InstallRoot $installRootFull -TaskFolder $folder -ExcludeProcessIds $excluded'
         assert text.count(target) == 1
         extra = ''
@@ -700,7 +723,8 @@ def test_live_relay_census_rejects_pid_reuse_as_process_identity(tmp_path):
 def test_quoted_live_relay_uninstall_and_reinstall(tmp_path, operation):
     env, source, install, protected = _setup(tmp_path, stock_version_identity=True)
     ready = subprocess.run([env['CA_UNINSTALL_PYTHON'], '-I', '-B', env['CA_UNINSTALL_HOST'],
-                            'prepare-ready', str(install/'app')], env=env, capture_output=True, timeout=30)
+                            'prepare-ready', str(install/'app')], env=env, capture_output=True, timeout=30,
+                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     assert ready.returncode == 0, 'owned current-user state preparation failed'
     (tmp_path/'prepared-protected.json').write_text(json.dumps({str(p): _sha(p) for p in protected}))
     quoted = _quote_fixture_executable(env)
@@ -836,6 +860,12 @@ def _assert_canonical_public_failure(result, root, expected_cause, source=None):
                       if starts[0] < number < ends[0]
                       and line.strip() == "throw 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER'"]
             assert len(guards) == 1
+        elif expected_cause == 'CANONICAL_STOP_MARKER_PREEXISTS':
+            guards = [number for number, line in enumerate(lines, 1)
+                      if line.strip() == "throw 'CANONICAL_STOP_MARKER_PREEXISTS'"
+                      and number > 1 and lines[number-2].strip()
+                      == '# Reject a retirement-owned stop before evidence preparation has effects.']
+            assert len(guards) == 1
         else:
             guards = [number for number, line in enumerate(lines, 1)
                       if 'throw' in line and expected_cause in line]
@@ -868,6 +898,22 @@ def _assert_removed_and_preserved(tmp_path, env, source, install, protected, sou
     assert marker['lifecycle_state'] == 'REMOVED'
 
 
+def _assert_post_removal_user_probe_refuses_without_mutation(source, install, protected):
+    import data_generation_guard as generation_guard
+
+    before = _tree(install.parent)
+    protected_before = {path: path.read_bytes() for path in protected}
+    entered = False
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(generation_guard, '__file__', str(source / 'app/data_generation_guard.py'))
+        with pytest.raises(generation_guard.DataGenerationBlocked) as refusal:
+            with generation_guard._authenticated_support_removal_source(install / 'app'):
+                entered = True
+    assert not entered and refusal.value.decision['status'] == 'UNKNOWN'
+    assert _tree(install.parent) == before
+    assert all(path.read_bytes() == data for path, data in protected_before.items())
+
+
 def _rerun_without_fault(tmp_path, env, source, install):
     env['CA_UNINSTALL_INJECT'] = '0'
     env['CA_UNINSTALL_REFUSE'] = '0'
@@ -879,20 +925,22 @@ def _rerun_without_fault(tmp_path, env, source, install):
     return result
 
 
-def test_quoted_live_relay_post_removal_failure_converges_without_resurrection(tmp_path):
+def test_quoted_live_relay_post_removal_failure_restores_installation_before_retry(tmp_path):
     env, source, install, protected = _setup(tmp_path, 'after_removal')
     quoted = _quote_fixture_executable(env)
     source_before = _tree(source)
+    code_before = _tree(install)
+    run_before = json.loads((tmp_path / "registry.json").read_text())
     with _launch_relay(tmp_path, env) as child:
         result = _run(tmp_path, env, source, install)
         _assert_canonical_public_failure(result, tmp_path, 'AFTER_REMOVAL_INJECTED_FAILURE')
-        assert child.poll() is not None and not install.exists()
-        assert json.loads((tmp_path/'registry.json').read_text())['exists'] is False
+        assert child.poll() is not None and _tree(install) == code_before
+        assert json.loads((tmp_path / "registry.json").read_text()) == run_before
         audit = Path(result.fixture_audit['audit_path'])
         first_failure = audit.read_bytes()
         record = json.loads(first_failure)
         assert record['status'] == 'FAILED_REMOVAL_INCOMPLETE'
-        assert record['rollback']['applied'] is False and record['rollback']['runtime_restored'] is False
+        assert record['rollback']['applied'] is True and record['rollback']['runtime_restored'] is True
         _rerun_without_fault(tmp_path, env, source, install)
         assert audit.read_bytes() == first_failure
         _assert_removed_and_preserved(tmp_path, env, source, install, protected, source_before)
@@ -903,22 +951,29 @@ def test_quoted_live_relay_post_removal_failure_converges_without_resurrection(t
 @pytest.mark.parametrize('scenario', ['success', 'partial', 'refusal', 'forged', 'interactive',
                                       'after_removal', 'helper_after_removal', 'final_evidence', 'audit_unavailable', 'fence_release'])
 def test_normal_uninstall_real_removal_and_forward_convergence(tmp_path, scenario):
-    # eb9ecf2 / operations.md:244-253; 1차 19:3x approved replacement of
-    # prior PASS_EXACT_PREIMAGE_SAFE_TO_RETRY / Run-and-code revival expectations.
+    # sub-681: a failed removal restores code/control/shortcuts before returning failure.
+    # Retry still converges on removal and does not launch a stopped relay.
     env, source, install, protected = _setup(tmp_path, scenario)
     source_before = _tree(source)
     env['CUSTOM_REMOVAL_SECRET'] = uuid.uuid4().hex + uuid.uuid4().hex
     retained = None
+    business_sentinel = None
     if scenario == 'partial':
-        unknown = install/'unknown-business.txt'
-        unknown.write_bytes(b'preserve-unknown-business')
-        retained = {'unknown-business.txt': _sha(unknown)}
+        # Keep business material outside the verified executable tree. An
+        # unlisted file inside current is tested as an admission refusal below.
+        business_sentinel = install.parent/'unknown-business.txt'
+        business_sentinel.write_bytes(b'preserve-unknown-business')
     if scenario == 'refusal':
         env['CA_UNINSTALL_REFUSE'] = '1'
         (tmp_path/'refusal-armed').touch()
     if scenario == 'interactive': env['CA_UNINSTALL_INTERACTIVE'] = '1'
+    code_before = _tree(install)
+    run_before = json.loads((tmp_path / "registry.json").read_text())
     with _launch_relay(tmp_path, env) as child:
         result = _run(tmp_path, env, source, install)
+        if scenario == 'partial':
+            assert (tmp_path/'partial-move-observed').read_text() == 'MOVED'
+            assert business_sentinel.read_bytes() == b'preserve-unknown-business'
         assert all(p.read_bytes() == b'protected-fixture-must-be-preserved' for p in protected)
         control = Path(env['LOCALAPPDATA'])/'KMTech/DirectSync/container_audit/control'
         assert not (control/'writer-session/active.json').exists(), result.stderr
@@ -931,7 +986,9 @@ def test_normal_uninstall_real_removal_and_forward_convergence(tmp_path, scenari
         else:
             assert result.returncode != 0, result.stdout
             assert 'uninstall_recovery_status=PASS_EXACT_PREIMAGE_SAFE_TO_RETRY' not in result.stdout
-            assert record['rollback']['applied'] is False and record['rollback']['runtime_restored'] is False
+            assert _tree(install) == code_before
+            if scenario != 'audit_unavailable':
+                assert record['rollback']['runtime_restored'] is True
             # A failed audit write leaves its original PREIMAGE record intact;
             # the independent stage evidence retains the first failure.
             if scenario == 'audit_unavailable':
@@ -940,34 +997,54 @@ def test_normal_uninstall_real_removal_and_forward_convergence(tmp_path, scenari
             else:
                 assert record['status'] == 'FAILED_REMOVAL_INCOMPLETE'
                 assert record['failure_type'] and record['failure']
-            assert json.loads((tmp_path/'registry.json').read_text())['exists'] is False
+            assert json.loads((tmp_path/'registry.json').read_text()) == run_before
             if scenario == 'refusal': assert child.poll() is None
         launches = [json.loads(line) for line in (tmp_path/'relay-launches.jsonl').read_text().splitlines()]
         assert len(launches) == 1, 'failed removal must not restart the old relay'
         raw = env['CUSTOM_REMOVAL_SECRET'].encode()
         assert all(raw not in payload for payload in (result.stdout.encode(), result.stderr.encode(), first_record_bytes))
-        _rerun_without_fault(tmp_path, env, source, install)
+        if scenario != 'success':
+            _rerun_without_fault(tmp_path, env, source, install)
         assert first_audit.read_bytes() == first_record_bytes, 'original failure record was overwritten'
         _assert_removed_and_preserved(tmp_path, env, source, install, protected, source_before, retained)
-        # A further identical run is idempotent, with the same immutable source.
-        _rerun_without_fault(tmp_path, env, source, install)
+        if business_sentinel is not None:
+            assert business_sentinel.read_bytes() == b'preserve-unknown-business'
+        # ANSWER-3 keeps the existing U admission when the bootstrap is gone.
+        _assert_post_removal_user_probe_refuses_without_mutation(source, install, protected)
         assert first_audit.read_bytes() == first_record_bytes
-        _assert_removed_and_preserved(tmp_path, env, source, install, protected, source_before, retained)
 
 
-@pytest.mark.parametrize('scenario', ['tampered_code', 'missing_record', 'foreign_registry', 'missing_target', 'old_manifest'])
-def test_supported_uninstall_preserves_unverified_content_and_removes_owned_content(tmp_path, scenario):
-    env, source, install, _ = _setup(tmp_path)
+def test_supported_uninstall_removes_verified_code_with_different_own_run_value(tmp_path):
+    env, source, install, protected = _setup(tmp_path)
+    source_before = _tree(source)
+    history = install.parent/'removal-evidence'/('8'*32)
+    history.mkdir(parents=True)
+    (history/'preserved.txt').write_bytes(b'preserve-existing-evidence')
+    history_before = _tree(history)
+    registry = tmp_path/'registry.json'
+    own_run = json.loads(registry.read_text())
+    own_run['data'] = 'unrelated-command'
+    registry.write_text(json.dumps(own_run))
+    result = _run(tmp_path, env, source, install)
+    assert result.returncode == 0, result.stderr
+    assert 'uninstall_status=PASS_UNINSTALLED_DATA_PRESERVED' in result.stdout
+    _assert_removed_and_preserved(tmp_path, env, source, install, protected, source_before)
+    assert _tree(history) == history_before
+
+
+@pytest.mark.parametrize('scenario', ['tampered_code', 'missing_record', 'missing_target', 'old_manifest', 'unlisted_code'])
+def test_supported_uninstall_rejects_unproven_identity_without_mutation(tmp_path, scenario):
+    env, source, install, protected = _setup(tmp_path)
     if scenario == 'tampered_code':
         path = install / 'app/main.py'
         path.write_bytes(b'X' * path.stat().st_size)
     elif scenario == 'missing_record':
         (install / 'bootstrap-integrity.json').unlink()
-    elif scenario == 'foreign_registry':
-        (tmp_path / 'registry.json').write_text(json.dumps({'exists': True, 'kind': 'String', 'data': 'unrelated-command'}))
     elif scenario == 'missing_target':
         assert install.resolve().is_relative_to(tmp_path.resolve())
         shutil.rmtree(install)
+    elif scenario == 'unlisted_code':
+        (install/'unknown-business.txt').write_bytes(b'preserve-unlisted-file')
     else:
         manifest_path = install / 'portable-manifest.json'
         manifest = json.loads(manifest_path.read_text())
@@ -975,26 +1052,20 @@ def test_supported_uninstall_preserves_unverified_content_and_removes_owned_cont
         manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
         result = _ps(tmp_path / 'record.ps1', env)
         assert result.returncode == 0, result.stderr
-    original = _tree(install)
+    before = _tree(install.parent)
     source_before = _tree(source)
+    run_before = (tmp_path / 'registry.json').read_bytes()
     result = _run(tmp_path, env, source, install)
-    assert result.returncode == 0, result.stderr
-    assert 'uninstall_status=PASS_UNINSTALLED_DATA_PRESERVED' in result.stdout
-    assert _tree(source) == source_before
-    assert json.loads((tmp_path/'registry.json').read_text())['exists'] is False
-    marker = json.loads((install.parent/'removed.json').read_text())
-    assert marker['lifecycle_state'] == 'REMOVED'
-    if scenario == 'tampered_code':
-        assert (install/'app/main.py').read_bytes() == b'X' * len((install/'app/main.py').read_bytes())
-        assert not (install/'app/kmtech_shared/portable.py').exists()
-        assert marker['retained_paths']
-    elif scenario == 'missing_record':
-        assert _tree(install) == original and marker['retained_paths']
+    assert result.returncode != 0
+    failures = [json.loads(line.split('=', 1)[1]) for line in result.stderr.splitlines()
+                if line.startswith('CONTAINER_AUDIT_INSTALLER_FAILURE=')]
+    if failures:
+        assert failures[-1]['reason_code'] in {'DATA_GENERATION_UNKNOWN', 'DATA_GENERATION_REFUSED'}
     else:
-        assert not install.exists()
-    retained = _tree(install)
-    _rerun_without_fault(tmp_path, env, source, install)
-    assert _tree(install) == retained and _tree(source) == source_before
+        _assert_canonical_public_failure(result, tmp_path, 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER', source)
+    assert _tree(install.parent) == before and _tree(source) == source_before
+    assert (tmp_path / 'registry.json').read_bytes() == run_before
+    assert all(path.read_bytes() == b'protected-fixture-must-be-preserved' for path in protected)
 
 
 @pytest.mark.parametrize('mode', ['uninstall', 'recover'])
@@ -1007,6 +1078,53 @@ def test_bare_uninstall_and_recovery_require_exact_fence(tmp_path, mode):
     assert result.returncode != 0
     assert 'CONTAINER_WRITER_FENCE_PARAMETERS_INVALID' in result.stderr, result.stderr
     assert _tree(install) == original
+
+
+def test_old_partial_removal_refuses_install_and_new_removal_without_mutation(tmp_path, monkeypatch):
+    import auto_update as update
+
+    env, source, install, protected = _setup(tmp_path, stock_version_identity=True)
+    application = install.parent
+    evidence = application / 'removal-evidence' / ('7' * 32)
+    evidence.mkdir(parents=True)
+    control = application / 'update-control'
+    with _launch_relay(tmp_path, env):
+        old_user_removal = subprocess.run(
+            [env['CA_UNINSTALL_PYTHON'], '-I', '-B', env['CA_UNINSTALL_HOST'], 'remove', str(install / 'app')],
+            env=env, capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        (tmp_path / 'old-user-removal.stdout').write_bytes(old_user_removal.stdout)
+        (tmp_path / 'old-user-removal.stderr').write_bytes(old_user_removal.stderr)
+        assert old_user_removal.returncode == 0, 'the old attempt must first complete the real user removal'
+        install.rename(evidence / 'current')
+        evidence_before = _tree(evidence)
+        control.mkdir(exist_ok=True)
+        (control / 'policy.json').write_text('{"fixture":"old interrupted removal"}', encoding='utf-8')
+        with pytest.raises(ValueError) as refusal:
+            update.resolve_lifecycle_context(application, operation='install')
+        assert str(refusal.value.__cause__) == 'lifecycle_removed_control_remains'
+        assert _tree(evidence) == evidence_before
+        application_before = _tree(application)
+        run_before = (tmp_path / 'registry.json').read_bytes()
+        # ANSWER-3: preserve U/stop/source authentication; no new cleanup proof.
+        removed = _run(tmp_path, env, source, install)
+        assert removed.returncode != 0
+        _assert_canonical_public_failure(removed, tmp_path, 'CANONICAL_STOP_MARKER_PREEXISTS', source)
+        assert _tree(application) == application_before
+        assert (tmp_path / 'registry.json').read_bytes() == run_before
+        assert _tree(evidence) == evidence_before
+        assert all(path.read_bytes() == b'protected-fixture-must-be-preserved' for path in protected)
+        # Exercise the actual PS classifier as well as the Python classifier.
+        quote = lambda value: "'" + str(value).replace("'", "''") + "'"
+        driver = tmp_path / 'refuse-residual-install.ps1'
+        driver.write_text(
+            "$ErrorActionPreference='Stop'\n. " + quote(ROOT / 'tools/bootstrap_integrity.ps1') + "\n"
+            "$refused=$false\ntry{[void](Get-BootstrapSupportedLifecycleContext -Root " + quote(application)
+            + " -Operation 'install')}catch{for($cause=$_.Exception;$null -ne $cause;$cause=$cause.InnerException){"
+              "if($cause.Message -ceq 'lifecycle_removed_control_remains'){$refused=$true}}}\n"
+              "if(-not $refused){exit 5};'EXPECTED_REFUSAL'\n", encoding='utf-8-sig')
+        classified = _ps(driver, env)
+        assert classified.returncode == 0 and 'EXPECTED_REFUSAL' in classified.stdout
+        assert _tree(application) == application_before
 
 
 def test_uninstall_plan_is_read_only_and_does_not_claim_installed_identity(tmp_path):

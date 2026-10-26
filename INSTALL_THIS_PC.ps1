@@ -125,6 +125,9 @@ function Get-InstallationHelperPublicFailure($Failure, [int]$ExitCode) {
             $cause=$cause.InnerException
         }
     }
+    for($cause=$exception;$null -ne $cause;$cause=$cause.InnerException){
+        if($cause.Data['removal_installation_damaged'] -eq $true){$fields.guidance='설치 손상: 자료를 보존한 상태로 승인된 새 판을 다시 설치하세요.';break}
+    }
     if($Failure -is [Management.Automation.ErrorRecord]){$fields.location_line=[int]$Failure.InvocationInfo.ScriptLineNumber}
     # The original is retained by the existing installation evidence writer.
     # A reference is published only by its verified atomic publication contract.
@@ -142,7 +145,7 @@ function Get-InstallationHelperPublicFailure($Failure, [int]$ExitCode) {
             $fields.Remove('report_status');$fields.report_path=$path;$fields.report_sha256=$digest
         } catch { }
     }
-    return ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes (@('FAILED','installer_helper','INSTALLER_HELPER_FAILURE','REPORT_UNAVAILABLE')+$contextCodes+$startupCodes) -SafeMessages @('자료를 보존하고 관리자 지원 복구를 요청하세요.','기존 설치 상태와 예약 작업을 확인하고 관리자 지원 복구를 요청하세요.')
+    return ConvertTo-KmtechPublicRecord -Fields $fields -AllowedCodes (@('FAILED','installer_helper','INSTALLER_HELPER_FAILURE','REPORT_UNAVAILABLE')+$contextCodes+$startupCodes) -SafeMessages @('자료를 보존하고 관리자 지원 복구를 요청하세요.','기존 설치 상태와 예약 작업을 확인하고 관리자 지원 복구를 요청하세요.','설치 손상: 자료를 보존한 상태로 승인된 새 판을 다시 설치하세요.')
 }
 $ExpectedInstallRoot = "C:\KMTech\Apps\Container_Audit\current"
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot "tools\bootstrap_integrity.ps1"
@@ -2313,6 +2316,8 @@ function Remove-ContainerScheduledTasks($Folder, [string]$EvidenceRoot, [string]
         try { $task = $Folder.GetTask($name) }
         catch { $failure=$_.Exception; while ($null -ne $failure.InnerException) { $failure=$failure.InnerException }; if ($failure.HResult -ne -2147024894) { throw } }
         if ($null -ne $task) {
+            $transaction=Get-Variable -Name removalPreimage -ValueOnly -ErrorAction SilentlyContinue
+            if($null -ne $transaction){[void]$transaction.tasks.Add(@{name=$name;xml=[string]$task.Xml;sddl=[string]$task.GetSecurityDescriptor(7);legacy=($name -ieq 'direct-sync-relay-container-audit');enabled=$task.Enabled})}
             Write-ContainerStartupUpdateRecord -Path (Join-Path $EvidenceRoot ($name + '.json')) -Payload @{
                 name=$name; xml=$task.Xml; sddl=$task.GetSecurityDescriptor(7)
             }
@@ -2498,7 +2503,125 @@ function Remove-ContainerEmptiedParents([string]$Path, [string[]]$Directories) {
     }
 }
 
-function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [int[]]$ExcludeProcessIds = @(),[switch]$OnlyUncommittedCurrent) {
+function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [int[]]$ExcludeProcessIds = @(),[switch]$OnlyUncommittedCurrent, [object[]]$AdditionalPreimageFiles = @(), [scriptblock]$BeforeRemoval = $null, [scriptblock]$AfterRemoval = $null) {
+
+    # This preimage contains only the existing content-owned removal plan and
+    # verified shortcut paths. Business roots and opaque files are never copied.
+    function Save-RemovalFilePreimage($Plan, [object[]]$ExtraFiles) {
+        $saved = @{files=[Collections.ArrayList]::new();tasks=[Collections.ArrayList]::new();directories=@();evidence=$evidence}
+        $backupRoot=Join-Path $evidence '.restore-preimage'
+        [void][IO.Directory]::CreateDirectory((Get-ContainerRemovalIoPath $backupRoot))
+        $rows=@($Plan.artifacts | ForEach-Object {@{path=$_;allowed_hash=''}})+@($ExtraFiles | Where-Object {$null -ne $_})
+        $seen=@{}
+        foreach($row in $rows){
+            $path=[string]$row.path
+            if($seen.ContainsKey($path)){continue};$seen[$path]=$true
+            Assert-ContainerRemovalBoundary $path
+            $io=Get-ContainerRemovalIoPath $path
+            if(-not(Test-Path -LiteralPath $io -ErrorAction Stop)){continue}
+            if($Plan.hashes.ContainsKey($path) -and -not(Test-ContainerRemovalFile $path $Plan.hashes[$path])){continue}
+            $item=Get-Item -LiteralPath $io -Force -ErrorAction Stop
+            if($item.PSIsContainer){throw 'REMOVAL_PREIMAGE_FILE_REQUIRED'}
+            $backup=Join-Path $backupRoot ([string]$saved.files.Count)
+            [IO.File]::Copy($io,(Get-ContainerRemovalIoPath $backup),$false)
+            $digest=[Security.Cryptography.SHA256]::Create();$reader=$null
+            try{$reader=[IO.File]::OpenRead((Get-ContainerRemovalIoPath $backup));$hash=([BitConverter]::ToString($digest.ComputeHash($reader))).Replace('-','').ToLowerInvariant()}
+            finally{if($null -ne $reader){$reader.Dispose()};$digest.Dispose()}
+            if(-not(Test-ContainerRemovalFile $path $hash)){throw 'REMOVAL_PREIMAGE_READBACK_DIFFERS'}
+            $acl=if(-not $testOverride){Get-Acl -LiteralPath $io -ErrorAction Stop}else{$null}
+            [void]$saved.files.Add(@{path=$path;backup=$backup;sha256=$hash;allowed_hash=[string]$row.allowed_hash;
+                acl=$acl;attributes=$item.Attributes;written=$item.LastWriteTimeUtc;created=$item.CreationTimeUtc})
+        }
+        $directories=@($Plan.directories | Where-Object {
+            $directoryPrefix=([string]$_).TrimEnd('\')+'\'
+            @($saved.files | Where-Object {$_.path.StartsWith($directoryPrefix,[StringComparison]::OrdinalIgnoreCase)}).Count -gt 0
+        })+@($saved.files | ForEach-Object {Split-Path -Parent $_.path})
+        foreach($path in @($directories | Sort-Object -Unique)){
+            Assert-ContainerRemovalBoundary $path
+            if(-not(Test-Path -LiteralPath (Get-ContainerRemovalIoPath $path) -PathType Container)){continue}
+            $item=Get-Item -LiteralPath (Get-ContainerRemovalIoPath $path) -Force -ErrorAction Stop
+            $saved.directories+=@{path=$path;acl=$(if(-not $testOverride){Get-Acl -LiteralPath (Get-ContainerRemovalIoPath $path) -ErrorAction Stop}else{$null});
+                attributes=$item.Attributes;written=$item.LastWriteTimeUtc;created=$item.CreationTimeUtc}
+        }
+        return $saved
+    }
+    function Restore-RemovalFilePreimage($Saved, $OriginalFailure) {
+        $failures=[Collections.ArrayList]::new()
+        # A success marker belongs to this attempt only when its evidence matches.
+        try{
+            if(Test-Path -LiteralPath $markerPath -PathType Leaf){
+                $marker=Get-Content -LiteralPath $markerPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                if([string]$marker.lifecycle_state -ceq 'REMOVED' -and [string]$marker.evidence_root -ceq $evidence){
+                    [IO.File]::Delete((Get-ContainerRemovalIoPath $markerPath))
+                }
+            }
+        }catch{[void]$failures.Add($_.Exception.GetType().FullName)}
+        foreach($directory in @($Saved.directories | Sort-Object {$_.path.Length})){
+            try{
+                Assert-ContainerRemovalBoundary $directory.path
+                $io=Get-ContainerRemovalIoPath $directory.path
+                if(-not[IO.Directory]::Exists($io)){
+                    [void][IO.Directory]::CreateDirectory($io)
+                    if($null -ne $directory.acl){Set-Acl -LiteralPath $io -AclObject $directory.acl -ErrorAction Stop}
+                }
+            }catch{[void]$failures.Add($_.Exception.GetType().FullName)}
+        }
+        foreach($file in $Saved.files){
+            try{
+                Assert-ContainerRemovalBoundary $file.path
+                $io=Get-ContainerRemovalIoPath $file.path
+                if(Test-Path -LiteralPath $io -ErrorAction Stop){
+                    if(Test-ContainerRemovalFile $file.path $file.sha256){continue}
+                    if(-not $file.allowed_hash -or -not(Test-ContainerRemovalFile $file.path $file.allowed_hash)){throw 'REMOVAL_RESTORE_CONFLICT'}
+                }
+                if(-not(Test-ContainerRemovalFile $file.backup $file.sha256)){throw 'REMOVAL_PREIMAGE_DAMAGED'}
+                $prefix=$application.TrimEnd('\')+'\'
+                $moved=if($file.path.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){Join-Path $evidence $file.path.Substring($prefix.Length)}else{''}
+                if($moved -and -not(Test-Path -LiteralPath $io) -and (Test-Path -LiteralPath (Get-ContainerRemovalIoPath $moved))){
+                    if(-not(Test-ContainerRemovalFile $moved $file.sha256)){throw 'REMOVAL_EVIDENCE_CHANGED'}
+                    [IO.File]::Move((Get-ContainerRemovalIoPath $moved),$io)
+                }else{[IO.File]::Copy((Get-ContainerRemovalIoPath $file.backup),$io,$true)}
+                if($null -ne $file.acl){Set-Acl -LiteralPath $io -AclObject $file.acl -ErrorAction Stop}
+                [IO.File]::SetCreationTimeUtc($io,$file.created);[IO.File]::SetLastWriteTimeUtc($io,$file.written)
+                [IO.File]::SetAttributes($io,$file.attributes)
+                if(-not(Test-ContainerRemovalFile $file.path $file.sha256)){throw 'REMOVAL_RESTORE_READBACK_DIFFERS'}
+            }catch{[void]$failures.Add($_.Exception.GetType().FullName)}
+        }
+        foreach($task in $Saved.tasks){
+            try{
+                if($task.ContainsKey('official')){
+                    Invoke-LabelOfficialLegacyTaskTransition 'Restore' $task.directory $task.official.xml_sha256
+                    continue
+                }
+                $present=$null
+                try{$present=$TaskFolder.GetTask($task.name)}catch{
+                    $cause=$_.Exception;while($null -ne $cause.InnerException){$cause=$cause.InnerException}
+                    if($cause.HResult -ne -2147024894){throw}
+                }
+                if($null -eq $present){
+                    [void]$TaskFolder.RegisterTask($task.name,$task.xml,6,$null,$null,0,$task.sddl)
+                    $present=$TaskFolder.GetTask($task.name)
+                }elseif([string]$present.Xml -cne $task.xml -and -not $task.legacy){throw 'REMOVAL_RESTORE_TASK_CONFLICT'}
+                if($task.legacy){$present.Enabled=$task.enabled}
+                if([string]$present.Xml -cne $task.xml -or [string]$present.GetSecurityDescriptor(7) -cne $task.sddl){throw 'REMOVAL_RESTORE_TASK_READBACK_DIFFERS'}
+            }catch{[void]$failures.Add($_.Exception.GetType().FullName)}
+        }
+        foreach($directory in @($Saved.directories | Sort-Object {$_.path.Length} -Descending)){
+            try{
+                $io=Get-ContainerRemovalIoPath $directory.path
+                [IO.Directory]::SetCreationTimeUtc($io,$directory.created);[IO.Directory]::SetLastWriteTimeUtc($io,$directory.written)
+                [IO.File]::SetAttributes($io,$directory.attributes)
+            }catch{[void]$failures.Add($_.Exception.GetType().FullName)}
+        }
+        if($failures.Count){
+            try{Write-ContainerStartupUpdateRecord -Path (Join-Path $evidence 'rollback.json') -Payload @{
+                status='ROLLBACK_FAILED';installation_damaged=$true;business_data_and_registration_preserved=$true;
+                failure_types=@($failures | Sort-Object -Unique)}}catch{}
+            $damage=[InvalidOperationException]::new('설치 손상: 자료를 보존한 상태로 승인된 새 판을 다시 설치하세요.',$OriginalFailure.Exception)
+            $damage.Data['removal_installation_damaged']=$true
+            throw $damage
+        }
+    }
     if($OnlyUncommittedCurrent -and $null -ne $TaskFolder){throw 'TRANSACTION_REMOVAL_TASK_CENSUS_FORBIDDEN'}
     $current = Get-StrictFullPath $InstallRoot 'removal current'
     if ((Split-Path -Leaf $current) -cne 'current') { throw 'REMOVAL_CURRENT_PATH_INVALID' }
@@ -2527,7 +2650,7 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
     # exactly (INSTALL_CANONICAL_PORTABLE.ps1 Restore-CanonicalRemovalFromMoveJournal).
     # Records hold paths, hashes and file metadata only; no secret values.
     $moveJournal = ''
-    if (-not $OnlyUncommittedCurrent -and $MachineControlRoot -and $WriterFenceReplacementTransactionId -cmatch '^[0-9a-f]{32}$') {
+    if (-not $OnlyUncommittedCurrent -and $WriterFenceReplacementTransactionId -cmatch '^[0-9a-f]{32}$') {
         $moveJournal = Join-Path $evidence 'removal-move-journal.jsonl'
         $journalEncoding = [Text.UTF8Encoding]::new($false)
         $journalWrite = { param($Record) $journalBytes = $journalEncoding.GetBytes((($Record | ConvertTo-Json -Compress -Depth 4) + "`n")); $journalStream = [IO.File]::Open($moveJournal, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::Read); try { $journalStream.Write($journalBytes, 0, $journalBytes.Length); $journalStream.Flush($true) } finally { $journalStream.Dispose() } }
@@ -2544,11 +2667,15 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
             Assert-BootstrapExactFileCopy $failedTransition $failedCopy
         }
     }
+    $plan = if($OnlyUncommittedCurrent){Get-ContainerArtifactFilePlan $current}else{Get-ContainerRemovalArtifacts $application}
+    if (-not $OnlyUncommittedCurrent -and (Test-Path -LiteralPath $markerPath)) { $plan.artifacts += $markerPath }
+    $localRollback=(-not $MachineControlRoot -and -not $OnlyUncommittedCurrent)
+    $removalPreimage=if($localRollback){Save-RemovalFilePreimage $plan $AdditionalPreimageFiles}else{$null}
+    try {
+    if($null -ne $BeforeRemoval){& $BeforeRemoval}
     if ($null -eq $TaskFolder -and -not $testOverride -and -not $OnlyUncommittedCurrent) { throw 'REMOVAL_TASK_OBSERVATION_UNKNOWN' }
     if ($null -ne $TaskFolder) { Remove-ContainerScheduledTasks $TaskFolder $evidence $current }
     Assert-ContainerRemovalQuiescent $application $ExcludeProcessIds
-    $plan = if($OnlyUncommittedCurrent){Get-ContainerArtifactFilePlan $current}else{Get-ContainerRemovalArtifacts $application}
-    if (-not $OnlyUncommittedCurrent -and (Test-Path -LiteralPath $markerPath)) { $plan.artifacts += $markerPath }
     $workerRemovalProof = if ($MachineControlRoot -and -not $Script:ContainerRemovalAttestedNewPlacement -and
         -not [string]::IsNullOrEmpty($Script:ContainerMachineRemovalProofKind)) {
         @{proof=$Script:ContainerMachineRemovalProofKind;worker_run_present=$Script:ContainerMachineRemovalWorkerRunPresent}
@@ -2559,6 +2686,9 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
     if ($moveJournal) {
         # Directories this removal may empty and delete: restore needs their ACL, attributes and times.
         foreach ($directory in @($plan.directories | Sort-Object -Unique)) {
+            $directoryPrefix=([string]$directory).TrimEnd('\')+'\'
+            if(-not @($plan.artifacts | Where-Object {$_.StartsWith($directoryPrefix,[StringComparison]::OrdinalIgnoreCase)}).Count){continue}
+            Assert-ContainerRemovalBoundary $directory
             $directoryIo = Get-ContainerRemovalIoPath $directory
             if (-not (Test-Path -LiteralPath $directoryIo -ErrorAction Stop)) { continue }
             $directoryItem = Get-Item -LiteralPath $directoryIo -Force -ErrorAction Stop
@@ -2635,7 +2765,13 @@ function Invoke-ContainerConvergentRemoval([string]$InstallRoot, $TaskFolder, [i
     }
     $marker = Get-Content -LiteralPath $markerPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ([string]$marker.lifecycle_state -cne 'REMOVED') { throw 'REMOVAL_MARKER_READBACK_FAILED' }
+    if($null -ne $AfterRemoval){& $AfterRemoval}
     return @{status='PASS';lifecycle_state='REMOVED';evidence_root=$evidence;retained_paths=@($remaining.retained_paths)}
+    } catch {
+        $removalFailure=$_
+        if($null -ne $removalPreimage){Restore-RemovalFilePreimage $removalPreimage $removalFailure}
+        throw $removalFailure
+    }
 }
 
 
@@ -2727,12 +2863,15 @@ if ($Uninstall.IsPresent) {
         try { $gateHeld=$gate.WaitOne(5000) } catch [Threading.AbandonedMutexException] { $gateHeld=$true; throw 'REMOVAL_UPDATE_GATE_ABANDONED' }
         if (-not $gateHeld) { throw 'REMOVAL_UPDATE_GATE_BUSY' }
         if ($UninstallAuditPath) { Write-ContainerSupportedRemovalJournal $excluded }
-        $removed = Invoke-ContainerConvergentRemoval -InstallRoot $installRootFull -TaskFolder $folder -ExcludeProcessIds $excluded -OnlyUncommittedCurrent:$RemoveUncommittedPlacement
         $shortcutRecord=Get-BootstrapWorkerShortcutCommonRecordPath $installRootFull
+        $shortcutPreimage=Read-BootstrapWorkerShortcutRecord $installRootFull $shortcutRecord 'Common'
+        $removalFiles=@($shortcutPreimage.entries | ForEach-Object {@{path=[string]$_.path;allowed_hash=[string]$_.original_sha256}})
+        $removalFiles+=@{path=(Get-BootstrapEmergencyShortcutPath $installRootFull);allowed_hash=''}
         # Only the already verified machine controller owns the independent emergency stage.
         $deferEmergencyCleanup=([bool]$MachineControlRoot -and -not $RemoveUncommittedPlacement -and
             [bool]$UninstallAuditPath -and $excluded -contains $RemovalControllerProcessId)
-        [void](Restore-BootstrapWorkerShortcuts $installRootFull $shortcutRecord 'Common' -DeferEmergencyCleanup:$deferEmergencyCleanup)
+        $finishRemoval={ [void](Restore-BootstrapWorkerShortcuts $installRootFull $shortcutRecord 'Common' -DeferEmergencyCleanup:$deferEmergencyCleanup) }
+        $removed = Invoke-ContainerConvergentRemoval -InstallRoot $installRootFull -TaskFolder $folder -ExcludeProcessIds $excluded -OnlyUncommittedCurrent:$RemoveUncommittedPlacement -AdditionalPreimageFiles $removalFiles -AfterRemoval $finishRemoval
         'uninstall_status=PASS_KNOWN_FILES_REMOVED_STATE_PRESERVED'
         'lifecycle_state=REMOVED'
         ConvertTo-KmtechRedactedSinkText -Text ('removal_evidence_root='+[string]$removed.evidence_root)

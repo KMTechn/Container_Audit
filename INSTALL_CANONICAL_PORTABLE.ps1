@@ -401,6 +401,10 @@ function Get-WriterContractSessionMutexName(
 }
 function Write-CanonicalInstallationPublicRecord($Failure=$null,[int]$ExitCode=0) {
     $guidance='자료를 보존하고 관리자 지원 복구를 요청하세요.'
+    if($null -ne $Failure){
+        $cause=if($Failure -is [Exception]){$Failure}else{$Failure.Exception}
+        while($null -ne $cause){if($cause.Data['removal_installation_damaged'] -eq $true){$guidance='설치 손상: 자료를 보존한 상태로 승인된 새 판을 다시 설치하세요.';break};$cause=$cause.InnerException}
+    }
     $replacementFailureCode=$null
     $replacement=$null
     if($null -ne $audit){
@@ -6200,6 +6204,8 @@ if ($CompleteRetiredRemoval) {
 $uninstallCodeStarted = $false
 $uninstallStopSha256 = ''
 $supportedRemovalProductStartedAt=$null
+$supportedRemovalArtifactPreimage=@()
+$supportedRemovalArtifactAllowedHashes=@{}
 $uninstallRecordPreimagePath = Join-Path $auditRoot "canonical-portable-$runId-integrity-preimage.json"
 $retirementResumeClaim = $null
 $continuationOldClaim = $null
@@ -6657,6 +6663,16 @@ $enteredPlacementTry = $true
     if ($Uninstall -and -not $CompleteRetiredRemoval) {
         # Execute only the externally verified support host. Damaged installed
         # code and update-control records are not prerequisites or authorities.
+        $removalShortcutPaths=@($workerShortcutRecordPath,(Get-BootstrapWorkerShortcutCommonRecordPath $install),(Get-BootstrapEmergencyShortcutPath $install))
+        foreach($shortcutScope in @('User','Common')){
+            $shortcutRecordPath=if($shortcutScope -ceq 'User'){$workerShortcutRecordPath}else{Get-BootstrapWorkerShortcutCommonRecordPath $install}
+            $shortcutRecord=Read-BootstrapWorkerShortcutRecord $install $shortcutRecordPath $shortcutScope
+            foreach($entry in @($shortcutRecord.entries)){
+                $removalShortcutPaths+=@([string]$entry.path)
+                if([string]$entry.action -ceq 'updated'){$supportedRemovalArtifactAllowedHashes[[string]$entry.path]=[string]$entry.original_sha256}
+            }
+        }
+        $supportedRemovalArtifactPreimage=@(Get-CanonicalMachineArtifactPreimage @($removalShortcutPaths | Sort-Object -Unique))
         $mutated=$true
         $supportedRemovalProductStartedAt=[DateTime]::UtcNow
         Product $source '--remove-current-user-setup' (Join-Path $install 'app')
@@ -7393,7 +7409,33 @@ catch {
         }
     }
     if ($Uninstall -and -not $CompleteRetiredRemoval) {
-        # Removal converges on removal; never resurrect moved code, tasks or Run.
+        # The content helper journals the same transaction before each move.
+        # Compensate every independent preimage before releasing admission.
+        $removalRollbackFailures=[Collections.ArrayList]::new()
+        $removalRestored=$null
+        try{
+            $removalRestored=Restore-CanonicalRemovalFromMoveJournal $install $Script:CanonicalWriterFenceTransactionId
+            if($null -ne $removalRestored){
+                $taskRestore=Restore-CanonicalRemovalScheduledTasks ([string]$removalRestored.evidence_root)
+                if([string]$taskRestore.status -cnotin @('NONE','RESTORED')){throw 'REMOVAL_TASK_RESTORE_UNPROVEN'}
+            }
+        }catch{[void]$removalRollbackFailures.Add($_.Exception.GetType().FullName)}
+        foreach($item in $supportedRemovalArtifactPreimage){
+            try{
+                $path=[string]$item.path
+                if(Test-Path -LiteralPath $path){
+                    $actual=Sha $path
+                    if($item.exists -and $actual -ceq [string]$item.sha256){continue}
+                    if(-not $supportedRemovalArtifactAllowedHashes.ContainsKey($path) -or $actual -cne $supportedRemovalArtifactAllowedHashes[$path]){throw 'REMOVAL_SHORTCUT_RESTORE_CONFLICT'}
+                }
+                if($item.exists -and -not(Test-Path -LiteralPath (Split-Path -Parent $path))){
+                    $parent=Split-Path -Parent $path
+                    Assert-BootstrapNoReparsePoint $parent 'removal shortcut restore parent' -PathOnly
+                    [void][IO.Directory]::CreateDirectory($parent)
+                }
+                Restore-CanonicalMachineArtifacts @($item)
+            }catch{[void]$removalRollbackFailures.Add($_.Exception.GetType().FullName)}
+        }
         if ($null -ne $supportedRemovalProductStartedAt) {
             try {
                 $audit['removal_attempt_stop_cleanup']=Remove-CanonicalSupportedRemovalAttemptStop `
@@ -7405,12 +7447,45 @@ catch {
                 $audit['removal_attempt_stop_cleanup_failure']=Get-CanonicalFailureDetails $_
             }
         }
+        # The existing stop proof requires the removed Run to remain absent.
+        # Restore its preimage only after that attempt's stop is checked.
+        try{
+            $runReadback=Snapshot
+            $runChanged=([bool]$runReadback.exists -ne [bool]$before.exists -or
+                ($before.exists -and ([string]$runReadback.kind -cne [string]$before.kind -or [string]$runReadback.data -cne [string]$before.data)))
+            if($runChanged){Restore $before;$runReadback=Snapshot}
+            if([bool]$runReadback.exists -ne [bool]$before.exists -or
+                ($before.exists -and ([string]$runReadback.kind -cne [string]$before.kind -or [string]$runReadback.data -cne [string]$before.data))){throw 'REMOVAL_RUN_RESTORE_READBACK_DIFFERS'}
+        }catch{[void]$removalRollbackFailures.Add($_.Exception.GetType().FullName)}
         if($canonicalWriterFenceActive){
             [void](Abort-ContainerWriterFence -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
                 -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId -AuthorityLease $canonicalWriterFenceAuthority)
             $canonicalWriterFenceActive=$false
         }
-        $audit.status='FAILED_REMOVAL_INCOMPLETE';$audit.rollback.applied=$false;$audit.rollback.runtime_restored=$false
+        $audit.status='FAILED_REMOVAL_INCOMPLETE'
+        $audit.rollback.applied=($null -ne $removalRestored)
+        $audit.rollback.runtime_restored=($removalRollbackFailures.Count -eq 0)
+        if($removalRollbackFailures.Count){
+            try{
+                $ownedJournal=Find-CanonicalRemovalMoveJournal (Split-Path -Parent $install) $Script:CanonicalWriterFenceTransactionId
+                $failedMarkerPath=Join-Path (Split-Path -Parent $install) 'removed.json'
+                if($ownedJournal -and (Test-Path -LiteralPath $failedMarkerPath -PathType Leaf)){
+                    $failedMarker=Get-Content -LiteralPath $failedMarkerPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                    if([string]$failedMarker.schema -ceq 'container-audit-supported-removal-v1' -and
+                        [string]$failedMarker.lifecycle_state -ceq 'REMOVED' -and (Same ([string]$failedMarker.evidence_root) (Split-Path -Parent $ownedJournal))){
+                        Move-Item -LiteralPath $failedMarkerPath -Destination (Join-Path (Split-Path -Parent $ownedJournal) 'failed-marker.json') -ErrorAction Stop
+                    }
+                }
+            }catch{Write-InstallationCaughtFailure $_}
+            $damageRoot=if($null -ne $removalRestored){[string]$removalRestored.evidence_root}else{Join-Path (Join-Path (Split-Path -Parent $install) 'removal-evidence') ([Guid]::NewGuid().ToString('N'))}
+            try{
+                Assert-BootstrapNoReparsePoint $damageRoot 'removal damage evidence' -PathOnly
+                [void][IO.Directory]::CreateDirectory($damageRoot)
+                Save (Join-Path $damageRoot 'rollback.json') @{status='ROLLBACK_FAILED';installation_damaged=$true;business_data_and_registration_preserved=$true;failure_types=@($removalRollbackFailures | Sort-Object -Unique)}
+            }catch{Write-InstallationCaughtFailure $_}
+            $original=[Management.Automation.ErrorRecord]::new([InvalidOperationException]::new('설치 손상: 자료를 보존한 상태로 승인된 새 판을 다시 설치하세요.',$original.Exception),'RemovalRollbackFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null)
+            $original.Exception.Data['removal_installation_damaged']=$true
+        }
         try{Save $auditPath $audit;if($evidenceFull){Save $evidenceFull $audit}}catch{Write-InstallationCaughtFailure $_}
         $publicFailure=[InvalidOperationException]::new((ConvertTo-KmtechRedactedSinkText -Text $original.Exception.Message -UserLine),$original.Exception);$publicFailure.Data['original_type']=$original.Exception.GetType().FullName;$publicRecord=[Management.Automation.ErrorRecord]::new($publicFailure,'CanonicalInstallationFailed',[Management.Automation.ErrorCategory]::InvalidOperation,$null);throw $publicRecord
     }
