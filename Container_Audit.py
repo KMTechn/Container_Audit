@@ -477,7 +477,7 @@ def container_startup_logistics_client(*, read_retry=None):
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.122"
+CURRENT_VERSION = "v2.0.123"
 CA_NEW_SCREEN_ARGUMENT = "--new-screen"
 CA_OLD_SCREEN_ARGUMENT = "--old-screen"
 CA_SCREEN_HOST = {"requested": False, "active": False, "run": None}
