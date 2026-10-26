@@ -4,7 +4,7 @@
  "commit": "7bbd2158f7b46ddbfdfa6d25f4b9c275beb32684",
  "dirty": true,
  "app": "ca",
- "parts_fingerprint": "c603bdb1abc7d8ac",
+ "parts_fingerprint": "b7603e19f694ac9d",
  "files": [
   {
    "path": "app/ca/ca.css",
@@ -476,9 +476,9 @@
   },
   {
    "path": "app/scan.js",
-   "sha256": "91fef13f08910bfbc1ae4044ce4add122213c1de86dbb03650663bc47c646e55",
-   "bytes": 19360,
-   "gzip": 5937
+   "sha256": "41734a74abb448f3dc7411245b3c141c8cf1fc0d79a043d525c387becb5a42c6",
+   "bytes": 20306,
+   "gzip": 6115
   },
   {
    "path": "app/sheet.js",
