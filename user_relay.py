@@ -35,6 +35,7 @@ USER_RELAY_RUN_VALUE = "KMTech.ContainerAudit.Relay"
 USER_RELAY_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 DEFAULT_RETRY_INTERVAL_SECONDS = 30
 MAX_RETRY_INTERVAL_SECONDS = 60
+RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS = 120
 USER_RELAY_STATUS_NAME = "container_audit_user_relay.json"
 USER_RELAY_STOP_NAME = "container_audit_user_relay.stop.json"
 APP_STOP_NAME = "container_audit_app.stop.json"
@@ -479,7 +480,7 @@ def _runtime_cycle(
         direct_sync_root=direct_sync_root,
         scan_source_dir=scan_source_dir,
         reason="PERSISTENT_USER_RELAY",
-        timeout_seconds=45,
+        timeout_seconds=RELAY_DIRECT_SYNC_PROCESS_TIMEOUT_SECONDS,
     )
     try:
         with writer_admission("persistent_relay_status"):
