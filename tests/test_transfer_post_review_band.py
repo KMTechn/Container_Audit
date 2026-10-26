@@ -215,6 +215,10 @@ def _use_real_notice_methods(app, monkeypatch):
         configure=lambda **kw: button.options.update(kw),
     )
     app.notice_ack_button = button
+    app.notice_message_label = SimpleNamespace(
+        text="", configure=lambda **kw: setattr(
+            app.notice_message_label, "text", kw.get("text", app.notice_message_label.text)),
+    )
     return app
 
 
@@ -230,6 +234,15 @@ def test_partial_review_survives_real_status_and_keeps_acknowledgement(
     app.current_tray.scan_times.pop()
     app.current_tray.is_partial_submission = True
     app._settle_short_completion_projection = lambda _key: projection_saved
+    shown = []
+    real_status = app.show_status_message
+
+    def show_status(message, *args, **kwargs):
+        result = real_status(message, *args, **kwargs)
+        shown.append((message, message in app.notice_message_label.text))
+        return result
+
+    app.show_status_message = show_status
     app._prepare_and_attempt_transfer_seal = lambda **_kwargs: SealAttempt(
         intent_id="partial-review", status="OPERATOR_REVIEW",
         command_id="container-seal:partial-review", local_completion_id="local-1",
@@ -242,6 +255,11 @@ def test_partial_review_survives_real_status_and_keeps_acknowledgement(
     assert app.notice_ack_button.options["state"] == "normal"
     assert app._warning_beep_active is True
     assert ("play", -1) in app.audio
+    expected = "부분 제출 완료" if projection_saved else "부분 제출 기록 저장을 다시 시도하세요."
+    assert any(expected in message and visible for message, visible in shown)
+    # A failed projection can immediately retry in this headless root; its newer
+    # guidance must be visible too, while the original band stays in place.
+    assert shown[-1][0] in app.notice_message_label.text
     app.scan_entry = _scanner_app().scan_entry
     app.scan_entry.value = ""
     if key == "enter":
@@ -292,7 +310,7 @@ def test_review_repeating_sound_stops_when_band_leaves(monkeypatch, replacement)
     assert app.audio[-1] == ("stop",)
 
 
-@pytest.mark.parametrize("key", ["enter", "escape", "web"])
+@pytest.mark.parametrize("key", ["enter", "escape", "web", "button", "button_return"])
 def test_processing_fault_keeps_review_notice_for_all_ack_keys(key):
     app = _scanner_app()
     app._present_transfer_post_review_required_notice("review-1")
@@ -302,10 +320,107 @@ def test_processing_fault_keeps_review_notice_for_all_ack_keys(key):
         app.process_barcode()
     elif key == "escape":
         app._on_scan_entry_escape_during_notice()
-    else:
+    elif key == "web":
         _bridge(app)._cmd_ack(None, {})
+    elif key == "button":
+        app._acknowledge_active_notice()
+    else:
+        app._on_notice_button_return()
     assert app.warning_presenter.state.active_notice is notice
     assert app._scan_entry_admission_block_reason()
+
+
+@pytest.mark.parametrize("faulted", [False, True])
+def test_review_ack_button_matches_processing_fault_and_recovers(monkeypatch, faulted):
+    app = _use_real_notice_methods(_scanner_app(), monkeypatch)
+    app._present_transfer_post_review_required_notice("review-1")
+    notice = app.warning_presenter.state.active_notice
+    app._ui_lane_fault_blocked = faulted
+    app._render_warning_state()
+    assert app.notice_ack_button.visible is True
+    assert app.notice_ack_button.options["state"] == ("disabled" if faulted else "normal")
+    app._acknowledge_active_notice()
+    assert app.warning_presenter.state.active_notice is (notice if faulted else None)
+    if faulted:
+        assert app._warning_beep_active is True
+        app._ui_lane_fault_blocked = False
+        app._render_warning_state()
+        assert app.notice_ack_button.options["state"] == "normal"
+        app._on_notice_button_return()
+        assert app.warning_presenter.state.active_notice is None
+    assert app._warning_beep_active is False
+
+
+@pytest.mark.parametrize("color,duration", [("danger", 4000), (None, 0)])
+def test_review_keeps_critical_status_visible_across_render(monkeypatch, color, duration):
+    app = _use_real_notice_methods(_scanner_app(), monkeypatch)
+    app._present_transfer_post_review_required_notice("review-1")
+    notice = app.warning_presenter.state.active_notice
+    message = "스캔 상태 저장에 실패했습니다. 스캔을 반영하지 않습니다."
+    app.show_status_message(message, color, duration=duration)
+    for _ in range(2):
+        app._render_warning_state()
+        assert app.warning_presenter.state.active_notice is notice
+        assert notice.message in app.notice_message_label.text
+        assert message in app.notice_message_label.text
+        assert not getattr(app, "_scan_refusal_visible", False)
+        band, = _alerts(app, app.warning_presenter.state, [], None)
+        assert notice.message.splitlines()[0] in band["text"]
+
+
+@pytest.mark.parametrize("injected", [False, True])
+@pytest.mark.parametrize("guard", ["fault", "storage", "busy"])
+def test_review_keeps_actual_entry_refusal_and_error_sound(monkeypatch, guard, injected):
+    app = _use_real_notice_methods(_scanner_app(), monkeypatch)
+    app._present_transfer_post_review_required_notice("review-1")
+    notice = app.warning_presenter.state.active_notice
+    if guard == "fault":
+        app._ui_lane_fault_blocked = True
+    elif guard == "storage":
+        app._storage_failure_blocked = True
+        app._storage_failure_stop_message = lambda: "저장 정지 — 관리자에게 문의하세요."
+    else:
+        app._scan_callback_pending = True
+    app._notice_scan_injected = injected
+    reason = app._scan_entry_admission_block_reason()
+    assert reason
+    app._refuse_entry_scan(reason)
+    app._render_warning_state()
+    assert app.warning_presenter.state.active_notice is notice
+    assert notice.message in app.notice_message_label.text
+    assert reason in app.notice_message_label.text
+    assert app._warning_beep_active is True
+    assert app.audio[-1] == ("play", -1)
+    # The same refusal path must also start the error loop after an earlier stop.
+    app._stop_warning_beep()
+    app._refuse_entry_scan(reason)
+    assert app._warning_beep_active is True
+    assert app.audio[-2:] == [("stop",), ("play", -1)]
+
+
+def test_review_keeps_forced_storage_stop_instead_of_success(monkeypatch):
+    app = _use_real_notice_methods(_scanner_app(), monkeypatch)
+    app._present_transfer_post_review_required_notice("review-1")
+    app._storage_failure_blocked = True
+    app._storage_failure_stop_message = lambda: "저장 정지 — 관리자에게 문의하세요."
+    app.show_status_message("처리 완료", app.COLOR_SUCCESS)
+    assert app.warning_presenter.state.active_notice.code == "transfer.post_review_required"
+    assert app._storage_failure_stop_message() in app.notice_message_label.text
+    assert "처리 완료" not in app.notice_message_label.text
+
+
+def test_review_keeps_actual_product_save_failure_visible(tmp_path, monkeypatch):
+    app = _use_real_notice_methods(
+        _scan_app(save_succeeds=False, events=[], save_root=tmp_path), monkeypatch)
+    app.notice_frame = None
+    app._present_transfer_post_review_required_notice("review-1")
+    notice = app.warning_presenter.state.active_notice
+    before = tuple(app.current_tray.scanned_barcodes)
+    app._process_barcode_logic(SECOND_BARCODE)
+    app._render_warning_state()
+    assert app.warning_presenter.state.active_notice is notice
+    assert "스캔 상태 저장에 실패했습니다." in app.notice_message_label.text
+    assert tuple(app.current_tray.scanned_barcodes) == before
 
 
 def test_next_product_scan_clears_review_and_stops_repeating_sound(tmp_path, monkeypatch):
