@@ -3,7 +3,7 @@
     {
       "caller": "Container_Audit.ContainerAudit._publish_tray_state_snapshot",
       "category": "filesystem",
-      "line": 4151,
+      "line": 4153,
       "operation": "atomic_replace.atomic_replace",
       "writer_admission_sources": []
     },
@@ -52,21 +52,21 @@
     {
       "caller": "direct_sync_push._copy_file_atomic",
       "category": "filesystem",
-      "line": 2059,
+      "line": 2066,
       "operation": "atomic_replace.atomic_replace",
       "writer_admission_sources": []
     },
     {
       "caller": "direct_sync_push._publish_restored_temp_file",
       "category": "filesystem",
-      "line": 747,
+      "line": 749,
       "operation": "atomic_replace.atomic_replace",
       "writer_admission_sources": []
     },
     {
       "caller": "direct_sync_push._with_upload_status_artifact",
       "category": "filesystem",
-      "line": 1388,
+      "line": 1392,
       "operation": "atomic_replace.atomic_replace",
       "writer_admission_sources": [
         "relay_upload_status"
@@ -75,14 +75,14 @@
     {
       "caller": "direct_sync_push._write_json_atomic",
       "category": "filesystem",
-      "line": 963,
+      "line": 965,
       "operation": "atomic_replace.atomic_replace",
       "writer_admission_sources": []
     },
     {
       "caller": "direct_sync_runtime._write_json_atomic",
       "category": "filesystem",
-      "line": 207,
+      "line": 210,
       "operation": "atomic_replace.atomic_replace",
       "writer_admission_sources": []
     },
@@ -253,24 +253,24 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 4117,
+      "line": 4119,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 4122,
+          "line": 4124,
           "operation": "temporary.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 4128,
+          "line": 4130,
           "operation": "temporary.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 4119,
+          "line": 4121,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -319,11 +319,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 4135,
+      "line": 4137,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 4151,
+          "line": 4153,
           "operation": "atomic_replace.atomic_replace",
           "writer_admission_sources": []
         }
@@ -375,11 +375,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 5724,
+      "line": 5726,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 5728,
+          "line": 5730,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -1193,11 +1193,11 @@
       ],
       "file": "ca_screen_bridge.py",
       "kind": "function",
-      "line": 1321,
+      "line": 1323,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 1327,
+          "line": 1329,
           "operation": "path.open",
           "writer_admission_sources": [
             "screen_shell_fileio"
@@ -2392,53 +2392,53 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 744,
+      "line": 746,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 747,
+          "line": 749,
           "operation": "atomic_replace.atomic_replace",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 750,
+          "line": 752,
           "operation": "os.link",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 753,
+          "line": 755,
           "operation": "temp_path.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 760,
+          "line": 762,
           "operation": "destination.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 768,
+          "line": 770,
           "operation": "temp_path.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 775,
+          "line": 777,
           "operation": "destination.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 779,
+          "line": 781,
           "operation": "temp_path.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 784,
+          "line": 786,
           "operation": "temp_path.unlink",
           "writer_admission_sources": []
         }
@@ -2465,11 +2465,11 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 791,
+      "line": 793,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 877,
+          "line": 879,
           "operation": "temp_path.open",
           "writer_admission_sources": [
             "relay_spool_storage"
@@ -2477,7 +2477,7 @@
         },
         {
           "category": "filesystem",
-          "line": 891,
+          "line": 893,
           "operation": "temp_path.unlink",
           "writer_admission_sources": [
             "relay_spool_storage"
@@ -2485,7 +2485,7 @@
         },
         {
           "category": "filesystem",
-          "line": 905,
+          "line": 907,
           "operation": "temp_path.unlink",
           "writer_admission_sources": [
             "relay_spool_storage"
@@ -2493,7 +2493,7 @@
         },
         {
           "category": "filesystem",
-          "line": 908,
+          "line": 910,
           "operation": "temp_path.unlink",
           "writer_admission_sources": [
             "relay_spool_storage"
@@ -2501,7 +2501,7 @@
         },
         {
           "category": "filesystem",
-          "line": 911,
+          "line": 913,
           "operation": "temp_path.unlink",
           "writer_admission_sources": [
             "relay_spool_storage"
@@ -2509,7 +2509,7 @@
         },
         {
           "category": "filesystem",
-          "line": 927,
+          "line": 929,
           "operation": "temp_path.unlink",
           "writer_admission_sources": [
             "relay_spool_storage"
@@ -2518,7 +2518,7 @@
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 875,
+          "line": 877,
           "operation": "path.mkdir",
           "writer_admission_sources": [
             "relay_spool_storage"
@@ -2559,30 +2559,30 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 950,
+      "line": 952,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 959,
+          "line": 961,
           "operation": "temp_path.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 963,
+          "line": 965,
           "operation": "atomic_replace.atomic_replace",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 966,
+          "line": 968,
           "operation": "temp_path.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 956,
+          "line": 958,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -2633,24 +2633,24 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 973,
+      "line": 975,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 980,
+          "line": 982,
           "operation": "temp_path.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 986,
+          "line": 988,
           "operation": "temp_path.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 977,
+          "line": 979,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -2701,11 +2701,11 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 1327,
+      "line": 1329,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 1388,
+          "line": 1392,
           "operation": "atomic_replace.atomic_replace",
           "writer_admission_sources": [
             "relay_upload_status"
@@ -2758,11 +2758,11 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 1547,
+      "line": 1554,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 1585,
+          "line": 1592,
           "operation": "session.post",
           "writer_admission_sources": []
         }
@@ -2820,12 +2820,12 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 1617,
+      "line": 1624,
       "mutation_sites": [
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 1618,
+          "line": 1625,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -2879,23 +2879,23 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 1653,
+      "line": 1660,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 1656,
+          "line": 1663,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1657,
+          "line": 1664,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1689,
+          "line": 1696,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -2946,17 +2946,17 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 1705,
+      "line": 1712,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 1717,
+          "line": 1724,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1724,
+          "line": 1731,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -3007,30 +3007,30 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 2049,
+      "line": 2056,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2054,
+          "line": 2061,
           "operation": "temp_path.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 2059,
+          "line": 2066,
           "operation": "atomic_replace.atomic_replace",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 2062,
+          "line": 2069,
           "operation": "temp_path.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 2051,
+          "line": 2058,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -3081,11 +3081,11 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 2135,
+      "line": 2142,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2148,
+          "line": 2155,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -3136,23 +3136,23 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 2170,
+      "line": 2177,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2199,
+          "line": 2206,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2232,
+          "line": 2239,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 2317,
+          "line": 2324,
           "operation": "spool_path.unlink",
           "writer_admission_sources": []
         }
@@ -3208,11 +3208,11 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 2326,
+      "line": 2333,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2335,
+          "line": 2342,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -3263,17 +3263,17 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 2355,
+      "line": 2362,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2370,
+          "line": 2377,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2385,
+          "line": 2392,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -3324,17 +3324,17 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 2421,
+      "line": 2428,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2440,
+          "line": 2447,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2455,
+          "line": 2462,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -3385,17 +3385,17 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 2491,
+      "line": 2498,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2632,
+          "line": 2639,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2637,
+          "line": 2644,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -3446,11 +3446,11 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 2696,
+      "line": 2703,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2713,
+          "line": 2720,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -3501,17 +3501,17 @@
       ],
       "file": "direct_sync_push.py",
       "kind": "function",
-      "line": 2866,
+      "line": 2873,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2878,
+          "line": 2885,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2879,
+          "line": 2886,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -3558,34 +3558,35 @@
       ],
       "decorated_source": "relay_runtime_storage",
       "direct_callers": [
-        "direct_sync_runtime._write_runtime_payload"
+        "direct_sync_runtime._write_runtime_payload",
+        "direct_sync_runtime._write_upload_block_status"
       ],
       "file": "direct_sync_runtime.py",
       "kind": "function",
-      "line": 194,
+      "line": 197,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 203,
+          "line": 206,
           "operation": "temp_path.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 207,
+          "line": 210,
           "operation": "atomic_replace.atomic_replace",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 210,
+          "line": 213,
           "operation": "temp_path.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 200,
+          "line": 203,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -3636,18 +3637,18 @@
       ],
       "file": "direct_sync_runtime.py",
       "kind": "function",
-      "line": 217,
+      "line": 220,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 222,
+          "line": 225,
           "operation": "target.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 221,
+          "line": 224,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -3699,12 +3700,12 @@
       ],
       "file": "direct_sync_runtime.py",
       "kind": "function",
-      "line": 619,
+      "line": 622,
       "mutation_sites": [
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 623,
+          "line": 626,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -5368,11 +5369,11 @@
       ],
       "file": "producer_runtime_client.py",
       "kind": "function",
-      "line": 229,
+      "line": 249,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 271,
+          "line": 291,
           "operation": "session.post",
           "writer_admission_sources": []
         }
@@ -5423,11 +5424,11 @@
       ],
       "file": "producer_runtime_client.py",
       "kind": "function",
-      "line": 478,
+      "line": 500,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 524,
+          "line": 546,
           "operation": "conn.execute",
           "writer_admission_sources": [
             "producer_runtime_storage"
@@ -5435,7 +5436,7 @@
         },
         {
           "category": "sqlite",
-          "line": 611,
+          "line": 633,
           "operation": "conn.execute",
           "writer_admission_sources": [
             "producer_runtime_storage"
@@ -5443,15 +5444,7 @@
         },
         {
           "category": "sqlite",
-          "line": 657,
-          "operation": "conn.execute",
-          "writer_admission_sources": [
-            "producer_runtime_storage"
-          ]
-        },
-        {
-          "category": "sqlite",
-          "line": 658,
+          "line": 679,
           "operation": "conn.execute",
           "writer_admission_sources": [
             "producer_runtime_storage"
@@ -5467,7 +5460,7 @@
         },
         {
           "category": "sqlite",
-          "line": 694,
+          "line": 702,
           "operation": "conn.execute",
           "writer_admission_sources": [
             "producer_runtime_storage"
@@ -5475,7 +5468,15 @@
         },
         {
           "category": "sqlite",
-          "line": 710,
+          "line": 716,
+          "operation": "conn.execute",
+          "writer_admission_sources": [
+            "producer_runtime_storage"
+          ]
+        },
+        {
+          "category": "sqlite",
+          "line": 732,
           "operation": "conn.execute",
           "writer_admission_sources": [
             "producer_runtime_storage"
@@ -5528,11 +5529,11 @@
       ],
       "file": "producer_runtime_client.py",
       "kind": "function",
-      "line": 754,
+      "line": 776,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 821,
+          "line": 843,
           "operation": "conn.execute",
           "writer_admission_sources": [
             "producer_runtime_storage"
@@ -5540,7 +5541,7 @@
         },
         {
           "category": "sqlite",
-          "line": 911,
+          "line": 933,
           "operation": "conn.execute",
           "writer_admission_sources": [
             "producer_runtime_storage"
@@ -5548,7 +5549,7 @@
         },
         {
           "category": "sqlite",
-          "line": 934,
+          "line": 956,
           "operation": "conn.execute",
           "writer_admission_sources": [
             "producer_runtime_storage"
@@ -5556,7 +5557,7 @@
         },
         {
           "category": "sqlite",
-          "line": 962,
+          "line": 984,
           "operation": "conn.execute",
           "writer_admission_sources": [
             "producer_runtime_storage"
@@ -5564,15 +5565,7 @@
         },
         {
           "category": "sqlite",
-          "line": 1003,
-          "operation": "conn.execute",
-          "writer_admission_sources": [
-            "producer_runtime_storage"
-          ]
-        },
-        {
-          "category": "sqlite",
-          "line": 1004,
+          "line": 1025,
           "operation": "conn.execute",
           "writer_admission_sources": [
             "producer_runtime_storage"
@@ -5588,7 +5581,7 @@
         },
         {
           "category": "sqlite",
-          "line": 1040,
+          "line": 1048,
           "operation": "conn.execute",
           "writer_admission_sources": [
             "producer_runtime_storage"
@@ -5596,7 +5589,15 @@
         },
         {
           "category": "sqlite",
-          "line": 1056,
+          "line": 1062,
+          "operation": "conn.execute",
+          "writer_admission_sources": [
+            "producer_runtime_storage"
+          ]
+        },
+        {
+          "category": "sqlite",
+          "line": 1078,
           "operation": "conn.execute",
           "writer_admission_sources": [
             "producer_runtime_storage"
@@ -7280,36 +7281,36 @@
       ],
       "file": "tools/direct_sync_relay_runner.py",
       "kind": "function",
-      "line": 106,
+      "line": 188,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 111,
+          "line": 193,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 126,
+          "line": 208,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 128,
+          "line": 210,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 130,
+          "line": 212,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 108,
+          "line": 190,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -7362,11 +7363,11 @@
       ],
       "file": "tools/direct_sync_relay_runner.py",
       "kind": "function",
-      "line": 387,
+      "line": 471,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 393,
+          "line": 477,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -7417,11 +7418,11 @@
       ],
       "file": "tools/direct_sync_relay_runner.py",
       "kind": "function",
-      "line": 562,
+      "line": 646,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 565,
+          "line": 649,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -7472,18 +7473,18 @@
       ],
       "file": "tools/direct_sync_relay_runner.py",
       "kind": "function",
-      "line": 576,
+      "line": 660,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 649,
+          "line": 733,
           "operation": "delta_source.write_bytes",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 648,
+          "line": 732,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -9697,8 +9698,8 @@
     "powershell_sink_count": 2,
     "python_external_control_literal_site_count": 5,
     "scheduled_task_mutation_site_count": 12,
-    "sink_function_count": 262,
-    "total_cross_language_sink_count": 264,
+    "sink_function_count": 263,
+    "total_cross_language_sink_count": 265,
     "trusted_control_plane_mutation_count": 0,
     "uncovered_mutation_function_count": 0
   },
@@ -9719,7 +9720,7 @@
       "argument_ast_sha256": "d8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81",
       "caller": "Container_Audit.ContainerAudit._prepare_tray_state_snapshot",
       "classification": "probe_only",
-      "line": 4119,
+      "line": 4121,
       "probe_only": true,
       "report_only": false,
       "source": "gui_tray_state_save",
@@ -9843,7 +9844,7 @@
       "argument_ast_sha256": "d5df6ba5f1a7dc72c635a9e2c7d7432df671867262848001585ebe173c53aa1c",
       "caller": "direct_sync_push._connect_relay_db",
       "classification": "decorator",
-      "line": 1618,
+      "line": 1625,
       "probe_only": false,
       "report_only": false,
       "source": "relay_spool_storage",
@@ -9853,7 +9854,7 @@
       "argument_ast_sha256": "a70fad8c3d201be97fbd6f298609417170004bcba06831df4282efd9f24818b9",
       "caller": "direct_sync_push._copy_file_atomic",
       "classification": "decorator",
-      "line": 2051,
+      "line": 2058,
       "probe_only": false,
       "report_only": false,
       "source": "relay_spool_storage",
@@ -9863,7 +9864,7 @@
       "argument_ast_sha256": "d8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81",
       "caller": "direct_sync_push._prepare_status_temp",
       "classification": "probe_only",
-      "line": 977,
+      "line": 979,
       "probe_only": true,
       "report_only": false,
       "source": "relay_upload_status",
@@ -9873,7 +9874,7 @@
       "argument_ast_sha256": "d8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81",
       "caller": "direct_sync_push._write_json_atomic",
       "classification": "decorator",
-      "line": 956,
+      "line": 958,
       "probe_only": false,
       "report_only": false,
       "source": "relay_spool_storage",
@@ -9883,7 +9884,7 @@
       "argument_ast_sha256": "a70fad8c3d201be97fbd6f298609417170004bcba06831df4282efd9f24818b9",
       "caller": "direct_sync_push.restore_raw_artifact_to_file",
       "classification": "writer_admission",
-      "line": 875,
+      "line": 877,
       "probe_only": true,
       "report_only": false,
       "source": "relay_spool_storage",
@@ -9895,7 +9896,7 @@
       "argument_ast_sha256": "b762147a0575a9c219141d905cb359521ef4b0ae6053a719380332f546acf71a",
       "caller": "direct_sync_runtime._append_jsonl",
       "classification": "decorator",
-      "line": 221,
+      "line": 224,
       "probe_only": false,
       "report_only": false,
       "source": "relay_runtime_storage",
@@ -9905,7 +9906,7 @@
       "argument_ast_sha256": "4e7f6fa8c515ed6b491f1a84f8f664a79648d680b6eefe8318d738cac1d00dd1",
       "caller": "direct_sync_runtime._disk_pressure_report",
       "classification": "decorator",
-      "line": 623,
+      "line": 626,
       "probe_only": false,
       "report_only": false,
       "source": "relay_runtime_storage",
@@ -9915,7 +9916,7 @@
       "argument_ast_sha256": "b762147a0575a9c219141d905cb359521ef4b0ae6053a719380332f546acf71a",
       "caller": "direct_sync_runtime._write_json_atomic",
       "classification": "decorator",
-      "line": 200,
+      "line": 203,
       "probe_only": false,
       "report_only": false,
       "source": "relay_runtime_storage",
@@ -10015,7 +10016,7 @@
       "argument_ast_sha256": "6aad499e83584ad6f1ecebaf7e467534035e33ba928df911209156d0854acbd8",
       "caller": "tools.direct_sync_relay_runner._build_delta_source_file",
       "classification": "decorator",
-      "line": 648,
+      "line": 732,
       "probe_only": false,
       "report_only": false,
       "source": "raw_relay_storage",
@@ -10025,7 +10026,7 @@
       "argument_ast_sha256": "b762147a0575a9c219141d905cb359521ef4b0ae6053a719380332f546acf71a",
       "caller": "tools.direct_sync_relay_runner._scan_state_connect",
       "classification": "decorator",
-      "line": 108,
+      "line": 190,
       "probe_only": false,
       "report_only": false,
       "source": "raw_relay_storage",
@@ -10860,7 +10861,7 @@
       "tools.register_container_audit_worker_pc"
     ]
   },
-  "inventory_sha256": "e7a5bffcd8b49fa2744f0509ee2ce43c729a238acc12003c847a5be7da9ce68d",
+  "inventory_sha256": "f4f100859cb507c0eefceaa1527e56dc76c24f67f4ff88c81f53994dd19cf29a",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -10887,6 +10888,7 @@
         "direct_sync_scan_drain",
         "direct_sync_scan_result",
         "direct_sync_scan_status",
+        "direct_sync_upload_block_status",
         "event_csv_append",
         "event_csv_idempotent_append",
         "event_csv_unlocked_append",
@@ -11124,6 +11126,7 @@
         "direct_sync_scan_drain",
         "direct_sync_scan_result",
         "direct_sync_scan_status",
+        "direct_sync_upload_block_status",
         "event_csv_idempotent_append",
         "event_csv_unlocked_append",
         "event_interprocess_lock",
@@ -11270,6 +11273,7 @@
         "direct_sync_scan_drain",
         "direct_sync_scan_result",
         "direct_sync_scan_status",
+        "direct_sync_upload_block_status",
         "producer_runtime_storage",
         "raw_relay_runner",
         "raw_relay_storage",
@@ -25129,6 +25133,7 @@
     "direct_sync_scan_drain",
     "direct_sync_scan_result",
     "direct_sync_scan_status",
+    "direct_sync_upload_block_status",
     "event_csv_append",
     "event_csv_idempotent_append",
     "event_csv_unlocked_append",
@@ -25581,7 +25586,7 @@
       "direct_mutation_site_count": 0,
       "file": "direct_sync_runtime.py",
       "function": "direct_sync_runtime.enqueue_completed_source_file",
-      "line": 934,
+      "line": 1035,
       "marker_kind": "decorator",
       "source": "direct_sync_enqueue"
     },
@@ -25629,7 +25634,7 @@
       "direct_mutation_site_count": 0,
       "file": "direct_sync_runtime.py",
       "function": "direct_sync_runtime.run_relay_once",
-      "line": 1181,
+      "line": 1289,
       "marker_kind": "decorator",
       "source": "direct_sync_relay_cycle"
     },
@@ -25637,7 +25642,7 @@
       "direct_mutation_site_count": 0,
       "file": "direct_sync_runtime.py",
       "function": "direct_sync_runtime.record_scan_drain_status",
-      "line": 1126,
+      "line": 1232,
       "marker_kind": "decorator",
       "source": "direct_sync_scan_drain"
     },
@@ -25645,7 +25650,7 @@
       "direct_mutation_site_count": 0,
       "file": "direct_sync_runtime.py",
       "function": "direct_sync_runtime.record_scan_result_status",
-      "line": 1090,
+      "line": 1194,
       "marker_kind": "decorator",
       "source": "direct_sync_scan_result"
     },
@@ -25653,9 +25658,17 @@
       "direct_mutation_site_count": 0,
       "file": "direct_sync_runtime.py",
       "function": "direct_sync_runtime.record_scan_status",
-      "line": 1054,
+      "line": 1155,
       "marker_kind": "decorator",
       "source": "direct_sync_scan_status"
+    },
+    {
+      "direct_mutation_site_count": 0,
+      "file": "direct_sync_runtime.py",
+      "function": "direct_sync_runtime._write_upload_block_status",
+      "line": 939,
+      "marker_kind": "decorator",
+      "source": "direct_sync_upload_block_status"
     },
     {
       "direct_mutation_site_count": 0,
@@ -25757,7 +25770,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1466,
+      "line": 1468,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -25765,7 +25778,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 23984,
+      "line": 24023,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -25773,7 +25786,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 5724,
+      "line": 5726,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -25781,7 +25794,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._clear_projected_checkpoint_audits",
-      "line": 4269,
+      "line": 4271,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -25789,7 +25802,7 @@
       "direct_mutation_site_count": 3,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._prepare_tray_state_snapshot",
-      "line": 4117,
+      "line": 4119,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -25797,7 +25810,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._publish_tray_state_snapshot",
-      "line": 4135,
+      "line": 4137,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -25805,7 +25818,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._recover_checkpoint_audit_events",
-      "line": 4237,
+      "line": 4239,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -25813,7 +25826,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot_admitted",
-      "line": 4160,
+      "line": 4162,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -25821,7 +25834,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 4745,
+      "line": 4747,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },
@@ -26221,7 +26234,7 @@
       "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client._create_state",
-      "line": 350,
+      "line": 372,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -26229,7 +26242,7 @@
       "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client._replace_expired_identity",
-      "line": 360,
+      "line": 382,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -26237,7 +26250,7 @@
       "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.apply_runtime_receipt_in_transaction",
-      "line": 1102,
+      "line": 1124,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -26245,7 +26258,7 @@
       "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.disable_runtime_authority_in_transaction",
-      "line": 1167,
+      "line": 1189,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -26253,7 +26266,7 @@
       "direct_mutation_site_count": 7,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.ensure_runtime_authority",
-      "line": 478,
+      "line": 500,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -26261,7 +26274,7 @@
       "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.expire_dead_fence_authority_in_transaction",
-      "line": 1187,
+      "line": 1209,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -26269,7 +26282,7 @@
       "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.init_runtime_schema",
-      "line": 181,
+      "line": 201,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -26277,7 +26290,7 @@
       "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.mark_runtime_operator_review_in_transaction",
-      "line": 1124,
+      "line": 1146,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -26285,7 +26298,7 @@
       "direct_mutation_site_count": 9,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.prepare_runtime_metadata",
-      "line": 754,
+      "line": 776,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -26293,7 +26306,7 @@
       "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.release_runtime_request_in_transaction",
-      "line": 1146,
+      "line": 1168,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -26333,7 +26346,7 @@
       "direct_mutation_site_count": 0,
       "file": "tools/direct_sync_relay_runner.py",
       "function": "tools.direct_sync_relay_runner.main",
-      "line": 745,
+      "line": 829,
       "marker_kind": "decorator",
       "source": "raw_relay_runner"
     },
@@ -26341,7 +26354,7 @@
       "direct_mutation_site_count": 2,
       "file": "tools/direct_sync_relay_runner.py",
       "function": "tools.direct_sync_relay_runner._build_delta_source_file",
-      "line": 576,
+      "line": 660,
       "marker_kind": "decorator",
       "source": "raw_relay_storage"
     },
@@ -26349,7 +26362,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/direct_sync_relay_runner.py",
       "function": "tools.direct_sync_relay_runner._record_source_prefix_verification",
-      "line": 562,
+      "line": 646,
       "marker_kind": "decorator",
       "source": "raw_relay_storage"
     },
@@ -26357,7 +26370,7 @@
       "direct_mutation_site_count": 5,
       "file": "tools/direct_sync_relay_runner.py",
       "function": "tools.direct_sync_relay_runner._scan_state_connect",
-      "line": 106,
+      "line": 188,
       "marker_kind": "decorator",
       "source": "raw_relay_storage"
     },
@@ -26365,7 +26378,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/direct_sync_relay_runner.py",
       "function": "tools.direct_sync_relay_runner._write_source_scan_state",
-      "line": 387,
+      "line": 471,
       "marker_kind": "decorator",
       "source": "raw_relay_storage"
     },
@@ -26437,7 +26450,7 @@
       "direct_mutation_site_count": 2,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push.claim_next_relay_batch",
-      "line": 2355,
+      "line": 2362,
       "marker_kind": "decorator",
       "source": "relay_batch_claim"
     },
@@ -26445,7 +26458,7 @@
       "direct_mutation_site_count": 0,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push.drain_one_relay_batch",
-      "line": 2927,
+      "line": 2934,
       "marker_kind": "decorator",
       "source": "relay_batch_drain"
     },
@@ -26453,7 +26466,7 @@
       "direct_mutation_site_count": 1,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push.upload_source_file",
-      "line": 1547,
+      "line": 1554,
       "marker_kind": "decorator",
       "source": "relay_network_upload"
     },
@@ -26461,7 +26474,7 @@
       "direct_mutation_site_count": 1,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push._release_claimed_relay_after_operator_pause",
-      "line": 2696,
+      "line": 2703,
       "marker_kind": "decorator",
       "source": "relay_operator_pause_release"
     },
@@ -26477,7 +26490,7 @@
       "direct_mutation_site_count": 2,
       "file": "direct_sync_runtime.py",
       "function": "direct_sync_runtime._append_jsonl",
-      "line": 217,
+      "line": 220,
       "marker_kind": "decorator",
       "source": "relay_runtime_storage"
     },
@@ -26485,7 +26498,7 @@
       "direct_mutation_site_count": 1,
       "file": "direct_sync_runtime.py",
       "function": "direct_sync_runtime._disk_pressure_report",
-      "line": 619,
+      "line": 622,
       "marker_kind": "decorator",
       "source": "relay_runtime_storage"
     },
@@ -26493,7 +26506,7 @@
       "direct_mutation_site_count": 4,
       "file": "direct_sync_runtime.py",
       "function": "direct_sync_runtime._write_json_atomic",
-      "line": 194,
+      "line": 197,
       "marker_kind": "decorator",
       "source": "relay_runtime_storage"
     },
@@ -26501,7 +26514,7 @@
       "direct_mutation_site_count": 3,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push.enqueue_source_file_for_relay",
-      "line": 2170,
+      "line": 2177,
       "marker_kind": "decorator",
       "source": "relay_spool_enqueue"
     },
@@ -26509,7 +26522,7 @@
       "direct_mutation_site_count": 1,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push._connect_relay_db",
-      "line": 1617,
+      "line": 1624,
       "marker_kind": "decorator",
       "source": "relay_spool_storage"
     },
@@ -26517,7 +26530,7 @@
       "direct_mutation_site_count": 4,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push._copy_file_atomic",
-      "line": 2049,
+      "line": 2056,
       "marker_kind": "decorator",
       "source": "relay_spool_storage"
     },
@@ -26525,7 +26538,7 @@
       "direct_mutation_site_count": 2,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push._ensure_relay_queue_columns",
-      "line": 1705,
+      "line": 1712,
       "marker_kind": "decorator",
       "source": "relay_spool_storage"
     },
@@ -26533,7 +26546,7 @@
       "direct_mutation_site_count": 2,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push._persist_legacy_exact_replay_before_source_post",
-      "line": 2866,
+      "line": 2873,
       "marker_kind": "decorator",
       "source": "relay_spool_storage"
     },
@@ -26541,7 +26554,7 @@
       "direct_mutation_site_count": 8,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push._publish_restored_temp_file",
-      "line": 744,
+      "line": 746,
       "marker_kind": "decorator",
       "source": "relay_spool_storage"
     },
@@ -26549,7 +26562,7 @@
       "direct_mutation_site_count": 1,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push._repair_relay_spool_for_existing_row",
-      "line": 2135,
+      "line": 2142,
       "marker_kind": "decorator",
       "source": "relay_spool_storage"
     },
@@ -26557,7 +26570,7 @@
       "direct_mutation_site_count": 2,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push._set_relay_status",
-      "line": 2491,
+      "line": 2498,
       "marker_kind": "decorator",
       "source": "relay_spool_storage"
     },
@@ -26565,7 +26578,7 @@
       "direct_mutation_site_count": 4,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push._write_json_atomic",
-      "line": 950,
+      "line": 952,
       "marker_kind": "decorator",
       "source": "relay_spool_storage"
     },
@@ -26573,7 +26586,7 @@
       "direct_mutation_site_count": 2,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push.claim_relay_batch_by_id",
-      "line": 2421,
+      "line": 2428,
       "marker_kind": "decorator",
       "source": "relay_spool_storage"
     },
@@ -26581,7 +26594,7 @@
       "direct_mutation_site_count": 3,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push.init_relay_queue_schema",
-      "line": 1653,
+      "line": 1660,
       "marker_kind": "decorator",
       "source": "relay_spool_storage"
     },
@@ -26589,7 +26602,7 @@
       "direct_mutation_site_count": 7,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push.restore_raw_artifact_to_file",
-      "line": 791,
+      "line": 793,
       "marker_kind": "decorator",
       "source": "relay_spool_storage"
     },
@@ -26597,7 +26610,7 @@
       "direct_mutation_site_count": 1,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push.reset_stale_relay_leases",
-      "line": 2326,
+      "line": 2333,
       "marker_kind": "decorator",
       "source": "relay_stale_lease_reset"
     },
@@ -26605,7 +26618,7 @@
       "direct_mutation_site_count": 3,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push._prepare_status_temp",
-      "line": 973,
+      "line": 975,
       "marker_kind": "decorator",
       "source": "relay_upload_status"
     },
@@ -26613,7 +26626,7 @@
       "direct_mutation_site_count": 1,
       "file": "direct_sync_push.py",
       "function": "direct_sync_push._with_upload_status_artifact",
-      "line": 1327,
+      "line": 1329,
       "marker_kind": "writer_admission",
       "source": "relay_upload_status"
     },
@@ -26653,7 +26666,7 @@
       "direct_mutation_site_count": 1,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client._post_lease_request",
-      "line": 229,
+      "line": 249,
       "marker_kind": "decorator",
       "source": "runtime_lease_network"
     },
@@ -26677,7 +26690,7 @@
       "direct_mutation_site_count": 1,
       "file": "ca_screen_bridge.py",
       "function": "ca_screen_bridge._write_screen_startup_record",
-      "line": 1321,
+      "line": 1323,
       "marker_kind": "writer_admission",
       "source": "screen_shell_fileio"
     },
