@@ -18607,6 +18607,7 @@ class ContainerAudit:
                 clock_warning=previous_health.clock_warning,
                 scan_terminal_blocked_count=previous_health.scan_terminal_blocked_count,
                 scan_terminal_blocked_record_count=previous_health.scan_terminal_blocked_record_count,
+                scan_terminal_blocked_since_utc=previous_health.scan_terminal_blocked_since_utc,
             )
         elif not read_failed:
             self._direct_sync_last_read_health = health
@@ -18624,6 +18625,7 @@ class ContainerAudit:
                 clock_warning=health.clock_warning,
                 scan_terminal_blocked_count=health.scan_terminal_blocked_count,
                 scan_terminal_blocked_record_count=health.scan_terminal_blocked_record_count,
+                scan_terminal_blocked_since_utc=health.scan_terminal_blocked_since_utc,
             )
         self._direct_sync_health = health
         self._render_direct_sync_status_line()

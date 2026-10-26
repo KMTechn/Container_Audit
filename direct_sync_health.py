@@ -44,6 +44,7 @@ class RelayHealth:
     clock_warning: Mapping[str, Any] = field(default_factory=dict)
     scan_terminal_blocked_count: int = 0
     scan_terminal_blocked_record_count: int | None = None
+    scan_terminal_blocked_since_utc: str = ""
 
     @property
     def operator_attention(self) -> bool:
@@ -129,6 +130,7 @@ def read_relay_health(
             and not isinstance(runtime_payload["scan_terminal_blocked_record_count"], bool)
             and runtime_payload["scan_terminal_blocked_record_count"] >= 0 else None
         ),
+        scan_terminal_blocked_since_utc=str(runtime_payload.get("scan_terminal_blocked_since_utc") or ""),
     )
 
 
