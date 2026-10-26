@@ -1080,7 +1080,7 @@ def _source_file_unreadable_result(exc: OSError) -> UploadResult:
         success=False,
         status_code=0,
         committed=False,
-        retryable=False,
+        retryable=True,
         receipt={},
         error_code="source_file_unreadable",
         error_message=f"source file cannot be read before upload: {type(exc).__name__}",
@@ -1324,6 +1324,7 @@ def _committed_receipt_issue(plan: SourceFilePlan, receipt: Mapping[str, Any]) -
 
 
 _UPLOAD_STATUS_CHECK: ContextVar[Callable[[], bool] | None] = ContextVar("relay_upload_status_check", default=None)
+_SOURCE_POST_STARTED: ContextVar[bool] = ContextVar("relay_source_post_started", default=False)
 
 
 def _with_upload_status_artifact(
@@ -1439,6 +1440,8 @@ def _upload_response_result(
     status_code = int(getattr(response, "status_code", 0) or 0)
     retry_after_seconds = _retry_after_header_seconds(_response_header(response, "Retry-After"))
     committed_value = payload.get("committed")
+    unconfirmed_rejection = (payload_is_valid_json and 400 <= status_code <= 499
+                             and status_code != 401 and "committed" not in payload)
     if 300 <= status_code < 400:
         return UploadResult(
             success=False,
@@ -1450,7 +1453,7 @@ def _upload_response_result(
             error_message="producer ingest redirected; redirects are not allowed",
         )
     if not payload_is_valid_json and not 200 <= status_code < 300:
-        is_retryable_status = status_code in {408, 429} or 500 <= status_code <= 599
+        is_retryable_status = 400 <= status_code <= 599
         return UploadResult(
             success=False,
             status_code=status_code,
@@ -1528,7 +1531,7 @@ def _upload_response_result(
         producer_error_code = "producer_committed_non_2xx"
         producer_error_message = f"producer committed upload but returned HTTP {status_code}"
     clock_stale = status_code == 401 and producer_error_code == "stale_timestamp" and not committed
-    retryable = False if committed or receipt_error_code else clock_stale or payload.get("retryable") is True or (status_code in {408, 429} or 500 <= status_code <= 599)
+    retryable = False if committed or receipt_error_code else clock_stale or unconfirmed_rejection or payload.get("retryable") is True or (status_code in {408, 429} or 500 <= status_code <= 599)
     return UploadResult(
         success=success,
         status_code=status_code,
@@ -1588,6 +1591,7 @@ def upload_source_file(
             if before_post is not None:
                 before_post()
             admit_credential_security_inputs(credentials)
+            _SOURCE_POST_STARTED.set(True)
             try:
                 response = session.post(
                     credentials.endpoint_url,
@@ -2380,11 +2384,13 @@ def claim_next_relay_batch(
             SELECT *
             FROM direct_sync_relay_batches
             WHERE status IN (?, ?)
-              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+              AND (next_attempt_at IS NULL OR next_attempt_at <= ?
+                   OR (status = ? AND last_error_code = 'stale_timestamp'
+                       AND julianday(?) < julianday(updated_at)))
             ORDER BY created_at, relay_id
             LIMIT 1
             """,
-            (RELAY_STATUS_PENDING, RELAY_STATUS_RETRY_WAIT, now),
+            (RELAY_STATUS_PENDING, RELAY_STATUS_RETRY_WAIT, now, RELAY_STATUS_RETRY_WAIT, now),
         ).fetchone()
         if row is None:
             conn.rollback()
@@ -2451,10 +2457,12 @@ def claim_relay_batch_by_id(
             FROM direct_sync_relay_batches
             WHERE relay_id = ?
               AND status IN (?, ?)
-              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+              AND (next_attempt_at IS NULL OR next_attempt_at <= ?
+                   OR (status = ? AND last_error_code = 'stale_timestamp'
+                       AND julianday(?) < julianday(updated_at)))
             LIMIT 1
             """,
-            (relay_id, RELAY_STATUS_PENDING, RELAY_STATUS_RETRY_WAIT, now),
+            (relay_id, RELAY_STATUS_PENDING, RELAY_STATUS_RETRY_WAIT, now, RELAY_STATUS_RETRY_WAIT, now),
         ).fetchone()
         if row is None:
             conn.rollback()
@@ -2550,7 +2558,7 @@ def _set_relay_status(
         authority_action = str(runtime_authority_action or "").strip().lower()
         if authority_action not in {"", "dead_fence", "legacy_accepted", "operator_review", "release"}:
             raise DirectSyncPushError("runtime authority action is invalid")
-        if not authority_action and runtime_review:
+        if not authority_action and runtime_review and status != RELAY_STATUS_RETRY_WAIT:
             authority_action = "operator_review"
         terminal_runtime_metadata = status in {
             RELAY_STATUS_ACKED,
@@ -2655,6 +2663,11 @@ def _set_relay_status(
                         relay_id,
                     ),
                 )
+        if (int(cursor.rowcount) == 1 and status == RELAY_STATUS_RETRY_WAIT
+                and authority_action == "release" and runtime_metadata is not None):
+            conn.execute("UPDATE direct_sync_relay_batches SET metadata_json=? WHERE relay_id=?",
+                         (canonical_json({name: value for name, value in runtime_metadata.items()
+                                          if name not in RUNTIME_METADATA_FIELDS}), relay_id))
         conn.commit()
         return int(cursor.rowcount) == 1
     except BaseException:
@@ -2967,7 +2980,7 @@ def drain_one_relay_batch(
             success=False,
             status_code=0,
             committed=False,
-            retryable=False,
+            retryable=True,
             receipt={"client_batch_id": row.relay_id},
             error_code=error_code,
             error_message=f"spooled file cannot be read: {exc}",
@@ -2975,10 +2988,15 @@ def drain_one_relay_batch(
         if not _set_claimed_relay_status(
             row,
             db_path=db_path,
-            status=RELAY_STATUS_FAILED_PERMANENT,
+            status=RELAY_STATUS_RETRY_WAIT,
             receipt=result.receipt,
+            next_attempt_at=(datetime.fromisoformat(now.replace("Z", "+00:00")).astimezone(timezone.utc)
+                             + timedelta(seconds=_retry_after_seconds(row.attempt_count, retry_base_seconds, row.relay_id))
+                             ).isoformat().replace("+00:00", "Z"),
             error_code=result.error_code,
             error_message=result.error_message,
+            runtime_credentials=credentials,
+            runtime_authority_action=("release" if any(name in row.metadata for name in RUNTIME_METADATA_FIELDS) else ""),
         ):
             return _relay_status_update_conflict(row, prior_result=result)
         return _local_relay_upload_result(row, result)
@@ -3138,6 +3156,7 @@ def drain_one_relay_batch(
             now=now,
         )
     status_check_context = _UPLOAD_STATUS_CHECK.set(lambda: _relay_claim_is_current(row, db_path=db_path))
+    source_post_context = _SOURCE_POST_STARTED.set(False)
     try:
         result = upload_source_file(
             plan,
@@ -3152,19 +3171,24 @@ def drain_one_relay_batch(
         return _relay_status_update_conflict(row)
     except Exception as exc:
         result = _upload_exception_result(row, exc)
-        if not _set_claimed_relay_status(
-            row,
-            db_path=db_path,
-            status=RELAY_STATUS_OPERATOR_REVIEW,
-            receipt=result.receipt,
-            error_code=result.error_code,
-            error_message=result.error_message,
-            runtime_credentials=credentials,
-            runtime_authority_action="operator_review",
-        ):
-            return _relay_status_update_conflict(row, prior_result=result)
-        return _local_relay_upload_result(row, result)
+        if isinstance(exc, OSError) and not _SOURCE_POST_STARTED.get():
+            result = replace(result, retryable=True)
+        else:
+            if not _set_claimed_relay_status(
+                row,
+                db_path=db_path,
+                status=RELAY_STATUS_OPERATOR_REVIEW,
+                receipt=result.receipt,
+                error_code=result.error_code,
+                error_message=result.error_message,
+                runtime_credentials=credentials,
+                runtime_authority_action="operator_review",
+            ):
+                return _relay_status_update_conflict(row, prior_result=result)
+            return _local_relay_upload_result(row, result)
     finally:
+        source_post_started = _SOURCE_POST_STARTED.get()
+        _SOURCE_POST_STARTED.reset(source_post_context)
         _UPLOAD_STATUS_CHECK.reset(status_check_context)
     result = _local_relay_upload_result(row, result)
     if result._runtime_disposition == "dead_fence":
@@ -3244,7 +3268,9 @@ def drain_one_relay_batch(
             runtime_authority_action="operator_review",
         ):
             return _relay_status_update_conflict(row, prior_result=result)
-    elif result.error_code in RUNTIME_OPERATOR_REVIEW_CODES:
+    elif result.error_code in RUNTIME_OPERATOR_REVIEW_CODES and not (
+        400 <= result.status_code <= 499 and result.status_code != 401 and "committed" not in result.receipt
+    ):
         if not _set_claimed_relay_status(
             row,
             db_path=db_path,
@@ -3279,6 +3305,9 @@ def drain_one_relay_batch(
             next_attempt_at=next_attempt_at,
             error_code=result.error_code,
             error_message=result.error_message,
+            runtime_credentials=credentials,
+            runtime_authority_action=("release" if (not source_post_started or result._runtime_token_unconsumed)
+                                      and any(name in row.metadata for name in RUNTIME_METADATA_FIELDS) else ""),
         ):
             return _relay_status_update_conflict(row, prior_result=result)
     else:
