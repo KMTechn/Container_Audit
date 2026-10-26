@@ -1840,3 +1840,113 @@ def test_runner_invalid_operator_pause_marker_returns_blocked_exit(tmp_path, cap
     status = json.loads((tmp_path / "runtime" / "status.json").read_text(encoding="utf-8"))
     assert status["scan_failed_source_file"] == str(csv_path)
     assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {}
+
+def _scan_error_count(tmp_path):
+    status = json.loads((tmp_path / "runtime" / "status.json").read_text(encoding="utf-8"))
+    return status["scan_file_error_count"], status["scan_file_errors"]
+
+
+def _record_failure(args, source, monkeypatch, code="source_file_read_failed"):
+    configs = []
+    build_config = runner_module._build_config
+    monkeypatch.setattr(runner_module, "_build_config", lambda parsed: configs.append(build_config(parsed)) or configs[-1])
+    empty_dir = source.parent.parent / "empty_scan"
+    empty_dir.mkdir(exist_ok=True)
+    probe_args = list(args)
+    probe_args[probe_args.index("--scan-source-dir") + 1] = str(empty_dir)
+    main(probe_args)
+    monkeypatch.setattr(runner_module, "_build_config", build_config)
+    config = configs[0]
+    direct_sync_runtime.record_source_scan_failure(
+        config, source_key=runner_module._source_delta_key(source), source_name=source.name, error_code=code)
+
+
+def test_runner_failure_entry_of_a_deleted_original_is_cleared_without_touching_other_files(tmp_path, capsys, monkeypatch):
+    gone = write_container_csv(tmp_path / "sync", name="이적작업이벤트로그_gone_20260622.csv")
+    args = runner_args(tmp_path, scan_dir=gone.parent)
+    _record_failure(args, gone, monkeypatch)
+    other = write_container_csv(gone.parent, name="이적작업이벤트로그_other_20260622.csv")
+    other_bytes = other.read_bytes()
+    gone.unlink()
+    main(args)
+    capsys.readouterr()
+    assert _scan_error_count(tmp_path) == (0, [])
+    assert other.read_bytes() == other_bytes
+    assert sorted(path.name for path in gone.parent.iterdir()) == [other.name]
+
+
+def test_runner_failure_entry_of_a_renamed_original_is_cleared_but_the_file_stays(tmp_path, capsys, monkeypatch):
+    source = write_container_csv(tmp_path / "sync", name="이적작업이벤트로그_old_20260622.csv")
+    args = runner_args(tmp_path, scan_dir=source.parent)
+    _record_failure(args, source, monkeypatch)
+    renamed = source.with_name("rotated.txt")
+    source.rename(renamed)
+    main(args)
+    capsys.readouterr()
+    assert _scan_error_count(tmp_path) == (0, [])
+    assert renamed.exists() and not source.exists()
+
+
+def test_runner_failure_entry_of_an_existing_original_deferred_this_round_stays(tmp_path, capsys, monkeypatch):
+    source = write_container_csv(tmp_path / "sync", name="이적작업이벤트로그_young_20260622.csv")
+    args = runner_args(tmp_path, scan_dir=source.parent)
+    args[args.index("--min-source-file-age-seconds") + 1] = "3600"
+    _record_failure(args, source, monkeypatch)
+    before = source.read_bytes()
+    main(args)
+    capsys.readouterr()
+    count, errors = _scan_error_count(tmp_path)
+    assert count == 1 and errors[0]["source_name"] == source.name
+    assert source.read_bytes() == before
+
+
+def test_runner_failure_entry_is_cleared_when_the_fixed_original_has_no_new_bytes(tmp_path, capsys, monkeypatch):
+    source = write_container_csv(tmp_path / "sync", name="이적작업이벤트로그_fixed_20260622.csv")
+    args = runner_args(tmp_path, scan_dir=source.parent)
+    content = source.read_bytes()
+    runner_module._record_source_sent_byte_count(
+        tmp_path / "relay.sqlite3", source, len(content), hashlib.sha256(content).hexdigest())
+    _record_failure(args, source, monkeypatch)
+    main(args)
+    capsys.readouterr()
+    assert _scan_error_count(tmp_path) == (0, [])
+    assert source.read_bytes() == content
+
+
+def test_runner_failure_entry_stays_while_the_original_is_in_a_partial_line(tmp_path, capsys, monkeypatch):
+    source = write_container_csv(tmp_path / "sync", name="이적작업이벤트로그_partial_20260622.csv")
+    args = runner_args(tmp_path, scan_dir=source.parent)
+    content = source.read_bytes()
+    runner_module._record_source_sent_byte_count(
+        tmp_path / "relay.sqlite3", source, len(content), hashlib.sha256(content).hexdigest())
+    source.write_bytes(content + b"2026-06-22T00:00:01,worker,SCAN_OK,\"{ partial")
+    _record_failure(args, source, monkeypatch)
+    main(args)
+    capsys.readouterr()
+    count, errors = _scan_error_count(tmp_path)
+    assert count == 1 and errors[0]["source_name"] == source.name
+
+
+@pytest.mark.parametrize("where", ["data", "header"])
+def test_runner_oversized_csv_cell_is_a_file_error_and_later_files_still_enqueue(tmp_path, capsys, where):
+    sync_dir = tmp_path / "sync"
+    bad = write_container_csv(sync_dir, name="이적작업이벤트로그_bad_20260622.csv")
+    later = write_container_csv(sync_dir, name="이적작업이벤트로그_later_20260622.csv")
+    huge = "x" * 200000
+    if where == "data":
+        bad.write_text(
+            "timestamp,worker_name,event,details\n2026-06-22T00:00:00,worker,SCAN_OK," + huge + "\n",
+            encoding="utf-8")
+    else:
+        bad.write_text(huge + ",worker_name,event,details\n", encoding="utf-8")
+    os.utime(bad, (1, 1))
+    os.utime(later, (2, 2))
+    bad_bytes = bad.read_bytes()
+    main(runner_args(tmp_path, scan_dir=sync_dir))
+    capsys.readouterr()
+    count, errors = _scan_error_count(tmp_path)
+    assert count == 1 and errors[0]["source_name"] == bad.name
+    assert errors[0]["error_code"] == "source_csv_content_invalid"
+    assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"][RELAY_STATUS_PENDING] == 1
+    assert bad.read_bytes() == bad_bytes
+
