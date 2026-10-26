@@ -10,6 +10,8 @@ import hashlib
 import json
 import os
 import sqlite3
+import stat
+import uuid
 import sys
 import time
 from pathlib import Path
@@ -19,7 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from event_log_store import LOCK_STALE_SECONDS as EVENT_LOG_LOCK_STALE_SECONDS  # noqa: E402
-from direct_sync_push import reset_stale_relay_leases  # noqa: E402
+from direct_sync_push import _copy_spool_file_atomic, reset_stale_relay_leases, utc_now_text  # noqa: E402
 from direct_sync_runtime import (  # noqa: E402
     DirectSyncRuntimeConfig,
     prepare_credential_config,
@@ -346,6 +348,161 @@ def _delta_relay_row_has_usable_spool(row: sqlite3.Row) -> bool:
         return False
 
 
+def _delta_path_is_missing(path: Path) -> bool:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        pass
+    return False
+
+
+def _delta_copy_state(path: Path, payload: bytes) -> str:
+    try:
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size != len(payload):
+            return "conflict"
+        return ("matching" if _file_prefix_sha256(path, len(payload)) == hashlib.sha256(payload).hexdigest()
+                else "conflict")
+    except FileNotFoundError:
+        return "missing"
+    except OSError:
+        return "conflict"
+
+
+def _missing_terminal_can_reenter(row: sqlite3.Row) -> bool:
+    if row["status"] != "failed_permanent" or row["last_error_code"] != "spooled_file_missing":
+        return False
+    try:
+        receipt = json.loads(row["receipt_json"])
+    except (TypeError, ValueError):
+        return False
+    return isinstance(receipt, dict) and all(
+        field not in receipt or receipt[field] is False
+        for field in ("committed", "_local_upload_result_committed")
+    )
+
+
+def _original_delta_content(source_file: Path, start_byte: int, end_byte: int) -> bytes | None:
+    before = _source_scan_signature(source_file)
+    if _has_active_source_writer_lock(source_file) or source_file.stat().st_size < end_byte:
+        return None
+    with source_file.open("rb") as handle:
+        header = handle.readline()
+        if start_byte and start_byte < handle.tell():
+            return None
+        handle.seek(start_byte)
+        body = handle.read(end_byte - start_byte)
+    if len(body) != end_byte - start_byte or _source_scan_signature(source_file) != before:
+        return None
+    return body if start_byte == 0 else header + body
+
+
+@writer_sink("raw_relay_storage")
+def _publish_missing_delta_copy(path: Path, payload: bytes, *, copy_from: Path | None = None) -> bool:
+    ensure_user_runtime_directory(path.parent)
+    staging = path.with_name(path.name + ".repair-" + uuid.uuid4().hex + ".tmp")
+    try:
+        if copy_from is None:
+            with staging.open("xb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+        else:
+            _copy_spool_file_atomic(copy_from, staging)
+        if _delta_copy_state(staging, payload) != "matching":
+            return False
+        try:
+            # A concurrent restoration must never be replaced with our copy.
+            os.link(staging, path)
+        except FileExistsError:
+            pass
+        return _delta_copy_state(path, payload) == "matching"
+    finally:
+        # Only this invocation's staging name; no orphan-directory cleanup.
+        staging.unlink(missing_ok=True)
+
+
+@writer_sink("raw_relay_storage")
+def _reconstruct_delta_copies(config: DirectSyncRuntimeConfig, source_file: Path, relay_id: str) -> bool:
+    conn = _scan_state_connect(config.db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM direct_sync_relay_batches WHERE relay_id = ?", (relay_id,)).fetchone()
+        if row is None:
+            return False
+        terminal = row["status"] == "failed_permanent"
+        if not (_missing_terminal_can_reenter(row) if terminal else row["status"] in {"pending", "retry_wait"}):
+            return False
+        parsed = _parse_delta_range(row["relative_path"], source_file)
+        if parsed is None:
+            return False
+        start_byte, end_byte = parsed
+        delta = Path(str(row["source_file_path"]))
+        spool = Path(str(row["spooled_file_path"]))
+        expected_delta = (Path(config.spool_dir) / "_scan_delta_inputs" / _source_delta_key(source_file)
+                          / f"bytes-{start_byte}-{end_byte}-sha256-{str(row['content_sha256'])[:16]}.csv")
+        if delta != expected_delta or spool != Path(config.spool_dir) / (relay_id + ".csv"):
+            return False
+        payload = _original_delta_content(source_file, start_byte, end_byte)
+        if (payload is None or len(payload) != int(row["byte_length"])
+                or hashlib.sha256(payload).hexdigest() != row["content_sha256"]):
+            return False
+        states = [_delta_copy_state(path, payload) for path in (delta, spool)]
+        if "conflict" in states:
+            return False
+        for path, state in zip((delta, spool), states):
+            if state == "missing" and not _publish_missing_delta_copy(
+                path, payload, copy_from=delta if path == spool else None
+            ):
+                return False
+        if (any(_delta_copy_state(path, payload) != "matching" for path in (delta, spool))
+                or _has_active_source_writer_lock(source_file)
+                or _delta_content_sha256_for_range(source_file, start_byte, end_byte) != row["content_sha256"]):
+            return False
+        if terminal:
+            changed = conn.execute(
+                """UPDATE direct_sync_relay_batches SET status = 'retry_wait', updated_at = ?
+                   WHERE relay_id = ? AND status = 'failed_permanent' AND last_error_code = 'spooled_file_missing'""",
+                (utc_now_text(), relay_id),
+            )
+            if changed.rowcount != 1:
+                return False
+        conn.commit()
+        return True
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return False
+    finally:
+        conn.close()
+
+
+def _missing_original_delta_blocks(config: DirectSyncRuntimeConfig, available_keys: set[str]) -> list[str]:
+    conn = _scan_state_connect(config.db_path)
+    try:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='direct_sync_relay_batches'").fetchone():
+            return []
+        rows = conn.execute(
+            """SELECT source_file_path, spooled_file_path FROM direct_sync_relay_batches
+               WHERE status IN ('pending', 'retry_wait')
+                  OR (status = 'failed_permanent' AND last_error_code = 'spooled_file_missing')
+               ORDER BY created_at, relay_id"""
+        ).fetchall()
+    finally:
+        conn.close()
+    blocked = {}
+    for row in rows:
+        delta = Path(str(row["source_file_path"] or ""))
+        key = delta.parent.name
+        if (delta.parent.parent != Path(config.spool_dir) / "_scan_delta_inputs"
+                or len(key) != 16 or any(char not in "0123456789abcdef" for char in key)
+                or key in available_keys):
+            continue
+        if _delta_path_is_missing(delta) and _delta_path_is_missing(Path(str(row["spooled_file_path"] or ""))):
+            blocked.setdefault(key, str(delta))
+    return list(blocked.values())
+
+
 def _repair_recoverable_delta_spools_before_scan(
     config: DirectSyncRuntimeConfig,
     source_file: Path,
@@ -360,8 +517,7 @@ def _repair_recoverable_delta_spools_before_scan(
             return True
         rows = conn.execute(
             """
-            SELECT relay_id, source_file_path, spooled_file_path, relative_path,
-                   content_sha256, byte_length, status
+            SELECT *
             FROM direct_sync_relay_batches
             WHERE relative_path LIKE 'legacy_csv_deltas/%'
                OR relative_path LIKE 'd/%'
@@ -380,6 +536,18 @@ def _repair_recoverable_delta_spools_before_scan(
         if parsed_range is None:
             continue
         start_byte, end_byte = parsed_range
+        status = str(row["status"] or "")
+        terminal_missing = status == "failed_permanent" and row["last_error_code"] == "spooled_file_missing"
+        both_missing = _delta_path_is_missing(source_path) and _delta_path_is_missing(
+            Path(str(row["spooled_file_path"] or ""))
+        )
+        if terminal_missing or (both_missing and status in {"pending", "retry_wait"}):
+            if not _reconstruct_delta_copies(config, source_file, str(row["relay_id"])):
+                raise ExistingTerminalDeltaBlocked(
+                    str(source_file), start_byte=start_byte, end_byte=end_byte,
+                    content_sha256=str(row["content_sha256"] or ""),
+                )
+            continue
         delta_hash = _delta_content_sha256_for_range(source_file, start_byte, end_byte)
         if not delta_hash or delta_hash != str(row["content_sha256"] or ""):
             continue
@@ -958,6 +1126,14 @@ def main(argv: list[str] | None = None) -> int:
             elif current["status"] not in SCAN_SUCCESS_STATUSES:
                 current["scan_failed_source_file"] = str(source_file)
                 break
+        available_keys = {
+            _source_delta_key(path) for path in _scan_source_files(
+                args.scan_source_dir, args.source_glob, args.max_enqueue_files, 0, limit_results=False
+            )
+        }
+        for missing_source in _missing_original_delta_blocks(config, available_keys):
+            terminal_blocked_sources.append(missing_source)
+            terminal_blocked_record_counts.append(None)
         blocked_record_count = (
             None if any(value is None for value in terminal_blocked_record_counts)
             else sum(terminal_blocked_record_counts)

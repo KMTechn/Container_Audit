@@ -7278,7 +7278,9 @@
       ],
       "decorated_source": "raw_relay_storage",
       "direct_callers": [
+        "tools.direct_sync_relay_runner._missing_original_delta_blocks",
         "tools.direct_sync_relay_runner._read_source_scan_state",
+        "tools.direct_sync_relay_runner._reconstruct_delta_copies",
         "tools.direct_sync_relay_runner._record_source_prefix_verification",
         "tools.direct_sync_relay_runner._record_source_sent_byte_count",
         "tools.direct_sync_relay_runner._record_source_sent_byte_count_after_ack",
@@ -7287,17 +7289,11 @@
       ],
       "file": "tools/direct_sync_relay_runner.py",
       "kind": "function",
-      "line": 188,
+      "line": 190,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 193,
-          "operation": "conn.execute",
-          "writer_admission_sources": []
-        },
-        {
-          "category": "sqlite",
-          "line": 208,
+          "line": 195,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
@@ -7314,14 +7310,155 @@
           "writer_admission_sources": []
         },
         {
+          "category": "sqlite",
+          "line": 214,
+          "operation": "conn.execute",
+          "writer_admission_sources": []
+        },
+        {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 190,
+          "line": 192,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
       ],
       "node": "tools.direct_sync_relay_runner._scan_state_connect",
+      "reachable_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "auto_update.__file_entry__",
+        "portable.main.__file_entry__",
+        "tools.check_logistics_runtime_profile.__file_entry__",
+        "tools.direct_sync_relay_install_pack.__file_entry__",
+        "tools.direct_sync_relay_operator.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main",
+        "tools.install_logistics_runtime_profile.__file_entry__",
+        "tools.install_protected_admin.__file_entry__",
+        "tools.register_container_audit_worker_pc.__file_entry__",
+        "user_relay.__file_entry__"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "auto_update.__file_entry__",
+        "portable.main.__file_entry__",
+        "tools.check_logistics_runtime_profile.__file_entry__",
+        "tools.direct_sync_relay_install_pack.__file_entry__",
+        "tools.direct_sync_relay_operator.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main",
+        "tools.install_logistics_runtime_profile.__file_entry__",
+        "tools.install_protected_admin.__file_entry__",
+        "tools.register_container_audit_worker_pc.__file_entry__",
+        "user_relay.__file_entry__"
+      ],
+      "decorated_source": "raw_relay_storage",
+      "direct_callers": [
+        "tools.direct_sync_relay_runner._reconstruct_delta_copies"
+      ],
+      "file": "tools/direct_sync_relay_runner.py",
+      "kind": "function",
+      "line": 403,
+      "mutation_sites": [
+        {
+          "category": "filesystem",
+          "line": 408,
+          "operation": "staging.open",
+          "writer_admission_sources": []
+        },
+        {
+          "category": "filesystem",
+          "line": 418,
+          "operation": "os.link",
+          "writer_admission_sources": []
+        },
+        {
+          "category": "filesystem",
+          "line": 424,
+          "operation": "staging.unlink",
+          "writer_admission_sources": []
+        },
+        {
+          "category": "filesystem",
+          "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
+          "line": 404,
+          "operation": "path.mkdir",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "tools.direct_sync_relay_runner._publish_missing_delta_copy",
+      "reachable_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "auto_update.__file_entry__",
+        "portable.main.__file_entry__",
+        "tools.check_logistics_runtime_profile.__file_entry__",
+        "tools.direct_sync_relay_install_pack.__file_entry__",
+        "tools.direct_sync_relay_operator.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main",
+        "tools.install_logistics_runtime_profile.__file_entry__",
+        "tools.install_protected_admin.__file_entry__",
+        "tools.register_container_audit_worker_pc.__file_entry__",
+        "user_relay.__file_entry__"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "auto_update.__file_entry__",
+        "portable.main.__file_entry__",
+        "tools.check_logistics_runtime_profile.__file_entry__",
+        "tools.direct_sync_relay_install_pack.__file_entry__",
+        "tools.direct_sync_relay_operator.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main",
+        "tools.install_logistics_runtime_profile.__file_entry__",
+        "tools.install_protected_admin.__file_entry__",
+        "tools.register_container_audit_worker_pc.__file_entry__",
+        "user_relay.__file_entry__"
+      ],
+      "decorated_source": "raw_relay_storage",
+      "direct_callers": [
+        "tools.direct_sync_relay_runner._repair_recoverable_delta_spools_before_scan"
+      ],
+      "file": "tools/direct_sync_relay_runner.py",
+      "kind": "function",
+      "line": 428,
+      "mutation_sites": [
+        {
+          "category": "sqlite",
+          "line": 431,
+          "operation": "conn.execute",
+          "writer_admission_sources": []
+        },
+        {
+          "category": "sqlite",
+          "line": 465,
+          "operation": "conn.execute",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "tools.direct_sync_relay_runner._reconstruct_delta_copies",
       "reachable_entrypoints": [
         "Container_Audit.__file_entry__",
         "Container_Audit.main",
@@ -7369,11 +7506,11 @@
       ],
       "file": "tools/direct_sync_relay_runner.py",
       "kind": "function",
-      "line": 471,
+      "line": 639,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 477,
+          "line": 645,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -7424,11 +7561,11 @@
       ],
       "file": "tools/direct_sync_relay_runner.py",
       "kind": "function",
-      "line": 646,
+      "line": 814,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 649,
+          "line": 817,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -7479,18 +7616,18 @@
       ],
       "file": "tools/direct_sync_relay_runner.py",
       "kind": "function",
-      "line": 660,
+      "line": 828,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 733,
+          "line": 901,
           "operation": "delta_source.write_bytes",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 732,
+          "line": 900,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -9684,7 +9821,7 @@
   ],
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
-    "closure_direct_mutation_function_count": 184,
+    "closure_direct_mutation_function_count": 186,
     "closure_module_count": 126,
     "external_process_mutation_site_count": 19,
     "powershell_direct_mutation_site_count": 126,
@@ -9704,8 +9841,8 @@
     "powershell_sink_count": 2,
     "python_external_control_literal_site_count": 5,
     "scheduled_task_mutation_site_count": 12,
-    "sink_function_count": 263,
-    "total_cross_language_sink_count": 265,
+    "sink_function_count": 265,
+    "total_cross_language_sink_count": 267,
     "trusted_control_plane_mutation_count": 0,
     "uncovered_mutation_function_count": 0
   },
@@ -10022,7 +10159,17 @@
       "argument_ast_sha256": "6aad499e83584ad6f1ecebaf7e467534035e33ba928df911209156d0854acbd8",
       "caller": "tools.direct_sync_relay_runner._build_delta_source_file",
       "classification": "decorator",
-      "line": 732,
+      "line": 900,
+      "probe_only": false,
+      "report_only": false,
+      "source": "raw_relay_storage",
+      "writer_admission_sources": []
+    },
+    {
+      "argument_ast_sha256": "d8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81",
+      "caller": "tools.direct_sync_relay_runner._publish_missing_delta_copy",
+      "classification": "decorator",
+      "line": 404,
       "probe_only": false,
       "report_only": false,
       "source": "raw_relay_storage",
@@ -10032,7 +10179,7 @@
       "argument_ast_sha256": "b762147a0575a9c219141d905cb359521ef4b0ae6053a719380332f546acf71a",
       "caller": "tools.direct_sync_relay_runner._scan_state_connect",
       "classification": "decorator",
-      "line": 190,
+      "line": 192,
       "probe_only": false,
       "report_only": false,
       "source": "raw_relay_storage",
@@ -10867,7 +11014,7 @@
       "tools.register_container_audit_worker_pc"
     ]
   },
-  "inventory_sha256": "cac3b6f349b2975715003d0537c474a50bf53c769d6f59573e48f4c5dd6c3b6c",
+  "inventory_sha256": "1886f050a4decccb6ed13aada9ccc2a597d1c3d08caac51490241679d5d5cdbd",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -11098,6 +11245,8 @@
         "terminal_operation_lease.OperationLeaseStore.__init__",
         "terminal_operation_lease.OperationLeaseStore._initialize",
         "tools.direct_sync_relay_runner._build_delta_source_file",
+        "tools.direct_sync_relay_runner._publish_missing_delta_copy",
+        "tools.direct_sync_relay_runner._reconstruct_delta_copies",
         "tools.direct_sync_relay_runner._record_source_prefix_verification",
         "tools.direct_sync_relay_runner._scan_state_connect",
         "tools.direct_sync_relay_runner._write_source_scan_state",
@@ -11267,6 +11416,8 @@
         "startup_check_report._write_result",
         "storage_utils.atomic_write_json",
         "tools.direct_sync_relay_runner._build_delta_source_file",
+        "tools.direct_sync_relay_runner._publish_missing_delta_copy",
+        "tools.direct_sync_relay_runner._reconstruct_delta_copies",
         "tools.direct_sync_relay_runner._record_source_prefix_verification",
         "tools.direct_sync_relay_runner._scan_state_connect",
         "tools.direct_sync_relay_runner._write_source_scan_state"
@@ -26352,7 +26503,7 @@
       "direct_mutation_site_count": 0,
       "file": "tools/direct_sync_relay_runner.py",
       "function": "tools.direct_sync_relay_runner.main",
-      "line": 829,
+      "line": 997,
       "marker_kind": "decorator",
       "source": "raw_relay_runner"
     },
@@ -26360,7 +26511,23 @@
       "direct_mutation_site_count": 2,
       "file": "tools/direct_sync_relay_runner.py",
       "function": "tools.direct_sync_relay_runner._build_delta_source_file",
-      "line": 660,
+      "line": 828,
+      "marker_kind": "decorator",
+      "source": "raw_relay_storage"
+    },
+    {
+      "direct_mutation_site_count": 4,
+      "file": "tools/direct_sync_relay_runner.py",
+      "function": "tools.direct_sync_relay_runner._publish_missing_delta_copy",
+      "line": 403,
+      "marker_kind": "decorator",
+      "source": "raw_relay_storage"
+    },
+    {
+      "direct_mutation_site_count": 2,
+      "file": "tools/direct_sync_relay_runner.py",
+      "function": "tools.direct_sync_relay_runner._reconstruct_delta_copies",
+      "line": 428,
       "marker_kind": "decorator",
       "source": "raw_relay_storage"
     },
@@ -26368,7 +26535,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/direct_sync_relay_runner.py",
       "function": "tools.direct_sync_relay_runner._record_source_prefix_verification",
-      "line": 646,
+      "line": 814,
       "marker_kind": "decorator",
       "source": "raw_relay_storage"
     },
@@ -26376,7 +26543,7 @@
       "direct_mutation_site_count": 5,
       "file": "tools/direct_sync_relay_runner.py",
       "function": "tools.direct_sync_relay_runner._scan_state_connect",
-      "line": 188,
+      "line": 190,
       "marker_kind": "decorator",
       "source": "raw_relay_storage"
     },
@@ -26384,7 +26551,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/direct_sync_relay_runner.py",
       "function": "tools.direct_sync_relay_runner._write_source_scan_state",
-      "line": 471,
+      "line": 639,
       "marker_kind": "decorator",
       "source": "raw_relay_storage"
     },

@@ -1,3 +1,4 @@
+- w9firstupdsub697: spool·delta 동시 소실은 같은 원본 범위/hash에서 같은 행으로 복구하고, spooled_file_missing terminal의 제한된 재진입·부분 복구 뒤 재시작·기존 배정을 보존한다. 원본 불일치·소실은 K/N·띠로 알리며 다른 원본 전송을 계속한다.
 - w9firstupdsub693: spool 소실·잠금 외 I/O 오류는 기존 terminal·K/N·띠로 격리하고 잠금만 재시도한다. ACK 유실 가능 행의 배정·runtime 다섯 칸과 같은 원본 앞 구간을 보존하며, 포장 24 h 뒤 다른 새 enqueue 지속을 검증한다.
 ### retained 후보와 다음 업데이트 요청 (sub-555)
 

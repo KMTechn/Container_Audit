@@ -224,6 +224,9 @@ def test_missing_delta_counts_in_public_status_and_band_and_blocks_only_its_sour
         session=runtime_helpers.EchoAcceptedSession(),
     )
     assert result.retryable is False
+    # A conflicting existing input is not overwritten by sub-697 recovery.
+    delta_input = Path(row['source_file_path'])
+    delta_input.write_bytes(b'!' * delta_input.stat().st_size)
     records = list(csv.reader(source.read_text(encoding='utf-8-sig').splitlines()))
     with source.open('a', encoding='utf-8', newline='') as stream:
         csv.writer(stream).writerow(records[-1])

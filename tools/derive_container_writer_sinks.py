@@ -193,6 +193,7 @@ DIRECTORY_PREPARATION_CALLS = {
     ('tools.direct_sync_relay_install_pack._write_scheduled_task_wrapper', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('direct_sync_install_pack', (), False, False),
     ('tools.direct_sync_relay_operator._write_json_atomic', 'b762147a0575a9c219141d905cb359521ef4b0ae6053a719380332f546acf71a'): ('relay_operator_report', (), False, False),
     ('tools.direct_sync_relay_runner._build_delta_source_file', '6aad499e83584ad6f1ecebaf7e467534035e33ba928df911209156d0854acbd8'): ('raw_relay_storage', (), False, False),
+    ('tools.direct_sync_relay_runner._publish_missing_delta_copy', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('raw_relay_storage', (), False, False),
     ('tools.direct_sync_relay_runner._scan_state_connect', 'b762147a0575a9c219141d905cb359521ef4b0ae6053a719380332f546acf71a'): ('raw_relay_storage', (), False, False),
     ('user_relay._write_json_atomic', 'd8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81'): ('persistent_relay_status', (), False, False),
     ('user_relay.main', '773e572279ed42d5919b32486aa595bd2d6024a711e73dfc863581f28ecbda6a'): ('persistent_relay_status', ('persistent_relay_status',), True, False),
