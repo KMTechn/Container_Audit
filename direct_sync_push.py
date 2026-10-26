@@ -124,7 +124,7 @@ class DirectSyncPushError(Exception):
 
 
 SOURCE_FILE_ERROR_CODES = frozenset({
-    "source_csv_header_invalid", "source_csv_utf8_invalid",
+    "source_csv_header_invalid", "source_csv_utf8_invalid", "source_csv_content_invalid",
     "source_file_read_failed", "source_delta_write_failed",
 })
 _SOURCE_LOCAL_ERRNOS = frozenset({errno.EACCES, errno.EPERM, errno.ENOENT, errno.ENOTDIR, errno.EISDIR})
@@ -147,6 +147,8 @@ def source_file_error_boundary(error_code: str = "source_file_read_failed"):
         yield
     except UnicodeDecodeError as exc:
         raise SourceFileInputError("source_csv_utf8_invalid") from exc
+    except csv.Error as exc:
+        raise SourceFileInputError("source_csv_content_invalid") from exc
     except OSError as exc:
         if exc.errno not in _SOURCE_LOCAL_ERRNOS:
             raise

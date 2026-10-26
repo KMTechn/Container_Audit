@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -366,6 +367,41 @@ def _delta_relay_row_blocks_progress(row: sqlite3.Row) -> bool:
     return status in {"failed_permanent", "operator_review"}
 
 
+def _clear_vanished_source_failures(config: DirectSyncRuntimeConfig, scan_source_dir: str, scanned_files: list[Path]) -> None:
+    """Drop failure entries whose original is neither scanned now nor on disk.
+
+    A file that still exists (deferred this round, renamed to another pattern,
+    unreadable parent) keeps its entry; nothing here deletes or moves a file.
+    """
+    db_path = Path(config.db_path)
+    try:
+        db_path.stat()
+    except FileNotFoundError:
+        return
+    conn = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        if not conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='direct_sync_source_scan_failures'"
+        ).fetchone():
+            return
+        entries = conn.execute("SELECT source_key, source_name FROM direct_sync_source_scan_failures").fetchall()
+    finally:
+        conn.close()
+    scanned = {_source_delta_key(path) for path in scanned_files}
+    for source_key, source_name in entries:
+        if source_key in scanned:
+            continue
+        candidate = Path(scan_source_dir) / str(source_name)
+        if _source_delta_key(candidate) != source_key:
+            continue
+        try:
+            os.lstat(candidate)
+        except (FileNotFoundError, NotADirectoryError):
+            clear_source_scan_failure(config, source_key=source_key)
+        except OSError:
+            continue
+
+
 def _read_source_scan_state(db_path: str | Path, source_file: Path) -> tuple[int, str]:
     conn = _scan_state_connect(db_path)
     try:
@@ -578,7 +614,12 @@ def _record_source_prefix_verification(config, source_file, signature, source_si
 
 
 @writer_sink("raw_relay_storage")
-def _build_delta_source_file(config: DirectSyncRuntimeConfig, source_file: Path) -> tuple[Path, str, int, str] | None:
+def _build_delta_source_file(
+    config: DirectSyncRuntimeConfig,
+    source_file: Path,
+    no_new_bytes: list[bool] | None = None,
+) -> tuple[Path, str, int, str] | None:
+    # no_new_bytes receives True only when the original is verified to hold nothing unsent.
     if _has_active_source_writer_lock(source_file):
         return None
     try:
@@ -587,6 +628,8 @@ def _build_delta_source_file(config: DirectSyncRuntimeConfig, source_file: Path)
     except OSError:
         return None
     if _source_prefix_recently_verified(config, source_file, signature, source_stat.st_size):
+        if no_new_bytes is not None:
+            no_new_bytes.append(True)
         return None
     if not _repair_recoverable_delta_spools_before_scan(config, source_file):
         return None
@@ -612,6 +655,8 @@ def _build_delta_source_file(config: DirectSyncRuntimeConfig, source_file: Path)
     if source_size <= sent_byte_count:
         if _source_scan_signature(source_file) == signature:
             _record_source_prefix_verification(config, source_file, signature, source_size, sent_prefix_sha256)
+        if no_new_bytes is not None:
+            no_new_bytes.append(True)
         return None
 
     with source_file_error_boundary(), source_file.open("rb") as handle:
@@ -838,13 +883,15 @@ def main(argv: list[str] | None = None) -> int:
         terminal_blocked_sources: list[str] = []
         pending_delta_progress: dict[str, tuple[Path, int, str]] = {}
         max_enqueue_files = max(0, int(args.max_enqueue_files or 0))
-        for source_file in _scan_source_files(
+        source_files = _scan_source_files(
             args.scan_source_dir,
             args.source_glob,
             args.max_enqueue_files,
             args.min_source_file_age_seconds,
             limit_results=False,
-        ):
+        )
+        _clear_vanished_source_failures(config, args.scan_source_dir, source_files)
+        for source_file in source_files:
             if enqueued_count >= max_enqueue_files:
                 break
             if not _source_file_still_eligible_for_enqueue(
@@ -853,8 +900,9 @@ def main(argv: list[str] | None = None) -> int:
                 args.min_source_file_age_seconds,
             ):
                 continue
+            no_new_bytes: list[bool] = []
             try:
-                delta = _build_delta_source_file(config, source_file)
+                delta = _build_delta_source_file(config, source_file, no_new_bytes)
             except SourceFileInputError as exc:
                 attempted_count += 1
                 file_error_status = record_source_scan_failure(
@@ -867,6 +915,8 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             if delta is None:
                 no_new_count += 1
+                if no_new_bytes:
+                    clear_source_scan_failure(config, source_key=_source_delta_key(source_file))
                 continue
             delta_source_file, relative_path, sent_byte_count, sent_prefix_sha256 = delta
             current = enqueue_completed_source_file(
