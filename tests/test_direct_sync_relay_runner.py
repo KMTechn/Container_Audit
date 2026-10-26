@@ -1938,7 +1938,7 @@ def test_runner_oversized_csv_cell_is_a_file_error_and_later_files_still_enqueue
             "timestamp,worker_name,event,details\n2026-06-22T00:00:00,worker,SCAN_OK," + huge + "\n",
             encoding="utf-8")
     else:
-        bad.write_text(huge + ",worker_name,event,details\n", encoding="utf-8")
+        bad.write_text(huge + ",worker_name,event,details\n1,2,3,4\n", encoding="utf-8")
     os.utime(bad, (1, 1))
     os.utime(later, (2, 2))
     bad_bytes = bad.read_bytes()
