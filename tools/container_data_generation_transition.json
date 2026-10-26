@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "060370893a19a4f20f70269af2c594f2234fbc54d2abeb401f98d9687b33dfc2",
+  "after_inventory_sha256": "ddeae1dfeb168cb3f0ac7bcf50274dc5e155e6a2da724006911e6aeebd13be16",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -238,7 +238,7 @@
     {
       "path": "app/direct_sync_push.py",
       "before": "f1f02e07fe892d9beb2f69e15ddd172d01c564e79700ef1d19b7e7423c11c06c",
-      "after": "08ced7ea0772e6ec8295d1e832211a2a43124a98af671b1bae66f9fc051974f4"
+      "after": "18210ab37850c230fb3c2d13e956e67c4f0f15f71eb66333f8717cd736625c3c"
     },
     {
       "path": "app/direct_sync_runtime.py",
@@ -1348,7 +1348,7 @@
     {
       "path": "app/tools/direct_sync_relay_runner.py",
       "before": "9cdb6db20d6750dbebbcee0eabc960bcfd41dfccc819e5a75fba94045ff0e9be",
-      "after": "065c55e14c2907b1b60ab9ecf7dba2fbaa1c50d4afeba7d6118af99a06b645f8"
+      "after": "34abf2e46e1ae54830b3819f423a5da11cf727c8963f486d2475cee8d59ada37"
     },
     {
       "path": "app/tools/install_logistics_runtime_profile.py",
@@ -1463,7 +1463,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "2c03fde87d8770901701878e290dc3375dd8f1e56d23edc11be048d776e24756"
+      "after": "7c75bcf7afb0f4d2705b4ef53381d966829eae42ac452a0c76bb998fecee0518"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4513,7 +4513,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "53266c2425b15f865219295d25b3de8cc73da750d97fdd0b9c62c5530e9a69b0"
+      "after": "3967fed5f06d7859a3b6a38fec60c94571a5cbc828c330d0c37f4010c70dc47b"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4523,12 +4523,12 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "05995830280fb5309d987458fc43ba83410dbcc23569bc0692d05878cf5b9967"
+      "after": "6abc35a366d14a52a4a9bb1c3a439e9840f7362c04b4a894903c01fd4761c94a"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "a7b07627f5fe184481328b1fceae974adfa93ea2abb10f669c336d342843f7bd"
+      "after": "b7d76d7db0713a387b5c4eee9ceb91e7dfe59c94848529d572596acd39b65782"
     }
   ],
   "source_replacements": [
@@ -4580,7 +4580,7 @@
     {
       "path": "direct_sync_push.py",
       "before": "2bc3aa2af3140e63177e0e81ba4adb81f9f01f190e3f9815815e6ab9bc4d55d4",
-      "after": "08ced7ea0772e6ec8295d1e832211a2a43124a98af671b1bae66f9fc051974f4"
+      "after": "18210ab37850c230fb3c2d13e956e67c4f0f15f71eb66333f8717cd736625c3c"
     },
     {
       "path": "direct_sync_runtime.py",
@@ -4645,7 +4645,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "53266c2425b15f865219295d25b3de8cc73da750d97fdd0b9c62c5530e9a69b0"
+      "after": "3967fed5f06d7859a3b6a38fec60c94571a5cbc828c330d0c37f4010c70dc47b"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4660,7 +4660,7 @@
     {
       "path": "tools/direct_sync_relay_runner.py",
       "before": "9cdb6db20d6750dbebbcee0eabc960bcfd41dfccc819e5a75fba94045ff0e9be",
-      "after": "065c55e14c2907b1b60ab9ecf7dba2fbaa1c50d4afeba7d6118af99a06b645f8"
+      "after": "34abf2e46e1ae54830b3819f423a5da11cf727c8963f486d2475cee8d59ada37"
     },
     {
       "path": "tools/install_logistics_runtime_profile.py",
@@ -4695,7 +4695,7 @@
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "2c03fde87d8770901701878e290dc3375dd8f1e56d23edc11be048d776e24756"
+      "after": "7c75bcf7afb0f4d2705b4ef53381d966829eae42ac452a0c76bb998fecee0518"
     }
   ],
   "hash_provenance": {
