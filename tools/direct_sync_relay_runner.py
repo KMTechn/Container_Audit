@@ -370,8 +370,9 @@ def _delta_relay_row_blocks_progress(row: sqlite3.Row) -> bool:
 def _clear_vanished_source_failures(config: DirectSyncRuntimeConfig, scan_source_dir: str, scanned_files: list[Path]) -> None:
     """Drop failure entries whose original is neither scanned now nor on disk.
 
-    A file that still exists (deferred this round, renamed to another pattern,
-    unreadable parent) keeps its entry; nothing here deletes or moves a file.
+    A file that still exists under the same name (deferred this round, unreadable
+    parent) keeps its entry; a renamed original is gone from its path and is
+    cleared. Nothing here deletes or moves a file.
     """
     db_path = Path(config.db_path)
     try:
@@ -397,7 +398,7 @@ def _clear_vanished_source_failures(config: DirectSyncRuntimeConfig, scan_source
         try:
             os.lstat(candidate)
         except (FileNotFoundError, NotADirectoryError):
-            clear_source_scan_failure(config, source_key=source_key)
+            clear_source_scan_failure(config, source_key=source_key, reason="vanished")
         except OSError:
             continue
 
@@ -916,7 +917,7 @@ def main(argv: list[str] | None = None) -> int:
             if delta is None:
                 no_new_count += 1
                 if no_new_bytes:
-                    clear_source_scan_failure(config, source_key=_source_delta_key(source_file))
+                    clear_source_scan_failure(config, source_key=_source_delta_key(source_file), reason="no_new_bytes")
                 continue
             delta_source_file, relative_path, sent_byte_count, sent_prefix_sha256 = delta
             current = enqueue_completed_source_file(

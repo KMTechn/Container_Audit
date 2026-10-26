@@ -885,15 +885,26 @@ def record_source_scan_failure(config: DirectSyncRuntimeConfig, *, source_key: s
 
 
 @writer_sink("direct_sync_scan_result")
-def clear_source_scan_failure(config: DirectSyncRuntimeConfig, *, source_key: str) -> None:
+def clear_source_scan_failure(config: DirectSyncRuntimeConfig, *, source_key: str, reason: str = "") -> None:
     # No schema creation is needed for a source that never failed.
+    # A reason (vanished / no_new_bytes) also leaves one log line with the name, first time and code.
+    cleared = None
     conn = sqlite3.connect(str(config.db_path))
     try:
         if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='direct_sync_source_scan_failures'").fetchone():
+            if reason:
+                cleared = conn.execute(
+                    "SELECT source_name, first_failed_at, error_code FROM direct_sync_source_scan_failures WHERE source_key=?",
+                    (source_key,),
+                ).fetchone()
             conn.execute("DELETE FROM direct_sync_source_scan_failures WHERE source_key=?", (source_key,))
             conn.commit()
     finally:
         conn.close()
+    if cleared:
+        _append_runtime_event(config, "source_scan_failure_cleared", {
+            "source_name": cleared[0], "first_failed_at": cleared[1], "error_code": cleared[2], "reason": reason,
+        })
 
 
 def _write_runtime_payload(config: DirectSyncRuntimeConfig, payload: dict[str, Any]) -> dict[str, Any]:
