@@ -57,6 +57,7 @@ APP_ROOT_FILES = (
     "atomic_replace.py",
     "worker_roster.py",
     "auto_update.py",
+    "report_publication.py",
     "startup_check.py",
     "startup_check_report.py",
     "best_time_records.py",

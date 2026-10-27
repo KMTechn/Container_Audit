@@ -386,13 +386,8 @@ def _redact_install_diagnostic(value):
 
 
 @writer_sink("direct_sync_install_pack")
-def _write_json(path: Path, payload: dict) -> None:
+def _write_json_bytes(path: Path, encoded: str) -> None:
     from atomic_replace import atomic_replace
-    from auto_update import mixed_status_record, serialize_json_for_sink
-    # This plan is a diagnostic sink, not an authenticated product record.
-    # Apply the existing whole-field credential rule before atomic publication.
-    encoded = serialize_json_for_sink(mixed_status_record(payload))
-    ensure_user_runtime_directory(path.parent)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
         with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
@@ -407,6 +402,22 @@ def _write_json(path: Path, payload: dict) -> None:
         except OSError:
             pass
         raise
+
+
+@writer_sink("direct_sync_install_pack")
+def _write_json(path: Path, payload: dict) -> None:
+    from auto_update import mixed_status_record, serialize_json_for_sink
+    from report_publication import prepare_report, report_io, flush_report_counter
+    prepared = prepare_report(
+        payload, render=lambda value: serialize_json_for_sink(mixed_status_record(value)),
+        fallback_render=lambda value: json.dumps(value, ensure_ascii=True, separators=(",", ":")),
+        path=path,
+    )
+    with report_io(prepared, required=False):
+        ensure_user_runtime_directory(path.parent)
+        flush_report_counter(prepared, path=path,
+            writer=lambda target, counts: _write_json_bytes(target, json.dumps(counts)))
+        _write_json_bytes(path, prepared.text)
 
 
 def _task_name_report(task_name: str) -> dict:

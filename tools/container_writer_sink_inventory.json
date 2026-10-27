@@ -10,14 +10,14 @@
     {
       "caller": "auto_update.publish_download",
       "category": "filesystem",
-      "line": 2863,
+      "line": 2865,
       "operation": "atomic_replace.atomic_replace",
       "writer_admission_sources": []
     },
     {
       "caller": "auto_update.write_json_durable",
       "category": "filesystem",
-      "line": 637,
+      "line": 638,
       "operation": "atomic_replace.atomic_replace",
       "writer_admission_sources": []
     },
@@ -31,7 +31,7 @@
     {
       "caller": "current_user_onboarding._write_json_atomic",
       "category": "filesystem",
-      "line": 459,
+      "line": 477,
       "operation": "atomic_replace.atomic_replace",
       "writer_admission_sources": []
     },
@@ -178,9 +178,9 @@
       "writer_admission_sources": []
     },
     {
-      "caller": "tools.direct_sync_relay_install_pack._write_json",
+      "caller": "tools.direct_sync_relay_install_pack._write_json_bytes",
       "category": "filesystem",
-      "line": 403,
+      "line": 398,
       "operation": "atomic_replace.atomic_replace",
       "writer_admission_sources": []
     },
@@ -443,17 +443,17 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 622,
+      "line": 623,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 633,
+          "line": 634,
           "operation": "temporary.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 637,
+          "line": 638,
           "operation": "atomic_replace.atomic_replace",
           "writer_admission_sources": []
         }
@@ -504,12 +504,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 1403,
+      "line": 1405,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 1423,
+          "line": 1425,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -558,12 +558,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 1518,
+      "line": 1520,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 1527,
+          "line": 1529,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -616,12 +616,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 1872,
+      "line": 1874,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 1880,
+          "line": 1882,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -673,11 +673,11 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2451,
+      "line": 2453,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2453,
+          "line": 2455,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -731,11 +731,11 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2470,
+      "line": 2472,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2478,
+          "line": 2480,
           "operation": "target.open",
           "writer_admission_sources": []
         }
@@ -782,11 +782,11 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2553,
+      "line": 2555,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2568,
+          "line": 2570,
           "operation": "os.rename",
           "writer_admission_sources": []
         }
@@ -833,12 +833,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2799,
+      "line": 2801,
       "mutation_sites": [
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 2801,
+          "line": 2803,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -889,11 +889,11 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2805,
+      "line": 2807,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2807,
+          "line": 2809,
           "operation": "path.open",
           "writer_admission_sources": []
         }
@@ -944,11 +944,11 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2814,
+      "line": 2816,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2816,
+          "line": 2818,
           "operation": "path.open",
           "writer_admission_sources": []
         }
@@ -999,11 +999,11 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2860,
+      "line": 2862,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2863,
+          "line": 2865,
           "operation": "atomic_replace.atomic_replace",
           "writer_admission_sources": []
         }
@@ -1054,12 +1054,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 3060,
+      "line": 3062,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 3064,
+          "line": 3066,
           "operation": "subprocess.Popen",
           "writer_admission_sources": []
         }
@@ -1106,12 +1106,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 3068,
+      "line": 3070,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 3072,
+          "line": 3074,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -1155,12 +1155,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 3080,
+      "line": 3082,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 3094,
+          "line": 3096,
           "operation": "subprocess.Popen",
           "writer_admission_sources": []
         }
@@ -1477,35 +1477,37 @@
       ],
       "decorated_source": "current_user_onboarding_storage",
       "direct_callers": [
+        "current_user_onboarding._persist_failure_report",
+        "current_user_onboarding._write_json_atomic",
         "current_user_onboarding.onboard_current_user",
         "current_user_onboarding.remove_current_user_setup"
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 445,
+      "line": 454,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 454,
+          "line": 472,
           "operation": "temporary.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 459,
+          "line": 477,
           "operation": "atomic_replace.atomic_replace",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 462,
+          "line": 480,
           "operation": "temporary.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 451,
+          "line": 469,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -1554,30 +1556,30 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 466,
+      "line": 484,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 476,
+          "line": 494,
           "operation": "temporary.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 481,
+          "line": 499,
           "operation": "os.link",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 484,
+          "line": 502,
           "operation": "temporary.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 473,
+          "line": 491,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -1627,12 +1629,12 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 723,
+      "line": 741,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 772,
+          "line": 790,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -1682,12 +1684,12 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 820,
+      "line": 838,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 860,
+          "line": 878,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -1721,12 +1723,12 @@
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 1131,
+      "line": 1149,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 1141,
+          "line": 1159,
           "operation": "subprocess.Popen",
           "writer_admission_sources": []
         }
@@ -1747,17 +1749,17 @@
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 1299,
+      "line": 1317,
       "mutation_sites": [
         {
           "category": "registry",
-          "line": 1307,
+          "line": 1325,
           "operation": "winreg.CreateKeyEx",
           "writer_admission_sources": []
         },
         {
           "category": "registry",
-          "line": 1313,
+          "line": 1331,
           "operation": "winreg.SetValueEx",
           "writer_admission_sources": []
         }
@@ -1778,17 +1780,17 @@
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 2041,
+      "line": 2059,
       "mutation_sites": [
         {
           "category": "registry",
-          "line": 2044,
+          "line": 2062,
           "operation": "winreg.CreateKeyEx",
           "writer_admission_sources": []
         },
         {
           "category": "registry",
-          "line": 2048,
+          "line": 2066,
           "operation": "winreg.SetValueEx",
           "writer_admission_sources": []
         }
@@ -1825,12 +1827,12 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 2150,
+      "line": 2168,
       "mutation_sites": [
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 2255,
+          "line": 2273,
           "operation": "path.mkdir",
           "writer_admission_sources": [
             "current_user_onboarding"
@@ -1881,12 +1883,12 @@
       ],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 2444,
+      "line": 2462,
       "mutation_sites": [
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 2473,
+          "line": 2491,
           "operation": "path.mkdir",
           "writer_admission_sources": [
             "current_user_setup_removal"
@@ -7316,7 +7318,7 @@
       ],
       "decorated_source": "direct_sync_install_pack",
       "direct_callers": [
-        "tools.direct_sync_relay_install_pack.main"
+        "tools.direct_sync_relay_install_pack._write_json"
       ],
       "file": "tools/direct_sync_relay_install_pack.py",
       "kind": "function",
@@ -7324,26 +7326,51 @@
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 398,
+          "line": 393,
           "operation": "temp_path.open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 403,
+          "line": 398,
           "operation": "atomic_replace.atomic_replace",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 406,
+          "line": 401,
           "operation": "temp_path.unlink",
           "writer_admission_sources": []
-        },
+        }
+      ],
+      "node": "tools.direct_sync_relay_install_pack._write_json_bytes",
+      "reachable_entrypoints": [
+        "tools.direct_sync_relay_install_pack.__file_entry__"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "tools.direct_sync_relay_install_pack.__file_entry__"
+      ],
+      "decorated_source": "direct_sync_install_pack",
+      "direct_callers": [
+        "tools.direct_sync_relay_install_pack.main"
+      ],
+      "file": "tools/direct_sync_relay_install_pack.py",
+      "kind": "function",
+      "line": 408,
+      "mutation_sites": [
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 395,
+          "line": 417,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -7370,12 +7397,12 @@
       ],
       "file": "tools/direct_sync_relay_install_pack.py",
       "kind": "function",
-      "line": 578,
+      "line": 589,
       "mutation_sites": [
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 595,
+          "line": 606,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -7402,12 +7429,12 @@
       ],
       "file": "tools/direct_sync_relay_install_pack.py",
       "kind": "function",
-      "line": 682,
+      "line": 693,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 701,
+          "line": 712,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -7435,12 +7462,12 @@
       ],
       "file": "tools/direct_sync_relay_install_pack.py",
       "kind": "function",
-      "line": 1239,
+      "line": 1250,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 1241,
+          "line": 1252,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -8276,17 +8303,17 @@
       ],
       "file": "tools/register_container_audit_worker_pc.py",
       "kind": "function",
-      "line": 1197,
+      "line": 1209,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 1209,
+          "line": 1221,
           "operation": "secret_path.parent.mkdir",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 1217,
+          "line": 1229,
           "operation": "secret_path.write_bytes",
           "writer_admission_sources": []
         }
@@ -8339,11 +8366,11 @@
       ],
       "file": "tools/register_container_audit_worker_pc.py",
       "kind": "function",
-      "line": 1330,
+      "line": 1342,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 1348,
+          "line": 1360,
           "operation": "session.post",
           "writer_admission_sources": []
         }
@@ -8394,11 +8421,11 @@
       ],
       "file": "tools/register_container_audit_worker_pc.py",
       "kind": "function",
-      "line": 1674,
+      "line": 1686,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 1793,
+          "line": 1805,
           "operation": "unlink",
           "writer_admission_sources": []
         }
@@ -8449,11 +8476,11 @@
       ],
       "file": "tools/register_container_audit_worker_pc.py",
       "kind": "function",
-      "line": 3126,
+      "line": 3138,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 3472,
+          "line": 3483,
           "operation": "recovery_secret_path.unlink",
           "writer_admission_sources": [
             "worker_pc_registration"
@@ -10075,6 +10102,7 @@
     "recovery_two_phase.py",
     "replacement_log_lookup.py",
     "replacement_workflow.py",
+    "report_publication.py",
     "responsive_layout.py",
     "runtime_dependency_guard.py",
     "runtime_entry.py",
@@ -10133,8 +10161,8 @@
   ],
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
-    "closure_direct_mutation_function_count": 191,
-    "closure_module_count": 126,
+    "closure_direct_mutation_function_count": 192,
+    "closure_module_count": 127,
     "external_process_mutation_site_count": 19,
     "powershell_direct_mutation_site_count": 134,
     "powershell_execution_site_count": 126,
@@ -10153,8 +10181,8 @@
     "powershell_sink_count": 2,
     "python_external_control_literal_site_count": 5,
     "scheduled_task_mutation_site_count": 12,
-    "sink_function_count": 270,
-    "total_cross_language_sink_count": 272,
+    "sink_function_count": 271,
+    "total_cross_language_sink_count": 273,
     "trusted_control_plane_mutation_count": 0,
     "uncovered_mutation_function_count": 0
   },
@@ -10185,7 +10213,7 @@
       "argument_ast_sha256": "ff08243590989fdc2c4104ebb0a9e30ebb2840a7352f86651027a50e88181892",
       "caller": "auto_update.create_download_stage",
       "classification": "decorator",
-      "line": 2801,
+      "line": 2803,
       "probe_only": false,
       "report_only": false,
       "source": "auto_update_control",
@@ -10215,7 +10243,7 @@
       "argument_ast_sha256": "d8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81",
       "caller": "current_user_onboarding._write_json_atomic",
       "classification": "decorator",
-      "line": 451,
+      "line": 469,
       "probe_only": false,
       "report_only": false,
       "source": "current_user_onboarding_storage",
@@ -10225,7 +10253,7 @@
       "argument_ast_sha256": "d8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81",
       "caller": "current_user_onboarding._write_json_atomic_create_new",
       "classification": "decorator",
-      "line": 473,
+      "line": 491,
       "probe_only": false,
       "report_only": false,
       "source": "current_user_onboarding_storage",
@@ -10235,7 +10263,7 @@
       "argument_ast_sha256": "87f9ed34d31694cef448ad430f4bf2d47211409a8649376df30813e5b8d1bd2f",
       "caller": "current_user_onboarding.onboard_current_user",
       "classification": "writer_admission",
-      "line": 2255,
+      "line": 2273,
       "probe_only": true,
       "report_only": false,
       "source": "current_user_onboarding",
@@ -10247,7 +10275,7 @@
       "argument_ast_sha256": "baed5eba0765259aa71ca7259034e47e8c4d38ae2520bd286c7010aebaacf367",
       "caller": "current_user_onboarding.remove_current_user_setup",
       "classification": "writer_admission",
-      "line": 2473,
+      "line": 2491,
       "probe_only": false,
       "report_only": false,
       "source": "current_user_setup_removal",
@@ -10411,7 +10439,7 @@
       "argument_ast_sha256": "ac4ab861b2316abcfe9281f7dce3de82d63d5ff49ee532f00ed01e5ffa940529",
       "caller": "tools.direct_sync_relay_install_pack._apply_task_runtime_acl",
       "classification": "decorator",
-      "line": 595,
+      "line": 606,
       "probe_only": false,
       "report_only": false,
       "source": "direct_sync_install_pack",
@@ -10421,7 +10449,7 @@
       "argument_ast_sha256": "d8d3aaabebc2d32ccbfa35401c2ac822563ff38c3a1b1687f4fa6a02d5972c81",
       "caller": "tools.direct_sync_relay_install_pack._write_json",
       "classification": "decorator",
-      "line": 395,
+      "line": 417,
       "probe_only": false,
       "report_only": false,
       "source": "direct_sync_install_pack",
@@ -10605,6 +10633,7 @@
     "recovery_two_phase.py",
     "replacement_log_lookup.py",
     "replacement_workflow.py",
+    "report_publication.py",
     "responsive_layout.py",
     "runtime_dependency_guard.py",
     "runtime_entry.py",
@@ -10737,6 +10766,7 @@
       "kmtech_shared",
       "kmtech_shared.data_generation",
       "producer_runtime_client",
+      "report_publication",
       "startup_check_report",
       "storage_policy",
       "update_service",
@@ -10785,6 +10815,7 @@
       "kmtech_shared.data_generation",
       "logistics_runtime_profile",
       "protected_admin",
+      "report_publication",
       "startup_check_report",
       "storage_policy",
       "storage_utils",
@@ -11061,6 +11092,7 @@
       "event_payloads",
       "label_qr"
     ],
+    "report_publication": [],
     "responsive_layout": [],
     "runtime_dependency_guard": [
       "atomic_replace",
@@ -11160,6 +11192,7 @@
       "direct_sync_push",
       "direct_sync_runtime",
       "isolated_qualification",
+      "report_publication",
       "storage_policy",
       "tools.register_container_audit_worker_pc",
       "writer_session_fence"
@@ -11220,6 +11253,7 @@
       "logistics_runtime_profile",
       "producer_runtime_client",
       "recovery_two_phase",
+      "report_publication",
       "storage_policy",
       "storage_utils",
       "tools.install_logistics_runtime_profile",
@@ -11326,7 +11360,7 @@
       "tools.register_container_audit_worker_pc"
     ]
   },
-  "inventory_sha256": "95c795c3ff73301f2d785d4b77901e9f86cb13d99bf1e34d9e91ec835689cab4",
+  "inventory_sha256": "627e42d73d7d2c108a25823331fba72552afb2e3b7ced2c7a86669091ff73e6d",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -25973,6 +26007,7 @@
     "recovery_two_phase.__file_entry__",
     "replacement_log_lookup.__file_entry__",
     "replacement_workflow.__file_entry__",
+    "report_publication.__file_entry__",
     "responsive_layout.__file_entry__",
     "runtime_dependency_guard.__file_entry__",
     "runtime_entry.__file_entry__",
@@ -26043,7 +26078,7 @@
         ],
         "file": "auto_update.py",
         "function": "auto_update.request_apply_task",
-        "line": 3071
+        "line": 3073
       },
       {
         "commands": [
@@ -26075,7 +26110,7 @@
         ],
         "file": "tools/direct_sync_relay_install_pack.py",
         "function": "tools.direct_sync_relay_install_pack.build_install_plan",
-        "line": 1177
+        "line": 1188
       }
     ]
   },
@@ -26349,7 +26384,7 @@
       "direct_mutation_site_count": 0,
       "file": "auto_update.py",
       "function": "auto_update._run_download_attempt",
-      "line": 2867,
+      "line": 2869,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26357,7 +26392,7 @@
       "direct_mutation_site_count": 0,
       "file": "auto_update.py",
       "function": "auto_update.copy_prepared_file",
-      "line": 2466,
+      "line": 2468,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26365,7 +26400,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.create_download_stage",
-      "line": 2799,
+      "line": 2801,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26373,7 +26408,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.create_protected_stage",
-      "line": 2451,
+      "line": 2453,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26381,7 +26416,7 @@
       "direct_mutation_site_count": 0,
       "file": "auto_update.py",
       "function": "auto_update.extract_prepared_code",
-      "line": 2457,
+      "line": 2459,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26389,7 +26424,7 @@
       "direct_mutation_site_count": 0,
       "file": "auto_update.py",
       "function": "auto_update.fixed_helper",
-      "line": 1868,
+      "line": 1870,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26397,7 +26432,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.launch_version",
-      "line": 3080,
+      "line": 3082,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26405,7 +26440,7 @@
       "direct_mutation_site_count": 0,
       "file": "auto_update.py",
       "function": "auto_update.persist_switch",
-      "line": 1924,
+      "line": 1926,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26413,7 +26448,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.preserve_candidate_version",
-      "line": 2553,
+      "line": 2555,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26421,7 +26456,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.publish_download",
-      "line": 2860,
+      "line": 2862,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26429,7 +26464,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.request_apply_task",
-      "line": 3068,
+      "line": 3070,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26437,7 +26472,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.request_bootstrap",
-      "line": 3060,
+      "line": 3062,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26445,7 +26480,7 @@
       "direct_mutation_site_count": 0,
       "file": "auto_update.py",
       "function": "auto_update.stage_prepared_copies",
-      "line": 2835,
+      "line": 2837,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26453,7 +26488,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.supported_task_present",
-      "line": 1518,
+      "line": 1520,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26461,7 +26496,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.supported_tasks_absent",
-      "line": 1403,
+      "line": 1405,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26469,7 +26504,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.write_download_bytes",
-      "line": 2805,
+      "line": 2807,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26477,7 +26512,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.write_download_chunk",
-      "line": 2814,
+      "line": 2816,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26485,7 +26520,7 @@
       "direct_mutation_site_count": 2,
       "file": "auto_update.py",
       "function": "auto_update.write_json_durable",
-      "line": 622,
+      "line": 623,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26509,7 +26544,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._replacement_identities_match",
-      "line": 820,
+      "line": 838,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -26517,7 +26552,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._start_replacement_user_relay_process",
-      "line": 1131,
+      "line": 1149,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -26525,7 +26560,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.restore_current_user_lifecycle_after_replacement",
-      "line": 2539,
+      "line": 2557,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -26533,7 +26568,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._windows_acl_identity",
-      "line": 723,
+      "line": 741,
       "marker_kind": "decorator",
       "source": "current_user_onboarding"
     },
@@ -26541,7 +26576,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.onboard_current_user",
-      "line": 2150,
+      "line": 2168,
       "marker_kind": "decorator",
       "source": "current_user_onboarding"
     },
@@ -26549,7 +26584,7 @@
       "direct_mutation_site_count": 2,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._install_replacement_user_relay_autostart",
-      "line": 1299,
+      "line": 1317,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -26557,7 +26592,7 @@
       "direct_mutation_site_count": 2,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._record_completed_machine_install_id",
-      "line": 2041,
+      "line": 2059,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -26565,7 +26600,7 @@
       "direct_mutation_site_count": 4,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._write_json_atomic",
-      "line": 445,
+      "line": 454,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -26573,7 +26608,7 @@
       "direct_mutation_site_count": 4,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._write_json_atomic_create_new",
-      "line": 466,
+      "line": 484,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -26581,7 +26616,7 @@
       "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.remove_current_user_setup",
-      "line": 2444,
+      "line": 2462,
       "marker_kind": "writer_admission",
       "source": "current_user_setup_removal"
     },
@@ -26613,7 +26648,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/direct_sync_relay_install_pack.py",
       "function": "tools.direct_sync_relay_install_pack._apply_task_runtime_acl",
-      "line": 578,
+      "line": 589,
       "marker_kind": "decorator",
       "source": "direct_sync_install_pack"
     },
@@ -26621,7 +26656,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/direct_sync_relay_install_pack.py",
       "function": "tools.direct_sync_relay_install_pack._python_runtime_import_report",
-      "line": 682,
+      "line": 693,
       "marker_kind": "decorator",
       "source": "direct_sync_install_pack"
     },
@@ -26629,14 +26664,22 @@
       "direct_mutation_site_count": 1,
       "file": "tools/direct_sync_relay_install_pack.py",
       "function": "tools.direct_sync_relay_install_pack._run_command",
-      "line": 1239,
+      "line": 1250,
       "marker_kind": "decorator",
       "source": "direct_sync_install_pack"
     },
     {
-      "direct_mutation_site_count": 4,
+      "direct_mutation_site_count": 1,
       "file": "tools/direct_sync_relay_install_pack.py",
       "function": "tools.direct_sync_relay_install_pack._write_json",
+      "line": 408,
+      "marker_kind": "decorator",
+      "source": "direct_sync_install_pack"
+    },
+    {
+      "direct_mutation_site_count": 3,
+      "file": "tools/direct_sync_relay_install_pack.py",
+      "function": "tools.direct_sync_relay_install_pack._write_json_bytes",
       "line": 389,
       "marker_kind": "decorator",
       "source": "direct_sync_install_pack"
@@ -28301,7 +28344,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/register_container_audit_worker_pc.py",
       "function": "tools.register_container_audit_worker_pc._post_enrollment_request",
-      "line": 1330,
+      "line": 1342,
       "marker_kind": "decorator",
       "source": "worker_enrollment_network"
     },
@@ -28309,7 +28352,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/register_container_audit_worker_pc.py",
       "function": "tools.register_container_audit_worker_pc._finalize_server_registration",
-      "line": 1674,
+      "line": 1686,
       "marker_kind": "decorator",
       "source": "worker_pc_registration"
     },
@@ -28317,7 +28360,7 @@
       "direct_mutation_site_count": 0,
       "file": "tools/register_container_audit_worker_pc.py",
       "function": "tools.register_container_audit_worker_pc._initial_possession_key",
-      "line": 1263,
+      "line": 1275,
       "marker_kind": "decorator",
       "source": "worker_pc_registration"
     },
@@ -28333,7 +28376,7 @@
       "direct_mutation_site_count": 2,
       "file": "tools/register_container_audit_worker_pc.py",
       "function": "tools.register_container_audit_worker_pc._write_dpapi_secret",
-      "line": 1197,
+      "line": 1209,
       "marker_kind": "decorator",
       "source": "worker_pc_registration"
     },
@@ -28349,7 +28392,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/register_container_audit_worker_pc.py",
       "function": "tools.register_container_audit_worker_pc.main",
-      "line": 3126,
+      "line": 3138,
       "marker_kind": "decorator",
       "source": "worker_pc_registration"
     },

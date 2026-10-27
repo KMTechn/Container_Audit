@@ -268,3 +268,51 @@ def test_two_report_refusals_keep_one_actual_first_setup(tmp_path, monkeypatch):
     assert failure_count(paths.onboarding_report_path) == 2
     assert json.loads(next(paths.status_dir.glob('.report-unavailable-count-*.json')).read_bytes()) == {'count': 2}
     assert json.loads(paths.onboarding_report_path.read_bytes())['status'] == 'READY'
+
+
+@pytest.mark.parametrize('fail_required_write', [False, True])
+def test_cli_zero_requires_fresh_ready_report(tmp_path, monkeypatch, fail_required_write):
+    import atomic_replace
+    app = support._generation_packet(tmp_path, monkeypatch)
+    environment = {'CONTAINER_AUDIT_DATA_ROOT': str(tmp_path / 'state'),
+                   'KMTECH_TEST_API_TOKEN': 'REDACTED'}
+    paths = onboarding.resolve_current_user_onboarding_paths(app, environ=environment)
+    support._ready_state(paths)
+    before = b'{"status":"READY","prior_run":true,"completed_at":"1900-01-01T00:00:00Z"}\n'
+    paths.onboarding_report_path.write_bytes(before)
+    original_replace = atomic_replace.atomic_replace
+    def interrupted(source, target, **kwargs):
+        if fail_required_write and Path(target) == paths.onboarding_report_path:
+            raise OSError('synthetic required report interruption')
+        return original_replace(source, target, **kwargs)
+    monkeypatch.setattr(atomic_replace, 'atomic_replace', interrupted)
+    actual = onboarding.onboard_current_user
+    calls = []
+    def autostart(*args, **kwargs):
+        return {**support._autostart(*args, **kwargs), 'message': 'REDACTED'}
+    def run(app_root, **kwargs):
+        calls.append(1)
+        return actual(app_root, environ=environment, require_bootstrap_integrity=False,
+            registration_runner=lambda p: pytest.fail('ready owner must be reused'),
+            profile_loader=support._profile_loader, credential_loader=support._credential_loader,
+            ledger_factory=support._ledger_factory, autostart_installer=autostart,
+            relay_launcher=support._relay_start)
+    monkeypatch.setattr(onboarding, 'onboard_current_user', run)
+    import time
+    started = time.time_ns()
+    rc = onboarding.onboarding_main(['--app-root', str(app)])
+    assert calls == [1]
+    if fail_required_write:
+        assert type(rc) is int and rc != 0
+        assert paths.onboarding_report_path.read_bytes() == before
+    else:
+        assert rc == 0
+        written = json.loads(paths.onboarding_report_path.read_bytes())
+        assert written['status'] == 'READY'
+        assert written['server_registration_verified'] is True
+        from report_publication import failure_count, UNAVAILABLE
+        assert written['relay_autostart']['message'] == UNAVAILABLE
+        assert failure_count(paths.onboarding_report_path) == 1
+        assert paths.onboarding_report_path.stat().st_mtime_ns >= started
+        assert 'prior_run' not in written
+        assert paths.onboarding_report_path.read_bytes() != before

@@ -156,8 +156,12 @@ class CurrentUserOnboardingError(RuntimeError):
         reason_code: str = "",
     ) -> None:
         from auto_update import _failure_text, failure_user_line
-        self.original_failure_text = _failure_text(message, limit=65536)
-        super().__init__(failure_user_line(message))
+        from report_publication import protect_diagnostic, UNAVAILABLE
+        self.original_failure_text, public_message = protect_diagnostic(
+            lambda: (_failure_text(message, limit=65536), failure_user_line(message)),
+            fallback=lambda: (UNAVAILABLE, UNAVAILABLE),
+        )
+        super().__init__(public_message)
         self.report_path = Path(report_path)
         self.status = status
         self.reason_code = reason_code
@@ -417,7 +421,12 @@ def _persist_failure_report(path: Path, report: dict[str, Any], error: BaseExcep
         attempt["publications"].pop(id(error), None)
     report["failure_attempt_id"] = attempt["id"] if attempt else uuid.uuid4().hex
     report["failure"] = "SUPPORT_FAILURE"
-    report["failure_details"] = mixed_status_record({"failure_details": _failure_details(error)})["failure_details"]
+    from report_publication import protect_diagnostic
+    report["failure_details"] = protect_diagnostic(
+        lambda: mixed_status_record({"failure_details": _failure_details(error)})["failure_details"],
+        fallback=lambda: _failure_details(error, _unavailable=True), path=path,
+        counter_writer=lambda counter, counts: _write_json_atomic(counter, counts, environ={}),
+    )
     report["failure_evidence_refs"] = []
     report["failure_evidence_status"] = "REPORT_UNAVAILABLE"
     report.update(public_record(_failure_location(error), INSTALLER_PUBLIC_CODES, INSTALLER_SAFE_MESSAGES))
@@ -445,9 +454,18 @@ def _atomic_report_reference(path: Path, expected: bytes) -> dict[str, str]:
 def _write_json_atomic(path: Path, payload: Mapping[str, Any], *,
                        environ: Mapping[str, str] | None = None) -> dict[str, str]:
     from atomic_replace import atomic_replace
-    from auto_update import assert_machine_metadata_no_secrets
-    safe_text = json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2)
-    assert_machine_metadata_no_secrets(safe_text, environ=os.environ if environ is None else environ)
+    from auto_update import assert_machine_metadata_no_secrets, _sink_policy
+    from report_publication import prepare_report
+    selected_environment = os.environ if environ is None else environ
+    def render(value):
+        text = json.dumps(value, ensure_ascii=True, sort_keys=True, indent=2)
+        assert_machine_metadata_no_secrets(text, environ=selected_environment)
+        return text
+    safe_text = prepare_report(
+        payload, render=render, fallback_render=render, path=path,
+        diagnostic_fields=_sink_policy()["diagnostic_fields"],
+        counter_writer=lambda counter, counts: _write_json_atomic(counter, counts, environ={}),
+    ).text
     ensure_user_runtime_directory(path.parent)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
