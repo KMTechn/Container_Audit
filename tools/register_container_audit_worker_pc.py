@@ -1150,10 +1150,12 @@ def _write_registration_json(path, payload, *, indent=2):
 
 
 def _write_registration_report(path, payload, *, indent=2):
-    # Registration consumers compare status/identity/recovery bindings, never
-    # diagnostic sentences. Keep every key/type and all machine metadata.
+    # Preserve the established mixed status projection; machine fields are bindings.
     from auto_update import mixed_status_record
-    _write_registration_json(path, mixed_status_record(payload), indent=indent)
+    published = mixed_status_record(payload)
+    _write_registration_json(path, published, indent=indent)
+    return published
+
 
 
 def _registration_artifact_versions(args):
@@ -3332,11 +3334,10 @@ def main(argv: list[str] | None = None) -> int:
                 with writer_admission("worker_pc_registration"):
                     completed_report["recovery_two_phase_state"] = STATE_COMPLETE
                     completed_report["recovery_two_phase_complete"] = True
-                    _write_registration_report(
+                    published_completed_report = _write_registration_report(
                         str(completed_report_path), completed_report, indent=2
                     )
-                    from auto_update import mixed_status_record
-                    if not _strict_json_value_equal(load_json_no_duplicate_keys(completed_report_path.read_bytes()), mixed_status_record(completed_report)):
+                    if not _strict_json_value_equal(load_json_no_duplicate_keys(completed_report_path.read_bytes()), published_completed_report):
                         raise DirectSyncPushError("persisted registration report exact readback differs")
                     from data_generation_guard import record_before_owner_paths
                     record_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))
@@ -3489,9 +3490,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             report["admin_recovery_secret_cleanup_required"] = False
         if two_phase_journal is None:
-            _write_registration_report(str(report_path), report, indent=2)
+            published_report = _write_registration_report(str(report_path), report, indent=2)
         else:
-            _write_registration_report(str(report_path), report, indent=2)
+            published_report = _write_registration_report(str(report_path), report, indent=2)
             journal_payload = two_phase_journal.load() or {}
             if journal_payload.get("state") == STATE_CLEANUP_INTENT_DURABLE:
                 journal_payload = two_phase_journal.mark_complete()
@@ -3502,11 +3503,10 @@ def main(argv: list[str] | None = None) -> int:
             _recovery_two_phase_cut_point("AFTER_COMPLETE_JOURNAL")
             report["recovery_two_phase_state"] = journal_payload["state"]
             report["recovery_two_phase_complete"] = True
-            _write_registration_report(str(report_path), report, indent=2)
+            published_report = _write_registration_report(str(report_path), report, indent=2)
             two_phase_journal.remove_sealed_package_after_complete()
         if report.get("server_registration_verified") is True:
-            from auto_update import mixed_status_record
-            if not _strict_json_value_equal(load_json_no_duplicate_keys(report_path.read_bytes()), mixed_status_record(report)):
+            if not _strict_json_value_equal(load_json_no_duplicate_keys(report_path.read_bytes()), published_report):
                 raise DirectSyncPushError("persisted registration report exact readback differs")
             from data_generation_guard import record_before_owner_paths
             record_before_owner_paths(storage_paths.data_root, file_paths=_registration_owner_paths(args, storage_paths))

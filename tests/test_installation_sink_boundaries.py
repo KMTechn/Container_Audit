@@ -139,13 +139,24 @@ def test_related_report_sink_redacts_before_temporary_file(tmp_path, monkeypatch
         'token_elevated': False, 'writer_contract_sha256': 'a' * 64,
     }
     if module_name == 'current_user_onboarding':
-        # Contract 1a: these generic writers publish authentication metadata.
-        # Diagnostic redaction belongs to _persist_failure_report instead.
-        before = _owned_snapshot(tmp_path)
-        with pytest.raises(ValueError, match='^MACHINE_METADATA_SECRET_DETECTED$'):
+        if function_name in {"_write_json_atomic", "_write_json_atomic_create_new"}:
+            from report_publication import UNAVAILABLE, failure_count
             getattr(module, function_name).__wrapped__(destination, payload)
-        if observed or _owned_snapshot(tmp_path) != before:
-            pytest.fail('Rejected machine metadata reached a temporary file', pytrace=False)
+            raw = destination.read_bytes()
+            assert secret.encode() not in raw
+            actual = json.loads(raw)
+            diagnostics = {"failure", "message", "detail", "stdout", "stderr", "stdout_tail", "stderr_tail"}
+            for field, value in payload.items():
+                assert actual[field] == (UNAVAILABLE if field in diagnostics else value)
+            assert failure_count(destination) == 1
+        else:
+            # Contract 1a: these generic writers publish authentication metadata.
+            # Diagnostic redaction belongs to _persist_failure_report instead.
+            before = _owned_snapshot(tmp_path)
+            with pytest.raises(ValueError, match='^MACHINE_METADATA_SECRET_DETECTED$'):
+                getattr(module, function_name).__wrapped__(destination, payload)
+            if observed or _owned_snapshot(tmp_path) != before:
+                pytest.fail('Rejected machine metadata reached a temporary file', pytrace=False)
         return
     getattr(module, function_name).__wrapped__(destination, payload)
     assert observed and secret.encode() not in destination.read_bytes()
@@ -176,12 +187,24 @@ def test_related_report_sink_bounds_valid_json_after_redaction(tmp_path, monkeyp
         'status': 'FAILED', 'failure': 'FIRST ' + ('가"' * 50000) + secret + ' ValueError: LAST',
     }
     if module_name == 'current_user_onboarding':
-        # Contract 1a keeps admitted metadata bytes, including >64 KiB, exact.
-        before = _owned_snapshot(tmp_path)
-        with pytest.raises(ValueError, match='^MACHINE_METADATA_SECRET_DETECTED$'):
+        if function_name in {"_write_json_atomic", "_write_json_atomic_create_new"}:
+            from report_publication import UNAVAILABLE, failure_count
             getattr(module, function_name).__wrapped__(path, payload)
-        if _owned_snapshot(tmp_path) != before:
-            pytest.fail('Rejected large machine metadata reached a file', pytrace=False)
+            raw = path.read_bytes()
+            assert secret.encode() not in raw
+            actual = json.loads(raw)
+            diagnostics = {"failure", "message", "detail", "stdout", "stderr", "stdout_tail", "stderr_tail"}
+            for field, value in payload.items():
+                assert actual[field] == (UNAVAILABLE if field in diagnostics else value)
+            assert failure_count(path) == 1
+        else:
+            # Contract 1a keeps admitted metadata bytes, including >64 KiB, exact.
+            before = _owned_snapshot(tmp_path)
+            with pytest.raises(ValueError, match='^MACHINE_METADATA_SECRET_DETECTED$'):
+                getattr(module, function_name).__wrapped__(path, payload)
+            if _owned_snapshot(tmp_path) != before:
+                pytest.fail('Rejected large machine metadata reached a file', pytrace=False)
+        path = tmp_path / "bounded-machine-metadata.json"
         payload['failure'] = payload['failure'].replace(secret, '')
         getattr(module, function_name).__wrapped__(path, payload)
         expected = (json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2) + '\n').encode('utf-8')

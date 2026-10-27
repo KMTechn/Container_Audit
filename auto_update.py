@@ -23,6 +23,8 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     sys.path.insert(1, str(Path(__file__).resolve().parent / "site-packages"))
 
+from report_publication import UNAVAILABLE
+
 from writer_session_fence import WriterFencedError, writer_sink, _assert_no_reparse_components
 from producer_runtime_client import DEFAULT_PRODUCER_USER_AGENT
 from storage_policy import ensure_user_runtime_directory
@@ -1125,6 +1127,7 @@ class SupportArgumentParser(argparse.ArgumentParser):
 
 # Registration only: these diagnostic sentences are literals in product code.
 REGISTERED_DIAGNOSTIC_MESSAGES = frozenset({
+    UNAVAILABLE,
     ' must not point at the legacy Syncthing folder',
     '; ',
     'admin recovery succeeded but the consumed protected authorization file could not be deleted: ',
@@ -1357,12 +1360,12 @@ def _failure_text(value, *, limit: int = 16384) -> str:
     return redact_for_sink(final, environment, _check_only=True)
 
 
-def _failure_details(error: BaseException) -> list[dict]:
+def _failure_details(error: BaseException, *, _unavailable: bool = False) -> list[dict]:
     details, seen = [], set()
     while error is not None and id(error) not in seen and len(details) < 16:
         seen.add(id(error))
         item = {"type": type(error).__module__ + "." + type(error).__name__,
-                "message": _failure_text(getattr(error, "original_failure_text", error), limit=4096)}
+                "message": UNAVAILABLE if _unavailable else _failure_text(getattr(error, "original_failure_text", error), limit=4096)}
         for name in ("errno", "winerror", "exit_code"):
             value = getattr(error, name, None)
             if type(value) is int:
@@ -1370,7 +1373,7 @@ def _failure_details(error: BaseException) -> list[dict]:
         for name in ("stdout", "stderr"):
             value = getattr(error, name, None)
             if isinstance(value, (str, bytes)):
-                item[name] = _failure_text(value)
+                item[name] = UNAVAILABLE if _unavailable else _failure_text(value)
                 item[name + "_truncated"] = len(value) > 16384
         details.append(item)
         error = error.__cause__ or error.__context__

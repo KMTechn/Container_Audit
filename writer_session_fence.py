@@ -102,9 +102,9 @@ def close_and_wait_writers(timeout_seconds: float) -> bool:
     finally:
         lease.release()
 
-# derive_container_writer_sinks.py binds the PowerShell fence and contract.
-# refresh_container_update_declarations.py binds this Python pin and transition.
-WRITER_INVENTORY_SHA256 = "7669a4931bf83677af0d5ab035f5f3d4e09c097d2d1592d0a6c13759d5f5a2e6"
+# This pin is generated and checked by tools/derive_container_writer_sinks.py.
+# It is updated together with the inventory after all sink markers are placed.
+WRITER_INVENTORY_SHA256 = "c40e78c876e095442ef1fa1f94d027885ab662d5360e15b9f9b627805b1c2a94"
 
 DELEGATION_TOKEN_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN"
 DELEGATION_SESSION_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID"
