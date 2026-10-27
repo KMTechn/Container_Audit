@@ -13,8 +13,11 @@ import ca_screen_bridge as screen
 import data_generation_guard
 import logistics_runtime_profile
 import runtime_instance
+import startup_check_report
 import user_relay
 from tests.test_startup_notice_stop import FakeRoot, FakeTk, STOP_TRACE
+
+REAL_STARTUP_OBSERVE = ca._startup_check_observe
 
 
 class StartupRoot(FakeRoot):
@@ -127,7 +130,7 @@ def item_startup(monkeypatch, tmp_path):
 @pytest.mark.parametrize('stop', [False, True], ids=['close', 'stop'])
 @pytest.mark.parametrize('failure', ['missing', 'read', 'encoding'])
 def test_item_notice_finishes_main_without_second_notice_or_fallback(
-        item_startup, monkeypatch, tmp_path, failure, stop, web):
+        item_startup, monkeypatch, failure, stop, web):
     state = item_startup
     if stop:
         state.tk.manual = False
@@ -150,15 +153,6 @@ def test_item_notice_finishes_main_without_second_notice_or_fallback(
     except Exception as error:
         outcome = type(error).__name__
 
-    (tmp_path / 'notice-facts.json').write_text(json.dumps({
-        'failure': failure, 'stop': stop, 'web': web, 'outcome': outcome,
-        'notice_count': len(state.tk.buttons), 'root_count': len(state.tk.roots),
-        'constructor_continued': state.tk.BooleanVar.call_count,
-        'reader_calls': reader.call_count, 'trace_count': len(state.traces),
-        'lease_releases': state.lease.release.call_count,
-        'shell_calls': len(state.shell_calls),
-        'fallback_count': sum('FALLBACK' in str(row[1]) for row in state.observations),
-    }), encoding='utf-8')
     assert len(state.tk.buttons) == 1, 'exactly one acknowledged startup notice'
     assert outcome == 0
     assert len(state.tk.roots) == 3  # app, visible owner, notice
@@ -176,6 +170,77 @@ def test_item_notice_finishes_main_without_second_notice_or_fallback(
         assert isinstance(state.shell_failures[0], screen.CaStartupRefused)
         assert state.shell_failures[0].code == 0
     state.native.assert_not_called()
+
+
+@pytest.mark.parametrize('stop', [False, True], ids=['close', 'stop'])
+def test_missing_item_notice_rewrites_real_start_check(item_startup, monkeypatch, stop):
+    state = item_startup
+    program_data = state.paths.data_root / 'program-data'
+    folder = program_data / 'KMTech' / 'start-check'
+    folder.mkdir(parents=True)
+    monkeypatch.setenv('PROGRAMDATA', str(program_data))
+    monkeypatch.delenv('KMTECH_START_CHECK_TEST_CATEGORY', raising=False)
+    monkeypatch.setattr(ca, '_startup_check_observe', REAL_STARTUP_OBSERVE)
+    if stop:
+        state.tk.manual = False
+
+        def publish_once():
+            state.tk.publish = None
+            user_relay.request_app_stop(state.paths.direct_sync_root, timeout_seconds=0)
+
+        state.tk.publish = publish_once
+
+    startup_check_report.finish()
+    try:
+        assert ca.main([]) == 0
+        files = list(folder.glob('*-CA.json'))
+        assert len(files) == 1
+        result = json.loads(files[0].read_text(encoding='utf-8'))
+        assert result['startable'] is False
+        assert result['category'] == 'UNKNOWN'
+        assert 'UNKNOWN_CHECK' in result['reasons']
+        assert len(state.tk.buttons) == 1
+        assert state.traces == ([STOP_TRACE] if stop else [])
+        state.tk.BooleanVar.assert_not_called()
+        state.lease.release.assert_called_once()
+        state.native.assert_not_called()
+    finally:
+        startup_check_report.finish()
+
+
+def test_both_item_notice_backends_failing_keep_general_error_path(item_startup, monkeypatch):
+    state = item_startup
+    original_factory = state.tk.Tk
+
+    def only_app_root():
+        if not state.tk.roots:
+            return original_factory()
+        raise RuntimeError('Tk notice unavailable')
+
+    monkeypatch.setattr(state.tk, 'Tk', only_app_root)
+    state.native.side_effect = OSError('native notice unavailable')
+    with pytest.raises(RuntimeError, match='destroyed application'):
+        ca.main([ca.CA_OLD_SCREEN_ARGUMENT])
+    state.tk.BooleanVar.assert_called_once()
+    assert state.native.call_count == 2  # Item notice, then the existing generic refusal.
+    assert any(row[2].get('failed') and row[2].get('refused') for row in state.observations)
+    state.lease.release.assert_called_once()
+
+
+def test_native_item_notice_success_still_finishes_quietly(item_startup, monkeypatch):
+    state = item_startup
+    original_factory = state.tk.Tk
+
+    def only_app_root():
+        if not state.tk.roots:
+            return original_factory()
+        raise RuntimeError('Tk notice unavailable')
+
+    monkeypatch.setattr(state.tk, 'Tk', only_app_root)
+    assert ca.main([ca.CA_OLD_SCREEN_ARGUMENT]) == 0
+    state.native.assert_called_once()
+    state.tk.BooleanVar.assert_not_called()
+    state.lease.release.assert_called_once()
 
 
 def test_integrity_banner_preserves_recent_note_when_other_bands_are_present():
