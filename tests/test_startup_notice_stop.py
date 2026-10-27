@@ -16,7 +16,7 @@ import user_relay
 from tests.test_startup_catalog_notice import startup, flow, fixed_operation_lease_clock
 
 
-MODES = ('unavailable', 'onboarding', 'integrity', 'catalog',
+MODES = ('unavailable', 'onboarding', 'catalog',
          'generation', 'data-root', 'legacy-update', 'instance-lock')
 STOP_TRACE = {'stage': 'APP_STOP_REQUESTED_CLOSE', 'message': '멈춤 요청으로 닫힘'}
 
@@ -34,13 +34,17 @@ class FakeTk:
         self.roots.append(root)
         return root
 
+    def Toplevel(self, _parent):
+        return self.Tk()
+
     def Label(self, root, **kwargs):
         self.labels.append(kwargs['text'].encode('utf-8'))
         return SimpleNamespace(pack=lambda **_kwargs: None)
 
     def Button(self, root, **kwargs):
         self.buttons.append(kwargs)
-        return SimpleNamespace(pack=lambda **_kwargs: None)
+        return SimpleNamespace(pack=lambda **_kwargs: None, focus_set=lambda: None,
+                               invoke=kwargs['command'])
 
 
 class FakeRoot:
@@ -60,6 +64,20 @@ class FakeRoot:
 
     def withdraw(self):
         pass
+
+    def deiconify(self):
+        pass
+
+    lift = focus_force = update_idletasks = deiconify
+
+    def transient(self, _parent):
+        pass
+
+    def attributes(self, *_args):
+        pass
+
+    def bind(self, name, callback):
+        self.protocols[name] = callback
 
     def protocol(self, name, callback):
         self.protocols[name] = callback
@@ -92,6 +110,8 @@ class FakeRoot:
             self.now = when
             callback()
 
+    wait_window = mainloop
+
 
 @pytest.fixture
 def notice(monkeypatch, tmp_path):
@@ -122,8 +142,6 @@ def invoke(mode, monkeypatch, tmp_path):
     if mode == 'onboarding':
         return ca._show_first_run_onboarding_error(ca.CurrentUserOnboardingError(
             'SETUP_FAILED', report_path=tmp_path / 'report.json', status='RECOVERY_REQUIRED'))
-    if mode == 'integrity':
-        return ca._show_bootstrap_integrity_warning(tmp_path / 'report.json')
     if mode == 'catalog':
         return ca._show_item_catalog_startup_error('HTTP_ERROR', http_status_code=503)
     if mode in ('generation', 'data-root'):
@@ -150,14 +168,13 @@ def invoke(mode, monkeypatch, tmp_path):
 def test_each_independent_notice_consumes_stop_and_returns_safely(
         notice, monkeypatch, tmp_path, mode):
     result = invoke(mode, monkeypatch, tmp_path)
-    assert len(notice.tk.roots) == 1
-    assert notice.tk.roots[0].destroyed
-    assert notice.tk.roots[0].now == 500
+    assert len(notice.tk.roots) == (2 if mode in ('onboarding', 'instance-lock') else 1)
+    assert all(root.destroyed for root in notice.tk.roots)
+    assert notice.tk.roots[-1].now == 500
     assert notice.traces == [STOP_TRACE]
     assert user_relay.read_app_stop_request(notice.root) is None
     assert not notice.native
-    assert result == (1 if mode in ('generation', 'data-root') else
-                      True if mode == 'integrity' else None)
+    assert result == (1 if mode in ('generation', 'data-root') else None)
 
 
 @pytest.mark.parametrize('mode', MODES)
@@ -169,7 +186,6 @@ def test_manual_close_keeps_message_bytes_and_does_not_report_stop(
     expected = {
         'unavailable': '시작 확인 안내',
         'onboarding': ca.MACHINE_ONBOARDING_ERROR_MESSAGES['RECOVERY_REQUIRED'],
-        'integrity': f'{ca.BOOTSTRAP_INTEGRITY_WARNING_MESSAGE}\n보고서: {tmp_path / "report.json"}',
         'catalog': f'{ca.ITEM_CATALOG_STARTUP_ERROR_MESSAGE}\n회사 서버 오류(코드 503).\n오류 코드: HTTP_ERROR',
         'generation': ca.DataGenerationBlocked({'status': 'REFUSE'}).user_message,
         'data-root': storage_policy.DATA_ROOT_ERROR_MESSAGE,
@@ -178,18 +194,18 @@ def test_manual_close_keeps_message_bytes_and_does_not_report_stop(
         'instance-lock': '데이터 충돌 방지를 위한 실행 잠금을 확인하지 못했습니다. '
                          '프로그램을 시작하지 않고 관리자에게 문의합니다.',
     }
-    assert notice.tk.labels == [expected[mode].encode('utf-8')]
+    assert notice.tk.labels == (['이적 시작 안내'.encode('utf-8')]
+                               if mode in ('onboarding', 'instance-lock') else []) + [expected[mode].encode('utf-8')]
     titles = {
         'unavailable': '프로그램 시작 확인',
         'onboarding': ca.FIRST_RUN_ONBOARDING_ERROR_TITLE,
-        'integrity': ca.BOOTSTRAP_INTEGRITY_WARNING_TITLE,
         'catalog': ca.ITEM_CATALOG_STARTUP_ERROR_TITLE,
         'generation': '자료 판 확인',
         'data-root': '이적 검사 데이터 폴더 오류',
         'legacy-update': '관리자 업데이트 필요',
         'instance-lock': '프로그램 실행 잠금 실패',
     }
-    assert notice.tk.roots[0].caption.encode('utf-8') == titles[mode].encode('utf-8')
+    assert notice.tk.roots[-1].caption.encode('utf-8') == titles[mode].encode('utf-8')
     assert notice.tk.buttons[0]['text'] == '닫기'
     assert not notice.traces
     assert not notice.native
@@ -210,8 +226,7 @@ def test_tk_creation_failure_uses_thirty_second_native_bound(
     assert len(calls) == 1
     args, kwargs = calls[0]
     assert args[0] and args[1]
-    assert args[2] == ('warning' if mode == 'integrity' else
-                       'info' if mode in ('legacy-update', 'unavailable') else 'error')
+    assert args[2] == ('info' if mode in ('legacy-update', 'unavailable') else 'error')
     assert not notice.native
     assert not notice.traces
     assert result == (1 if mode in ('generation', 'data-root') else None)
@@ -401,7 +416,11 @@ def test_integrity_stop_never_enters_the_next_startup_unit(startup, monkeypatch,
     monkeypatch.setattr(ca, 'onboard_current_user', lambda *_args, **_kwargs: {'bootstrap_integrity': 'absent'})
     monkeypatch.setattr(ca, 'resolve_current_user_onboarding_paths',
                         lambda *_args: SimpleNamespace(onboarding_report_path=tmp_path / 'report.json'))
-    monkeypatch.setattr(ca, '_show_bootstrap_integrity_warning', lambda *_args: True)
+    checks = []
+    def stop_after_onboarding(_root):
+        checks.append(True)
+        return len(checks) == 3
+    monkeypatch.setattr(ca, '_consume_startup_app_stop_request', stop_after_onboarding)
     monkeypatch.setattr(ca, 'record_before_owner_paths',
                         lambda *_args, **_kwargs: pytest.fail('next startup unit entered after stop'))
     monkeypatch.setattr(ca, 'prepare_startup_item_catalog',

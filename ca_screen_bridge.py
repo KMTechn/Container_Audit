@@ -181,6 +181,8 @@ def _alerts(app: Any, presenter_state: Any, notes: List[Dict[str, Any]], now: da
     alerts: List[Dict[str, Any]] = []
     if _attr(app, "_scan_entry_broken", False):
         alerts.append({"kind": 'bad', "text": "입력 칸 오류 — 프로그램을 다시 켜세요"})
+    if _attr(app, '_bootstrap_integrity_absent', False):
+        alerts.append({'kind': 'warn', 'text': ca.BOOTSTRAP_INTEGRITY_WARNING_MESSAGE})
     notice = presenter_state.active_notice
     if notice is not None and (notice.blocking or notice.code == "transfer.post_review_required"):
         choices = _choices(app)
@@ -1459,6 +1461,7 @@ def owner_main_for(module: Any, arguments: List[str], *, attempt: Optional[Scree
         host = module.CA_SCREEN_HOST
         original_active, original_run = host["active"], host["run"]
         original_attempt = host.get("attempt")
+        original_notice_tk = host.get('startup_notice_tk')
         original_names = [(name, getattr(module, name))
                           for name in ("messagebox", "simpledialog", "filedialog")]
         original_tk = module.tk.Tk
@@ -1499,6 +1502,7 @@ def owner_main_for(module: Any, arguments: List[str], *, attempt: Optional[Scree
 
             setattr(dialogs, name, notice)
         host["active"], host["run"] = True, run
+        host['startup_notice_tk'] = original_tk
         if attempt is not None:
             host["attempt"] = attempt
         for name, _ in original_names:
@@ -1524,6 +1528,10 @@ def owner_main_for(module: Any, arguments: List[str], *, attempt: Optional[Scree
             return None  # The main thread raises the original error after run_app.
         finally:
             host["active"], host["run"] = original_active, original_run
+            if original_notice_tk is None:
+                host.pop('startup_notice_tk', None)
+            else:
+                host['startup_notice_tk'] = original_notice_tk
             if original_attempt is None:
                 host.pop("attempt", None)
             else:

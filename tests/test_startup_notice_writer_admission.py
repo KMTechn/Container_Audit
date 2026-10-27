@@ -111,6 +111,7 @@ def test_startup_notice_releases_writer_before_waiting(
     monkeypatch.setattr(ca, "shutdown_stall_is_live", stalled)
     for selected_kind in ("showerror", "showwarning"):
         monkeypatch.setattr(ca.messagebox, selected_kind, notice(selected_kind))
+    monkeypatch.setattr(ca, "_show_visible_startup_notice", notice("showerror"))
     monkeypatch.setattr(ca, "_show_startup_notice", notice("showerror"))
     for name in ("clear_shutdown_stall", "_first_run_onboarding_enabled",
                  "record_before_owner_paths", "prepare_startup_item_catalog", "ContainerAudit"):
