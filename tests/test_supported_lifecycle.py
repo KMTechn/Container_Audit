@@ -37,6 +37,7 @@ def test_owner_a_active_b_and_actual_b_from_are_independent(installed):
 @pytest.mark.parametrize('phase',['PREPARED','APPLIED_PENDING_READY','ROLLBACK_PENDING','ROLLBACK_PENDING_READY','UNKNOWN','FAILED'])
 @pytest.mark.parametrize('operation',['install','register'])
 def test_unstable_control_refuses_before_any_write(installed,phase,operation):
+    """Manual classification has no accepted startup proof, even for register."""
     state=installed/'update-control/transition.json'; state.write_text(json.dumps(dict(schema=update.SCHEMA,phase=phase)))
     originals={p:p.read_bytes() for p in installed.rglob('*') if p.is_file()}
     with pytest.raises(ValueError,match='지원 제거'):update.resolve_lifecycle_context(installed,operation=operation)

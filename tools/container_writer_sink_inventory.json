@@ -10,7 +10,7 @@
     {
       "caller": "auto_update.publish_download",
       "category": "filesystem",
-      "line": 2863,
+      "line": 2865,
       "operation": "atomic_replace.atomic_replace",
       "writer_admission_sources": []
     },
@@ -616,12 +616,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 1872,
+      "line": 1874,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 1880,
+          "line": 1882,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -673,11 +673,11 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2451,
+      "line": 2453,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2453,
+          "line": 2455,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -731,11 +731,11 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2470,
+      "line": 2472,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2478,
+          "line": 2480,
           "operation": "target.open",
           "writer_admission_sources": []
         }
@@ -782,11 +782,11 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2553,
+      "line": 2555,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2568,
+          "line": 2570,
           "operation": "os.rename",
           "writer_admission_sources": []
         }
@@ -833,12 +833,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2799,
+      "line": 2801,
       "mutation_sites": [
         {
           "category": "filesystem",
           "directory_preparation_helper": "storage_policy.ensure_user_runtime_directory",
-          "line": 2801,
+          "line": 2803,
           "operation": "path.mkdir",
           "writer_admission_sources": []
         }
@@ -889,11 +889,11 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2805,
+      "line": 2807,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2807,
+          "line": 2809,
           "operation": "path.open",
           "writer_admission_sources": []
         }
@@ -944,11 +944,11 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2814,
+      "line": 2816,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2816,
+          "line": 2818,
           "operation": "path.open",
           "writer_admission_sources": []
         }
@@ -999,11 +999,11 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 2860,
+      "line": 2862,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2863,
+          "line": 2865,
           "operation": "atomic_replace.atomic_replace",
           "writer_admission_sources": []
         }
@@ -1054,12 +1054,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 3060,
+      "line": 3103,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 3064,
+          "line": 3107,
           "operation": "subprocess.Popen",
           "writer_admission_sources": []
         }
@@ -1106,12 +1106,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 3068,
+      "line": 3111,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 3072,
+          "line": 3115,
           "operation": "subprocess.run",
           "writer_admission_sources": []
         }
@@ -1155,12 +1155,12 @@
       ],
       "file": "auto_update.py",
       "kind": "function",
-      "line": 3080,
+      "line": 3123,
       "mutation_sites": [
         {
           "category": "external_process",
           "external_control_commands": [],
-          "line": 3094,
+          "line": 3137,
           "operation": "subprocess.Popen",
           "writer_admission_sources": []
         }
@@ -10185,7 +10185,7 @@
       "argument_ast_sha256": "ff08243590989fdc2c4104ebb0a9e30ebb2840a7352f86651027a50e88181892",
       "caller": "auto_update.create_download_stage",
       "classification": "decorator",
-      "line": 2801,
+      "line": 2803,
       "probe_only": false,
       "report_only": false,
       "source": "auto_update_control",
@@ -11326,7 +11326,7 @@
       "tools.register_container_audit_worker_pc"
     ]
   },
-  "inventory_sha256": "95c795c3ff73301f2d785d4b77901e9f86cb13d99bf1e34d9e91ec835689cab4",
+  "inventory_sha256": "92a365b868ce2ccecf71a3d1f8119cc8da7bf380cb3e33087ba8bc10b69e150a",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -26043,7 +26043,7 @@
         ],
         "file": "auto_update.py",
         "function": "auto_update.request_apply_task",
-        "line": 3071
+        "line": 3114
       },
       {
         "commands": [
@@ -26349,7 +26349,7 @@
       "direct_mutation_site_count": 0,
       "file": "auto_update.py",
       "function": "auto_update._run_download_attempt",
-      "line": 2867,
+      "line": 2869,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26357,7 +26357,7 @@
       "direct_mutation_site_count": 0,
       "file": "auto_update.py",
       "function": "auto_update.copy_prepared_file",
-      "line": 2466,
+      "line": 2468,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26365,7 +26365,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.create_download_stage",
-      "line": 2799,
+      "line": 2801,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26373,7 +26373,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.create_protected_stage",
-      "line": 2451,
+      "line": 2453,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26381,7 +26381,7 @@
       "direct_mutation_site_count": 0,
       "file": "auto_update.py",
       "function": "auto_update.extract_prepared_code",
-      "line": 2457,
+      "line": 2459,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26389,7 +26389,7 @@
       "direct_mutation_site_count": 0,
       "file": "auto_update.py",
       "function": "auto_update.fixed_helper",
-      "line": 1868,
+      "line": 1870,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26397,7 +26397,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.launch_version",
-      "line": 3080,
+      "line": 3123,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26405,7 +26405,7 @@
       "direct_mutation_site_count": 0,
       "file": "auto_update.py",
       "function": "auto_update.persist_switch",
-      "line": 1924,
+      "line": 1926,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26413,7 +26413,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.preserve_candidate_version",
-      "line": 2553,
+      "line": 2555,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26421,7 +26421,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.publish_download",
-      "line": 2860,
+      "line": 2862,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26429,7 +26429,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.request_apply_task",
-      "line": 3068,
+      "line": 3111,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26437,7 +26437,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.request_bootstrap",
-      "line": 3060,
+      "line": 3103,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26445,7 +26445,7 @@
       "direct_mutation_site_count": 0,
       "file": "auto_update.py",
       "function": "auto_update.stage_prepared_copies",
-      "line": 2835,
+      "line": 2837,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26469,7 +26469,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.write_download_bytes",
-      "line": 2805,
+      "line": 2807,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },
@@ -26477,7 +26477,7 @@
       "direct_mutation_site_count": 1,
       "file": "auto_update.py",
       "function": "auto_update.write_download_chunk",
-      "line": 2814,
+      "line": 2816,
       "marker_kind": "decorator",
       "source": "auto_update_control"
     },

@@ -1613,7 +1613,9 @@ def resolve_lifecycle_context(root: Path, *, operation: str = 'inspect', expecte
                               and failed_support_preflight is True and not startup)
             if (policy.get('schema') != 'container-audit-startup-update-policy-v1' or pointer.get('schema') != SCHEMA
                     or state.get('schema') != SCHEMA
-                    or (state.get('phase') not in {'CONFIRMED', 'DEFERRED', 'ROLLED_BACK'} and not failed_support)):
+                    or (state.get('phase') not in {'CONFIRMED', 'DEFERRED', 'ROLLED_BACK'} and not failed_support
+                        and not (operation == 'register' and startup
+                                 and _lifecycle_startup_proven(control, policy, pointer, state)))):
                 raise ValueError('lifecycle_transition_requires_recovery')
             active_sha = _sha(pointer.get('sha'))
             if state.get('phase') == 'CONFIRMED' and state.get('candidate_sha') != active_sha:
@@ -3007,7 +3009,60 @@ def startup_update_lock(control: Path, policy: Mapping[str, Any], *, deadline: f
         yield acquired
 
 
+_STARTUP_ADMISSION = None
+
+
+def _startup_proof_binding(policy, active, state) -> str:
+    values = [policy, active, state, os.environ.get("KMTECH_CA_UPDATE_DEFERRED_AT"),
+              os.environ.get("KMTECH_CA_UPDATE_TRIAL_NONCE")]
+    return hashlib.sha256(json.dumps(values, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _accept_startup_proof(app_root: Path, control: Path, policy, state, active,
+                          sha: str, *, role: str, remember: bool = False) -> bool:
+    """One read-only trial/defer decision, reused before first setup writes."""
+    if sha != active["sha"] or not ordinary_user_context(policy["operator_sid"]):
+        return False
+    accepted = False
+    if state and state["phase"] in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"}:
+        if os.environ.get("KMTECH_CA_UPDATE_TRIAL_NONCE") == state["nonce"] and ordinary_user_context():
+            claim = optional_record(Path(policy["staging_root"]) / "trial.json")
+            accepted = bool(claim and claim.get("nonce") == state["nonce"]
+                            and claim.get("transition_id") == state["transition_id"]
+                            and (role == "relay" or claim.get("pid") == os.getpid()))
+    if not accepted:
+        deferred_at = os.environ.get("KMTECH_CA_UPDATE_DEFERRED_AT")
+        rollback_recovery_gui = bool(state and state["phase"] == "ROLLBACK_PENDING_READY"
+                                     and role == "gui" and apply_claim_status(control) == "ABSENT")
+        if deferred_at and (not state or state["phase"] in {
+                "PREPARED", "CONFIRMED", "ROLLED_BACK", "DEFERRED", "FAILED", "UNKNOWN",
+                "APPLIED_PENDING_READY"} or rollback_recovery_gui):
+            _utc(deferred_at)
+            if state and state["phase"] in {"PREPARED", "FAILED", "UNKNOWN", "APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"}:
+                assert_ordinary_recovery(control, policy, sha, deferred_at)
+            accepted = True
+    if accepted and remember:
+        global _STARTUP_ADMISSION
+        _STARTUP_ADMISSION = (os.getpid(), Path(app_root).resolve(), role,
+                              _startup_proof_binding(policy, active, state))
+    return accepted
+
+
+def _lifecycle_startup_proven(control: Path, policy, active, state) -> bool:
+    proof = _STARTUP_ADMISSION
+    if proof is None or proof[0] != os.getpid():
+        return False
+    app_root, role, binding = proof[1:]
+    if (control_root(app_root) != control or Path(__file__).resolve().parent != app_root
+            or binding != _startup_proof_binding(policy, active, state)):
+        return False
+    sha = version_manifest(app_root.parent)["source_commit"]
+    return _accept_startup_proof(app_root, control, policy, state, active, sha, role=role)
+
+
 def startup_gate(app_root: Path, arguments: list[str], *, role: str = "gui") -> int | None:
+    global _STARTUP_ADMISSION
+    _STARTUP_ADMISSION = None
     if arguments[:1] in (["--container-audit-user-relay"], ["--container-audit-direct-sync-relay"]):
         role = "relay"
     control = control_root(app_root)
@@ -3034,20 +3089,8 @@ def startup_gate(app_root: Path, arguments: list[str], *, role: str = "gui") -> 
                 return None
             emit_progress_guidance()
             return 20
-        if sha == active["sha"] and state and state["phase"] in {"APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"}:
-            if os.environ.get("KMTECH_CA_UPDATE_TRIAL_NONCE") == state["nonce"] and ordinary_user_context():
-                claim = optional_record(Path(policy["staging_root"]) / "trial.json")
-                if claim and claim.get("nonce") == state["nonce"] and claim.get("transition_id") == state["transition_id"] and (role == "relay" or claim.get("pid") == os.getpid()):
-                    return None
-        deferred_at = os.environ.get("KMTECH_CA_UPDATE_DEFERRED_AT")
-        rollback_recovery_gui = bool(state and state["phase"] == "ROLLBACK_PENDING_READY"
-                                     and role == "gui" and apply_claim_status(control) == "ABSENT")
-        if sha == active["sha"] and deferred_at and (not state or state["phase"] in {"PREPARED", "CONFIRMED", "ROLLED_BACK", "DEFERRED", "FAILED", "UNKNOWN", "APPLIED_PENDING_READY"} or rollback_recovery_gui):
-            _utc(deferred_at)
-            if state and state["phase"] in {"PREPARED", "FAILED", "UNKNOWN", "APPLIED_PENDING_READY", "ROLLBACK_PENDING_READY"}:
-                assert_ordinary_recovery(control, policy, sha, deferred_at)
-            # Ordinary active-code admission only. The unchanged G guard still
-            # runs before data access; this grants no pointer or trial authority.
+        if _accept_startup_proof(app_root, control, policy, state, active, sha,
+                                 role=role, remember=True):
             return None
         prepared = prepared_pending(control, policy, state)
         if not startup_requires_bootstrap(state, prepared_present=prepared, running_sha=sha, active_sha=active["sha"]):
