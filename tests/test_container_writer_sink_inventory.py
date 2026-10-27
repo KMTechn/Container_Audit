@@ -1300,3 +1300,18 @@ def test_powershell_post_release_mutation_fails_release_gate(
     assert gate.returncode == 1, (gate.stdout, gate.stderr)
     assert "writer sink inventory is not release-admissible" in gate.stderr
     print(f"POST_RELEASE_GATE gate_exit={gate.returncode}")
+
+
+def test_current_inventory_binding_matches_every_runtime_consumer() -> None:
+    import re
+    import writer_session_fence as fence
+
+    inventory = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+    expected = inventory["inventory_sha256"]
+    contract = json.loads((ROOT / "tools/container_writer_session_contract.json").read_text(encoding="utf-8"))
+    powershell = (ROOT / "tools/container_writer_fence.ps1").read_text(encoding="utf-8-sig")
+    ps_pin = re.search(r"ContainerWriterFenceInventorySha256 = '([0-9a-f]{64})'", powershell)
+    assert ps_pin is not None
+    assert fence.WRITER_INVENTORY_SHA256 == expected
+    assert ps_pin[1] == expected
+    assert contract['all_writer_fence']["writer_inventory_sha256"] == expected
