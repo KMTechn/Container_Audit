@@ -181,8 +181,6 @@ def _alerts(app: Any, presenter_state: Any, notes: List[Dict[str, Any]], now: da
     alerts: List[Dict[str, Any]] = []
     if _attr(app, "_scan_entry_broken", False):
         alerts.append({"kind": 'bad', "text": "입력 칸 오류 — 프로그램을 다시 켜세요"})
-    if _attr(app, '_bootstrap_integrity_absent', False):
-        alerts.append({'kind': 'warn', 'text': ca.BOOTSTRAP_INTEGRITY_WARNING_MESSAGE})
     notice = presenter_state.active_notice
     if notice is not None and (notice.blocking or notice.code == "transfer.post_review_required"):
         choices = _choices(app)
@@ -213,6 +211,8 @@ def _alerts(app: Any, presenter_state: Any, notes: List[Dict[str, Any]], now: da
     for note in notes[-1:]:  # 처리 층 알림(지금 messagebox 자리) — 가장 최근 하나, 「확인」 으로 닫음
         alerts.append({"kind": note["kind"], "text": note["text"],
                        "choices": [{"id": "note_ok", "text": "확인", "go": "command:choose:note_ok", "default": True}]})
+    if _attr(app, '_bootstrap_integrity_absent', False):
+        alerts.append({'kind': 'warn', 'text': ca.BOOTSTRAP_INTEGRITY_WARNING_MESSAGE})
     sending = ca.relay_send_warning_model(_attr(app, "_direct_sync_health"))
     return ([sending] if sending else []) + alerts[:4]
 
