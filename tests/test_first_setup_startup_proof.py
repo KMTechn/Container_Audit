@@ -2,6 +2,7 @@
 from contextlib import nullcontext
 import json
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -179,8 +180,15 @@ def test_registration_rechecks_start_proof_before_entering_setup(first_setup, mo
         monkeypatch.setattr(updates.os, "getpid", lambda: own_pid + 1)
     elif change == "module":
         monkeypatch.setattr(updates, "__file__", str(control.parent / "current/app/auto_update.py"))
-    with pytest.raises(ValueError):
+    expected_cause = {
+        "generation": "ordinary recovery requires current data generation allowance",
+        "writer": "an earlier or unrelated writer prevents ordinary recovery",
+    }.get(change, "lifecycle_transition_requires_recovery")
+    public_message = re.escape(updates.LIFECYCLE_RECOVERY + " [ValueError]")
+    with pytest.raises(ValueError, match="^" + public_message + "$") as failure:
         updates.resolve_lifecycle_context(root, operation='register', startup=True)
+    assert isinstance(failure.value.__cause__, ValueError)
+    assert str(failure.value.__cause__) == expected_cause
 
 
 @pytest.mark.parametrize('operation', ['install', 'inspect', 'register'])
