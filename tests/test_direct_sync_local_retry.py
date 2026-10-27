@@ -32,12 +32,23 @@ def test_spool_read_oserror_retries_same_batch_then_recovers(tmp_path, monkeypat
     result = push.drain_one_relay_batch(db_path=tmp_path / 'relay.sqlite3', credentials=credentials,
                                       session=helpers.EchoAcceptedSession(), now='2099-01-01T00:00:00Z')
     current = queue_row(tmp_path)
-    assert result.retryable is True and current['status'] == 'retry_wait'
-    assert current['next_attempt_at'] and current['attempt_count'] == 1
+    expected_retry = winerror in {5, 32, 33}
+    assert result.retryable is expected_retry
+    assert current['status'] == ('retry_wait' if expected_retry else 'failed_permanent')
+    assert current['attempt_count'] == 1
+    if expected_retry:
+        assert current['next_attempt_at']
     assert Path(current['spooled_file_path']).is_file()
     monkeypatch.setattr(push, '_read_file_digest', digest)
     result = push.drain_one_relay_batch(db_path=tmp_path / 'relay.sqlite3', credentials=credentials,
                                       session=helpers.EchoAcceptedSession(), now='2100-01-01T00:00:00Z')
+    if not expected_retry:
+        # Sub-693 keeps non-lock spool loss terminal until the existing scan recovery.
+        current = queue_row(tmp_path)
+        assert current['status'] == 'failed_permanent'
+        assert current['relay_id'] == original['relay_id']
+        assert current['content_sha256'] == original['content_sha256']
+        return
     assert result.success and queue_row(tmp_path)['status'] == 'acked'
     assert queue_row(tmp_path)['relay_id'] == original['relay_id']
     assert queue_row(tmp_path)['content_sha256'] == original['content_sha256']

@@ -196,7 +196,8 @@ def test_one_send_band_preserves_all_four_existing_alert_slots():
     app = SimpleNamespace(_direct_sync_health=health, _scan_entry_broken=True, is_idle=True,
                           _operator_review_blocks_mutation=lambda: True,
                           _catalog_notice_for_display=lambda: 'catalog warning')
-    notice = SimpleNamespace(blocking=True, severity=NoticeSeverity.ERROR, title='blocked', message='message')
+    notice = SimpleNamespace(code='test.warning', blocking=True, severity=NoticeSeverity.ERROR,
+                             title='blocked', message='message')
     alerts = screen._alerts(app, SimpleNamespace(active_notice=notice), [], None)
     assert len(alerts) == 5
     assert alerts[0]['text'].startswith('이 PC 시계')

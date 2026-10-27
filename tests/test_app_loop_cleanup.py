@@ -2,6 +2,7 @@
 import csv
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -28,12 +29,16 @@ def _child(directory, mode):
 
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
+    os.environ['CONTAINER_AUDIT_DATA_ROOT'] = str(directory)
     runtime_instance.runtime_mutex_name = lambda root: (
         "Local\\KMTech.Test.CA.Loop." + hashlib.sha256(str(directory).encode()).hexdigest()[:20]
     )
-    lease = runtime_instance.acquire_runtime_instance(directory)
-    assert lease is not None
     app = _completion_app(directory)
+    from runtime_entry import begin_gui_entry, entry_runtime_instance
+    assert begin_gui_entry([], application_path=str(Path(module.__file__).parent))
+    lease = entry_runtime_instance(directory)
+    assert lease is not None
+    module.CA_SCREEN_HOST.update(active=True, run=lambda selected: selected.run())
     events = []
     saved_path = directory / app.CURRENT_TRAY_STATE_FILE
     restored_scans = None

@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.parametrize('phase', ['ROLLBACK_PENDING', 'UNKNOWN'])
-@pytest.mark.parametrize('budget,expected', [(150, 465), (270, 480)])
+@pytest.mark.parametrize('budget,expected', [(150, 465), (270, 585)])
 def test_supervision_follows_the_same_stop_budget_without_reset(monkeypatch, phase, budget, expected):
     relay = ModuleType('user_relay')
     relay.RELAY_NORMAL_STOP_TIMEOUT_SECONDS = budget
@@ -20,7 +20,8 @@ def test_supervision_follows_the_same_stop_budget_without_reset(monkeypatch, pha
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                     and node.name == 'bootstrap_supervision_deadline')
     namespace = {'_utc': datetime.fromisoformat, 'STARTUP_WAIT_SECONDS': 240,
-                 'READY_WINDOW_SECONDS': 240, '_bootstrap_awaiting_apply_decision': lambda *args: False}
+                 'READY_WINDOW_SECONDS': 900, 'BOOTSTRAP_OBSERVATION_CAP_SECONDS': 1140,
+                 '_bootstrap_awaiting_apply_decision': lambda *args: False}
     module = ast.Module(body=[ast.ImportFrom(module='__future__', names=[ast.alias(name='annotations')], level=0),
                               function], type_ignores=[])
     exec(compile(ast.fix_missing_locations(module), str(ROOT / 'auto_update.py'), 'exec'), namespace)
