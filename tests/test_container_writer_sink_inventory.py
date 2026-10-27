@@ -365,7 +365,8 @@ def test_container_writer_sink_inventory_has_expected_current_findings(tmp_path)
         path.as_posix() for path in module._discover_shipped_powershell_paths(ROOT)
     ]
     assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
-    "call_operator": 28,
+    # ca-ptimeout f4f1a626 adds guarded Invoke-ContainerTimedWait to uninstall's 28.
+    "call_operator": 29,
     "com_wmi_process_create": 16,
     "dot_source": 51,
     "dotnet_process_start": 2,

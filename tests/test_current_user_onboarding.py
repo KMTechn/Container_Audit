@@ -360,7 +360,8 @@ def test_unproven_server_origin_keeps_existing_ready(installed_server_state, mon
 
 
 @pytest.mark.parametrize("changed", [False, True])
-def test_completed_machine_install_still_checks_server_before_reuse(installed_server_state, changed):
+def test_completed_machine_install_still_checks_server_before_reuse(installed_server_state, changed, monkeypatch):
+    monkeypatch.setattr(onboarding_module, "current_process_sid", lambda: TEST_SOURCE_HOST_ID)
     paths, environment, marker_path, marker = installed_server_state
     marker["target_sid"] = TEST_SOURCE_HOST_ID
     if changed:
@@ -386,6 +387,7 @@ def test_completed_machine_install_still_checks_server_before_reuse(installed_se
 
 
 def test_completed_machine_install_keeps_old_decision_when_paths_are_unreadable(installed_server_state, monkeypatch):
+    monkeypatch.setattr(onboarding_module, "current_process_sid", lambda: TEST_SOURCE_HOST_ID)
     paths, environment, marker_path, marker = installed_server_state
     marker["target_sid"] = TEST_SOURCE_HOST_ID
     _write_json(marker_path, marker)

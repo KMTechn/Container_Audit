@@ -32,6 +32,23 @@ TEST_REPLACEMENT_DOUBLES = {
 MOVEMENT_EXCLUSIONS = {('INSTALL_THIS_PC.ps1', 'Restore-ContainerStartupUpdatePreimage', '01732e3a2f354425721a765af5d4acd15f194801276c8368ab46a04ff59819c8'): 'guarded quarantine or version directory move; no file publication', ('INSTALL_THIS_PC.ps1', 'Invoke-ContainerConvergentRemoval', 'bb0fcc5b04d60c75b98418b0386d81b785ccc86186b0f2bfd1215deabec33b38'): 'guarded quarantine or version directory move; no file publication', ('INSTALL_THIS_PC.ps1', '<module>', '8becac505a03d2f48be68878e420a1990318b3cbd009d15ae93200902bb2824b'): 'guarded quarantine or version directory move; no file publication', ('INSTALL_THIS_PC.ps1', '<module>', '929439eadd1356766f52333644e3ba6898bc71f60c2f58ef8eef8f7bb5f7121f'): 'guarded quarantine or version directory move; no file publication', ('INSTALL_THIS_PC.ps1', '<module>', 'a0898bfdf0d2b7414073c852daff544aeee76e3045a90b01f2bf714d090aa6cd'): 'guarded quarantine or version directory move; no file publication', ('INSTALL_THIS_PC.ps1', '<module>', '4ccfa4fb5b4b733240046536856ea650da76fc768e15ed7d925144a5d6ed2c87'): 'guarded quarantine or version directory move; no file publication', ('INSTALL_THIS_PC.ps1', '<module>', 'b5956526cc6d6a68b9a8c26c82f3a7b905b3fe9274ca0adf9ac06c26b5a52f0f'): 'guarded quarantine or version directory move; no file publication', ('INSTALL_THIS_PC.ps1', '<module>', '560e01bae1147700e870caa8f44ace81e6cccbc274539bd24cc1e62470a2c8ac'): 'guarded quarantine or version directory move; no file publication', ('tools/bootstrap_integrity.ps1', 'Invoke-BootstrapVerifiedReplacementRestore', '04f07000709349c4620ee0492bf5bb5b424b5a42d22c08eb8ed81a34cab2963c'): 'guarded quarantine or version directory move; no file publication', ('tools/bootstrap_integrity.ps1', 'Invoke-BootstrapVerifiedReplacementRestore', 'ba30833e116cc4a8c7a59819e551e8224b063cd4a0f341d438216a08c0681c42'): 'guarded quarantine or version directory move; no file publication', ('tools/bootstrap_integrity.ps1', 'Invoke-BootstrapVerifiedReplacementRestore', '347d6e1c77eea361c7bdeb27e6221c9f39f3ab9d4f824971f62abbe317b3e695'): 'guarded quarantine or version directory move; no file publication', ('tools/bootstrap_integrity.ps1', 'Invoke-BootstrapVerifiedReplacementRestore', '1f0294214766f50cf7e4ec91b12c1949c99c16f831a2908516040eb71dc92a5e'): 'guarded quarantine or version directory move; no file publication', ('tools/bootstrap_integrity.ps1', 'Invoke-BootstrapVerifiedReplacementRestore', '4439e03dbbad17adadfbf6f394a6b0a31c70403c39d143bb061c5b162d0971a0'): 'guarded quarantine or version directory move; no file publication'}
 
 
+# Lane ANSWER-7: exact, approved compensation/evidence moves; no wildcard.
+MOVEMENT_EXCLUSIONS.update({
+    ('INSTALL_CANONICAL_PORTABLE.ps1', 'Restore-CanonicalRemovalFromMoveJournal',
+     'a5576198bfd5fd4efa5443e186b2c5046ab0c6a7761fb1edf211ad3d1de32c70'):
+        'guarded journal-owned file restoration with hash/time readback',
+    ('INSTALL_CANONICAL_PORTABLE.ps1', '<module>',
+     '611be306183987282fb7266ebb3dc45ff98b1ebcce78afa3d63712962faa2d19'):
+        'owned failed-marker custody transfer into matching removal evidence',
+    ('INSTALL_THIS_PC.ps1', 'Move-ContainerFailedTransitionEvidence',
+     '023f68317d96dd19374fdfcdb2a2f68f255814a3933275ed509f942cc4e0b852'):
+        'guarded failed-transition original custody with exact-copy readback',
+    ('INSTALL_THIS_PC.ps1', 'Restore-RemovalFilePreimage',
+     '583af0d287721679c61ce309cdf88d60e6bf0df56a3ee6ea4febe37aa676c2b0'):
+        'guarded evidence-owned restoration with hash/ACL readback',
+})
+
+
 def _direct_replacements(root):
     """Scan owned source and named test doubles; exclude generated/dependency trees."""
     import re
