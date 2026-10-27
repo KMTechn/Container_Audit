@@ -65,7 +65,7 @@ def test_marker_write_failure_keeps_old_complete_report(tmp_path, monkeypatch):
     pack._write_json(path, {'message': 'public'})
     assert path.read_bytes() == before
     assert not list(tmp_path.glob('report.json.tmp.*'))
-    assert failure_count(path) == 1
+    assert failure_count(path) == 0
 
 
 def test_unknown_serialization_failure_keeps_original_error_and_file(tmp_path, monkeypatch):

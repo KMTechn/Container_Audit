@@ -19,28 +19,37 @@ def test_counter_failure_never_changes_report_result(tmp_path, error_type):
     def fail_counter(path, value):
         raise error_type("synthetic-counter-failure")
     prepared = publication.prepare_report({"detail": "synthetic-diagnostic"},
-        render=refused, fallback_render=json.dumps, path=target,
-        counter_writer=fail_counter)
+        render=refused, fallback_render=json.dumps, unavailable_codes=("REPORT_UNAVAILABLE",))
+    assert publication.failure_count(target) == 0
+    target.write_text(prepared.text, encoding="utf-8")
+    publication.record_publication(prepared, path=target, writer=fail_counter)
     assert prepared.unavailable
     assert publication.failure_count(target) == 1
 
 
 def test_counter_writer_runs_outside_count_lock(tmp_path):
     ownership = []
-    publication.prepare_report({}, render=refused, fallback_render=json.dumps,
-        path=tmp_path / "diagnostic.json",
-        counter_writer=lambda path, value: ownership.append(publication._LOCK._is_owned()))
+    target = tmp_path / "diagnostic.json"
+    prepared = publication.prepare_report({}, render=refused, fallback_render=json.dumps,
+        unavailable_codes=("REPORT_UNAVAILABLE",))
+    assert ownership == [] and publication.failure_count(target) == 0
+    target.write_text(prepared.text, encoding="utf-8")
+    publication.record_publication(prepared, path=target,
+        writer=lambda path, value: ownership.append(publication._LOCK._is_owned()))
     assert ownership == [False]
 
 
 def test_directory_counter_does_not_accumulate_process_files(tmp_path, monkeypatch):
     def write_counter(path, value):
         path.write_text(json.dumps(value), encoding="utf-8")
+    target = tmp_path / "diagnostic.json"
     for process in (31001, 31002):
         with monkeypatch.context() as change:
             change.setattr(os, "getpid", lambda: process)
-            publication.prepare_report({}, render=refused, fallback_render=json.dumps,
-                path=tmp_path / "diagnostic.json", counter_writer=write_counter)
+            prepared = publication.prepare_report({}, render=refused, fallback_render=json.dumps,
+                unavailable_codes=("REPORT_UNAVAILABLE",))
+            target.write_text(prepared.text, encoding="utf-8")
+            publication.record_publication(prepared, path=target, writer=write_counter)
     files = list(tmp_path.glob(".report-unavailable-count*.json"))
     assert len(files) == 1
     assert files[0].name == ".report-unavailable-count.json"
@@ -51,7 +60,8 @@ def test_empty_and_nonstring_diagnostics_keep_their_types():
     value = {"failure": None, "message": 0, "stdout": False, "stderr": [],
              "detail": {}, "stdout_tail": "", "stderr_tail": "synthetic-diagnostic"}
     prepared = publication.prepare_report(value, render=refused,
-        fallback_render=json.dumps, diagnostic_fields=publication.DIAGNOSTIC_FIELDS)
+        fallback_render=json.dumps, diagnostic_fields=publication.DIAGNOSTIC_FIELDS,
+        unavailable_codes=("REPORT_UNAVAILABLE",))
     result = json.loads(prepared.text)
     assert result == {**value, "stderr_tail": publication.UNAVAILABLE}
 
@@ -139,7 +149,7 @@ def test_fallback_keeps_public_projection_and_anonymous_diagnostics(tmp_path, mo
     payload.pop("failure_traceback")
     payload["traceback"] = "trace [REDACTED:KMTECH_TEST_API_TOKEN]"
     target = tmp_path / "current_user_onboarding.json"
-    onboarding._write_json_atomic.__wrapped__(target, payload)
+    onboarding._persist_failure_report(target, payload, RuntimeError("synthetic-original-failure"))
     raw = target.read_text(encoding="utf-8")
     result = json.loads(raw)
     assert result["status"] == "FAILED"

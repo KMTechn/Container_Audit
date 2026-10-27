@@ -407,20 +407,25 @@ def _write_json_bytes(path: Path, encoded: str) -> None:
 @writer_sink("direct_sync_install_pack")
 def _write_json(path: Path, payload: dict) -> bool:
     from auto_update import mixed_status_record, serialize_json_for_sink, public_record, PUBLIC_CODES, SAFE_MESSAGES
-    from report_publication import prepare_report, report_io, flush_report_counter
+    from report_publication import prepare_report, record_publication
+    status_codes = PUBLIC_CODES | {"DRY_RUN", "APPLYING", "APPLY_REQUESTED"}
     prepared = prepare_report(
         payload, render=lambda value: serialize_json_for_sink(mixed_status_record(value)),
         fallback_render=lambda value: json.dumps({**value, **public_record(
-            {"status": payload["status"]} if "status" in payload else {}, PUBLIC_CODES, SAFE_MESSAGES)},
+            {"status": payload["status"]} if "status" in payload else {}, status_codes, SAFE_MESSAGES)},
             ensure_ascii=True, separators=(",", ":")),
-        path=path,
+        unavailable_codes=("REPORT_UNAVAILABLE", "MACHINE_METADATA_SECRET_DETECTED"),
     )
-    with report_io(prepared, required=False) as outcome:
+    try:
         ensure_user_runtime_directory(path.parent)
-        flush_report_counter(prepared, path=path,
-            writer=lambda target, counts: _write_json_bytes(target, json.dumps(counts)))
         _write_json_bytes(path, prepared.text)
-    return outcome["written"]
+    except OSError:
+        if not prepared.unavailable:
+            raise
+        return False
+    record_publication(prepared, path=path,
+        writer=lambda target, counts: _write_json_bytes(target, json.dumps(counts)))
+    return True
 
 
 def _task_name_report(task_name: str) -> dict:

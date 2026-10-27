@@ -27,6 +27,7 @@ def test_report_redaction_does_not_fail_actual_onboarding(tmp_path, monkeypatch,
         return 0
     def autostart(*args, **kwargs):
         result = dict(support._autostart(*args, **kwargs))
+        result['command'] = 'synthetic original relay command'
         result['message'] = int(selected[1]) if scene == 'json-number' else selected[1]
         return result
     report = onboarding.onboard_current_user(app, environ=environment,
@@ -50,6 +51,7 @@ def test_report_redaction_does_not_fail_actual_onboarding(tmp_path, monkeypatch,
     counters = list(paths.status_dir.glob('.report-unavailable-count.json'))
     assert len(counters) == 1
     assert json.loads(counters[0].read_bytes()) == {'count': 1}
+    assert persisted['relay_autostart']['command'] == 'synthetic original relay command'
     assert persisted['relay_autostart']['message'] == UNAVAILABLE
 
 
@@ -103,7 +105,7 @@ def test_marker_io_failure_keeps_actual_onboarding_ready(tmp_path, monkeypatch):
     assert result['status'] == 'READY'
     assert json.loads(paths.onboarding_report_path.read_bytes())['status'] == 'READY'
     assert marker.read_bytes() == before
-    assert failure_count(marker) == 1
+    assert failure_count(marker) == 0
     assert calls == [1]
 
 
