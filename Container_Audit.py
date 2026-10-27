@@ -23806,7 +23806,7 @@ def _show_stop_aware_startup_notice(title, message, kind, *, direct_sync_root, r
             owner.protocol('WM_DELETE_WINDOW', root.destroy)
             root.bind('<Return>', lambda _event: button.invoke())
             root.bind('<KP_Enter>', lambda _event: button.invoke())
-            root.bind('<Escape>', lambda _event: root.destroy())
+
             root.deiconify()
             root.lift()
             root.attributes('-topmost', True)
