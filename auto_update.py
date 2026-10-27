@@ -3153,7 +3153,10 @@ def current_generation_status(control: Path, policy: Mapping[str, Any], sha: str
 
 
 def assert_ordinary_recovery(control: Path, policy: Mapping[str, Any], sha: str, started_at: str) -> list[Mapping[str, Any]]:
-    """Caller owns the update lock; native process creation registers writers."""
+    """Read-only proof for a lock holder or a caller that rechecks the records.
+
+    Native process creation registers writers; this observation changes none.
+    """
     if read_json(control / "active.json")["sha"] != sha:
         raise ValueError("ordinary recovery code is not the active version")
     if current_generation_status(control, policy, sha) != "ALLOW":

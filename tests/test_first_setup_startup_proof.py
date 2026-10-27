@@ -64,7 +64,7 @@ def first_setup(installed, monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize('phase,updated', [
-    ('CONFIRMED', True), ('DEFERRED', True), ('PREPARED', True), ('CONFIRMED', False),
+    ('CONFIRMED', True), ('DEFERRED', True), ("PREPARED", True), ("UNKNOWN", True), ('CONFIRMED', False),
 ])
 def test_actual_gui_start_enters_first_setup(first_setup, monkeypatch, phase, updated):
     root, control, active_app, reached = first_setup
@@ -77,12 +77,20 @@ def test_actual_gui_start_enters_first_setup(first_setup, monkeypatch, phase, up
     (control / 'transition.json').write_text(json.dumps(
         {'schema': updates.SCHEMA, 'phase': phase, 'candidate_sha': sha,
          'previous_sha': sha}))
-    if phase == 'PREPARED':
+    if phase in {"PREPARED", "UNKNOWN"}:
         monkeypatch.setenv('KMTECH_CA_UPDATE_DEFERRED_AT', updates.now_utc())
     before = {path: path.read_bytes() for path in control.iterdir() if path.is_file()}
     assert updates.startup_gate(active_app, []) is None
+    lifecycle_results = []
+    resolve = updates.resolve_lifecycle_context
+    def observe_lifecycle(*args, **kwargs):
+        result = resolve(*args, **kwargs)
+        lifecycle_results.append(result)
+        return result
+    monkeypatch.setattr(updates, "resolve_lifecycle_context", observe_lifecycle)
     with pytest.raises(FirstSetupReached):
         app._prepare_gui_startup()
+    assert [result["status"] for result in lifecycle_results] == (["PASS"] if updated else [])
     assert reached == [active_app]
     assert all(path.read_bytes() == content for path, content in before.items())
 
@@ -147,7 +155,7 @@ def test_trial_first_setup_rechecks_the_original_claim(first_setup, monkeypatch,
         assert updates.resolve_lifecycle_context(root, operation='register', startup=True)['from_commit'] == NEW
 
 
-@pytest.mark.parametrize('change', ['no_gate', 'generation', 'system', 'writer', 'journal'])
+@pytest.mark.parametrize('change', ["no_gate", "generation", "system", "writer", "journal", "pid", "module"])
 def test_registration_rechecks_start_proof_before_entering_setup(first_setup, monkeypatch, change):
     root, control, active_app, _reached = first_setup
     state = {'schema': updates.SCHEMA, 'phase': 'PREPARED', 'previous_sha': NEW,
@@ -166,6 +174,11 @@ def test_registration_rechecks_start_proof_before_entering_setup(first_setup, mo
              'sid': updates.current_process_sid(), 'role': 'relay', 'created_at': updates.now_utc()}])
     elif change == 'journal':
         (control / 'transition.json').write_text(json.dumps({**state, 'candidate_sha': '4' * 40}))
+    elif change == "pid":
+        own_pid = os.getpid()
+        monkeypatch.setattr(updates.os, "getpid", lambda: own_pid + 1)
+    elif change == "module":
+        monkeypatch.setattr(updates, "__file__", str(control.parent / "current/app/auto_update.py"))
     with pytest.raises(ValueError):
         updates.resolve_lifecycle_context(root, operation='register', startup=True)
 
@@ -179,3 +192,17 @@ def test_start_proof_does_not_change_manual_classification(first_setup, monkeypa
     assert updates.startup_gate(active_app, []) is None
     with pytest.raises(ValueError):
         updates.resolve_lifecycle_context(root, operation=operation)
+
+
+def test_manual_onboarding_clears_prior_startup_proof(first_setup, monkeypatch):
+    root, control, active_app, _reached = first_setup
+    (control / "transition.json").write_text(json.dumps({
+        "schema": updates.SCHEMA, "phase": "PREPARED",
+        "previous_sha": NEW, "candidate_sha": OLD,
+    }))
+    monkeypatch.setenv("KMTECH_CA_UPDATE_DEFERRED_AT", updates.now_utc())
+    assert updates.startup_gate(active_app, []) is None
+    assert updates.resolve_lifecycle_context(root, operation="register", startup=True)["status"] == "PASS"
+    assert updates.startup_gate(active_app, ["--onboard-current-user"]) is None
+    with pytest.raises(ValueError):
+        updates.resolve_lifecycle_context(root, operation="register", startup=True)
