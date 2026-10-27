@@ -1300,3 +1300,15 @@ def test_powershell_post_release_mutation_fails_release_gate(
     assert gate.returncode == 1, (gate.stdout, gate.stderr)
     assert "writer sink inventory is not release-admissible" in gate.stderr
     print(f"POST_RELEASE_GATE gate_exit={gate.returncode}")
+
+
+def test_current_inventory_binding_matches_every_runtime_consumer() -> None:
+    from tools import refresh_container_update_declarations as declarations
+
+    expected_bindings = declarations.current_bindings(ROOT)
+    transition = ROOT / "tools/container_data_generation_transition.json"
+    assert transition in expected_bindings
+    for path, expected in expected_bindings.items():
+        # Compare complete declarations without dumping their contents on failure.
+        matches_current_bytes = path.read_bytes() == expected
+        assert matches_current_bytes, path.relative_to(ROOT).as_posix()
