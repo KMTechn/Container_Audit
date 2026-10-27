@@ -227,3 +227,44 @@ def test_report_failure_preserves_original_registration_failure(tmp_path, monkey
     raw = paths.onboarding_report_path.read_text(encoding='utf-8')
     assert 'REDACTED' not in raw and 'KMTECH_TEST_API_TOKEN' not in raw
     assert failure_count(paths.onboarding_report_path) == 1
+
+
+def test_two_report_refusals_keep_one_actual_first_setup(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from report_publication import failure_count, UNAVAILABLE
+    app = support._generation_packet(tmp_path, monkeypatch)
+    environment = {"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "state")}
+    paths = onboarding.resolve_current_user_onboarding_paths(app, environ=environment)
+    reports = [paths.status_dir / 'first-diagnostic.json', paths.status_dir / 'second-diagnostic.json']
+    calls = []
+    import auto_update
+    from tools import direct_sync_relay_install_pack as pack
+    fake_environment = {'KMTECH_TEST_API_TOKEN': '4826'}
+    raw_text, raw_json = auto_update.redact_for_sink, auto_update.redact_json_for_sink
+    monkeypatch.setattr(auto_update, 'redact_for_sink', lambda text, environ=None, **kwargs: raw_text(text, fake_environment if environ is None else environ, **kwargs))
+    monkeypatch.setattr(auto_update, 'redact_json_for_sink', lambda value, environ=fake_environment: raw_json(value, environ))
+    def register(selected):
+        calls.append(1)
+        support._ready_state(selected)
+        return 0
+    def launch(*args, **kwargs):
+        def report(path):
+            pack._write_json(path, {'detail': 4826})
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(report, reports))
+        return support._relay_start(*args, **kwargs)
+    result = onboarding.onboard_current_user(app, environ=environment,
+        require_bootstrap_integrity=False, registration_runner=register,
+        profile_loader=support._profile_loader, credential_loader=support._credential_loader,
+        ledger_factory=support._ledger_factory, autostart_installer=support._autostart,
+        relay_launcher=launch)
+    assert result['status'] == 'READY'
+    assert calls == [1]
+    for path in reports:
+        decoded = json.loads(path.read_bytes())
+        assert UNAVAILABLE in decoded.values()
+        raw = path.read_text(encoding='utf-8')
+        assert '4826' not in raw and 'KMTECH_TEST_API_TOKEN' not in raw
+    assert failure_count(paths.onboarding_report_path) == 2
+    assert json.loads(next(paths.status_dir.glob('.report-unavailable-count-*.json')).read_bytes()) == {'count': 2}
+    assert json.loads(paths.onboarding_report_path.read_bytes())['status'] == 'READY'
