@@ -47,7 +47,7 @@ def test_report_redaction_does_not_fail_actual_onboarding(tmp_path, monkeypatch,
     assert paths.ledger_path.is_file()
     from report_publication import failure_count, UNAVAILABLE
     assert failure_count(paths.onboarding_report_path) == 1
-    counters = list(paths.status_dir.glob('.report-unavailable-count-*.json'))
+    counters = list(paths.status_dir.glob('.report-unavailable-count.json'))
     assert len(counters) == 1
     assert json.loads(counters[0].read_bytes()) == {'count': 1}
     assert persisted['relay_autostart']['message'] == UNAVAILABLE
@@ -116,7 +116,7 @@ def test_counter_io_failure_keeps_actual_onboarding_ready(tmp_path, monkeypatch)
     paths = onboarding.resolve_current_user_onboarding_paths(app, environ=environment)
     original = atomic_replace.atomic_replace
     def interrupted(source, target, **kwargs):
-        if Path(target).name.startswith('.report-unavailable-count-'):
+        if Path(target).name.startswith('.report-unavailable-count'):
             raise OSError('synthetic counter interruption')
         return original(source, target, **kwargs)
     monkeypatch.setattr(atomic_replace, 'atomic_replace', interrupted)
@@ -134,20 +134,24 @@ def test_counter_io_failure_keeps_actual_onboarding_ready(tmp_path, monkeypatch)
     persisted = json.loads(paths.onboarding_report_path.read_bytes())
     assert persisted['relay_autostart']['message'] == UNAVAILABLE
     assert failure_count(paths.onboarding_report_path) == 1
-    assert not list(paths.status_dir.glob('.report-unavailable-count-*.json'))
+    assert not list(paths.status_dir.glob('.report-unavailable-count.json'))
 
 
 def test_registration_receipt_diagnostic_preserves_ready_and_origin(tmp_path, monkeypatch):
     from tools import register_container_audit_worker_pc as registration_writer
     app = support._generation_packet(tmp_path, monkeypatch)
     environment = {"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "state")}
+    synthetic_machine = "synthetic-registration-machine-collision"
+    environment["KMTECH_TEST_MACHINE_TOKEN"] = synthetic_machine
+    monkeypatch.setenv("KMTECH_TEST_MACHINE_TOKEN", synthetic_machine)
     environment['KMTECH_TEST_API_TOKEN'] = '4826'
     monkeypatch.setenv('KMTECH_TEST_API_TOKEN', '4826')
     paths = onboarding.resolve_current_user_onboarding_paths(app, environ=environment)
     def register(selected):
         support._ready_state(selected)
         receipt = json.loads(selected.registration_report_path.read_bytes())
-        receipt.update(base_url='https://synthetic.invalid', detail=4826)
+        receipt.update(base_url='https://synthetic.invalid', detail="4826")
+        receipt["hostname"] = synthetic_machine
         manifest = json.loads(selected.producer_manifest_path.read_bytes())
         credential = json.loads(selected.credential_path.read_bytes())
         monkeypatch.setattr(registration_writer, 'build_registration_payloads',
@@ -266,7 +270,7 @@ def test_two_report_refusals_keep_one_actual_first_setup(tmp_path, monkeypatch):
         raw = path.read_text(encoding='utf-8')
         assert '4826' not in raw and 'KMTECH_TEST_API_TOKEN' not in raw
     assert failure_count(paths.onboarding_report_path) == 2
-    assert json.loads(next(paths.status_dir.glob('.report-unavailable-count-*.json')).read_bytes()) == {'count': 2}
+    assert json.loads(next(paths.status_dir.glob('.report-unavailable-count.json')).read_bytes()) == {'count': 2}
     assert json.loads(paths.onboarding_report_path.read_bytes())['status'] == 'READY'
 
 

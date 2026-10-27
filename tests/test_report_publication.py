@@ -34,7 +34,7 @@ def test_strict_redactor_rejects_but_report_publishes_marker(tmp_path, monkeypat
     raw = path.read_text(encoding='utf-8')
     assert all(name not in raw and (len(value) < 4 or value not in raw) for name, value in environment.items())
     assert failure_count(path) == 1
-    assert json.loads(next(tmp_path.glob('.report-unavailable-count-*.json')).read_bytes()) == {'count': 1}
+    assert json.loads(next(tmp_path.glob('.report-unavailable-count.json')).read_bytes()) == {'count': 1}
 
 
 def test_concurrent_failures_keep_both_markers_and_count_two(tmp_path, monkeypatch):
@@ -46,7 +46,7 @@ def test_concurrent_failures_keep_both_markers_and_count_two(tmp_path, monkeypat
         list(pool.map(lambda path: pack._write_json(path, {'message': 'public'}), paths))
     assert all(json.loads(path.read_bytes())['message'] == UNAVAILABLE for path in paths)
     assert failure_count(paths[0]) == 2
-    assert json.loads(next(tmp_path.glob('.report-unavailable-count-*.json')).read_bytes()) == {'count': 2}
+    assert json.loads(next(tmp_path.glob('.report-unavailable-count.json')).read_bytes()) == {'count': 2}
 
 
 def test_marker_write_failure_keeps_old_complete_report(tmp_path, monkeypatch):

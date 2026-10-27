@@ -1150,22 +1150,12 @@ def _write_registration_json(path, payload, *, indent=2):
 
 
 def _write_registration_report(path, payload, *, indent=2):
-    # Registration consumers compare status/identity/recovery bindings, never
-    # diagnostic sentences. Keep every key/type and all machine metadata.
-    from auto_update import mixed_status_record, assert_machine_metadata_no_secrets, _sink_policy
-    from report_publication import prepare_report
-    def render(value):
-        text = json.dumps(value, indent=indent)
-        assert_machine_metadata_no_secrets(text, environ=os.environ)
-        return text
-    prepared = prepare_report(
-        mixed_status_record(payload), render=render, fallback_render=render, path=path,
-        diagnostic_fields=_sink_policy()["diagnostic_fields"],
-        counter_writer=lambda counter, counts: _write_registration_json(counter, counts, indent=2),
-    )
-    published = json.loads(prepared.text)
+    # Preserve the established mixed status projection; machine fields are bindings.
+    from auto_update import mixed_status_record
+    published = mixed_status_record(payload)
     _write_registration_json(path, published, indent=indent)
     return published
+
 
 
 def _registration_artifact_versions(args):

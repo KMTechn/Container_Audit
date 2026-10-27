@@ -415,31 +415,33 @@ def _new_failure_attempt():
 
 def _persist_failure_report(path: Path, report: dict[str, Any], error: BaseException,
                             *, create_new: bool = False, environ: Mapping[str, str] | None = None) -> None:
-    from auto_update import _failure_details, mixed_status_record, public_record
-    attempt = _FAILURE_ATTEMPT.get()
-    if attempt:
-        attempt["publications"].pop(id(error), None)
-    report["failure_attempt_id"] = attempt["id"] if attempt else uuid.uuid4().hex
-    report["failure"] = "SUPPORT_FAILURE"
-    from report_publication import protect_diagnostic
-    report["failure_details"] = protect_diagnostic(
-        lambda: mixed_status_record({"failure_details": _failure_details(error)})["failure_details"],
-        fallback=lambda: _failure_details(error, _unavailable=True), path=path,
-        counter_writer=lambda counter, counts: _write_json_atomic(counter, counts, environ={}),
-    )
-    report["failure_evidence_refs"] = []
-    report["failure_evidence_status"] = "REPORT_UNAVAILABLE"
-    report.update(public_record(_failure_location(error), INSTALLER_PUBLIC_CODES, INSTALLER_SAFE_MESSAGES))
-    try:
-        # Only diagnostic fields are transformed; generic metadata writers keep
-        # their original-byte/fail-closed contract for READY and owner records.
-        safe_report = mixed_status_record(report)
-        writer = _write_json_atomic_create_new if create_new else _write_json_atomic
-        writer(path, safe_report, environ=environ)
-    except Exception:
-        # Publication refusal must not replace the primary failure or advertise
-        # an old pathname. The public boundary emits REPORT_UNAVAILABLE.
-        report["failure_report_status"] = "REPORT_UNAVAILABLE"
+    from report_publication import report_attempt
+    with report_attempt():
+        from auto_update import _failure_details, mixed_status_record, public_record
+        attempt = _FAILURE_ATTEMPT.get()
+        if attempt:
+            attempt["publications"].pop(id(error), None)
+        report["failure_attempt_id"] = attempt["id"] if attempt else uuid.uuid4().hex
+        report["failure"] = "SUPPORT_FAILURE"
+        from report_publication import protect_diagnostic
+        report["failure_details"] = protect_diagnostic(
+            lambda: mixed_status_record({"failure_details": _failure_details(error)})["failure_details"],
+            fallback=lambda: _failure_details(error, _unavailable=True), path=path,
+            counter_writer=lambda counter, counts: _write_json_atomic(counter, counts, environ={}),
+        )
+        report["failure_evidence_refs"] = []
+        report["failure_evidence_status"] = "REPORT_UNAVAILABLE"
+        report.update(public_record(_failure_location(error), INSTALLER_PUBLIC_CODES, INSTALLER_SAFE_MESSAGES))
+        try:
+            # Only diagnostic fields are transformed; generic metadata writers keep
+            # their original-byte/fail-closed contract for READY and owner records.
+            safe_report = mixed_status_record(report)
+            writer = _write_json_atomic_create_new if create_new else _write_json_atomic
+            writer(path, safe_report, environ=environ)
+        except Exception:
+            # Publication refusal must not replace the primary failure or advertise
+            # an old pathname. The public boundary emits REPORT_UNAVAILABLE.
+            report["failure_report_status"] = "REPORT_UNAVAILABLE"
 
 
 def _atomic_report_reference(path: Path, expected: bytes) -> dict[str, str]:
@@ -454,7 +456,7 @@ def _atomic_report_reference(path: Path, expected: bytes) -> dict[str, str]:
 def _write_json_atomic(path: Path, payload: Mapping[str, Any], *,
                        environ: Mapping[str, str] | None = None) -> dict[str, str]:
     from atomic_replace import atomic_replace
-    from auto_update import assert_machine_metadata_no_secrets, _sink_policy
+    from auto_update import assert_machine_metadata_no_secrets, _sink_policy, mixed_status_record
     from report_publication import prepare_report
     selected_environment = os.environ if environ is None else environ
     def render(value):
@@ -462,7 +464,7 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any], *,
         assert_machine_metadata_no_secrets(text, environ=selected_environment)
         return text
     safe_text = prepare_report(
-        payload, render=render, fallback_render=render, path=path,
+        payload, render=render, fallback_render=render, fallback_tree=mixed_status_record, path=path,
         diagnostic_fields=_sink_policy()["diagnostic_fields"],
         counter_writer=lambda counter, counts: _write_json_atomic(counter, counts, environ={}),
     ).text
@@ -485,9 +487,18 @@ def _write_json_atomic_create_new(path: Path, payload: Mapping[str, Any], *,
                        environ: Mapping[str, str] | None = None) -> dict[str, str]:
     """Publish JSON atomically without ever replacing an existing pathname."""
 
-    from auto_update import assert_machine_metadata_no_secrets
-    safe_text = json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2)
-    assert_machine_metadata_no_secrets(safe_text, environ=os.environ if environ is None else environ)
+    from auto_update import assert_machine_metadata_no_secrets, _sink_policy, mixed_status_record
+    from report_publication import prepare_report
+    selected_environment = os.environ if environ is None else environ
+    def render(value):
+        text = json.dumps(value, ensure_ascii=True, sort_keys=True, indent=2)
+        assert_machine_metadata_no_secrets(text, environ=selected_environment)
+        return text
+    safe_text = prepare_report(
+        payload, render=render, fallback_render=render, fallback_tree=mixed_status_record, path=path,
+        diagnostic_fields=_sink_policy()["diagnostic_fields"],
+        counter_writer=lambda counter, counts: _write_json_atomic(counter, counts, environ={}),
+    ).text
     ensure_user_runtime_directory(path.parent)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:

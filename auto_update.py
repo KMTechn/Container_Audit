@@ -16,13 +16,14 @@ import re
 import sys
 import time
 import uuid
-from report_publication import UNAVAILABLE
 from contextlib import ExitStack, contextmanager
 from typing import Any, Mapping
 
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     sys.path.insert(1, str(Path(__file__).resolve().parent / "site-packages"))
+
+from report_publication import UNAVAILABLE
 
 from writer_session_fence import WriterFencedError, writer_sink, _assert_no_reparse_components
 from producer_runtime_client import DEFAULT_PRODUCER_USER_AGENT
