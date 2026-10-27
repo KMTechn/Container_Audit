@@ -1527,8 +1527,8 @@ class ContainerAudit:
                     raise
                 print(f"필수 품목 파일 없음: {item_path}")
                 _show_visible_startup_notice(
-                    "필수 파일 없음",
-                    '품목 정보를 불러오는 데 필요한 파일을 찾을 수 없습니다.\n현장 관리자에게 알리세요.',
+                    "이적을 시작하지 못했습니다",
+                    '품목 정보 파일이 없어 이적을 시작하지 못했습니다 — 현장 관리자에게 알리세요',
                 )
                 self.root.destroy()
                 return []
@@ -1537,14 +1537,15 @@ class ContainerAudit:
                     raise
                 print(f"품목 파일 읽기 실패: {item_path}: {e.__class__.__name__}: {e}")
                 _show_visible_startup_notice(
-                    "파일 읽기 오류",
-                    '품목 정보를 읽지 못했습니다.\n프로그램을 다시 시작한 뒤 계속되면 현장 관리자에게 알리세요.',
+                    "이적을 시작하지 못했습니다",
+                    '품목 정보를 읽지 못해 이적을 시작하지 못했습니다 — 다시 켜 보고, 또 나오면 현장 관리자에게 알리세요',
                 )
                 self.root.destroy()
                 return []
         if not show_errors:
             raise UnicodeError("item catalog encoding is unsupported")
-        _show_visible_startup_notice('입력한 파일을 확인하세요', f'입력한 파일을 확인하세요\n코드: {os.path.basename(item_path)}')
+        print(f'입력한 파일을 확인하세요\n코드: {os.path.basename(item_path)}')
+        _show_visible_startup_notice('이적을 시작하지 못했습니다', f'품목 정보 파일의 글자가 깨져 이적을 시작하지 못했습니다 — 현장 관리자에게 알리세요(파일: {os.path.basename(item_path)})')
         self.root.destroy()
         return []
 
@@ -23672,8 +23673,11 @@ ITEM_CATALOG_SETUP_REQUIRED_MESSAGE = (
     "할 일: 설치 담당자에게 이 Windows 사용자로 이적 검사 설치(초기 설정)를 "
     "다시 실행해 달라고 요청한 뒤 프로그램을 다시 시작하세요."
 )
-FIRST_RUN_ONBOARDING_ERROR_TITLE = "초기 설정 실패"
+FIRST_RUN_ONBOARDING_ERROR_TITLE = "이적 첫 설정을 마치지 못했습니다"
 FIRST_RUN_ONBOARDING_ERROR_MESSAGE = (
+    "이 PC 사용자의 첫 설정을 마치지 못했습니다 — 인터넷 연결을 확인하고 다시 켜 보고, 또 나오면 현장 관리자에게 알리세요"
+)
+FIRST_RUN_ONBOARDING_SUPPORT_MESSAGE = (
     "이 사용자 계정의 이적 검사 초기 설정을 완료하지 못했습니다.\n\n"
     "네트워크 연결을 확인한 뒤 다시 실행하세요. 계속 실패하면 오류 보고서 경로를 "
     "IT 담당자에게 전달하세요."
@@ -23915,7 +23919,8 @@ def _show_first_run_onboarding_error(failure: CurrentUserOnboardingError) -> Non
     elif _startup_refusal(reason):
         return
     report_path = str(failure.report_path)
-    operator_message = f"{FIRST_RUN_ONBOARDING_ERROR_MESSAGE}\n보고서: {report_path}"
+    print(f"{FIRST_RUN_ONBOARDING_SUPPORT_MESSAGE}\n보고서: {report_path}", file=sys.stderr)
+    operator_message = FIRST_RUN_ONBOARDING_ERROR_MESSAGE
     if isinstance(failure.__cause__, DataGenerationBlocked):
         operator_message = failure.__cause__.user_message
     elif failure.status in MACHINE_ONBOARDING_ERROR_MESSAGES:
@@ -24165,11 +24170,12 @@ def _prepare_gui_startup(*, data_root=None):
         instance_lease = acquire_runtime_instance(storage_paths.data_root)
     except OSError:
         _startup_check_observe("note", "UNKNOWN_PROCESS_LIST")
+        print("프로그램 실행 잠금 실패: 데이터 충돌 방지를 위한 실행 잠금을 확인하지 못했습니다. "
+              "프로그램을 시작하지 않고 관리자에게 문의합니다.", file=sys.stderr)
         startup_notice = (
             _show_visible_startup_notice,
-            "프로그램 실행 잠금 실패",
-            "데이터 충돌 방지를 위한 실행 잠금을 확인하지 못했습니다. "
-            "프로그램을 시작하지 않고 관리자에게 문의합니다.",
+            "이적을 시작하지 못했습니다",
+            "이 PC에서 이적 프로그램을 안전하게 시작하지 못했습니다 — 다시 켜 보고, 또 나오면 현장 관리자에게 알리세요",
         )
     else:
         if instance_lease is None:

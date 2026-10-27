@@ -1,5 +1,6 @@
 """Exercise the actual GUI handler with a headless message sink."""
 import ast
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
@@ -13,6 +14,7 @@ def test_install_server_change_uses_existing_refusal_guidance():
     messages, observations = [], []
     namespace = {
         "CurrentUserOnboardingError": Exception, "DataGenerationBlocked": RuntimeError,
+        "FIRST_RUN_ONBOARDING_SUPPORT_MESSAGE": "support", "sys": sys,
         "FIRST_RUN_ONBOARDING_ERROR_MESSAGE": "default", "FIRST_RUN_ONBOARDING_ERROR_TITLE": "title",
         "_show_visible_startup_notice": lambda title, message: messages.append(message),
         "_startup_refusal": lambda *_args, **_kwargs: False,
@@ -36,6 +38,7 @@ def test_pending_reason_reaches_field_guidance(status, expected):
     assert len(nodes) == 2
     messages = []
     namespace = {"CurrentUserOnboardingError": Exception, "DataGenerationBlocked": RuntimeError,
+        "FIRST_RUN_ONBOARDING_SUPPORT_MESSAGE": "support", "sys": sys,
         "FIRST_RUN_ONBOARDING_ERROR_MESSAGE": "default", "FIRST_RUN_ONBOARDING_ERROR_TITLE": "title",
         "_show_visible_startup_notice": lambda title, message: messages.append(message),
         # Startup refusal not recorded/acknowledged: the field guidance dialog is the operator path.

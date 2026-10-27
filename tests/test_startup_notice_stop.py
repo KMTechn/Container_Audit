@@ -191,8 +191,7 @@ def test_manual_close_keeps_message_bytes_and_does_not_report_stop(
         'data-root': storage_policy.DATA_ROOT_ERROR_MESSAGE,
         'legacy-update': f'새로운 버전(test-version)이 확인되었습니다. (현재: {ca.CURRENT_VERSION})\n\n'
                          + ca.RUNTIME_UPDATE_BOOTSTRAP_MESSAGE,
-        'instance-lock': '데이터 충돌 방지를 위한 실행 잠금을 확인하지 못했습니다. '
-                         '프로그램을 시작하지 않고 관리자에게 문의합니다.',
+        'instance-lock': '이 PC에서 이적 프로그램을 안전하게 시작하지 못했습니다 — 다시 켜 보고, 또 나오면 현장 관리자에게 알리세요',
     }
     assert notice.tk.labels == (['이적 시작 안내'.encode('utf-8')]
                                if mode in ('onboarding', 'instance-lock') else []) + [expected[mode].encode('utf-8')]
@@ -203,7 +202,7 @@ def test_manual_close_keeps_message_bytes_and_does_not_report_stop(
         'generation': '자료 판 확인',
         'data-root': '이적 검사 데이터 폴더 오류',
         'legacy-update': '관리자 업데이트 필요',
-        'instance-lock': '프로그램 실행 잠금 실패',
+        'instance-lock': '이적을 시작하지 못했습니다',
     }
     assert notice.tk.roots[-1].caption.encode('utf-8') == titles[mode].encode('utf-8')
     assert notice.tk.buttons[0]['text'] == '닫기'
@@ -411,6 +410,11 @@ def test_owned_update_notice_preserves_parent_and_acknowledgement(monkeypatch):
 
 def test_integrity_stop_never_enters_the_next_startup_unit(startup, monkeypatch, tmp_path):
     _app, released = startup
+    import data_generation_guard
+    monkeypatch.setattr(data_generation_guard, '_runtime_release', lambda: {
+        'version': ca.CURRENT_VERSION, 'build_id': 'a' * 40,
+        'data_compatible_min_version': ca.CURRENT_VERSION, 'compatibility_verified': False,
+    })
     monkeypatch.setattr(ca, 'consume_pending_machine_onboarding', lambda *_args: None)
     monkeypatch.setattr(ca, '_first_run_onboarding_enabled', lambda: True)
     monkeypatch.setattr(ca, 'onboard_current_user', lambda *_args, **_kwargs: {'bootstrap_integrity': 'absent'})

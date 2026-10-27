@@ -104,7 +104,7 @@ def test_items_retry_only_file_locks(monkeypatch, kind, release):
     monkeypatch.setattr(app_module.time, 'sleep', sleeps)
     monkeypatch.setattr(app_module, 'get_verified_catalog_snapshot', lambda path: None)
     monkeypatch.setattr(app_module, 'requires_verified_catalog_snapshot', lambda path: False)
-    monkeypatch.setattr(app_module.messagebox, 'showerror', errors)
+    monkeypatch.setattr(app_module, '_show_visible_startup_notice', errors)
 
     rows = app.load_items(read_retry=app_module.StartupReadRetry())
 
@@ -116,13 +116,13 @@ def test_items_retry_only_file_locks(monkeypatch, kind, release):
         app.root.destroy.assert_not_called()
     else:
         assert rows == []
-        assert errors.call_args.args[0] == '파일 읽기 오류'
+        assert errors.call_args.args[0] == '이적을 시작하지 못했습니다'
         app.root.destroy.assert_called_once()
 
 
 @pytest.mark.parametrize('error,title', [
-    (OSError(errno.EIO, 'disk error'), '파일 읽기 오류'),
-    (FileNotFoundError('absent'), '필수 파일 없음'),
+    (OSError(errno.EIO, 'disk error'), '이적을 시작하지 못했습니다'),
+    (FileNotFoundError('absent'), '이적을 시작하지 못했습니다'),
 ])
 def test_items_other_errors_keep_existing_failure(monkeypatch, error, title):
     reader = Mock(side_effect=error)
@@ -134,7 +134,7 @@ def test_items_other_errors_keep_existing_failure(monkeypatch, error, title):
     monkeypatch.setattr(app_module.time, 'sleep', sleeps)
     monkeypatch.setattr(app_module, 'get_verified_catalog_snapshot', lambda path: None)
     monkeypatch.setattr(app_module, 'requires_verified_catalog_snapshot', lambda path: False)
-    monkeypatch.setattr(app_module.messagebox, 'showerror', errors)
+    monkeypatch.setattr(app_module, '_show_visible_startup_notice', errors)
     assert app.load_items() == []
     reader.assert_called_once()
     sleeps.assert_not_called()
