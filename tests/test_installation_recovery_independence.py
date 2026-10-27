@@ -181,7 +181,7 @@ if($env:CA_FAILED_STEP -ceq 'tree_readback'){
 def test_update_failures_replace_opaque_environment_authority_in_all_details(monkeypatch):
     import importlib.util
     import sys
-    spec = importlib.util.spec_from_file_location("ca_failure_contract_target", ROOT / "auto_update.py")
+    spec = importlib.util.spec_from_file_location("auto_update", ROOT / "auto_update.py")
     auto_update = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, auto_update)
     spec.loader.exec_module(auto_update)

@@ -738,7 +738,6 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
 
             # Retain existing non-JSON credential assignments/header protection.
             $Text=[regex]::Replace($Text,'(?i)(\b[A-Za-z0-9_-]*(?:secret|token|signature|password|credential|registration[_-]?(?:value|code)|api[_-]?key)[A-Za-z0-9_-]*\s*[=:]\s*)([^\r\n,;]+)',[Text.RegularExpressions.MatchEvaluator]{param($m) if($m.Groups[2].Value.StartsWith('[REDACTED:')){return $m.Value};return $m.Groups[1].Value+$policy.field_marker})
-            $Text=[regex]::Replace($Text,'(?i)authorization\s*:\s*[^\r\n]+',$policy.field_marker)
             $Text=[regex]::Replace($Text,'(https?://)[^\s/@]+:[^\s/@]+@',('$1'+$policy.field_marker+'@'))
             $Text=[regex]::Replace($Text,'(https?://[^\s?]+)\?[^\s]+',('$1?'+$policy.field_marker))
         }
@@ -751,6 +750,11 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
             if($value.StartsWith('[REDACTED:') -or $value -cin @('true','false','null')){continue}
             if(Test-RedactedField $match.Groups['key'].Value $value){
                 $start=$match.Groups['value'].Index;$end=$start+$match.Groups['value'].Length
+                # Redact the complete scheme credential before changing its prefix.
+                if($match.Groups['key'].Value -match 'authorization' -and $value -match '^(?i:bearer|basic)$'){
+                    $credential=[regex]::Match($Text.Substring($end),'^\s+[A-Za-z0-9._~+/-]+=*(?![A-Za-z0-9._~+/=-])')
+                    if($credential.Success){$end+=$credential.Length}
+                }
                 if($match.Groups['quote'].Value -and $value.Length -ge 2 -and
                     $value[0] -cin @([char]34,[char]39) -and $value[$value.Length-1] -ceq $value[0]){
                     $start++;$end--
@@ -761,6 +765,9 @@ function Protect-InstallationText([string]$Text, [int]$Limit=4096, [switch]$Conf
         }
         foreach($span in @($spans|Sort-Object start -Descending)){
             $Text=$Text.Substring(0,$span.start)+$policy.field_marker+$Text.Substring($span.end)
+        }
+        if(-not $CommonOnly -and -not $jsonProcessed){
+            $Text=[regex]::Replace($Text,'(?i)authorization\s*:\s*[^\r\n]+',$policy.field_marker)
         }
     }
 
