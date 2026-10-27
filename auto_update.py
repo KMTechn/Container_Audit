@@ -799,6 +799,13 @@ def redact_for_sink(text: str, environ: Mapping[str, str] = os.environ, *, limit
         value = {"true": True, "false": False, "null": None}.get(raw, raw)
         if _redact_field(match.group("key"), value, policy):
             start, end = match.span("value")
+            # A header/assignment value includes both the scheme and token68.
+            # Consume it before replacing the scheme, including folded lines.
+            if (re.search("authorization", match.group("key"), re.IGNORECASE)
+                    and re.fullmatch(r"(?i)bearer|basic", raw)):
+                credential = re.match(r"\s+[A-Za-z0-9._~+/-]+=*(?![A-Za-z0-9._~+/=-])", text[end:])
+                if credential:
+                    end += credential.end()
             replacement = policy["field_marker"]
             if raw[0] in "{[":
                 end = _structured_value_end(text, start)
