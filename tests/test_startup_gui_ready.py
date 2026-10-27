@@ -145,27 +145,28 @@ def test_atomic_replace_preserves_old_marker_until_complete_json_exists(folder, 
 
 @pytest.mark.parametrize("failure", ["missing", "open", "replace", "native", "reparse", "relative"])
 def test_marker_failure_never_changes_normal_start(folder, flow, workers, monkeypatch, capsys, failure):
-    def denied(*_args, **_kwargs):
-        raise PermissionError()
+    with monkeypatch.context() as faults:
+        def denied(*_args, **_kwargs):
+            raise PermissionError()
 
-    if failure == "missing":
-        folder.rmdir()
-    elif failure == "open":
-        monkeypatch.setattr(Path, "open", denied)
-    elif failure == "replace":
-        monkeypatch.setattr(report.os, "replace", denied)
-    elif failure == "native":
-        monkeypatch.setattr(report, "_process_start_utc", denied)
-    elif failure == "reparse":
-        monkeypatch.setattr(report, "_assert_no_reparse_components", denied)
-    else:
-        monkeypatch.setenv("PROGRAMDATA", "relative")
-    assert app.main([]) == 0 and flow.events == ["prepare", "run", "release"]
-    worker = workers.pop()
-    worker.target(*worker.args)
-    assert not folder.exists() or not list(folder.glob("*.gui.json"))
-    assert not folder.exists() or not list(folder.glob("*.tmp"))
-    assert not capsys.readouterr().err
+        if failure == "missing":
+            folder.rmdir()
+        elif failure == "open":
+            faults.setattr(Path, "open", denied)
+        elif failure == "replace":
+            faults.setattr(report.os, "replace", denied)
+        elif failure == "native":
+            faults.setattr(report, "_process_start_utc", denied)
+        elif failure == "reparse":
+            faults.setattr(report, "_assert_no_reparse_components", denied)
+        else:
+            faults.setenv("PROGRAMDATA", "relative")
+        assert app.main([]) == 0 and flow.events == ["prepare", "run", "release"]
+        worker = workers.pop()
+        worker.target(*worker.args)
+        assert not folder.exists() or not list(folder.glob("*.gui.json"))
+        assert not folder.exists() or not list(folder.glob("*.tmp"))
+        assert not capsys.readouterr().err
 
 
 def test_thread_start_failure_does_not_change_start_or_raise(folder, flow, workers, monkeypatch, capsys):

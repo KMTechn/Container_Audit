@@ -1519,6 +1519,9 @@ class ContainerAudit:
                         "exception_type": type(exc).__name__,
                     },
                 ) from exc
+        def notice_shown():
+            self._startup_item_notice_shown = True
+
         encodings_to_try = ['utf-8-sig', 'cp949', 'euc-kr', 'utf-8']
         for encoding in encodings_to_try:
             try:
@@ -1535,8 +1538,8 @@ class ContainerAudit:
                 _show_visible_startup_notice(
                     "이적을 시작하지 못했습니다",
                     '품목 정보 파일이 없어 이적을 시작하지 못했습니다 — 현장 관리자에게 알리세요',
+                    on_shown=notice_shown,
                 )
-                self._startup_item_notice_shown = True
                 self.root.destroy()
                 return []
             except Exception as e:
@@ -1546,15 +1549,18 @@ class ContainerAudit:
                 _show_visible_startup_notice(
                     "이적을 시작하지 못했습니다",
                     '품목 정보를 읽지 못해 이적을 시작하지 못했습니다 — 다시 켜 보고, 또 나오면 현장 관리자에게 알리세요',
+                    on_shown=notice_shown,
                 )
-                self._startup_item_notice_shown = True
                 self.root.destroy()
                 return []
         if not show_errors:
             raise UnicodeError("item catalog encoding is unsupported")
         print(f'입력한 파일을 확인하세요\n코드: {os.path.basename(item_path)}')
-        _show_visible_startup_notice('이적을 시작하지 못했습니다', f'품목 정보 파일의 글자가 깨져 이적을 시작하지 못했습니다 — 현장 관리자에게 알리세요(파일: {os.path.basename(item_path)})')
-        self._startup_item_notice_shown = True
+        _show_visible_startup_notice(
+            '이적을 시작하지 못했습니다',
+            f'품목 정보 파일의 글자가 깨져 이적을 시작하지 못했습니다 — 현장 관리자에게 알리세요(파일: {os.path.basename(item_path)})',
+            on_shown=notice_shown,
+        )
         self.root.destroy()
         return []
 
@@ -23779,11 +23785,16 @@ def _watch_startup_notice_stop(root, direct_sync_root, record_stop):
 
 
 def _show_stop_aware_startup_notice(title, message, kind, *, direct_sync_root, record_stop,
-                                    visible_owner=False):
+                                    visible_owner=False, on_shown=None):
     """Acknowledge a startup notice, or return True only for an official stop."""
+    def show_native():
+        _show_startup_notice_native(title, message, kind)
+        if os.name == 'nt' and on_shown is not None:
+            on_shown()
+
     if direct_sync_root is None and not visible_owner:
         try:
-            _show_startup_notice_native(title, message, kind)
+            show_native()
         except Exception:
             pass  # Keep the existing dialog-unavailable safe return.
         return False
@@ -23824,6 +23835,8 @@ def _show_stop_aware_startup_notice(title, message, kind, *, direct_sync_root, r
             root.lift()
             root.attributes('-topmost', True)
             root.update_idletasks()
+            if on_shown is not None:
+                on_shown()
             root.focus_force()
             button.focus_set()
             root.attributes('-topmost', False)
@@ -23842,7 +23855,7 @@ def _show_stop_aware_startup_notice(title, message, kind, *, direct_sync_root, r
                 pass
         if not state["stopped"]:
             try:
-                _show_startup_notice_native(title, message, kind)
+                show_native()
             except Exception:
                 pass
     finally:
@@ -23878,10 +23891,10 @@ def _show_startup_notice(title, message, kind="error"):
         record_stop=_record_startup_notice_stop)
 
 
-def _show_visible_startup_notice(title, message, kind='error'):
+def _show_visible_startup_notice(title, message, kind='error', *, on_shown=None):
     return _show_stop_aware_startup_notice(
         title, message, kind, direct_sync_root=_STARTUP_NOTICE_DIRECT_SYNC_ROOT,
-        record_stop=_record_startup_notice_stop, visible_owner=True)
+        record_stop=_record_startup_notice_stop, visible_owner=True, on_shown=on_shown)
 
 
 def _show_startup_unavailable(notice=None):
@@ -24329,6 +24342,8 @@ def _prepare_gui_startup(*, data_root=None):
                     health = RelayHealth("blocked", 0, 0, 0, "", "", "", "relay_health_not_loaded")
                 app._apply_direct_sync_health(health)
         except _StartupNoticeShown:
+            _startup_check_observe('note', 'UNKNOWN_CHECK')
+            _startup_check_observe('publish')
             return 0
         except ItemCatalogSyncError as exc:
             try:

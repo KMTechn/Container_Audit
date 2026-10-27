@@ -213,21 +213,22 @@ def test_begin_exception_is_unknown_and_adds_no_refusal(folder, flow, monkeypatc
 
 @pytest.mark.parametrize("failure", ["replace", "open", "missing", "relative", "reparse"])
 def test_result_write_failure_does_not_change_start(folder, flow, monkeypatch, failure):
-    def denied(*_args, **_kwargs):
-        raise PermissionError()
-    if failure == "replace":
-        monkeypatch.setattr(report.os, "replace", denied)
-    elif failure == "open":
-        monkeypatch.setattr(Path, "open", denied)
-    elif failure == "missing":
-        folder.rmdir()
-    elif failure == "relative":
-        monkeypatch.setenv("PROGRAMDATA", "relative")
-    else:
-        monkeypatch.setattr(report, "_assert_no_reparse_components", denied)
-    assert app.main([]) == 0
-    assert not flow.notices and "run" in flow.events
-    assert not folder.exists() or not list(folder.iterdir())
+    with monkeypatch.context() as faults:
+        def denied(*_args, **_kwargs):
+            raise PermissionError()
+        if failure == "replace":
+            faults.setattr(report.os, "replace", denied)
+        elif failure == "open":
+            faults.setattr(Path, "open", denied)
+        elif failure == "missing":
+            folder.rmdir()
+        elif failure == "relative":
+            faults.setenv("PROGRAMDATA", "relative")
+        else:
+            faults.setattr(report, "_assert_no_reparse_components", denied)
+        assert app.main([]) == 0
+        assert not flow.notices and "run" in flow.events
+        assert not folder.exists() or not list(folder.iterdir())
 
 
 def test_report_is_atomic_sanitized_and_never_acquires_admission(folder, monkeypatch):
