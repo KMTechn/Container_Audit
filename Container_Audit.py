@@ -1526,9 +1526,9 @@ class ContainerAudit:
                 if not show_errors:
                     raise
                 print(f"필수 품목 파일 없음: {item_path}")
-                messagebox.showerror(
-                    "필수 파일 없음",
-                    '품목 정보를 불러오는 데 필요한 파일을 찾을 수 없습니다.\n현장 관리자에게 알리세요.',
+                _show_visible_startup_notice(
+                    "이적을 시작하지 못했습니다",
+                    '품목 정보 파일이 없어 이적을 시작하지 못했습니다 — 현장 관리자에게 알리세요',
                 )
                 self.root.destroy()
                 return []
@@ -1536,15 +1536,16 @@ class ContainerAudit:
                 if not show_errors:
                     raise
                 print(f"품목 파일 읽기 실패: {item_path}: {e.__class__.__name__}: {e}")
-                messagebox.showerror(
-                    "파일 읽기 오류",
-                    '품목 정보를 읽지 못했습니다.\n프로그램을 다시 시작한 뒤 계속되면 현장 관리자에게 알리세요.',
+                _show_visible_startup_notice(
+                    "이적을 시작하지 못했습니다",
+                    '품목 정보를 읽지 못해 이적을 시작하지 못했습니다 — 다시 켜 보고, 또 나오면 현장 관리자에게 알리세요',
                 )
                 self.root.destroy()
                 return []
         if not show_errors:
             raise UnicodeError("item catalog encoding is unsupported")
-        messagebox.showerror('입력한 파일을 확인하세요', f'입력한 파일을 확인하세요\n코드: {os.path.basename(item_path)}')
+        print(f'입력한 파일을 확인하세요\n코드: {os.path.basename(item_path)}')
+        _show_visible_startup_notice('이적을 시작하지 못했습니다', f'품목 정보 파일의 글자가 깨져 이적을 시작하지 못했습니다 — 현장 관리자에게 알리세요(파일: {os.path.basename(item_path)})')
         self.root.destroy()
         return []
 
@@ -18833,7 +18834,10 @@ class ContainerAudit:
         frame = getattr(self, "catalog_notice_frame", None)
         if frame is None:
             return
-        first, _, rest = self._catalog_notice_for_display().partition('\n')
+        notice = self._catalog_notice_for_display()
+        if getattr(self, '_bootstrap_integrity_absent', False):
+            notice = BOOTSTRAP_INTEGRITY_WARNING_MESSAGE + ('\n' + notice if notice else '')
+        first, _, rest = notice.partition('\n')
         context = getattr(self, "_startup_item_catalog_context", {})
         client = getattr(getattr(self, "transfer_seal_coordinator", None), "client", None)
         cache_reconnected = (
@@ -23669,17 +23673,18 @@ ITEM_CATALOG_SETUP_REQUIRED_MESSAGE = (
     "할 일: 설치 담당자에게 이 Windows 사용자로 이적 검사 설치(초기 설정)를 "
     "다시 실행해 달라고 요청한 뒤 프로그램을 다시 시작하세요."
 )
-FIRST_RUN_ONBOARDING_ERROR_TITLE = "초기 설정 실패"
+FIRST_RUN_ONBOARDING_ERROR_TITLE = "이적 첫 설정을 마치지 못했습니다"
 FIRST_RUN_ONBOARDING_ERROR_MESSAGE = (
+    "이 PC 사용자의 첫 설정을 마치지 못했습니다 — 인터넷 연결을 확인하고 다시 켜 보고, 또 나오면 현장 관리자에게 알리세요"
+)
+FIRST_RUN_ONBOARDING_SUPPORT_MESSAGE = (
     "이 사용자 계정의 이적 검사 초기 설정을 완료하지 못했습니다.\n\n"
     "네트워크 연결을 확인한 뒤 다시 실행하세요. 계속 실패하면 오류 보고서 경로를 "
     "IT 담당자에게 전달하세요."
 )
 BOOTSTRAP_INTEGRITY_WARNING_TITLE = "배포 무결성 기록 없음"
 BOOTSTRAP_INTEGRITY_WARNING_MESSAGE = (
-    "bootstrap 무결성 기록이 없어 경고 상태로 계속 시작합니다.\n\n"
-    "프로그램 파일이 일부만 압축 해제됐을 수 있으므로 공식 ZIP을 다시 받아 확인하세요. "
-    "기록이 존재하지만 일치하지 않는 경우에는 시작이 차단됩니다."
+    '이 PC의 설치 기록 일부가 없습니다 — 작업은 계속할 수 있습니다 · 현장 관리자에게 알리세요'
 )
 
 
@@ -23764,26 +23769,61 @@ def _watch_startup_notice_stop(root, direct_sync_root, record_stop):
     return state, cancel
 
 
-def _show_stop_aware_startup_notice(title, message, kind, *, direct_sync_root, record_stop):
+def _show_stop_aware_startup_notice(title, message, kind, *, direct_sync_root, record_stop,
+                                    visible_owner=False):
     """Acknowledge a startup notice, or return True only for an official stop."""
-    if direct_sync_root is None:
+    if direct_sync_root is None and not visible_owner:
         try:
             _show_startup_notice_native(title, message, kind)
         except Exception:
             pass  # Keep the existing dialog-unavailable safe return.
         return False
     root = None
+    owner = None
     state = {"stopped": False}
     cancel = lambda: None
     try:
-        root = tk.Tk()
+        if visible_owner:
+            # The web owner replaces tk.Tk with a deliberately hidden root.
+            factory = CA_SCREEN_HOST.get('startup_notice_tk', tk.Tk)
+            owner = factory()
+            owner.title('이적 시작 안내')
+            owner.resizable(False, False)
+            tk.Label(owner, text='이적 시작 안내', padx=20, pady=12).pack()
+            owner.deiconify()
+            owner.lift()
+            owner.attributes('-topmost', True)
+            owner.update_idletasks()
+            owner.focus_force()
+            owner.attributes('-topmost', False)
+            root = tk.Toplevel(owner)
+            root.transient(owner)
+        else:
+            root = tk.Tk()
         root.title(title)
         root.resizable(False, False)
         tk.Label(root, text=message, padx=20, pady=20).pack()
-        tk.Button(root, text="닫기", command=root.destroy).pack(pady=(0, 12))
+        button = tk.Button(root, text="닫기", command=root.destroy)
+        button.pack(pady=(0, 12))
         root.protocol("WM_DELETE_WINDOW", root.destroy)
-        state, cancel = _watch_startup_notice_stop(root, direct_sync_root, record_stop)
-        root.mainloop()
+        if visible_owner:
+            owner.protocol('WM_DELETE_WINDOW', root.destroy)
+            root.bind('<Return>', lambda _event: button.invoke())
+            root.bind('<KP_Enter>', lambda _event: button.invoke())
+
+            root.deiconify()
+            root.lift()
+            root.attributes('-topmost', True)
+            root.update_idletasks()
+            root.focus_force()
+            button.focus_set()
+            root.attributes('-topmost', False)
+        if direct_sync_root is not None:
+            state, cancel = _watch_startup_notice_stop(root, direct_sync_root, record_stop)
+        if visible_owner:
+            root.wait_window()
+        else:
+            root.mainloop()
     except Exception:
         cancel()
         if root is not None:
@@ -23803,7 +23843,12 @@ def _show_stop_aware_startup_notice(title, message, kind, *, direct_sync_root, r
                 root.destroy()
             except Exception:
                 pass
-    if not state["stopped"]:
+        if owner is not None:
+            try:
+                owner.destroy()
+            except Exception:
+                pass
+    if direct_sync_root is not None and not state["stopped"]:
         # Acknowledgement or a native timeout must not continue past a fresh stop.
         try:
             requested = _consume_startup_app_stop_request(direct_sync_root)
@@ -23822,6 +23867,12 @@ def _show_startup_notice(title, message, kind="error"):
     return _show_stop_aware_startup_notice(
         title, message, kind, direct_sync_root=_STARTUP_NOTICE_DIRECT_SYNC_ROOT,
         record_stop=_record_startup_notice_stop)
+
+
+def _show_visible_startup_notice(title, message, kind='error'):
+    return _show_stop_aware_startup_notice(
+        title, message, kind, direct_sync_root=_STARTUP_NOTICE_DIRECT_SYNC_ROOT,
+        record_stop=_record_startup_notice_stop, visible_owner=True)
 
 
 def _show_startup_unavailable(notice=None):
@@ -23868,31 +23919,17 @@ def _show_first_run_onboarding_error(failure: CurrentUserOnboardingError) -> Non
     elif _startup_refusal(reason):
         return
     report_path = str(failure.report_path)
-    operator_message = f"{FIRST_RUN_ONBOARDING_ERROR_MESSAGE}\n보고서: {report_path}"
+    print(f"{FIRST_RUN_ONBOARDING_SUPPORT_MESSAGE}\n보고서: {report_path}", file=sys.stderr)
+    operator_message = FIRST_RUN_ONBOARDING_ERROR_MESSAGE
     if isinstance(failure.__cause__, DataGenerationBlocked):
         operator_message = failure.__cause__.user_message
     elif failure.status in MACHINE_ONBOARDING_ERROR_MESSAGES:
         operator_message = MACHINE_ONBOARDING_ERROR_MESSAGES[failure.status]
     try:
-        _show_startup_notice(
+        _show_visible_startup_notice(
             FIRST_RUN_ONBOARDING_ERROR_TITLE,
             operator_message,
         )
-    except Exception:
-        pass
-
-
-def _show_bootstrap_integrity_warning(report_path: object) -> bool | None:
-    operator_message = (
-        f"{BOOTSTRAP_INTEGRITY_WARNING_MESSAGE}\n보고서: {str(report_path or 'UNKNOWN')}"
-    )
-    try:
-        if _show_startup_notice(
-            BOOTSTRAP_INTEGRITY_WARNING_TITLE,
-            operator_message,
-            "warning",
-        ):
-            return True
     except Exception:
         pass
 
@@ -24133,11 +24170,12 @@ def _prepare_gui_startup(*, data_root=None):
         instance_lease = acquire_runtime_instance(storage_paths.data_root)
     except OSError:
         _startup_check_observe("note", "UNKNOWN_PROCESS_LIST")
+        print("프로그램 실행 잠금 실패: 데이터 충돌 방지를 위한 실행 잠금을 확인하지 못했습니다. "
+              "프로그램을 시작하지 않고 관리자에게 문의합니다.", file=sys.stderr)
         startup_notice = (
-            _show_startup_notice,
-            "프로그램 실행 잠금 실패",
-            "데이터 충돌 방지를 위한 실행 잠금을 확인하지 못했습니다. "
-            "프로그램을 시작하지 않고 관리자에게 문의합니다.",
+            _show_visible_startup_notice,
+            "이적을 시작하지 못했습니다",
+            "이 PC에서 이적 프로그램을 안전하게 시작하지 못했습니다 — 다시 켜 보고, 또 나오면 현장 관리자에게 알리세요",
         )
     else:
         if instance_lease is None:
@@ -24148,6 +24186,7 @@ def _prepare_gui_startup(*, data_root=None):
         show_notice(title, message)
         return
     startup_complete = False
+    bootstrap_integrity_absent = False
     app = None
     try:
         if _consume_startup_app_stop_request(storage_paths.direct_sync_root):
@@ -24224,13 +24263,7 @@ def _prepare_gui_startup(*, data_root=None):
                 return ONBOARDING_EXIT_CODE
             if _consume_startup_app_stop_request(storage_paths.direct_sync_root):
                 return 0
-            if onboarding_report.get("bootstrap_integrity") == "absent":
-                if _show_bootstrap_integrity_warning(
-                    resolve_current_user_onboarding_paths(
-                        application_path
-                    ).onboarding_report_path
-                ):
-                    return 0
+            bootstrap_integrity_absent = onboarding_report.get("bootstrap_integrity") == "absent"
         record_before_owner_paths(storage_paths.data_root, file_paths=profile_candidates)
         try:
             catalog_unconfirmed = False
@@ -24274,6 +24307,9 @@ def _prepare_gui_startup(*, data_root=None):
             if catalog_unconfirmed:
                 app.item_catalog_unconfirmed = True
             app._startup_item_catalog_context = catalog_context
+            app._bootstrap_integrity_absent = bootstrap_integrity_absent
+            if bootstrap_integrity_absent:
+                app._apply_catalog_notice_layout()
             if (
                 catalog_unconfirmed
                 or catalog_context.get("cache_used")

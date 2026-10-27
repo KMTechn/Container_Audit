@@ -3,7 +3,7 @@
   "direction": "forward",
   "before_source_commit": "ea566d131f37db3ee74468e1645c6b57ac45b6fa",
   "before_inventory_sha256": "cfd1351f5a0f978dfe79945e975d3bed55399f02216ea54e414095a8c2815563",
-  "after_inventory_sha256": "9e995b22033fb2fdd8cdfa726065f77fc41a02990e90a8ba47e80b3110335719",
+  "after_inventory_sha256": "95c795c3ff73301f2d785d4b77901e9f86cb13d99bf1e34d9e91ec835689cab4",
   "route_replacements": [
     {
       "route_id": "persistent_relay",
@@ -188,7 +188,7 @@
     {
       "path": "app/Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "a54e298d2cb7f62e458dcf4f1fba26cd072cf9d5f45e4837a0922b66714608af"
+      "after": "2300f7cb2c9740b1602086496f35263986010a08a960d9c1958e4de51040f651"
     },
     {
       "path": "app/best_time_records.py",
@@ -1463,7 +1463,7 @@
     {
       "path": "app/writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "ff4f32832ad53ed50178cfe2e85abf82319ba04c1473ecf1849220bfcb16f726"
+      "after": "eac5e9e4b70ad4228c16c47fcc6cbbb3632762c3ef2d5bc35ff174fb66e56813"
     },
     {
       "path": "runtime/Lib/__future__.py",
@@ -4513,7 +4513,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "635609cf7ad7572fa9fbf7cf8133d7958f4d2ebeaa0b5b149f2dc778162e1750"
+      "after": "0cea8340a511ca2ef00241edcfa9ec19ecb51479d3291a52d50e23cd2b7f8164"
     },
     {
       "path": "tools/container_writer_session.ps1",
@@ -4523,19 +4523,19 @@
     {
       "path": "tools/container_writer_session_contract.json",
       "before": "156e122f625c69ee186522b94a0b63611c3626b7e8daec3217161b48dc003226",
-      "after": "87885bad6efbf41456f998ef67d2f9df4d081846682ceceac6713f16aa1e550d"
+      "after": "c16efffeff7ada8f5ac1bddc56d0e2a1f641f28a9a903ca30ebd15b5e91f188c"
     },
     {
       "path": "tools/container_writer_sink_inventory.json",
       "before": "92c251fae157da6cb0c65da7bac7882a6e06f020ccc2711ad8210a3b605d0603",
-      "after": "55c221970b4a1402575997fe4e85f230b92d1192819278578703d5a2bc473843"
+      "after": "b53d578a39a0db39699dc2f545d8b0a742dd80ec121ee4aac345504df2f97071"
     }
   ],
   "source_replacements": [
     {
       "path": "Container_Audit.py",
       "before": "f64dfc75e786c709244054323c0c68a4e550874b2f5b3dce2bf7dd3a6dee6151",
-      "after": "a54e298d2cb7f62e458dcf4f1fba26cd072cf9d5f45e4837a0922b66714608af"
+      "after": "2300f7cb2c9740b1602086496f35263986010a08a960d9c1958e4de51040f651"
     },
     {
       "path": "INSTALL_CANONICAL_PORTABLE.ps1",
@@ -4645,7 +4645,7 @@
     {
       "path": "tools/container_writer_fence.ps1",
       "before": "434bb51c1426b27e8e8d10763576c87098a67c7df878bbecd5e466e815fc7229",
-      "after": "635609cf7ad7572fa9fbf7cf8133d7958f4d2ebeaa0b5b149f2dc778162e1750"
+      "after": "0cea8340a511ca2ef00241edcfa9ec19ecb51479d3291a52d50e23cd2b7f8164"
     },
     {
       "path": "tools/direct_sync_relay_install_pack.py",
@@ -4695,7 +4695,7 @@
     {
       "path": "writer_session_fence.py",
       "before": "300a53e185899c173b6f66f9f9aa3be13aa6135edde743c8f2226cd249f237f0",
-      "after": "ff4f32832ad53ed50178cfe2e85abf82319ba04c1473ecf1849220bfcb16f726"
+      "after": "eac5e9e4b70ad4228c16c47fcc6cbbb3632762c3ef2d5bc35ff174fb66e56813"
     }
   ],
   "hash_provenance": {

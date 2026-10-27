@@ -45,9 +45,8 @@ def test_notice_probe_uses_the_same_real_mutex():
 
 @pytest.mark.parametrize("branch,kind,title,body", [
     (
-        "lock-error", "showerror", "프로그램 실행 잠금 실패",
-        "데이터 충돌 방지를 위한 실행 잠금을 확인하지 못했습니다. "
-        "프로그램을 시작하지 않고 관리자에게 문의합니다.",
+        "lock-error", "showerror", "이적을 시작하지 못했습니다",
+        "이 PC에서 이적 프로그램을 안전하게 시작하지 못했습니다 — 다시 켜 보고, 또 나오면 현장 관리자에게 알리세요",
     ),
     (
         "duplicate", "showwarning", "프로그램이 이미 실행 중입니다",
@@ -111,6 +110,7 @@ def test_startup_notice_releases_writer_before_waiting(
     monkeypatch.setattr(ca, "shutdown_stall_is_live", stalled)
     for selected_kind in ("showerror", "showwarning"):
         monkeypatch.setattr(ca.messagebox, selected_kind, notice(selected_kind))
+    monkeypatch.setattr(ca, "_show_visible_startup_notice", notice("showerror"))
     monkeypatch.setattr(ca, "_show_startup_notice", notice("showerror"))
     for name in ("clear_shutdown_stall", "_first_run_onboarding_enabled",
                  "record_before_owner_paths", "prepare_startup_item_catalog", "ContainerAudit"):
