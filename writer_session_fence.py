@@ -104,7 +104,7 @@ def close_and_wait_writers(timeout_seconds: float) -> bool:
 
 # derive_container_writer_sinks.py binds the PowerShell fence and contract.
 # refresh_container_update_declarations.py binds this Python pin and transition.
-WRITER_INVENTORY_SHA256 = "92a365b868ce2ccecf71a3d1f8119cc8da7bf380cb3e33087ba8bc10b69e150a"
+WRITER_INVENTORY_SHA256 = "7669a4931bf83677af0d5ab035f5f3d4e09c097d2d1592d0a6c13759d5f5a2e6"
 
 DELEGATION_TOKEN_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN"
 DELEGATION_SESSION_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID"
