@@ -1032,6 +1032,10 @@ def _recovery_item_firewall(action):
 # ####################################################################
 # # 메인 어플리케이션
 # ####################################################################
+class _StartupNoticeShown(Exception):
+    """Startup already explained its refusal and must finish quietly."""
+
+
 class ContainerAudit:
     APP_TITLE = f"이적 검사 시스템 ({CURRENT_VERSION})"
     APP_VERSION = CURRENT_VERSION
@@ -1297,6 +1301,8 @@ class ContainerAudit:
         self._active_transfer_exchange_master_label = ""
         self._active_transfer_exchange_intent_id = ""
         self.items_data = self.load_items(read_retry=self._startup_read_retry)
+        if getattr(self, '_startup_item_notice_shown', False):
+            raise _StartupNoticeShown
         self.item_catalog = ItemCatalog(self.items_data)
         
         self.work_summary: Dict[str, Dict[str, Any]] = {}
@@ -1530,6 +1536,7 @@ class ContainerAudit:
                     "이적을 시작하지 못했습니다",
                     '품목 정보 파일이 없어 이적을 시작하지 못했습니다 — 현장 관리자에게 알리세요',
                 )
+                self._startup_item_notice_shown = True
                 self.root.destroy()
                 return []
             except Exception as e:
@@ -1540,12 +1547,14 @@ class ContainerAudit:
                     "이적을 시작하지 못했습니다",
                     '품목 정보를 읽지 못해 이적을 시작하지 못했습니다 — 다시 켜 보고, 또 나오면 현장 관리자에게 알리세요',
                 )
+                self._startup_item_notice_shown = True
                 self.root.destroy()
                 return []
         if not show_errors:
             raise UnicodeError("item catalog encoding is unsupported")
         print(f'입력한 파일을 확인하세요\n코드: {os.path.basename(item_path)}')
         _show_visible_startup_notice('이적을 시작하지 못했습니다', f'품목 정보 파일의 글자가 깨져 이적을 시작하지 못했습니다 — 현장 관리자에게 알리세요(파일: {os.path.basename(item_path)})')
+        self._startup_item_notice_shown = True
         self.root.destroy()
         return []
 
@@ -24319,6 +24328,8 @@ def _prepare_gui_startup(*, data_root=None):
                 if not isinstance(health, RelayHealth):
                     health = RelayHealth("blocked", 0, 0, 0, "", "", "", "relay_health_not_loaded")
                 app._apply_direct_sync_health(health)
+        except _StartupNoticeShown:
+            return 0
         except ItemCatalogSyncError as exc:
             try:
                 write_item_catalog_failure_diagnostic(
